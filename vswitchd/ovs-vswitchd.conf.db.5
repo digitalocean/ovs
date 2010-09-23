@@ -1,0 +1,2764 @@
+'\" pt
+.TH Open_vSwitch 5 "September 2010" "Open vSwitch" "Open vSwitch Manual"
+.\" -*- nroff -*-
+.de TQ
+.  br
+.  ns
+.  TP "\\$1"
+..
+.de ST
+.  PP
+.  RS -0.15in
+.  I "\\$1"
+.  RE
+..
+.SH "Open_vSwitch DATABASE"
+A database with this schema holds the configuration for one Open
+vSwitch daemon.  The root of the configuration for the daemon is
+the \fBOpen_vSwitch\fR table, which must have exactly one
+record.  Records in other tables are significant only when they
+can be reached directly or indirectly from the
+\fBOpen_vSwitch\fR table.
+.sp
+.ce 1
+\fBOpen_vSwitch\fR Database Tables:
+.TS
+center box;
+l | l
+lb | l.
+Table	Purpose
+=
+Open_vSwitch	Open vSwitch configuration.
+Bridge	Bridge configuration.
+Port	Port configuration.
+Interface	One physical network device in a Port.
+QoS	Quality of Service configuration
+Queue	QoS output queue.
+Mirror	Port mirroring (SPAN/RSPAN).
+Controller	OpenFlow controller configuration.
+NetFlow	NetFlow configuration.
+SSL	SSL configuration.
+sFlow	sFlow configuration.
+Capability	Capability configuration.
+.TE
+.sp 1
+.SH "TABLE RELATIONSHIPS"
+.PP
+The following diagram shows the relationship among tables in the
+database.  Each node represents a table.  Each edge leads from the
+table that contains it and points to the table that its value
+represents.  Edges are labeled with their column names.
+.RS -1in
+.\"  Creator: Graphviz version 2.20.2 (Sun Oct 12 22:28:10 UTC 2008)
+.\"  For: (blp) Ben Pfaff,,,
+.\"  Title: Open_vSwitch
+.\"  save point size and font
+.nr .S \n(.s
+.nr DF \n(.f
+.PS 6.50000 3.59722
+# to change drawing size, multiply the width and height on the .PS line above and the number on the two lines below (rounded to the nearest integer) by a scale factor
+.nr SF 6500
+scalethickness = 6500
+# don't change anything below this line in this drawing
+# non-fatal run-time pic version determination, version 2
+boxrad=2.0 # will be reset to 0.0 by gpic only
+scale=1.0 # required for comparisons
+# boxrad is now 0.0 in gpic, else it remains 2.0
+# dashwid is 0.1 in 10th Edition, 0.05 in DWB 2 and in gpic
+# fillval is 0.3 in 10th Edition (fill 0 means black), 0.5 in gpic (fill 0 means white), undefined in DWB 2
+# fill has no meaning in DWB 2, gpic can use fill or filled, 10th Edition uses fill only
+# DWB 2 doesn't use fill and doesn't define fillval
+# reset works in gpic and 10th edition, but isn't defined in DWB 2
+# DWB 2 compatibility definitions
+if boxrad > 1.0 && dashwid < 0.075 then X
+fillval = 1;
+define fill Y Y;
+define solid Y Y;
+define reset Y scale=1.0 Y;
+X
+reset # set to known state
+# GNU pic vs. 10th Edition d\(e'tente
+if fillval > 0.4 then X
+define setfillval Y fillval = 1 - Y;
+define bold Y thickness 2 Y;
+# if you use gpic and it barfs on encountering "solid",
+#	install a more recent version of gpic or switch to DWB or 10th Edition pic;
+#	sorry, the groff folks changed gpic; send any complaint to them;
+X else Z
+define setfillval Y fillval = Y;
+define bold Y Y;
+define filled Y fill Y;
+Z
+# arrowhead has no meaning in DWB 2, arrowhead = 7 makes filled arrowheads in gpic and in 10th Edition
+# arrowhead is undefined in DWB 2, initially 1 in gpic, 2 in 10th Edition
+arrowhead = 7 # not used by graphviz
+# GNU pic supports a boxrad variable to draw boxes with rounded corners; DWB and 10th Ed. do not
+boxrad = 0 # no rounded corners in graphviz
+# GNU pic supports a linethick variable to set line thickness; DWB and 10th Ed. do not
+linethick = 1; oldlinethick = linethick
+# .PS w/o args causes GNU pic to scale drawing to fit 8.5x11 paper; DWB does not
+# maxpsht and maxpswid have no meaning in DWB 2.0, set page boundaries in gpic and in 10th Edition
+# maxpsht and maxpswid are predefined to 11.0 and 8.5 in gpic
+maxpsht = 3.597222
+maxpswid = 6.500000
+Dot: [
+define attrs0 % %; define unfilled % %; define rounded % %; define diagonals % %
+setfillval 0.000000
+setfillval 0.827451
+.ft R
+.ps 8*\n(SFu/6500u
+setfillval 1.000000
+setfillval 1.000000
+setfillval 1.000000
+{
+define attrs1 % %
+#	Bridge
+setfillval 0.000000
+box attrs1 wid 0.53352 ht 0.32011 at (2.19631,2.56088);
+{
+define attrs2 % %
+setfillval 0.000000
+"Bridge" at (2.19631,2.55791);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	sFlow
+setfillval 0.000000
+box attrs1 wid 0.49795 ht 0.32011 at (0.24897,1.76060);
+{
+define attrs2 % %
+setfillval 0.000000
+"sFlow" at (0.24897,1.75764);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Bridge -> sFlow
+setfillval 0.000000
+setfillval 0.000000
+P0: (1.92955,2.52531)
+P1: (1.84522,2.51062)
+P2: (1.75320,2.49315)
+P3: (1.65489,2.47281)
+P4: (1.55168,2.44948)
+P5: (1.44494,2.42305)
+P6: (1.33607,2.39342)
+P7: (1.22645,2.36049)
+P8: (1.11747,2.32414)
+P9: (1.01051,2.28427)
+P10: (0.90698,2.24077)
+P11: (0.86432,2.21866)
+P12: (0.82183,2.19517)
+P13: (0.77965,2.17050)
+P14: (0.73796,2.14488)
+P15: (0.69690,2.11850)
+P16: (0.65665,2.09160)
+P17: (0.61736,2.06437)
+P18: (0.57918,2.03703)
+P19: (0.54229,2.00981)
+P20: (0.50684,1.98290)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (0.52462,1.95622)
+P1: (0.43570,1.92066)
+P2: (0.48016,2.00068)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"sflow" at (1.12483,2.15777);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Mirror
+setfillval 0.000000
+box attrs1 wid 0.51573 ht 0.32011 at (1.73393,1.76060);
+{
+define attrs2 % %
+setfillval 0.000000
+"Mirror" at (1.73393,1.75764);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Bridge -> Mirror
+setfillval 0.000000
+setfillval 0.000000
+P0: (2.09850,2.40082)
+P1: (2.08807,2.38482)
+P2: (2.07808,2.36881)
+P3: (2.06840,2.35280)
+P4: (2.05894,2.33680)
+P5: (2.04959,2.32079)
+P6: (2.04024,2.30479)
+P7: (2.03077,2.28878)
+P8: (2.02110,2.27278)
+P9: (2.01111,2.25677)
+P10: (2.00068,2.24077)
+P11: (1.98735,2.21676)
+P12: (1.97401,2.19275)
+P13: (1.96067,2.16874)
+P14: (1.94733,2.14473)
+P15: (1.93399,2.12073)
+P16: (1.92066,2.09672)
+P17: (1.90732,2.07271)
+P18: (1.89398,2.04870)
+P19: (1.88064,2.02469)
+P20: (1.86731,2.00068)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (1.89398,1.98290)
+P1: (1.82285,1.92066)
+P2: (1.84063,2.00958)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"mirrors" at (2.24966,2.15777);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Port
+setfillval 0.000000
+box attrs1 wid 0.48016 ht 0.32011 at (3.31669,1.76060);
+{
+define attrs2 % %
+setfillval 0.000000
+"Port" at (3.31224,1.75764);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Bridge -> Port
+setfillval 0.000000
+setfillval 0.000000
+P0: (2.37415,2.40082)
+P1: (2.40743,2.37073)
+P2: (2.44300,2.33936)
+P3: (2.48050,2.30703)
+P4: (2.51955,2.27406)
+P5: (2.55976,2.24077)
+P6: (2.60078,2.20747)
+P7: (2.64223,2.17450)
+P8: (2.68373,2.14217)
+P9: (2.72490,2.11080)
+P10: (2.76539,2.08071)
+P11: (2.78699,2.06471)
+P12: (2.80907,2.04877)
+P13: (2.83157,2.03294)
+P14: (2.85445,2.01726)
+P15: (2.87765,2.00180)
+P16: (2.90112,1.98660)
+P17: (2.92480,1.97172)
+P18: (2.94863,1.95722)
+P19: (2.97258,1.94314)
+P20: (2.99658,1.92955)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (3.01436,1.95622)
+P1: (3.07661,1.88509)
+P2: (2.98769,1.90287)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"ports" at (2.92100,2.15777);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Controller
+setfillval 0.000000
+box attrs1 wid 0.74692 ht 0.32011 at (4.09029,1.76060);
+{
+define attrs2 % %
+setfillval 0.000000
+"Controller" at (4.08584,1.75764);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Bridge -> Controller
+setfillval 0.000000
+setfillval 0.000000
+P0: (2.46306,2.48085)
+P1: (2.51818,2.46164)
+P2: (2.57638,2.44137)
+P3: (2.63704,2.42003)
+P4: (2.69952,2.39762)
+P5: (2.76317,2.37415)
+P6: (2.82735,2.34960)
+P7: (2.89142,2.32399)
+P8: (2.95475,2.29732)
+P9: (3.01669,2.26958)
+P10: (3.07661,2.24077)
+P11: (3.11337,2.22284)
+P12: (3.14447,2.20619)
+P13: (3.17120,2.19051)
+P14: (3.19483,2.17546)
+P15: (3.21666,2.16074)
+P16: (3.23794,2.14601)
+P17: (3.25998,2.13097)
+P18: (3.28404,2.11528)
+P19: (3.31141,2.09864)
+P20: (3.34337,2.08071)
+P21: (3.37271,2.06713)
+P22: (3.40205,2.05318)
+P23: (3.43140,2.03902)
+P24: (3.46074,2.02480)
+P25: (3.49008,2.01069)
+P26: (3.51943,1.99684)
+P27: (3.54877,1.98342)
+P28: (3.57811,1.97059)
+P29: (3.60746,1.95851)
+P30: (3.63680,1.94733)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+move to P20; line attrs1 to P21 then to P22
+move to P22; line attrs1 to P23 then to P24
+move to P24; line attrs1 to P25 then to P26
+move to P26; line attrs1 to P27 then to P28
+move to P28; line attrs1 to P29 then to P30
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (3.64569,1.97401)
+P1: (3.71683,1.91176)
+P2: (3.61902,1.92066)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"controller" at (3.63680,2.15777);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	NetFlow
+setfillval 0.000000
+box attrs1 wid 0.65800 ht 0.32011 at (0.98700,1.76060);
+{
+define attrs2 % %
+setfillval 0.000000
+"NetFlow" at (0.98700,1.75764);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Bridge -> NetFlow
+setfillval 0.000000
+setfillval 0.000000
+P0: (1.92955,2.48085)
+P1: (1.88055,2.46404)
+P2: (1.82989,2.44564)
+P3: (1.77806,2.42563)
+P4: (1.72553,2.40402)
+P5: (1.67279,2.38081)
+P6: (1.62032,2.35601)
+P7: (1.56860,2.32960)
+P8: (1.51810,2.30159)
+P9: (1.46931,2.27198)
+P10: (1.42271,2.24077)
+P11: (1.39363,2.21891)
+P12: (1.36509,2.19609)
+P13: (1.33708,2.17242)
+P14: (1.30960,2.14801)
+P15: (1.28266,2.12295)
+P16: (1.25625,2.09736)
+P17: (1.23038,2.07134)
+P18: (1.20503,2.04500)
+P19: (1.18023,2.01845)
+P20: (1.15595,1.99179)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (1.18263,1.97401)
+P1: (1.10260,1.92066)
+P2: (1.12927,2.00958)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"netflow" at (1.71170,2.15777);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Mirror -> Port
+setfillval 0.000000
+setfillval 0.000000
+P0: (1.79617,1.60055)
+P1: (1.81565,1.56758)
+P2: (1.83679,1.53318)
+P3: (1.85963,1.49803)
+P4: (1.88424,1.46283)
+P5: (1.91065,1.42827)
+P6: (1.93894,1.39504)
+P7: (1.96914,1.36384)
+P8: (2.00132,1.33535)
+P9: (2.03553,1.31029)
+P10: (2.07182,1.28933)
+P11: (2.17646,1.23651)
+P12: (2.27299,1.19543)
+P13: (2.36344,1.16609)
+P14: (2.44983,1.14848)
+P15: (2.53420,1.14261)
+P16: (2.61857,1.14848)
+P17: (2.70496,1.16609)
+P18: (2.79541,1.19543)
+P19: (2.89194,1.23651)
+P20: (2.99658,1.28933)
+P21: (3.02512,1.30421)
+P22: (3.05207,1.32191)
+P23: (3.07741,1.34207)
+P24: (3.10115,1.36431)
+P25: (3.12329,1.38825)
+P26: (3.14383,1.41353)
+P27: (3.16277,1.43977)
+P28: (3.18011,1.46660)
+P29: (3.19585,1.49364)
+P30: (3.20999,1.52052)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+move to P20; line attrs1 to P21 then to P22
+move to P22; line attrs1 to P23 then to P24
+move to P24; line attrs1 to P25 then to P26
+move to P26; line attrs1 to P27 then to P28
+move to P28; line attrs1 to P29 then to P30
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (3.18331,1.53830)
+P1: (3.25445,1.60055)
+P2: (3.23666,1.51163)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"select_src_port" at (2.52975,1.35750);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Mirror -> Port
+setfillval 0.000000
+setfillval 0.000000
+P0: (1.99179,1.76060)
+P1: (2.07850,1.76060)
+P2: (2.17219,1.76060)
+P3: (2.27133,1.76060)
+P4: (2.37436,1.76060)
+P5: (2.47974,1.76060)
+P6: (2.58592,1.76060)
+P7: (2.69135,1.76060)
+P8: (2.79448,1.76060)
+P9: (2.89378,1.76060)
+P10: (2.98769,1.76060)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (2.98769,1.79617)
+P1: (3.07661,1.76060)
+P2: (2.98769,1.73393)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"output_port" at (2.52975,1.82877);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Mirror -> Port
+setfillval 0.000000
+setfillval 0.000000
+P0: (1.99179,1.60055)
+P1: (1.99979,1.59788)
+P2: (2.00780,1.59521)
+P3: (2.01580,1.59254)
+P4: (2.02380,1.58988)
+P5: (2.03181,1.58721)
+P6: (2.03981,1.58454)
+P7: (2.04781,1.58187)
+P8: (2.05581,1.57921)
+P9: (2.06382,1.57654)
+P10: (2.07182,1.57387)
+P11: (2.17501,1.54698)
+P12: (2.26780,1.52521)
+P13: (2.35312,1.50889)
+P14: (2.43390,1.49833)
+P15: (2.51308,1.49384)
+P16: (2.59360,1.49576)
+P17: (2.67838,1.50441)
+P18: (2.77037,1.52009)
+P19: (2.87249,1.54314)
+P20: (2.98769,1.57387)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (2.97880,1.60055)
+P1: (3.07661,1.60055)
+P2: (2.99658,1.54720)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"select_dst_port" at (2.53420,1.64204);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	QoS
+setfillval 0.000000
+box attrs1 wid 0.48016 ht 0.32011 at (2.77428,0.96033);
+{
+define attrs2 % %
+setfillval 0.000000
+"QoS" at (2.76984,0.95736);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Port -> QoS
+setfillval 0.000000
+setfillval 0.000000
+P0: (3.20999,1.60055)
+P1: (3.18522,1.56461)
+P2: (3.15912,1.52642)
+P3: (3.13196,1.48643)
+P4: (3.10399,1.44505)
+P5: (3.07550,1.40270)
+P6: (3.04673,1.35982)
+P7: (3.01797,1.31684)
+P8: (2.98947,1.27418)
+P9: (2.96150,1.23226)
+P10: (2.93434,1.19152)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (2.96101,1.17373)
+P1: (2.88098,1.12038)
+P2: (2.90766,1.20930)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"qos" at (3.20554,1.35750);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Interface
+setfillval 0.000000
+box attrs1 wid 0.69357 ht 0.32011 at (3.52120,0.96033);
+{
+define attrs2 % %
+setfillval 0.000000
+"Interface" at (3.52120,0.95736);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Port -> Interface
+setfillval 0.000000
+setfillval 0.000000
+P0: (3.36115,1.60055)
+P1: (3.36941,1.56486)
+P2: (3.37815,1.52742)
+P3: (3.38732,1.48859)
+P4: (3.39686,1.44874)
+P5: (3.40672,1.40826)
+P6: (3.41685,1.36751)
+P7: (3.42719,1.32686)
+P8: (3.43769,1.28670)
+P9: (3.44830,1.24739)
+P10: (3.45896,1.20930)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (3.48564,1.20930)
+P1: (3.47674,1.12038)
+P2: (3.43228,1.20041)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"interfaces" at (3.75239,1.35750);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Queue
+setfillval 0.000000
+box attrs1 wid 0.55130 ht 0.32011 at (2.77428,0.16005);
+{
+define attrs2 % %
+setfillval 0.000000
+"Queue" at (2.77428,0.15709);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	QoS -> Queue
+setfillval 0.000000
+setfillval 0.000000
+P0: (2.77428,0.80027)
+P1: (2.77428,0.76483)
+P2: (2.77428,0.72800)
+P3: (2.77428,0.69000)
+P4: (2.77428,0.65103)
+P5: (2.77428,0.61132)
+P6: (2.77428,0.57108)
+P7: (2.77428,0.53051)
+P8: (2.77428,0.48984)
+P9: (2.77428,0.44927)
+P10: (2.77428,0.40903)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (2.80985,0.40903)
+P1: (2.77428,0.32011)
+P2: (2.74761,0.40903)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"queues value" at (3.18331,0.55723);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Open_vSwitch
+setfillval 0.000000
+box attrs1 wid 1.03146 ht 0.32011 at (4.49042,3.36115);
+{
+define attrs2 % %
+setfillval 0.000000
+"Open_vSwitch" at (4.49042,3.35819);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Open_vSwitch -> Bridge
+setfillval 0.000000
+setfillval 0.000000
+P0: (3.97469,3.20109)
+P1: (3.92643,3.18509)
+P2: (3.87773,3.16908)
+P3: (3.82872,3.15308)
+P4: (3.77950,3.13707)
+P5: (3.73016,3.12107)
+P6: (3.68083,3.10506)
+P7: (3.63161,3.08906)
+P8: (3.58259,3.07305)
+P9: (3.53390,3.05705)
+P10: (3.48564,3.04104)
+P11: (3.38867,3.00613)
+P12: (3.29037,2.97090)
+P13: (3.19154,2.93556)
+P14: (3.09297,2.90033)
+P15: (2.99547,2.86542)
+P16: (2.89984,2.83105)
+P17: (2.80687,2.79742)
+P18: (2.71737,2.76475)
+P19: (2.63214,2.73325)
+P20: (2.55198,2.70315)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (2.56088,2.66758)
+P1: (2.46306,2.66758)
+P2: (2.53420,2.72982)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"bridges" at (3.76129,2.95805);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Open_vSwitch -> Controller
+setfillval 0.000000
+setfillval 0.000000
+P0: (4.36594,3.20109)
+P1: (4.34122,3.16220)
+P2: (4.31543,3.12043)
+P3: (4.28911,3.07609)
+P4: (4.26279,3.02952)
+P5: (4.23700,2.98102)
+P6: (4.21228,2.93092)
+P7: (4.18917,2.87954)
+P8: (4.16818,2.82721)
+P9: (4.14986,2.77423)
+P10: (4.13475,2.72093)
+P11: (4.11548,2.64795)
+P12: (4.10010,2.57354)
+P13: (4.08825,2.49837)
+P14: (4.07955,2.42316)
+P15: (4.07361,2.34858)
+P16: (4.07008,2.27534)
+P17: (4.06858,2.20412)
+P18: (4.06873,2.13563)
+P19: (4.07016,2.07055)
+P20: (4.07250,2.00958)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (4.10807,2.00958)
+P1: (4.07250,1.92066)
+P2: (4.04583,2.00958)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"controller" at (4.42818,2.55791);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Capability
+setfillval 0.000000
+box attrs1 wid 0.74692 ht 0.32011 at (5.17510,2.56088);
+{
+define attrs2 % %
+setfillval 0.000000
+"Capability" at (5.17510,2.55791);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Open_vSwitch -> Capability
+setfillval 0.000000
+setfillval 0.000000
+P0: (4.63269,3.20109)
+P1: (4.66305,3.16515)
+P2: (4.69522,3.12697)
+P3: (4.72889,3.08698)
+P4: (4.76373,3.04559)
+P5: (4.79942,3.00325)
+P6: (4.83564,2.96037)
+P7: (4.87208,2.91739)
+P8: (4.90842,2.87473)
+P9: (4.94432,2.83281)
+P10: (4.97948,2.79207)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (5.00616,2.80985)
+P1: (5.03283,2.72093)
+P2: (4.95280,2.77428)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"capabilities value" at (5.41518,2.95805);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	SSL
+setfillval 0.000000
+box attrs1 wid 0.48016 ht 0.32011 at (6.18878,2.56088);
+{
+define attrs2 % %
+setfillval 0.000000
+"SSL" at (6.18878,2.55791);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+{
+define attrs1 % %
+#	Open_vSwitch -> SSL
+setfillval 0.000000
+setfillval 0.000000
+P0: (5.00616,3.29891)
+P1: (5.11780,3.28184)
+P2: (5.23244,3.26270)
+P3: (5.34771,3.24153)
+P4: (5.46128,3.21838)
+P5: (5.57079,3.19331)
+P6: (5.67390,3.16638)
+P7: (5.76827,3.13763)
+P8: (5.85153,3.10712)
+P9: (5.92135,3.07491)
+P10: (5.97538,3.04104)
+P11: (5.99617,3.02160)
+P12: (6.01585,3.00078)
+P13: (6.03436,2.97878)
+P14: (6.05163,2.95582)
+P15: (6.06763,2.93211)
+P16: (6.08229,2.90787)
+P17: (6.09557,2.88331)
+P18: (6.10740,2.85865)
+P19: (6.11774,2.83409)
+P20: (6.12654,2.80985)
+move to P0; line attrs1 to P1 then to P2
+move to P2; line attrs1 to P3 then to P4
+move to P4; line attrs1 to P5 then to P6
+move to P6; line attrs1 to P7 then to P8
+move to P8; line attrs1 to P9 then to P10
+move to P10; line attrs1 to P11 then to P12
+move to P12; line attrs1 to P13 then to P14
+move to P14; line attrs1 to P15 then to P16
+move to P16; line attrs1 to P17 then to P18
+move to P18; line attrs1 to P19 then to P20
+{
+define attrs2 % %
+define attrs2 % solid %
+oldlinethick = linethick;linethick = 1 * scalethickness / 10153
+P0: (6.15321,2.81874)
+P1: (6.15321,2.72093)
+P2: (6.09986,2.80096)
+move to P0; line attrs2 to P1
+move to P1; line attrs2 to P2
+move to P2; line attrs2 to P0
+}
+linethick = oldlinethick
+{
+define attrs2 % %
+setfillval 0.000000
+"ssl" at (6.14877,2.95805);
+}
+linethick = oldlinethick
+}
+linethick = oldlinethick
+]
+.PE
+.\"  restore point size and font
+.ps \n(.S
+.ft \n(DF
+.RE
+.bp
+.SS "Open_vSwitch Table"
+Configuration for an Open vSwitch daemon.  There must be exactly one record
+in the \fBOpen_vSwitch\fR table.
+.sp
+.ce 1
+\fBOpen_vSwitch\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+.T&
+li | s
+l | l.
+Configuration
+_
+\ \ \fBbridges\fR	T{
+set of \fBBridge\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBmanagers\fR	T{
+set of strings, between 0 and 2147483647 characters long
+T}
+\ \ \fBssl\fR	T{
+optional \fBSSL\fR, between 0 and 2147483647 characters long
+T}
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Status
+_
+\ \ \fBnext_cfg\fR	T{
+integer, between 0 and 2147483647 characters long
+T}
+\ \ \fBcur_cfg\fR	T{
+integer, between 0 and 2147483647 characters long
+T}
+\ \ \fBcapabilities\fR	T{
+map of string-\fBCapability\fR pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\ \ \fBstatistics\fR	T{
+map of string-integer pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.ST "Configuration:"
+.IP "\fBbridges\fR: set of \fBBridge\fRs, between 0 and 2147483647 characters long"
+Set of bridges managed by the daemon.
+.IP "\fBmanagers\fR: set of strings, between 0 and 2147483647 characters long"
+Remote database clients to which the Open vSwitch\(cqs database server
+should connect or to which it should listen.
+.IP "\fBssl\fR: optional \fBSSL\fR, between 0 and 2147483647 characters long"
+SSL used globally by the daemon.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate
+with Open vSwitch, rather than by Open vSwitch itself.  System
+integrators should either use the Open vSwitch development
+mailing list to coordinate on common key-value definitions, or
+choose key names that are likely to be unique.  The currently
+defined common key-value pairs are:
+.RS
+.TP
+\fBsystem\-type\fR
+An identifier for the switch type, such as
+\fBXenServer\fR or \fBKVM\fR\.
+.TP
+\fBsystem\-version\fR
+The version of the switch software, such as
+\fB5.6.0\fR on XenServer.
+.TP
+\fBsystem\-id\fR
+A unique identifier for the Open vSwitch\(cqs physical host.
+The form of the identifier depends on the type of the host.
+On a Citrix XenServer, this will likely be the same as
+\fBxs\-system\-uuid\fR\.
+.TP
+\fBxs\-system\-uuid\fR
+The Citrix XenServer universally unique identifier for the
+physical host as displayed by \fBxe host\-list\fR\.
+.RE
+.ST "Status:"
+.IP "\fBnext_cfg\fR: integer, between 0 and 2147483647 characters long"
+Sequence number for client to increment.  When a client modifies
+any part of the database configuration and wishes to wait for
+Open vSwitch to finish applying the changes, it may increment
+this sequence number.
+.IP "\fBcur_cfg\fR: integer, between 0 and 2147483647 characters long"
+Sequence number that Open vSwitch sets to the current value of
+\fBnext_cfg\fR after it finishes applying a set of
+configuration changes.
+.IP "\fBcapabilities\fR: map of string-\fBCapability\fR pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Describes functionality supported by the hardware and software platform
+on which this Open vSwitch is based.  Clients should not modify this
+column.  See the \fBCapability\fR description for defined
+capability categories and the meaning of associated
+\fBCapability\fR records.
+.IP "\fBstatistics\fR: map of string-integer pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs that report statistics about a running Open_vSwitch
+daemon.  The current implementation updates these counters
+periodically.  In the future, we plan to, instead, update them only
+when they are queried (e.g. using an OVSDB \fBselect\fR
+operation) and perhaps at other times, but not on any regular
+periodic basis.
+.IP
+The currently defined key-value pairs are listed below.  Some Open
+vSwitch implementations may not support some statistics, in which
+case those key-value pairs are omitted.
+.RS
+.TP
+\fBload\-average\fR
+System load average multiplied by 100 and rounded to the nearest
+integer.
+.RE
+.bp
+.SS "Bridge Table"
+Configuration for a bridge within an
+\fBOpen_vSwitch\fR\.
+.PP
+A \fBBridge\fR record represents an Ethernet switch with one or
+more ``ports,\(cq\(cq which are the \fBPort\fR records pointed to by
+the \fBBridge\fR\(cqs \fBports\fR column.
+.sp
+.ce 1
+\fBBridge\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+.T&
+li | s
+l | l.
+Core Features
+_
+\ \ \fBname\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\ \ \fBports\fR	T{
+set of \fBPort\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBmirrors\fR	T{
+set of \fBMirror\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBnetflow\fR	T{
+optional \fBNetFlow\fR, between 0 and 2147483647 characters long
+T}
+\ \ \fBsflow\fR	T{
+optional \fBsFlow\fR, between 0 and 2147483647 characters long
+T}
+\ \ \fBflood_vlans\fR	T{
+set of up to 4096 integers, in range 0 to 4,095
+T}
+_
+.T&
+li | s
+l | l.
+OpenFlow Configuration
+_
+\ \ \fBcontroller\fR	T{
+set of \fBController\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBfail_mode\fR	T{
+optional string, either \fBsecure\fR or \fBstandalone\fR
+T}
+\ \ \fBdatapath_id\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Other Features
+_
+\ \ \fBdatapath_type\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\ \ \fBother_config\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.ST "Core Features:"
+.IP "\fBname\fR: string, between 0 and 2147483647 characters long"
+Bridge identifier.  Should be alphanumeric and no more than about 8
+bytes long.  Must be unique among the names of ports, interfaces, and
+bridges on a host.
+.IP "\fBports\fR: set of \fBPort\fRs, between 0 and 2147483647 characters long"
+Ports included in the bridge.
+.IP "\fBmirrors\fR: set of \fBMirror\fRs, between 0 and 2147483647 characters long"
+Port mirroring configuration.
+.IP "\fBnetflow\fR: optional \fBNetFlow\fR, between 0 and 2147483647 characters long"
+NetFlow configuration.
+.IP "\fBsflow\fR: optional \fBsFlow\fR, between 0 and 2147483647 characters long"
+sFlow configuration.
+.IP "\fBflood_vlans\fR: set of up to 4096 integers, in range 0 to 4,095"
+VLAN IDs of VLANs on which MAC address learning should be disabled, so
+that packets are flooded instead of being sent to specific ports that
+are believed to contain packets\(cq destination MACs.  This should
+ordinarily be used to disable MAC learning on VLANs used for mirroring
+(RSPAN VLANs).  It may also be useful for debugging.
+.ST "OpenFlow Configuration:"
+.IP "\fBcontroller\fR: set of \fBController\fRs, between 0 and 2147483647 characters long"
+OpenFlow controller set.  If unset, then no OpenFlow controllers
+will be used.
+.IP "\fBfail_mode\fR: optional string, either \fBsecure\fR or \fBstandalone\fR"
+When a controller is configured, it is, ordinarily, responsible
+for setting up all flows on the switch.  Thus, if the connection to
+the controller fails, no new network connections can be set up.
+If the connection to the controller stays down long enough,
+no packets can pass through the switch at all.  This setting
+determines the switch\(cqs response to such a situation.  It may be set
+to one of the following:
+.RS
+.TP
+\fBstandalone\fR
+If no message is received from the controller for three
+times the inactivity probe interval
+(see \fBinactivity_probe\fR), then Open vSwitch
+will take over responsibility for setting up flows.  In
+this mode, Open vSwitch causes the bridge to act like an
+ordinary MAC-learning switch.  Open vSwitch will continue
+to retry connecting to the controller in the background
+and, when the connection succeeds, it will discontinue its
+standalone behavior.
+.TP
+\fBsecure\fR
+Open vSwitch will not set up flows on its own when the
+controller connection fails or when no controllers are
+defined.  The bridge will continue to retry connecting to
+any defined controllers forever.
+.RE
+.IP
+If this value is unset, the default is implementation-specific.
+.IP
+When more than one controller is configured,
+\fBfail_mode\fR is considered only when none of the
+configured controllers can be contacted.
+.IP "\fBdatapath_id\fR: optional string, between 0 and 2147483647 characters long"
+Reports the OpenFlow datapath ID in use.  Exactly 16 hex
+digits.  (Setting this column will have no useful effect.  Set
+\fBother_config\fR:\fBother\-config\fR
+instead.)
+.ST "Other Features:"
+.IP "\fBdatapath_type\fR: string, between 0 and 2147483647 characters long"
+Name of datapath provider.  The kernel datapath has
+type \fBsystem\fR\.  The userspace datapath has
+type \fBnetdev\fR\.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate
+with Open vSwitch, rather than by Open vSwitch itself.  System
+integrators should either use the Open vSwitch development
+mailing list to coordinate on common key-value definitions, or
+choose key names that are likely to be unique.  The currently
+defined key-value pairs are:
+.RS
+.TP
+\fBbridge\-id\fR
+A unique identifier of the bridge.  On Citrix XenServer this
+will commonly be the same as \fBxs\-network\-uuids\fR\.
+.TP
+\fBxs\-network\-uuids\fR
+Semicolon-delimited set of universally unique identifier(s) for
+the network with which this bridge is associated on a Citrix
+XenServer host.  The network identifiers are RFC 4122 UUIDs as
+displayed by, e.g., \fBxe network\-list\fR\.
+.RE
+.IP "\fBother_config\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for configuring rarely used bridge
+features.  The currently defined key-value pairs are:
+.RS
+.TP
+\fBdatapath\-id\fR
+Exactly 16 hex
+digits to set the OpenFlow datapath ID to a specific
+value.
+.TP
+\fBhwaddr\fR
+An Ethernet address in the form
+\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR
+to set the hardware address of the local port and influence the
+datapath ID.
+.RE
+.bp
+.SS "Port Table"
+A port within a \fBBridge\fR\.
+.PP
+Most commonly, a port has exactly one ``interface,\(cq\(cq pointed to by its
+\fBinterfaces\fR column.  Such a port logically
+corresponds to a port on a physical Ethernet switch.  A port
+with more than one interface is a ``bonded port\(cq\(cq (see
+\fBBonding Configuration\fR).
+.PP
+Some properties that one might think as belonging to a port are actually
+part of the port\(cqs \fBInterface\fR members.
+.sp
+.ce 1
+\fBPort\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBname\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\fBinterfaces\fR	T{
+set of 1 or more \fBInterface\fRs, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+VLAN Configuration
+_
+\ \ \fBtag\fR	T{
+optional integer, in range 0 to 4,095
+T}
+\ \ \fBtrunks\fR	T{
+set of up to 4096 integers, in range 0 to 4,095
+T}
+_
+.T&
+li | s
+l | l.
+Bonding Configuration
+_
+\ \ \fBbond_updelay\fR	T{
+integer, between 0 and 2147483647 characters long
+T}
+\ \ \fBbond_downdelay\fR	T{
+integer, between 0 and 2147483647 characters long
+T}
+\ \ \fBbond_fake_iface\fR	T{
+boolean, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Other Features
+_
+\ \ \fBqos\fR	T{
+optional \fBQoS\fR, between 0 and 2147483647 characters long
+T}
+\ \ \fBmac\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\ \ \fBfake_bridge\fR	T{
+boolean, between 0 and 2147483647 characters long
+T}
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\ \ \fBother_config\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBname\fR: string, between 0 and 2147483647 characters long"
+Port name.  Should be alphanumeric and no more than about 8
+bytes long.  May be the same as the interface name, for
+non-bonded ports.  Must otherwise be unique among the names of
+ports, interfaces, and bridges on a host.
+.IP "\fBinterfaces\fR: set of 1 or more \fBInterface\fRs, between 0 and 2147483647 characters long"
+The port\(cqs interfaces.  If there is more than one, this is a
+bonded Port.
+.ST "VLAN Configuration:"
+A bridge port must be configured for VLANs in one of two
+mutually exclusive ways:
+.RS
+.IP \(bu
+A ``trunk port\(cq\(cq has an empty value for \fBtag\fR\.  Its \fBtrunks\fR value may be
+empty or non-empty.
+.IP \(bu
+An ``implicitly tagged VLAN port\(cq\(cq or ``access port\(cq\(cq
+has an nonempty value for \fBtag\fR\.  Its
+\fBtrunks\fR value must be empty.
+.RE
+If \fBtrunks\fR and \fBtag\fR are both
+nonempty, the configuration is ill-formed.
+.IP "\fBtag\fR: optional integer, in range 0 to 4,095"
+If this is an access port (see above), the port\(cqs implicitly
+tagged VLAN.  Must be empty if this is a trunk port.
+.IP
+Frames arriving on trunk ports will be forwarded to this
+port only if they are tagged with the given VLAN (or, if
+\fBtag\fR is 0, then if they lack a VLAN header).
+Frames arriving on other access ports will be forwarded to
+this port only if they have the same \fBtag\fR
+value.  Frames forwarded to this port will not have an
+802.1Q header.
+.IP
+When a frame with a 802.1Q header that indicates a nonzero
+VLAN is received on an access port, it is discarded.
+.IP "\fBtrunks\fR: set of up to 4096 integers, in range 0 to 4,095"
+If this is a trunk port (see above), the 802.1Q VLAN(s) that
+this port trunks; if it is empty, then the port trunks all
+VLANs.  Must be empty if this is an access port.
+.IP
+Frames arriving on trunk ports are dropped if they are not
+in one of the specified VLANs.  For this purpose, packets
+that have no VLAN header are treated as part of VLAN 0.
+.ST "Bonding Configuration:"
+A port that has more than one interface is a ``bonded port.\(cq\(cq
+Bonding allows for load balancing and fail-over.  Open vSwitch
+supports ``source load balancing\(cq\(cq (SLB) bonding, which
+assigns flows to slaves based on source MAC address, with
+periodic rebalancing as traffic patterns change.  This form of
+bonding does not require 802.3ad or other special support from
+the upstream switch to which the slave devices are
+connected.
+.PP
+These columns apply only to bonded ports.  Their values are
+otherwise ignored.
+.IP "\fBbond_updelay\fR: integer, between 0 and 2147483647 characters long"
+For a bonded port, the number of milliseconds for which carrier must
+stay up on an interface before the interface is considered to be up.
+Specify \fB0\fR to enable the interface immediately.
+.IP
+This setting is honored only when at least one bonded interface is
+already enabled.  When no interfaces are enabled, then the first bond
+interface to come up is enabled immediately.
+.IP "\fBbond_downdelay\fR: integer, between 0 and 2147483647 characters long"
+For a bonded port, the number of milliseconds for which carrier must
+stay down on an interface before the interface is considered to be
+down.  Specify \fB0\fR to disable the interface immediately.
+.IP "\fBbond_fake_iface\fR: boolean, between 0 and 2147483647 characters long"
+For a bonded port, whether to create a fake internal interface with the
+name of the port.  Use only for compatibility with legacy software that
+requires this.
+.ST "Other Features:"
+.IP "\fBqos\fR: optional \fBQoS\fR, between 0 and 2147483647 characters long"
+Quality of Service configuration for this port.
+.IP "\fBmac\fR: optional string, between 0 and 2147483647 characters long"
+The MAC address to use for this port for the purpose of choosing the
+bridge\(cqs MAC address.  This column does not necessarily reflect the
+port\(cqs actual MAC address, nor will setting it change the port\(cqs actual
+MAC address.
+.IP "\fBfake_bridge\fR: boolean, between 0 and 2147483647 characters long"
+Does this port represent a sub-bridge for its tagged VLAN within the
+Bridge?  See ovs-vsctl(8) for more information.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with
+Open vSwitch, rather than by Open vSwitch itself.  System integrators
+should either use the Open vSwitch development mailing list to
+coordinate on common key-value definitions, or choose key names that
+are likely to be unique.
+.IP
+No key-value pairs native to \fBPort\fR are currently
+defined.  For fake bridges (see the \fBfake_bridge\fR
+column), external IDs for the fake bridge are defined here by
+prefixing a \fBBridge\fR \fBexternal_ids\fR key with \fBfake\-bridge\-\fR,
+e.g. \fBfake\-bridge\-xs\-network\-uuids\fR\.
+.IP "\fBother_config\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for configuring rarely used port features.  The
+currently defined key-value pairs are:
+.RS
+.TP
+\fBhwaddr\fR
+An Ethernet address in the form
+\fB\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB\fR\.
+.TP
+\fBbond\-rebalance\-interval\fR
+For a bonded port, the number of milliseconds between
+successive attempts to rebalance the bond, that is, to
+move source MACs and their flows from one interface on
+the bond to another in an attempt to keep usage of each
+interface roughly equal.  The default is 10000 (10
+seconds), and the minimum is 1000 (1 second).
+.RE
+.bp
+.SS "Interface Table"
+An interface within a \fBPort\fR\.
+.sp
+.ce 1
+\fBInterface\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+.T&
+li | s
+l | l.
+Core Features
+_
+\ \ \fBname\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\ \ \fBmac\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\ \ \fBofport\fR	T{
+optional integer, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+System-Specific Details
+_
+\ \ \fBtype\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\ \ \fBoptions\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\ \ \fBstatus\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Ingress Policing
+_
+\ \ \fBingress_policing_burst\fR	T{
+integer, at least 0
+T}
+\ \ \fBingress_policing_rate\fR	T{
+integer, at least 0
+T}
+_
+.T&
+li | s
+l | l.
+Other Features
+_
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\ \ \fBstatistics\fR	T{
+map of string-integer pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.ST "Core Features:"
+.IP "\fBname\fR: string, between 0 and 2147483647 characters long"
+Interface name.  Should be alphanumeric and no more than about 8 bytes
+long.  May be the same as the port name, for non-bonded ports.  Must
+otherwise be unique among the names of ports, interfaces, and bridges
+on a host.
+.IP "\fBmac\fR: optional string, between 0 and 2147483647 characters long"
+Ethernet address to set for this interface.  If unset then the
+default MAC address is used:
+.RS
+.IP \(bu
+For the local interface, the default is the lowest-numbered MAC
+address among the other bridge ports, either the value of the
+\fBmac\fR in its \fBPort\fR record,
+if set, or its actual MAC (for bonded ports, the MAC of its slave
+whose name is first in alphabetical order).  Internal ports and
+bridge ports that are used as port mirroring destinations (see the
+\fBMirror\fR table) are ignored.
+.IP \(bu
+For other internal interfaces, the default MAC is randomly
+generated.
+.IP \(bu
+External interfaces typically have a MAC address associated with
+their hardware.
+.RE
+.IP
+Some interfaces may not have a software-controllable MAC
+address.
+.IP "\fBofport\fR: optional integer, between 0 and 2147483647 characters long"
+OpenFlow port number for this interface.  Unlike most columns, this
+column\(cqs value should be set only by Open vSwitch itself.  Other
+clients should set this column to an empty set (the default) when
+creating an \fBInterface\fR\.
+.IP
+Open vSwitch populates this column when the port number becomes
+known.  If the interface is successfully added,
+\fBofport\fR will be set to a number between 1 and 65535
+(generally either in the range 1 to 65280, exclusive, or 65534, the
+port number for the OpenFlow ``local port\(cq\(cq).  If the interface
+cannot be added then Open vSwitch sets this column
+to -1.
+.ST "System-Specific Details:"
+.IP "\fBtype\fR: string, between 0 and 2147483647 characters long"
+The interface type, one of:
+.RS
+.TP
+\fBsystem\fR
+An ordinary network device, e.g. \fBeth0\fR on Linux.
+Sometimes referred to as ``external interfaces\(cq\(cq since they are
+generally connected to hardware external to that on which the Open
+vSwitch is running.  The empty string is a synonym for
+\fBsystem\fR\.
+.TP
+\fBinternal\fR
+A simulated network device that sends and receives traffic.  An
+internal interface whose \fBname\fR is the same as its
+bridge\(cqs \fBname\fR is called the
+``local interface.\(cq\(cq  It does not make sense to bond an internal
+interface, so the terms ``port\(cq\(cq and ``interface\(cq\(cq are often used
+imprecisely for internal interfaces.
+.TP
+\fBtap\fR
+A TUN/TAP device managed by Open vSwitch.
+.TP
+\fBgre\fR
+An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
+tunnel.  Each tunnel must be uniquely identified by the
+combination of \fBremote_ip\fR, \fBlocal_ip\fR, and
+\fBin_key\fR\.  Note that if two ports are defined that are
+the same except one has an optional identifier and the other does
+not, the more specific one is matched first.  \fBin_key\fR
+is considered more specific than \fBlocal_ip\fR if a port
+defines one and another port defines the other.  The following
+options may be specified in the \fBoptions\fR column:
+.RS
+.TP
+\fBremote_ip\fR
+Required.  The tunnel endpoint.
+.RE
+.RS
+.TP
+\fBlocal_ip\fR
+Optional.  The destination IP that received packets must
+match.  Default is to match all addresses.
+.RE
+.RS
+.TP
+\fBin_key\fR
+Optional.  The GRE key that received packets must contain.
+It may either be a 32-bit number (no key and a key of 0 are
+treated as equivalent) or the word \fBflow\fR\.  If
+\fBflow\fR is specified then any key will be accepted
+and the key will be placed in the \fBtun_id\fR field
+for matching in the flow table.  The ovs-ofctl manual page
+contains additional information about matching fields in
+OpenFlow flows.  Default is no key.
+.RE
+.RS
+.TP
+\fBout_key\fR
+Optional.  The GRE key to be set on outgoing packets.  It may
+either be a 32-bit number or the word \fBflow\fR\.  If
+\fBflow\fR is specified then the key may be set using
+the \fBset_tunnel\fR Nicira OpenFlow vendor extension (0
+is used in the absence of an action).  The ovs-ofctl manual
+page contains additional information about the Nicira OpenFlow
+vendor extensions.  Default is no key.
+.RE
+.RS
+.TP
+\fBkey\fR
+Optional.  Shorthand to set \fBin_key\fR and
+\fBout_key\fR at the same time.
+.RE
+.RS
+.TP
+\fBtos\fR
+Optional.  The value of the ToS bits to be set on the
+encapsulating packet.  It may also be the word
+\fBinherit\fR, in which case the ToS will be copied from
+the inner packet if it is IPv4 or IPv6 (otherwise it will be
+0).  Note that the ECN fields are always inherited.  Default is
+0.
+.RE
+.RS
+.TP
+\fBttl\fR
+Optional.  The TTL to be set on the encapsulating packet.
+It may also be the word \fBinherit\fR, in which case the
+TTL will be copied from the inner packet if it is IPv4 or IPv6
+(otherwise it will be the system default, typically 64).
+Default is the system default TTL.
+.RE
+.RS
+.TP
+\fBcsum\fR
+Optional.  Compute GRE checksums on outgoing packets.
+Checksums present on incoming packets will be validated
+regardless of this setting.  Note that GRE checksums
+impose a significant performance penalty as they cover the
+entire packet.  As the contents of the packet is typically
+covered by L3 and L4 checksums, this additional checksum only
+adds value for the GRE and encapsulated Ethernet headers.
+Default is disabled, set to \fBtrue\fR to enable.
+.RE
+.RS
+.TP
+\fBpmtud\fR
+Optional.  Enable tunnel path MTU discovery.  If enabled
+``ICMP destination unreachable - fragmentation\(cq\(cq needed
+messages will be generated for IPv4 packets with the DF bit set
+and IPv6 packets above the minimum MTU if the packet size
+exceeds the path MTU minus the size of the tunnel headers.  It
+also forces the encapsulating packet DF bit to be set (it is
+always set if the inner packet implies path MTU discovery).
+Note that this option causes behavior that is typically
+reserved for routers and therefore is not entirely in
+compliance with the IEEE 802.1D specification for bridges.
+Default is enabled, set to \fBfalse\fR to disable.
+.RE
+.TP
+\fBcapwap\fR
+Ethernet tunneling over the UDP transport portion of CAPWAP
+(RFC 5415).  This allows interoperability with certain switches
+where GRE is not available.  Note that only the tunneling component
+of the protocol is implemented.  Due to the non-standard use of
+CAPWAP, UDP ports 58881 and 58882 are used as the source and
+destinations ports respectivedly.  Each tunnel must be uniquely
+identified by the combination of \fBremote_ip\fR and
+\fBlocal_ip\fR\.  If two ports are defined that are the same
+except one includes \fBlocal_ip\fR and the other does not,
+the more specific one is matched first.  CAPWAP support is not
+available on all platforms.  Currently it is only supported in the
+Linux kernel module with kernel versions >= 2.6.25.  The following
+options may be specified in the \fBoptions\fR column:
+.RS
+.TP
+\fBremote_ip\fR
+Required.  The tunnel endpoint.
+.RE
+.RS
+.TP
+\fBlocal_ip\fR
+Optional.  The destination IP that received packets must
+match.  Default is to match all addresses.
+.RE
+.RS
+.TP
+\fBtos\fR
+Optional.  The value of the ToS bits to be set on the
+encapsulating packet.  It may also be the word
+\fBinherit\fR, in which case the ToS will be copied from
+the inner packet if it is IPv4 or IPv6 (otherwise it will be
+0).  Note that the ECN fields are always inherited.  Default is
+0.
+.RE
+.RS
+.TP
+\fBttl\fR
+Optional.  The TTL to be set on the encapsulating packet.
+It may also be the word \fBinherit\fR, in which case the
+TTL will be copied from the inner packet if it is IPv4 or IPv6
+(otherwise it will be the system default, typically 64).
+Default is the system default TTL.
+.RE
+.RS
+.TP
+\fBpmtud\fR
+Optional.  Enable tunnel path MTU discovery.  If enabled
+``ICMP destination unreachable - fragmentation\(cq\(cq needed
+messages will be generated for IPv4 packets with the DF bit set
+and IPv6 packets above the minimum MTU if the packet size
+exceeds the path MTU minus the size of the tunnel headers.  It
+also forces the encapsulating packet DF bit to be set (it is
+always set if the inner packet implies path MTU discovery).
+Note that this option causes behavior that is typically
+reserved for routers and therefore is not entirely in
+compliance with the IEEE 802.1D specification for bridges.
+Default is enabled, set to \fBfalse\fR to disable.
+.RE
+.TP
+\fBpatch\fR
+A pair of virtual devices that act as a patch cable.  The \fBoptions\fR column must have the following key-value pair:
+.RS
+.TP
+\fBpeer\fR
+The \fBname\fR of the \fBInterface\fR for
+the other side of the patch.  The named \fBInterface\fR\(cqs own \fBpeer\fR option must specify
+this \fBInterface\fR\(cqs name.  That is, the two patch
+interfaces must have reversed \fBname\fR and
+\fBpeer\fR values.
+.RE
+.RE
+.IP "\fBoptions\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Configuration options whose interpretation varies based on
+\fBtype\fR\.
+.IP "\fBstatus\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs that report port status.  Supported status
+values are \fBtype\fR-dependent.
+.IP
+The only currently defined key-value pair is:
+.RS
+.TP
+\fBsource_ip\fR
+The source IP address used for an IPv4 tunnel end-point,
+such as \fBgre\fR or \fBcapwap\fR\.  Not
+supported by all implementations.
+.RE
+.ST "Ingress Policing:"
+.IP "\fBingress_policing_burst\fR: integer, at least 0"
+Maximum burst size for data received on this interface, in kb.  The
+default burst size if set to \fB0\fR is 1000 kb.  This value
+has no effect if \fBingress_policing_rate\fR
+is \fB0\fR\.
+.IP
+The burst size should be at least the size of the interface\(cqs
+MTU.
+.IP "\fBingress_policing_rate\fR: integer, at least 0"
+Maximum rate for data received on this interface, in kbps.  Data
+received faster than this rate is dropped.  Set to \fB0\fR to
+disable policing.
+.IP
+The meaning of ``ingress\(cq\(cq is from Open vSwitch\(cqs perspective.  If
+configured on a physical interface, then it limits the rate at which
+traffic is allowed into the system from the outside.  If configured
+on a virtual interface that is connected to a virtual machine, then
+it limits the rate at which the guest is able to transmit.
+.ST "Other Features:"
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate
+with Open vSwitch, rather than by Open vSwitch itself.  System
+integrators should either use the Open vSwitch development
+mailing list to coordinate on common key-value definitions, or
+choose key names that are likely to be unique.  The currently
+defined common key-value pairs are:
+.RS
+.TP
+\fBattached\-mac\fR
+The MAC address programmed into the ``virtual hardware\(cq\(cq for this
+interface, in the form
+\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR\.
+For Citrix XenServer, this is the value of the \fBMAC\fR
+field in the VIF record for this interface.
+.TP
+\fBiface\-id\fR
+A system-unique identifier for the interface.  On XenServer,
+this will commonly be the same as \fBxs\-vif\-uuid\fR\.
+.RE
+.IP
+Additionally the following key-value pairs specifically
+apply to an interface that represents a virtual Ethernet interface
+connected to a virtual machine.  These key-value pairs should not be
+present for other types of interfaces.  Keys whose names end
+in \fB\-uuid\fR have values that uniquely identify the entity
+in question.  For a Citrix XenServer hypervisor, these values are
+UUIDs in RFC 4122 format.  Other hypervisors may use other
+formats.
+.IP
+The currently defined key-value pairs for XenServer are:
+.RS
+.TP
+\fBxs\-vif\-uuid\fR
+The virtual interface associated with this interface.
+.TP
+\fBxs\-network\-uuid\fR
+The virtual network to which this interface is attached.
+.TP
+\fBxs\-vm\-uuid\fR
+The VM to which this interface belongs.
+.RE
+.IP "\fBstatistics\fR: map of string-integer pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs that report interface statistics.  The current
+implementation updates these counters periodically.  In the future,
+we plan to, instead, update them when an interface is created, when
+they are queried (e.g. using an OVSDB \fBselect\fR operation),
+and just before an interface is deleted due to virtual interface
+hot-unplug or VM shutdown, and perhaps at other times, but not on any
+regular periodic basis.
+.IP
+The currently defined key-value pairs are listed below.  These are
+the same statistics reported by OpenFlow in its \fBstruct
+ofp_port_stats\fR structure.  If an interface does not support a
+given statistic, then that pair is omitted.
+.RS
+.IP \(bu
+Successful transmit and receive counters:
+.RS
+.TP
+\fBrx_packets\fR
+Number of received packets.
+.TP
+\fBrx_bytes\fR
+Number of received bytes.
+.TP
+\fBtx_packets\fR
+Number of transmitted packets.
+.TP
+\fBtx_bytes\fR
+Number of transmitted bytes.
+.RE
+.IP \(bu
+Receive errors:
+.RS
+.TP
+\fBrx_dropped\fR
+Number of packets dropped by RX.
+.TP
+\fBrx_frame_err\fR
+Number of frame alignment errors.
+.TP
+\fBrx_over_err\fR
+Number of packets with RX overrun.
+.TP
+\fBrx_crc_err\fR
+Number of CRC errors.
+.TP
+\fBrx_errors\fR
+Total number of receive errors, greater than or equal
+to the sum of the above.
+.RE
+.IP \(bu
+Transmit errors:
+.RS
+.TP
+\fBtx_dropped\fR
+Number of packets dropped by TX.
+.TP
+\fBcollisions\fR
+Number of collisions.
+.TP
+\fBtx_errors\fR
+Total number of transmit errors, greater
+than or equal to the sum of the above.
+.RE
+.RE
+.bp
+.SS "QoS Table"
+Quality of Service (QoS) configuration for each Port that
+references it.
+.sp
+.ce 1
+\fBQoS\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBtype\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\fBqueues\fR	T{
+map of integer-\fBQueue\fR pairs, key in range 0 to 4,294,967,295, value between 0 and 2147483647 characters long
+T}
+\fBother_config\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBtype\fR: string, between 0 and 2147483647 characters long"
+The type of QoS to implement.  The \fBcapabilities\fR column in the \fBOpen_vSwitch\fR table
+identifies the types that a switch actually supports.  The currently
+defined types are listed below:
+.RS
+.TP
+\fBlinux\-htb\fR
+Linux ``hierarchy token bucket\(cq\(cq classifier.  See tc-htb(8) (also at
+\fBhttp://linux.die.net/man/8/tc\-htb\fR) and the HTB manual
+(\fBhttp://luxik.cdi.cz/~devik/qos/htb/manual/userg.htm\fR)
+for information on how this classifier works and how to configure it.
+.RE
+.IP "\fBqueues\fR: map of integer-\fBQueue\fR pairs, key in range 0 to 4,294,967,295, value between 0 and 2147483647 characters long"
+A map from queue numbers to \fBQueue\fR records.  The
+supported range of queue numbers depend on \fBtype\fR\.  The
+queue numbers are the same as the \fBqueue_id\fR used in
+OpenFlow in \fBstruct ofp_action_enqueue\fR and other
+structures.  Queue 0 is used by OpenFlow output actions that do not
+specify a specific queue.
+.IP "\fBother_config\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for configuring QoS features that depend on
+\fBtype\fR\.
+.IP
+The \fBlinux\-htb\fR class supports the following key-value
+pairs:
+.RS
+.TP
+\fBmax\-rate\fR
+Maximum rate shared by all queued traffic, in bit/s.
+Optional.  If not specified, for physical interfaces, the
+default is the link rate.  For other interfaces or if the
+link rate cannot be determined, the default is currently 100
+Mbps.
+.RE
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "Queue Table"
+A configuration for a port output queue, used in configuring Quality of
+Service (QoS) features.  May be referenced by \fBqueues\fR column in \fBQoS\fR table.
+.sp
+.ce 1
+\fBQueue\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBother_config\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+\fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBother_config\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for configuring the output queue.  The supported
+key-value pairs and their meanings depend on the \fBtype\fR
+of the \fBQoS\fR records that reference this row.
+.IP
+The key-value pairs defined for \fBQoS\fR \fBtype\fR of \fBmin\-rate\fR are:
+.RS
+.TP
+\fBmin\-rate\fR
+Minimum guaranteed bandwidth, in bit/s.  Required.
+.RE
+.IP
+The key-value pairs defined for \fBQoS\fR \fBtype\fR of \fBlinux\-htb\fR are:
+.RS
+.TP
+\fBmin\-rate\fR
+Minimum guaranteed bandwidth, in bit/s.  Required.
+.TP
+\fBmax\-rate\fR
+Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
+queue\(cqs rate will not be allowed to exceed the specified value, even
+if excess bandwidth is available.  If unspecified, defaults to no
+limit.
+.TP
+\fBburst\fR
+Burst size, in bits.  This is the maximum amount of ``credits\(cq\(cq
+that a queue can accumulate while it is idle.  Optional.  Details of
+the \fBlinux\-htb\fR implementation require a minimum burst
+size, so a too-small \fBburst\fR will be silently
+ignored.
+.TP
+\fBpriority\fR
+A nonnegative 32-bit integer.  Defaults to 0 if
+unspecified.  A queue with a smaller \fBpriority\fR
+will receive all the excess bandwidth that it can use before
+a queue with a larger value receives any.  Specific priority
+values are unimportant; only relative ordering matters.
+.RE
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "Mirror Table"
+A port mirror within a \fBBridge\fR\.
+.PP
+A port mirror configures a bridge to send selected frames to special
+``mirrored\(cq\(cq ports, in addition to their normal destinations.  Mirroring
+traffic may also be referred to as SPAN or RSPAN, depending on the
+mechanism used for delivery.
+.sp
+.ce 1
+\fBMirror\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBname\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Selecting Packets for Mirroring
+_
+\ \ \fBselect_all\fR	T{
+boolean, between 0 and 2147483647 characters long
+T}
+\ \ \fBselect_dst_port\fR	T{
+set of weak reference to \fBPort\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBselect_src_port\fR	T{
+set of weak reference to \fBPort\fRs, between 0 and 2147483647 characters long
+T}
+\ \ \fBselect_vlan\fR	T{
+set of up to 4096 integers, in range 0 to 4,095
+T}
+_
+.T&
+li | s
+l | l.
+Mirroring Destination Configuration
+_
+\ \ \fBoutput_port\fR	T{
+optional weak reference to \fBPort\fR, between 0 and 2147483647 characters long
+T}
+\ \ \fBoutput_vlan\fR	T{
+optional integer, in range 1 to 4,095
+T}
+_
+.T&
+li | s
+l | l.
+Other Features
+_
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBname\fR: string, between 0 and 2147483647 characters long"
+Arbitrary identifier for the \fBMirror\fR\.
+.ST "Selecting Packets for Mirroring:"
+.IP "\fBselect_all\fR: boolean, between 0 and 2147483647 characters long"
+If true, every packet arriving or departing on any port is
+selected for mirroring.
+.IP "\fBselect_dst_port\fR: set of weak reference to \fBPort\fRs, between 0 and 2147483647 characters long"
+Ports on which departing packets are selected for mirroring.
+.IP "\fBselect_src_port\fR: set of weak reference to \fBPort\fRs, between 0 and 2147483647 characters long"
+Ports on which arriving packets are selected for mirroring.
+.IP "\fBselect_vlan\fR: set of up to 4096 integers, in range 0 to 4,095"
+VLANs on which packets are selected for mirroring.  An empty set
+selects packets on all VLANs.
+.ST "Mirroring Destination Configuration:"
+.IP "\fBoutput_port\fR: optional weak reference to \fBPort\fR, between 0 and 2147483647 characters long"
+Output port for selected packets, if nonempty.  Mutually exclusive
+with \fBoutput_vlan\fR\.
+.IP
+Specifying a port for mirror output reserves that port exclusively
+for mirroring.  No frames other than those selected for mirroring
+will be forwarded to the port, and any frames received on the port
+will be discarded.
+.IP
+This type of mirroring is sometimes called SPAN.
+.IP "\fBoutput_vlan\fR: optional integer, in range 1 to 4,095"
+Output VLAN for selected packets, if nonempty.  Mutually exclusive
+with \fBoutput_port\fR\.
+.IP
+The frames will be sent out all ports that trunk
+\fBoutput_vlan\fR, as well as any ports with implicit VLAN
+\fBoutput_vlan\fR\.  When a mirrored frame is sent out a
+trunk port, the frame\(cqs VLAN tag will be set to
+\fBoutput_vlan\fR, replacing any existing tag; when it is
+sent out an implicit VLAN port, the frame will not be tagged.  This
+type of mirroring is sometimes called RSPAN.
+.IP
+\fBPlease note:\fR Mirroring to a VLAN can disrupt a network that
+contains unmanaged switches.  Consider an unmanaged physical switch
+with two ports: port 1, connected to an end host, and port 2,
+connected to an Open vSwitch configured to mirror received packets
+into VLAN 123 on port 2.  Suppose that the end host sends a packet on
+port 1 that the physical switch forwards to port 2.  The Open vSwitch
+forwards this packet to its destination and then reflects it back on
+port 2 in VLAN 123.  This reflected packet causes the unmanaged
+physical switch to replace the MAC learning table entry, which
+correctly pointed to port 1, with one that incorrectly points to port
+2.  Afterward, the physical switch will direct packets destined for
+the end host to the Open vSwitch on port 2, instead of to the end
+host on port 1, disrupting connectivity.  If mirroring to a VLAN is
+desired in this scenario, then the physical switch must be replaced
+by one that learns Ethernet addresses on a per-VLAN basis.  In
+addition, learning should be disabled on the VLAN containing mirrored
+traffic. If this is not done then intermediate switches will learn
+the MAC address of each end host from the mirrored traffic.  If
+packets being sent to that end host are also mirrored, then they will
+be dropped since the switch will attempt to send them out the input
+port. Disabling learning for the VLAN will cause the switch to
+correctly send the packet out all ports configured for that VLAN.  If
+Open vSwitch is being used as an intermediate switch, learning can be
+disabled by adding the mirrored VLAN to \fBflood_vlans\fR
+in the appropriate \fBBridge\fR table or tables.
+.ST "Other Features:"
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "Controller Table"
+An OpenFlow controller.
+.PP
+Open vSwitch supports two kinds of OpenFlow controllers:
+.RS
+.TP
+Primary controllers
+This is the kind of controller envisioned by the OpenFlow 1.0
+specification.  Usually, a primary controller implements a network
+policy by taking charge of the switch\(cqs flow table.
+.IP
+Open vSwitch initiates and maintains persistent connections to
+primary controllers, retrying the connection each time it fails or
+drops.  The \fBfail_mode\fR column in the
+\fBBridge\fR table applies to primary controllers.
+.IP
+Open vSwitch permits a bridge to have any number of primary
+controllers.  When multiple controllers are configured, Open
+vSwitch connects to all of them simultaneously.  Because
+OpenFlow 1.0 does not specify how multiple controllers
+coordinate in interacting with a single switch, more than
+one primary controller should be specified only if the
+controllers are themselves designed to coordinate with each
+other.  (The Nicira-defined \fBNXT_ROLE\fR OpenFlow
+vendor extension may be useful for this.)
+.TP
+Service controllers
+These kinds of OpenFlow controller connections are intended for
+occasional support and maintenance use, e.g. with
+\fBovs\-ofctl\fR\.  Usually a service controller connects only
+briefly to inspect or modify some of a switch\(cqs state.
+.IP
+Open vSwitch listens for incoming connections from service
+controllers.  The service controllers initiate and, if necessary,
+maintain the connections from their end.  The \fBfail_mode\fR column in the \fBBridge\fR table does
+not apply to service controllers.
+.IP
+Open vSwitch supports configuring any number of service controllers.
+.RE
+.PP
+The \fBtarget\fR determines the type of controller.
+.sp
+.ce 1
+\fBController\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+.T&
+li | s
+l | l.
+Core Features
+_
+\ \ \fBtarget\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\ \ \fBconnection_mode\fR	T{
+optional string, either \fBin\-band\fR or \fBout\-of\-band\fR
+T}
+_
+.T&
+li | s
+l | l.
+Controller Failure Detection and Handling
+_
+\ \ \fBmax_backoff\fR	T{
+optional integer, at least 1,000
+T}
+\ \ \fBinactivity_probe\fR	T{
+optional integer, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+OpenFlow Rate Limiting
+_
+\ \ \fBcontroller_rate_limit\fR	T{
+optional integer, at least 100
+T}
+\ \ \fBcontroller_burst_limit\fR	T{
+optional integer, at least 25
+T}
+_
+.T&
+li | s
+l | l.
+Additional Discovery Configuration
+_
+\ \ \fBdiscover_accept_regex\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\ \ \fBdiscover_update_resolv_conf\fR	T{
+optional boolean, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Additional In-Band Configuration
+_
+\ \ \fBlocal_ip\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\ \ \fBlocal_netmask\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\ \ \fBlocal_gateway\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+_
+.T&
+li | s
+l | l.
+Other Features
+_
+\ \ \fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.ST "Core Features:"
+.IP "\fBtarget\fR: string, between 0 and 2147483647 characters long"
+Connection method for controller.
+.IP
+The following connection methods are currently supported for primary
+controllers:
+.RS
+.TP
+\fBssl:\fIip\fB\fR[\fB:\fIport\fB\fR]
+The specified SSL \fIport\fR (default: 6633) on the host at
+the given \fIip\fR, which must be expressed as an IP address
+(not a DNS name).  The \fBssl\fR
+column in the \fBOpen_vSwitch\fR table must point to a
+valid SSL configuration when this form is used.
+.IP
+SSL support is an optional feature that is not always built as
+part of Open vSwitch.
+.TP
+\fBtcp:\fIip\fB\fR[\fB:\fIport\fB\fR]
+The specified TCP \fIport\fR (default: 6633) on the host at
+the given \fIip\fR, which must be expressed as an IP address
+(not a DNS name).
+.TP
+\fBdiscover\fR
+Enables controller discovery.
+.IP
+In controller discovery mode, Open vSwitch broadcasts a DHCP
+request with vendor class identifier \fBOpenFlow\fR across
+all of the bridge\(cqs network devices.  It will accept any valid
+DHCP reply that has the same vendor class identifier and includes
+a vendor-specific option with code 1 whose contents are a string
+specifying the location of the controller in the same format as
+\fBtarget\fR\.
+.IP
+The DHCP reply may also, optionally, include a vendor-specific
+option with code 2 whose contents are a string specifying the URI
+to the base of the OpenFlow PKI
+(e.g. \fBhttp://192.168.0.1/openflow/pki\fR).  This URI is
+used only for bootstrapping the OpenFlow PKI at initial switch
+setup; \fBovs\-vswitchd\fR does not use it at all.
+.RE
+.IP
+The following connection methods are currently supported for service
+controllers:
+.RS
+.TP
+\fBpssl:\fR[\fIport\fR][\fB:\fIip\fB\fR]
+Listens for SSL connections on the specified TCP \fIport\fR
+(default: 6633).  If \fIip\fR, which must be expressed as an
+IP address (not a DNS name), is specified, then connections are
+restricted to the specified local IP address.
+.IP
+The \fBssl\fR column in the \fBOpen_vSwitch\fR table must point to a valid SSL
+configuration when this form is used.
+.IP
+SSL support is an optional feature that is not always built as
+part of Open vSwitch.
+.TP
+\fBptcp:\fR[\fIport\fR][\fB:\fIip\fB\fR]
+Listens for connections on the specified TCP \fIport\fR
+(default: 6633).  If \fIip\fR, which must be expressed as an
+IP address (not a DNS name), is specified, then connections are
+restricted to the specified local IP address.
+.RE
+.IP
+When multiple controllers are configured for a single bridge, the
+\fBtarget\fR values must be unique.  Duplicate
+\fBtarget\fR values yield unspecified results.
+.IP "\fBconnection_mode\fR: optional string, either \fBin\-band\fR or \fBout\-of\-band\fR"
+If it is specified, this setting must be one of the following
+strings that describes how Open vSwitch contacts this OpenFlow
+controller over the network:
+.RS
+.TP
+\fBin\-band\fR
+In this mode, this controller\(cqs OpenFlow traffic travels over the
+bridge associated with the controller.  With this setting, Open
+vSwitch allows traffic to and from the controller regardless of the
+contents of the OpenFlow flow table.  (Otherwise, Open vSwitch
+would never be able to connect to the controller, because it did
+not have a flow to enable it.)  This is the most common connection
+mode because it is not necessary to maintain two independent
+networks.
+.TP
+\fBout\-of\-band\fR
+In this mode, OpenFlow traffic uses a control network separate
+from the bridge associated with this controller, that is, the
+bridge does not use any of its own network devices to communicate
+with the controller.  The control network must be configured
+separately, before or after \fBovs\-vswitchd\fR is started.
+.RE
+.IP
+If not specified, the default is implementation-specific.  If
+\fBtarget\fR is \fBdiscover\fR, the connection mode
+is always treated as \fBin\-band\fR regardless of the actual
+setting.
+.ST "Controller Failure Detection and Handling:"
+.IP "\fBmax_backoff\fR: optional integer, at least 1,000"
+Maximum number of milliseconds to wait between connection attempts.
+Default is implementation-specific.
+.IP "\fBinactivity_probe\fR: optional integer, between 0 and 2147483647 characters long"
+Maximum number of milliseconds of idle time on connection to
+controller before sending an inactivity probe message.  If Open
+vSwitch does not communicate with the controller for the specified
+number of seconds, it will send a probe.  If a response is not
+received for the same additional amount of time, Open vSwitch
+assumes the connection has been broken and attempts to reconnect.
+Default is implementation-specific.
+.ST "OpenFlow Rate Limiting:"
+.IP "\fBcontroller_rate_limit\fR: optional integer, at least 100"
+The maximum rate at which packets in unknown flows will be
+forwarded to the OpenFlow controller, in packets per second.  This
+feature prevents a single bridge from overwhelming the controller.
+If not specified, the default is implementation-specific.
+.IP
+In addition, when a high rate triggers rate-limiting, Open
+vSwitch queues controller packets for each port and transmits
+them to the controller at the configured rate.  The number of
+queued packets is limited by
+the \fBcontroller_burst_limit\fR value.  The packet
+queue is shared fairly among the ports on a bridge.
+.IP
+Open
+vSwitch maintains two such packet rate-limiters per bridge.
+One of these applies to packets sent up to the controller
+because they do not correspond to any flow.  The other applies
+to packets sent up to the controller by request through flow
+actions. When both rate-limiters are filled with packets, the
+actual rate that packets are sent to the controller is up to
+twice the specified rate.
+.IP "\fBcontroller_burst_limit\fR: optional integer, at least 25"
+In conjunction with \fBcontroller_rate_limit\fR,
+the maximum number of unused packet credits that the bridge will
+allow to accumulate, in packets.  If not specified, the default
+is implementation-specific.
+.ST "Additional Discovery Configuration:"
+These values are considered only when \fBtarget\fR
+is \fBdiscover\fR\.
+.IP "\fBdiscover_accept_regex\fR: optional string, between 0 and 2147483647 characters long"
+A POSIX
+extended regular expression against which the discovered controller
+location is validated.  The regular expression is implicitly
+anchored at the beginning of the controller location string, as
+if it begins with \fB^\fR\.  If not specified, the default
+is implementation-specific.
+.IP "\fBdiscover_update_resolv_conf\fR: optional boolean, between 0 and 2147483647 characters long"
+Whether to update \fB/etc/resolv.conf\fR when the
+controller is discovered.  If not specified, the default
+is implementation-specific.  Open vSwitch will only modify
+\fB/etc/resolv.conf\fR if the DHCP response that it receives
+specifies one or more DNS servers.
+.ST "Additional In-Band Configuration:"
+These values are considered only in in-band control mode (see
+\fBconnection_mode\fR) and only when \fBtarget\fR
+is not \fBdiscover\fR\.  (For controller discovery, the network
+configuration obtained via DHCP is used instead.)
+.PP
+When multiple controllers are configured on a single bridge, there
+should be only one set of unique values in these columns.  If different
+values are set for these columns in different controllers, the effect
+is unspecified.
+.IP "\fBlocal_ip\fR: optional string, between 0 and 2147483647 characters long"
+The IP address to configure on the local port,
+e.g. \fB192.168.0.123\fR\.  If this value is unset, then
+\fBlocal_netmask\fR and \fBlocal_gateway\fR are
+ignored.
+.IP "\fBlocal_netmask\fR: optional string, between 0 and 2147483647 characters long"
+The IP netmask to configure on the local port,
+e.g. \fB255.255.255.0\fR\.  If \fBlocal_ip\fR is set
+but this value is unset, then the default is chosen based on whether
+the IP address is class A, B, or C.
+.IP "\fBlocal_gateway\fR: optional string, between 0 and 2147483647 characters long"
+The IP address of the gateway to configure on the local port, as a
+string, e.g. \fB192.168.0.1\fR\.  Leave this column unset if
+this network has no gateway.
+.ST "Other Features:"
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "NetFlow Table"
+A NetFlow target.  NetFlow is a protocol that exports a number of
+details about terminating IP flows, such as the principals involved
+and duration.
+.sp
+.ce 1
+\fBNetFlow\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBtargets\fR	T{
+set of 1 or more strings, between 0 and 2147483647 characters long
+T}
+\fBengine_id\fR	T{
+optional integer, in range 0 to 255
+T}
+\fBengine_type\fR	T{
+optional integer, in range 0 to 255
+T}
+\fBactive_timeout\fR	T{
+integer, at least -1
+T}
+\fBadd_id_to_interface\fR	T{
+boolean, between 0 and 2147483647 characters long
+T}
+\fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBtargets\fR: set of 1 or more strings, between 0 and 2147483647 characters long"
+NetFlow targets in the form
+\fB\fIip\fB:\fIport\fB\fR\.  The \fIip\fR
+must be specified numerically, not as a DNS name.
+.IP "\fBengine_id\fR: optional integer, in range 0 to 255"
+Engine ID to use in NetFlow messages.  Defaults to datapath index
+if not specified.
+.IP "\fBengine_type\fR: optional integer, in range 0 to 255"
+Engine type to use in NetFlow messages.  Defaults to datapath
+index if not specified.
+.IP "\fBactive_timeout\fR: integer, at least -1"
+The interval at which NetFlow records are sent for flows that are
+still active, in seconds.  A value of \fB0\fR requests the
+default timeout (currently 600 seconds); a value of \fB\-1\fR
+disables active timeouts.
+.IP "\fBadd_id_to_interface\fR: boolean, between 0 and 2147483647 characters long"
+If this column\(cqs value is \fBfalse\fR, the ingress and egress
+interface fields of NetFlow flow records are derived from OpenFlow port
+numbers.  When it is \fBtrue\fR, the 7 most significant bits of
+these fields will be replaced by the least significant 7 bits of the
+engine id.  This is useful because many NetFlow collectors do not
+expect multiple switches to be sending messages from the same host, so
+they do not store the engine information which could be used to
+disambiguate the traffic.
+.IP
+When this option is enabled, a maximum of 508 ports are supported.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "SSL Table"
+SSL configuration for an Open_vSwitch.
+.sp
+.ce 1
+\fBSSL\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBprivate_key\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\fBcertificate\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\fBca_cert\fR	T{
+string, between 0 and 2147483647 characters long
+T}
+\fBbootstrap_ca_cert\fR	T{
+boolean, between 0 and 2147483647 characters long
+T}
+\fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBprivate_key\fR: string, between 0 and 2147483647 characters long"
+Name of a PEM file containing the private key used as the switch\(cqs
+identity for SSL connections to the controller.
+.IP "\fBcertificate\fR: string, between 0 and 2147483647 characters long"
+Name of a PEM file containing a certificate, signed by the
+certificate authority (CA) used by the controller and manager,
+that certifies the switch\(cqs private key, identifying a trustworthy
+switch.
+.IP "\fBca_cert\fR: string, between 0 and 2147483647 characters long"
+Name of a PEM file containing the CA certificate used to verify
+that the switch is connected to a trustworthy controller.
+.IP "\fBbootstrap_ca_cert\fR: boolean, between 0 and 2147483647 characters long"
+If set to \fBtrue\fR, then Open vSwitch will attempt to
+obtain the CA certificate from the controller on its first SSL
+connection and save it to the named PEM file. If it is successful,
+it will immediately drop the connection and reconnect, and from then
+on all SSL connections must be authenticated by a certificate signed
+by the CA certificate thus obtained.  \fBThis option exposes the
+SSL connection to a man\-in\-the\-middle attack obtaining the initial
+CA certificate.\fR  It may still be useful for bootstrapping.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "sFlow Table"
+An sFlow(R) target.  sFlow is a protocol for remote monitoring
+of switches.
+.sp
+.ce 1
+\fBsFlow\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBagent\fR	T{
+optional string, between 0 and 2147483647 characters long
+T}
+\fBheader\fR	T{
+optional integer, between 0 and 2147483647 characters long
+T}
+\fBpolling\fR	T{
+optional integer, between 0 and 2147483647 characters long
+T}
+\fBsampling\fR	T{
+optional integer, between 0 and 2147483647 characters long
+T}
+\fBtargets\fR	T{
+set of 1 or more strings, between 0 and 2147483647 characters long
+T}
+\fBexternal_ids\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBagent\fR: optional string, between 0 and 2147483647 characters long"
+Name of the network device whose IP address should be reported as the
+``agent address\(cq\(cq to collectors.  If not specified, the IP address
+defaults to the \fBlocal_ip\fR in the
+collector\(cqs \fBController\fR\.  If an agent IP address cannot be
+determined either way, sFlow is disabled.
+.IP "\fBheader\fR: optional integer, between 0 and 2147483647 characters long"
+Number of bytes of a sampled packet to send to the collector.
+If not specified, the default is 128 bytes.
+.IP "\fBpolling\fR: optional integer, between 0 and 2147483647 characters long"
+Polling rate in seconds to send port statistics to the collector.
+If not specified, defaults to 30 seconds.
+.IP "\fBsampling\fR: optional integer, between 0 and 2147483647 characters long"
+Rate at which packets should be sampled and sent to the collector.
+If not specified, defaults to 400, which means one out of 400
+packets, on average, will be sent to the collector.
+.IP "\fBtargets\fR: set of 1 or more strings, between 0 and 2147483647 characters long"
+sFlow targets in the form
+\fB\fIip\fB:\fIport\fB\fR\.
+.IP "\fBexternal_ids\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs for use by external frameworks that integrate with Open
+vSwitch, rather than by Open vSwitch itself.  System integrators should
+either use the Open vSwitch development mailing list to coordinate on
+common key-value definitions, or choose key names that are likely to be
+unique.  No common key-value pairs are currently defined.
+.bp
+.SS "Capability Table"
+Records in this table describe functionality supported by the hardware
+and software platform on which this Open vSwitch is based.  Clients
+should not modify this table.
+.PP
+A record in this table is meaningful only if it is referenced by the
+\fBcapabilities\fR column in the
+\fBOpen_vSwitch\fR table.  The key used to reference it, called
+the record\(cqs ``category,\(cq\(cq determines the meanings of the
+\fBdetails\fR column.  The following general forms of
+categories are currently defined:
+.RS
+.TP
+\fBqos\-\fItype\fB\fR
+\fItype\fR is supported as the value for
+\fBtype\fR in the \fBQoS\fR table.
+.RE
+.sp
+.ce 1
+\fBCapability\fR Table Columns:
+.TS
+center box;
+l | l.
+Column	Type
+=
+\fBdetails\fR	T{
+map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long
+T}
+.TE
+.IP "\fBdetails\fR: map of string-string pairs, key between 0 and 2147483647 characters long, value between 0 and 2147483647 characters long"
+Key-value pairs that describe capabilities.  The meaning of the pairs
+depends on the category key that the \fBcapabilities\fR column in the \fBOpen_vSwitch\fR table
+uses to reference this record, as described above.
+.IP
+The presence of a record for category \fBqos\-\fItype\fB\fR
+indicates that the switch supports \fItype\fR as the value of
+the \fBtype\fR column in the \fBQoS\fR
+table.  The following key-value pairs are defined to further describe
+QoS capabilities:
+.RS
+.TP
+\fBn\-queues\fR
+Number of supported queues, as a positive integer.  Keys in the
+\fBqueues\fR column for \fBQoS\fR
+records whose \fBtype\fR value
+equals \fItype\fR must range between 0 and this value minus one,
+inclusive.
+.RE

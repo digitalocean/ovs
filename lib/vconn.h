@@ -1,0 +1,77 @@
+/*
+ * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef VCONN_H
+#define VCONN_H 1
+
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "flow.h"
+
+struct ofpbuf;
+struct ofp_action_header;
+struct ofp_header;
+struct ofp_match;
+struct ofp_stats_reply;
+struct pvconn;
+struct vconn;
+
+void vconn_usage(bool active, bool passive, bool bootstrap);
+
+/* Active vconns: virtual connections to OpenFlow devices. */
+int vconn_verify_name(const char *name);
+int vconn_open(const char *name, int min_version, struct vconn **);
+void vconn_close(struct vconn *);
+const char *vconn_get_name(const struct vconn *);
+uint32_t vconn_get_remote_ip(const struct vconn *);
+uint16_t vconn_get_remote_port(const struct vconn *);
+uint32_t vconn_get_local_ip(const struct vconn *);
+uint16_t vconn_get_local_port(const struct vconn *);
+int vconn_connect(struct vconn *);
+int vconn_recv(struct vconn *, struct ofpbuf **);
+int vconn_send(struct vconn *, struct ofpbuf *);
+int vconn_recv_xid(struct vconn *, uint32_t xid, struct ofpbuf **);
+int vconn_transact(struct vconn *, struct ofpbuf *, struct ofpbuf **);
+
+void vconn_run(struct vconn *);
+void vconn_run_wait(struct vconn *);
+
+int vconn_open_block(const char *name, int min_version, struct vconn **);
+int vconn_send_block(struct vconn *, struct ofpbuf *);
+int vconn_recv_block(struct vconn *, struct ofpbuf **);
+
+enum vconn_wait_type {
+    WAIT_CONNECT,
+    WAIT_RECV,
+    WAIT_SEND
+};
+void vconn_wait(struct vconn *, enum vconn_wait_type);
+void vconn_connect_wait(struct vconn *);
+void vconn_recv_wait(struct vconn *);
+void vconn_send_wait(struct vconn *);
+
+/* Passive vconns: virtual listeners for incoming OpenFlow connections. */
+int pvconn_verify_name(const char *name);
+int pvconn_open(const char *name, struct pvconn **);
+const char *pvconn_get_name(const struct pvconn *);
+void pvconn_close(struct pvconn *);
+int pvconn_accept(struct pvconn *, int min_version, struct vconn **);
+void pvconn_wait(struct pvconn *);
+
+#endif /* vconn.h */

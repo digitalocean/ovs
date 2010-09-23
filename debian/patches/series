@@ -1,0 +1,7 @@
+0001-xenserver-Remove-LICENSE-header-that-is-difficult-to.patch
+0002-xenserver-Add-GPLv2-license-text.patch
+0003-xenserver-Change-license-of-xsconsole-plugin-to-GPLv.patch
+0004-xenserver-Add-explicit-license-to-refresh-xs-network.patch
+0005-xenserver-Add-license-to-uuid.py.patch
+0006-xenserver-Now-everything-is-free.patch
+debian-changes-1.1.0~pre2-2

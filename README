@@ -1,0 +1,118 @@
+                 Open vSwitch <http://openvswitch.org>
+
+What is Open vSwitch?
+---------------------
+
+Open vSwitch is a multilayer software switch licensed under the open
+source Apache 2 license.  Our goal is to implement a production
+quality switch platform that supports standard management interfaces
+(e.g. NetFlow, sFlow(R), RSPAN, ERSPAN, IOS-like CLI), and opens the
+forwarding functions to programmatic extension and control.
+
+Open vSwitch is well suited to function as a virtual switch in VM
+environments.  In addition to exposing standard control and visibility
+interfaces to the virtual networking layer, it was designed to support
+distribution across multiple physical servers.  Open vSwitch supports
+multiple Linux-based virtualization technologies including
+Xen/XenServer, KVM, and VirtualBox.
+
+The bulk of the code is written in platform-independent C and is
+easily ported to other environments.  The current release of Open
+vSwitch supports the following features:
+
+    * Visibility into inter-VM communication via NetFlow, sFlow, SPAN,
+      and RSPAN
+    * Standard 802.1Q VLAN model with trunking
+    * Per VM policing
+    * NIC bonding with source-MAC load balancing
+    * Kernel-based forwarding
+    * Support for OpenFlow
+    * Compatibility layer for the Linux bridging code
+
+The included Linux kernel module supports Linux 2.6.15 and up, with
+testing focused on 2.6.18 with Centos and Xen patches and version
+2.6.26 from kernel.org.  Open vSwitch also has special support for
+Citrix XenServer hosts.
+
+Open vSwitch can also operate, at a cost in performance, entirely in
+userspace, without assistance from a kernel module.  This userspace
+implementation should be easier to port than the kernel-based switch.
+It is considered experimental.
+
+What's here?
+------------
+
+The main components of this distribution are:
+
+    * ovs-vswitchd, a daemon that implements the switch, along with 
+      a companion Linux kernel module for flow-based switching.
+
+    * ovsdb-server, a lightweight database server that ovs-vswitchd
+      queries to obtain its configuration.
+
+    * ovs-brcompatd, a daemon that allows ovs-vswitchd to act as a
+      drop-in replacement for the Linux bridge in many environments, 
+      along with a companion Linux kernel module to intercept bridge 
+      ioctls.
+
+    * ovs-dpctl, a tool for configuring the switch kernel module.
+
+    * Scripts and specs for building RPMs that allow Open vSwitch
+      to be installed on a Citrix XenServer host as a drop-in
+      replacement for its switch, with additional functionality.
+
+    * ovs-vsctl, a utility for querying and updating the configuration
+      of ovs-vswitchd.
+
+    * ovs-appctl, a utility that sends commands to running Open
+      vSwitch daemons.
+
+    * ovsdbmonitor, a GUI tool for remotely viewing OVS databases and
+      OpenFlow flow tables.
+
+Open vSwitch also provides an OpenFlow implementation and tools for
+those interested in OpenFlow but not additional Open vSwitch features:
+
+    * ovs-openflowd, a program that implements a simple OpenFlow
+      switch (without the special features provided by ovs-vswitchd)
+      using the same kernel module as ovs-vswitchd.
+
+    * ovs-controller, a simple OpenFlow controller.
+
+    * ovs-ofctl, a utility for querying and controlling OpenFlow
+      switches and controllers.
+
+    * ovs-pki, a utility for creating and managing the public-key
+      infrastructure for OpenFlow switches.
+
+    * A patch to tcpdump that enables it to parse OpenFlow messages.
+
+What other documentation is available?
+--------------------------------------
+
+To install Open vSwitch on a regular Linux machine, read INSTALL.Linux.
+
+To use Open vSwitch as a drop-in replacement for the Linux bridge,
+read INSTALL.bridge.
+
+To build RPMs for installing Open vSwitch on a Citrix XenServer host
+or resource pool, read INSTALL.XenServer.
+
+To use Open vSwitch with KVM on Linux, read INSTALL.Linux, then
+INSTALL.KVM.
+
+To install Open vSwitch without using a kernel module, read
+INSTALL.userspace.
+
+To learn set up SSL support for Open vSwitch, read INSTALL.SSL.
+
+Each Open vSwitch userspace program is accompanied by a manpage.  Many
+of the manpages are customized to your configuration as part of the
+build process, so we recommend building Open vSwitch before reading
+the manpages.
+
+Contact 
+-------
+
+bugs@openvswitch.org
+http://openvswitch.org/

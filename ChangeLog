@@ -1,0 +1,53 @@
+v1.1.0pre2 - 13 Sep 2010
+------------------------
+    - Bug fixes
+
+v1.1.0pre1 - 31 Aug 2010
+------------------------
+    - OpenFlow 1.0 slicing (QoS) functionality
+    - Python bindings for configuration database (no write support)
+    - Performance and scalability improvements
+    - Bug fixes
+
+v1.0.1 - 31 May 2010
+--------------------
+    - New "patch" interface type
+    - Bug fixes
+
+v1.0.0 - 15 May 2010
+--------------------
+    - Configuration database with remote management
+    - OpenFlow 1.0
+    - GRE tunneling
+    - Support for XenServer 5.5 and 5.6
+    - Performance and scalability improvements
+    - Bug fixes
+
+v0.99.2 - 18 Feb 2010
+---------------------
+    - Bug fixes
+
+v0.99.1 - 25 Jan 2010
+---------------------
+    - Add support for sFlow(R)
+    - Make headers compatible with C++
+    - Bug fixes
+
+v0.99.0 - 14 Jan 2010
+---------------------
+    - User-space forwarding engine
+    - Bug fixes
+	
+v0.90.7 - 29 Nov 2009
+---------------------
+    - Add support for NetFlow active timeouts
+    - Bug fixes
+
+v0.90.6 - 6 Oct 2009
+--------------------
+    - Bug fixes
+
+v0.90.5 - 21 Sep 2009
+---------------------
+    - Generalize in-band control to more diverse network setups
+    - Bug fixes

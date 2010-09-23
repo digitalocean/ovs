@@ -1,0 +1,8 @@
+# -*- shell-script -*-
+HAVE_OPENSSL='@HAVE_OPENSSL@'
+HAVE_PYTHON='@HAVE_PYTHON@'
+PERL='@PERL@'
+PYTHON='@PYTHON@'
+
+PYTHONPATH=$PYTHONPATH:$abs_top_srcdir/python
+export PYTHONPATH

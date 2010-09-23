@@ -1,0 +1,30 @@
+From ee5311097049272834308f64931172f1c8210755 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Wed, 22 Sep 2010 10:05:29 -0700
+Subject: [PATCH 4/6] xenserver: Add explicit license to refresh-xs-network-uuids.
+
+I had assumed that a trivial one-line shell script didn't need an explicit
+license, but it seems that I was wrong.
+
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ ...re_openvswitch_scripts_refresh-xs-network-uuids |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/xenserver/usr_share_openvswitch_scripts_refresh-xs-network-uuids b/xenserver/usr_share_openvswitch_scripts_refresh-xs-network-uuids
+index 42ebe06..35df06d 100755
+--- a/xenserver/usr_share_openvswitch_scripts_refresh-xs-network-uuids
++++ b/xenserver/usr_share_openvswitch_scripts_refresh-xs-network-uuids
+@@ -1,2 +1,9 @@
+ #! /bin/sh
++# Copyright (C) 2009, 2010 Nicira Networks, Inc.
++#
++# Copying and distribution of this file, with or without modification,
++# are permitted in any medium without royalty provided the copyright
++# notice and this notice are preserved.  This file is offered as-is,
++# without warranty of any kind.
++
+ exec /opt/xensource/libexec/interface-reconfigure rewrite
+-- 
+1.7.1
+

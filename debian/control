@@ -1,0 +1,96 @@
+Source: openvswitch
+Section: net
+Priority: extra
+Maintainer: Open vSwitch developers <dev@openvswitch.org>
+Uploaders: Ben Pfaff <pfaffben@debian.org>, Simon Horman <horms@debian.org>
+Build-Depends:
+ debhelper (>= 5), autoconf (>= 2.64), automake1.10, libssl-dev,
+ pkg-config (>= 0.21), po-debconf, bzip2, openssl, python
+Standards-Version: 3.9.1
+Homepage: http://openvswitch.org/
+
+Package: openvswitch-datapath-source
+Architecture: all
+Depends: module-assistant, bzip2, debhelper (>= 5.0.37), ${misc:Depends}
+Suggests: openvswitch-switch
+Description: Source code for Open vSwitch datapath Linux module
+ This package provides the Open vSwitch datapath module source code
+ that is needed by openvswitch-switch.  The kernel module can be built
+ from it using module-assistant or make-kpkg.  README.Debian in this
+ package provides further instructions.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: openvswitch-common
+Architecture: any
+Depends: ${shlibs:Depends}, openssl, ${misc:Depends}
+Description: Open vSwitch common components
+ openvswitch-common provides components required by both openvswitch-switch
+ and openvswitch-controller.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: openvswitch-switch
+Architecture: any
+Suggests: openvswitch-datapath-module
+Depends: ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps
+Description: Open vSwitch switch implementations
+ openvswitch-switch provides the userspace components and utilities for
+ the Open vSwitch kernel-based switch.  
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: openvswitch-pki
+Architecture: all
+Depends:
+ ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (>= ${source:Version}),
+ openvswitch-common (<< ${source:Version}.1~)
+Description: A dependency package for the Open vSwitch public key infrastructure
+ openvswitch-pki provides PKI (public key infrastructure) support for
+ Open vSwitch switches and controllers, reducing the risk of
+ man-in-the-middle attacks on the Open vSwitch network infrastructure.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: openvswitch-pki-server
+Architecture: all
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${perl:Depends}, openvswitch-pki (= ${binary:Version}), apache2
+Description: Open vSwitch public key infrastructure (HTTP server support)
+ openvswitch-pki-server provides HTTP access to the Open vSwitch PKI (public
+ key infrastructure) maintained on the local machine by the
+ openvswitch-pki package.  This HTTP access is needed for secure and
+ convenient OpenFlow switch setup using the ovs-switch-setup program
+ in the openvswitch-switch package.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: openvswitch-controller
+Architecture: any
+Depends:
+ ${shlibs:Depends}, openvswitch-common (= ${binary:Version}),
+ openvswitch-pki (= ${source:Version}), ${misc:Depends}
+Description: Open vSwitch controller implementation
+ The Open vSwitch controller enables OpenFlow switches that connect to it
+ to act as MAC-learning Ethernet switches.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
+Package: corekeeper
+Architecture: all
+Depends: tmpreaper, ${misc:Depends}
+Description: Core file centralizer and reaper
+ The corekeeper package configures the system to dump all core files to
+ /var/log/core.  It also deletes core files older than 7 days.
+
+Package: openvswitch-dbg
+Section: debug
+Architecture: any
+Depends:
+ ${shlibs:Depends}, ${misc:Depends},
+ openvswitch-common (= ${binary:Version}),
+ openvswitch-controller (= ${binary:Version}),
+ openvswitch-switch (= ${binary:Version})
+Description: Debug symbols for Open vSwitch packages
+ This package contains the debug symbols for all the other openvswitch-*
+ packages.  Install it to debug one of them or to examine a core dump
+ produced by one of them.

@@ -1,0 +1,105 @@
+This directory contains files for seamless integration of Open vSwitch on
+Citrix XenServer hosts managed by the Citrix management tools.
+
+Some of these files are modifications of Citrix's proprietary code.
+Citrix has given permission to distribute these modified files.
+Citrix has not specified a particular license for them.  There is no
+guarantee that, should Citrix specify a license, that it would be
+DFSG-compliant or GPL-compatible.
+
+Most of the files in this directory is installed on a XenServer system
+under the same name, if underscores are replaced by slashes.  The
+files are:
+
+    etc_init.d_openvswitch
+
+        Initializes Open vSwitch at boot and shuts it down at shutdown.
+
+    etc_init.d_openvswitch-xapi-update
+
+        Init script to ensure openvswitch-cfg-update is called for the
+        current host at boot.
+
+    etc_logrotate.d_openvswitch
+
+        Ensures that logs in /var/log/openvswitch are rotated
+        periodically and that appropriate daemons reopen their log
+        files at that point.
+
+    etc_profile.d_openvswitch.sh
+
+        Open vSwitch-related shell functions for the administrator's
+        convenience.
+
+    etc_xapi.d_plugins_openvswitch-cfg-update
+
+        xapi plugin script to update the cache of configuration items
+        in the ovs-vswitchd configuration that are managed in the
+        xapi database when integrated with Citrix management tools.
+
+    etc_xensource_scripts_vif
+
+        Open vSwitch-aware replacement for Citrix script of the same name.
+
+    openvswitch-xen.spec
+
+        spec file for building RPMs to install on a XenServer host.
+
+    opt_xensource_libexec_interface-reconfigure
+
+        Open vSwitch-aware replacement for Citrix script of the same name.
+
+    usr_share_openvswitch_scripts_monitor-external-ids
+
+        Daemon to monitor the external_ids columns of the Bridge and
+        Interface OVSDB tables.
+
+    usr_share_openvswitch_scripts_refresh-xs-network-uuids
+
+        Script to refresh Bridge table external-ids:xs-network-uuids
+        values, which can get out-of-sync following a pool join.
+
+    usr_share_openvswitch_scripts_sysconfig.template
+
+        Template for Open vSwitch's /etc/sysconfig/openvswitch 
+        configuration file.
+
+    usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py
+
+        xsconsole plugin to configure the pool-wide configuration keys
+        used to control Open vSwitch when integrated with Citrix 
+        management tools.
+
+    usr_sbin_brctl
+
+        wrapper for /usr/sbin/brctl that provides some additional
+        bridge compatibility
+
+    usr_sbin_xen-bugtool
+
+        Open vSwitch-aware replacement for Citrix script of the same name.
+
+    uuid.py
+
+        This is uuid.py from Python 2.5.  It is installed into the
+        Open vSwitch RPM because XenServer 5.5 and 5.6 use Python 2.4,
+        which do not have uuid.py.
+
+To install, build the Open vSwitch RPM with a command like this:
+
+        rpmbuild -D "openvswitch_version $full_version" \
+                -D "xen_version $XENKERNEL" \
+                -D "build_number --with-build-number=$buildnr" \
+                -bb openvswitch-xen.spec
+
+Then, "rpm -U" the resulting Open vSwitch package on the XenServer hosts in
+question and reboot them.  (The openvswitch-dbg package that is also
+produced need not be installed, but it is harmless to do so.)
+
+----------------------------------------------------------------------
+Copyright (C) 2009, 2010 Nicira Networks, Inc.
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.  This file is offered as-is,
+without warranty of any kind.

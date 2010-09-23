@@ -1,0 +1,412 @@
+#!/bin/bash
+#
+# openvswitch
+#
+# chkconfig: 2345 09 91
+# description: Manage Open vSwitch kernel modules and user-space daemons
+
+# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+. /etc/init.d/functions
+
+. /etc/xensource-inventory
+test -e /etc/sysconfig/openvswitch && . /etc/sysconfig/openvswitch
+
+NETWORK_MODE=$(cat /etc/xensource/network.conf)
+case $NETWORK_MODE in
+    vswitch|openvswitch)
+        ;;
+    bridge)
+        exit 0
+        ;;
+    *)
+        echo "Open vSwitch disabled (/etc/xensource/network.conf is invalid)" >&2
+        exit 0
+        ;;
+esac
+
+# General config variables in /etc/sysconfig/openvswitch
+if test "$PRODUCT_VERSION" = "5.5.0"; then
+    # XenServer 5.5.0 needs ovs-brcompatd and /proc/net simulation.
+    : ${ENABLE_BRCOMPAT:=y}
+    : ${ENABLE_FAKE_PROC_NET:=y}
+else
+    # Later versions don't need them.
+    : ${ENABLE_BRCOMPAT:=n}
+    : ${ENABLE_FAKE_PROC_NET:=n}
+fi
+: ${ENABLE_MONITOR:=y}
+: ${FORCE_COREFILES:=y}
+
+# Config variables specific to ovsdb-server
+: ${OVSDB_SERVER_REMOTES:=punix:/var/run/openvswitch/db.sock db:Open_vSwitch,managers}
+: ${OVSDB_SERVER_DB:=/etc/openvswitch/conf.db}
+: ${OVSDB_SERVER_PIDFILE:=/var/run/openvswitch/ovsdb-server.pid}
+: ${OVSDB_SERVER_RUN_DIR:=/var/xen/openvswitch}
+: ${OVSDB_SERVER_PRIORITY:=-10}
+: ${OVSDB_SERVER_LOGFILE:=/var/log/openvswitch/ovsdb-server.log}
+: ${OVSDB_SERVER_FILE_LOGLEVEL:=INFO}
+: ${OVSDB_SERVER_SYSLOG_LOGLEVEL:=ERR}
+: ${OVSDB_SERVER_MEMLEAK_LOGFILE:=}
+: ${OVSDB_SERVER_STRACE_LOG:=}
+: ${OVSDB_SERVER_STRACE_OPT:=}
+: ${OVSDB_SERVER_VALGRIND_LOG:=}
+: ${OVSDB_SERVER_VALGRIND_OPT:=}
+
+# Config variables specific to ovs-vswitchd
+: ${VSWITCHD_OVSDB_SERVER:=unix:/var/run/openvswitch/db.sock}
+: ${VSWITCHD_OVSDB_SCHEMA:=/usr/share/openvswitch/vswitch.ovsschema}
+: ${VSWITCHD_PIDFILE:=/var/run/openvswitch/ovs-vswitchd.pid}
+: ${VSWITCHD_RUN_DIR:=/var/xen/openvswitch}
+: ${VSWITCHD_PRIORITY:=-10}
+: ${VSWITCHD_MLOCKALL:=yes}
+: ${VSWITCHD_LOGFILE:=/var/log/openvswitch/ovs-vswitchd.log}
+: ${VSWITCHD_FILE_LOGLEVEL:=INFO}
+: ${VSWITCHD_SYSLOG_LOGLEVEL:=ERR}
+: ${VSWITCHD_MEMLEAK_LOGFILE:=}
+: ${VSWITCHD_STRACE_LOG:=}
+: ${VSWITCHD_STRACE_OPT:=}
+: ${VSWITCHD_VALGRIND_LOG:=}
+: ${VSWITCHD_VALGRIND_OPT:=}
+
+# Config variables specific to ovs-brcompatd
+: ${BRCOMPATD_PIDFILE:=/var/run/openvswitch/ovs-brcompatd.pid}
+: ${BRCOMPATD_RUN_DIR:=/var/xen/openvswitch}
+: ${BRCOMPATD_PRIORITY:=-10}
+: ${BRCOMPATD_LOGFILE:=/var/log/openvswitch/ovs-brcompatd.log}
+: ${BRCOMPATD_FILE_LOGLEVEL:=INFO}
+: ${BRCOMPATD_SYSLOG_LOGLEVEL:=ERR}
+: ${BRCOMPATD_MEMLEAK_LOGFILE:=}
+: ${BRCOMPATD_STRACE_LOG:=}
+: ${BRCOMPATD_STRACE_OPT:=}
+: ${BRCOMPATD_VALGRIND_LOG:=}
+: ${BRCOMPATD_VALGRIND_OPT:=}
+
+# Full paths to executables & modules
+ovsdb_server="/usr/sbin/ovsdb-server"
+ovsdb_tool="/usr/bin/ovsdb-tool"
+vswitchd="/usr/sbin/ovs-vswitchd"
+brcompatd="/usr/sbin/ovs-brcompatd"
+dpctl="/usr/bin/ovs-dpctl"
+appctl="/usr/bin/ovs-appctl"
+ofctl="/usr/bin/ovs-ofctl"
+vsctl="/usr/bin/ovs-vsctl"
+
+if [ "$ENABLE_FAKE_PROC_NET" = "y" ]; then
+    if [ "$ENABLE_BRCOMPAT" != "y" ]; then
+        warning "FAKE_PROC_NET required BRCOMPAT which was disabled.  Force enabling."
+        ENABLE_BRCOMPAT="y"
+    fi
+fi
+
+if test "$ENABLE_MONITOR" = "y"; then
+    monitor_opt="--monitor"
+else
+    monitor_opt=
+fi
+
+function dp_list {
+    "$dpctl" show | grep '^dp[0-9]\+:' | cut -d':' -f 1
+}
+
+function turn_on_corefiles {
+    ulimit -Sc 67108864
+}
+
+function remove_all_dp {
+    for dp in $(dp_list); do
+        action "Removing datapath: $dp" "$dpctl" del-dp "$dp"
+    done
+}
+
+function insert_modules_if_required {
+    if ! lsmod | grep -q "openvswitch_mod"; then
+        action "Inserting llc module" modprobe llc
+        action "Inserting openvswitch module" modprobe openvswitch_mod
+    fi
+    if [ "$ENABLE_BRCOMPAT" = "y" ] && [ -n "$BRCOMPATD_PIDFILE" ] && ! lsmod | grep -q "brcompat_mod"; then
+        action "Inserting brcompat module" modprobe brcompat_mod
+    fi
+}
+
+function remove_modules {
+    if lsmod | grep -q "brcompat_mod"; then
+        action "Removing brcompat module" rmmod brcompat_mod.ko
+    fi
+    if lsmod | grep -q "openvswitch_mod"; then
+        action "Removing openvswitch module" rmmod openvswitch_mod.ko
+    fi
+}
+
+function start_daemon {
+    local DAEMON=$1
+    shift
+    local BINARY=$1
+
+    # cd to daemon's run_dir so core files get dumped into a sensible place.
+    eval local run_dir=\$${DAEMON}_RUN_DIR
+    if [ ! -d "$run_dir" ]; then
+        install -d -m 755 -o root -g root "$run_dir"
+    fi
+    cd "$run_dir"
+    
+    # Configure log levels.
+    eval local syslog_loglevel=\$${DAEMON}_SYSLOG_LOGLEVEL
+    eval local file_loglevel=\$${DAEMON}_FILE_LOGLEVEL
+    eval local logfile=\$${DAEMON}_LOGFILE
+    set -- "$@" -vANY:CONSOLE:EMER -vANY:SYSLOG:"$syslog_loglevel"
+    if test -n "$file_loglevel" && test -n "$logfile"; then
+        install -d -m 755 -o root -g root `dirname "$logfile"`
+        set -- "$@" --log-file="$logfile" -vANY:FILE:"$file_loglevel"
+    fi
+
+    # Configure leak checker.
+    eval local memleak_logfile=\$${DAEMON}_MEMLEAK_LOGFILE
+    if test -n "$memleak_logfile"; then
+        set -- "$@" --check-leaks="$memleak_logfile"
+        if test -e "$memleak_logfile"; then
+            mv "$memleak_logfile" "$memleak_logfile.prev"
+        fi
+    fi
+
+    # Configure debugging wrappers.
+    eval local strace_log=\$${DAEMON}_STRACE_LOG
+    eval local strace_opt=\$${DAEMON}_STRACE_OPT
+    eval local valgrind_log=\$${DAEMON}_VALGRIND_LOG
+    eval local valgrind_opt=\$${DAEMON}_VALGRIND_OPT
+    if test -n "$strace_log" && test -n "$valgrind_log"; then
+        printf "Can not start with both VALGRIND and STRACE\n"
+        exit 1
+    elif test -n "$strace_log"; then
+        local mode=strace
+        set -- strace -o "$strace_log" $strace_opt "$@"
+    elif test -n "$valgrind_log"; then
+        local mode=valgrind
+        set -- valgrind --log-file="$valgrind_log" $valgrind_opt "$@"
+    else
+        local mode=production
+        eval local pidfile=\$${DAEMON}_PIDFILE
+        install -d -m 755 -o root -g root `dirname $pidfile`
+        set -- "$@" --pidfile="$pidfile" --detach $monitor_opt --no-chdir
+    fi
+
+    # Configure niceness.
+    eval local priority=\$${DAEMON}_PRIORITY
+    if test -n "$priority"; then
+        set -- nice -n $priority "$@"
+    fi
+
+    if test $mode = production; then
+        action "Starting `basename $BINARY`" "$@"
+    else
+        # Start in background and force a "success" message
+        action "Starting `basename $BINARY` with $mode debugging" true
+        ("$@") &
+    fi
+}
+
+function start_ovsdb_server {
+    set -- "$ovsdb_server" "$OVSDB_SERVER_DB"
+    for remote in $OVSDB_SERVER_REMOTES; do
+        set -- "$@" --remote="$remote"
+    done
+    set -- "$@" --private-key=db:SSL,private_key --certificate=db:SSL,certificate --bootstrap-ca-cert=db:SSL,ca_cert
+    start_daemon OVSDB_SERVER "$@"
+}
+
+function start_vswitchd {
+    local fake_proc_net_opt=
+    if [ "$ENABLE_FAKE_PROC_NET" = "y" ]; then
+        fake_proc_net_opt="--fake-proc-net"
+    fi
+
+    local mlockall_opt=
+    if [ "$VSWITCHD_MLOCKALL" != "no" ]; then
+        mlockall_opt="--mlockall"
+    fi
+
+    start_daemon VSWITCHD "$vswitchd" $fake_proc_net_opt $mlockall_opt \
+                 "$VSWITCHD_OVSDB_SERVER"
+ }
+
+function start_brcompatd {
+    start_daemon BRCOMPATD "$brcompatd" \
+                 --appctl-command="$appctl --target=/var/run/openvswitch/ovs-vswitchd.\`cat $VSWITCHD_PIDFILE\`.ctl %s" \
+                 "$VSWITCHD_OVSDB_SERVER"
+}
+
+function stop_daemon {
+    local DAEMON=$1
+    local BINARY=$2
+    eval local pidfile=\$${DAEMON}_PIDFILE
+    if test -f "$pidfile"; then
+        local pid=$(cat "$pidfile")
+        action "Killing `basename $BINARY` ($pid)" kill $pid
+        for delay in .1 .25 .65 1 1 1 1; do
+            if kill -0 $pid >/dev/null 2>&1; then
+                sleep $delay
+            else
+                break
+            fi
+        done
+        rm -f "$pidfile"
+    fi
+}
+
+function restart_approval {
+    if test ! -t 0; then
+        # Don't prompt if invoked non-interactively.
+        return 0
+    fi
+    cat <<EOF
+
+WARNING!!!
+
+Restarting Open vSwitch on a live server is not guaranteed to work.  It is
+provided as a convenience for those situations in which it does work.
+
+EOF
+    read -s -r -n 1 -p "Continue with restart (y/N): " response
+    printf "\n"
+    case "$response" in
+        y|Y)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+function set_system_ids {
+    if [ -f /etc/xensource-inventory ]; then
+        action "Configuring Open vSwitch system IDs" true
+        $vsctl --no-wait set Open_vSwitch . \
+            external-ids:system-type="$PRODUCT_BRAND" \
+            external-ids:system-version="$PRODUCT_VERSION-$BUILD_NUMBER" \
+            external-ids:system-id="$INSTALLATION_UUID" \
+            external-ids:xs-system-uuid="$INSTALLATION_UUID"
+    else
+        action "Configuring Open vSwitch system IDs" false
+    fi
+}
+
+function start {
+    if [ "$FORCE_COREFILES" = "y" ]; then
+        turn_on_corefiles
+    fi
+
+    insert_modules_if_required
+
+    # Increase the limit on the number of open file descriptors since
+    # ovs-vswitchd needs a few per bridge
+    ulimit -n 4096
+
+    # Allow GRE traffic.
+    iptables -I INPUT -p gre -j ACCEPT
+
+    if [ ! -e "$OVSDB_SERVER_DB" ]; then
+        warning "$OVSDB_SERVER_DB does not exist"
+        install -d -m 755 -o root -g root `dirname $OVSDB_SERVER_DB`
+
+        action "Creating empty database $OVSDB_SERVER_DB" true
+        $ovsdb_tool -vANY:console:emer create "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
+    else
+        # Upgrade or downgrade schema and compact database.
+        $ovsdb_tool -vANY:console:emer convert "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
+    fi
+
+    start_ovsdb_server
+    $vsctl --no-wait init
+    if [ ! -e /var/run/openvswitch.booted ]; then
+        touch /var/run/openvswitch.booted
+        for bridge in $($vsctl list-br); do
+            $vsctl --no-wait del-br $bridge
+        done
+    fi
+
+    set_system_ids
+
+    start_vswitchd
+    if [ "${ENABLE_BRCOMPAT}" = "y" ] ; then
+        start_brcompatd
+    fi
+
+    # Start daemon to monitor external ids
+    PYTHONPATH=/usr/share/openvswitch/python \
+               /usr/share/openvswitch/scripts/monitor-external-ids \
+               --pidfile --detach "$VSWITCHD_OVSDB_SERVER"
+
+    touch /var/lock/subsys/openvswitch
+}
+
+function stop {
+    stop_daemon BRCOMPATD "$brcompatd"
+    stop_daemon VSWITCHD "$vswitchd"
+    stop_daemon OVSDB_SERVER "$ovsdb_server"
+    if [ -e /var/run/openvswitch/monitor-external-ids.pid ]; then
+        kill `cat /var/run/openvswitch/monitor-external-ids.pid`
+    fi
+    rm -f /var/lock/subsys/openvswitch
+}
+
+function restart {
+    if restart_approval; then
+        stop
+        start
+    fi
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    reload|force-reload)
+	# Nothing to do--ovs-vswitchd and ovsdb-server keep their configuration
+	# up-to-date all the time.
+	;;
+    strace-vswitchd)
+        shift
+        strace -p $(cat "$VSWITCHD_PIDFILE") "$@"
+        ;;
+    strace-brcompatd)
+        shift
+        strace -p $(cat "$BRCOMPATD_PIDFILE") "$@"
+        ;;
+    status)
+        status -p "$OVSDB_SERVER_PIDFILE" ovsdb-server &&
+        status -p "$VSWITCHD_PIDFILE" ovs-vswitchd &&
+        (test "$ENABLE_BRCOMPAT" != "y" || 
+            status -p "$BRCOMPATD_PIDFILE" ovs-brcompatd)
+        ;;
+    version)
+        /usr/sbin/ovsdb-server -V
+        /usr/sbin/ovs-vswitchd -V
+        /usr/sbin/ovs-brcompatd -V
+        ;;
+    help)
+        printf "openvswitch [start|stop|restart|reload|force-reload|status|version]\n"
+        ;;
+    *)
+        printf "Unknown command: $1\n"
+        exit 1
+        ;;
+esac

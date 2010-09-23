@@ -1,0 +1,336 @@
+#! /bin/sh
+#
+# /etc/init.d/openvswitch-switch
+#
+# Written by Miquel van Smoorenburg <miquels@cistron.nl>.
+# Modified for Debian by Ian Murdock <imurdock@gnu.ai.mit.edu>.
+# Further changes by Javier Fernandez-Sanguino <jfs@debian.org>
+# Modified for openvswitch-switch.
+#
+# Version:	@(#)skeleton  1.9  26-Feb-2001  miquels@cistron.nl
+#
+### BEGIN INIT INFO
+# Provides:          openvswitch-switch
+# Required-Start:    $network $named $remote_fs $syslog
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Open vSwitch switch
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+ovs_vswitchd=/usr/sbin/ovs-vswitchd
+ovsdb_server=/usr/bin/ovsdb-server
+
+(test -x $ovsdb_server && test -x $ovs_vswitchd) || exit 0
+
+DODTIME=1                   # Time to wait for the server to die, in seconds
+                            # If this value is set too low you might not
+                            # let some servers to die gracefully and
+                            # 'restart' will not work
+
+# Include ovs-openflowd defaults if available
+unset OVSDB_SERVER_OPTS
+unset OVS_VSWITCHD_OPTS
+unset CORE_LIMIT
+unset ENABLE_MONITOR
+default=/etc/default/openvswitch-switch
+if [ -f $default ] ; then
+    . $default
+fi
+
+: ${ENABLE_MONITOR:=y}
+
+set -e
+
+# running_pid pid name
+#
+# Check if 'pid' is a process named 'name'
+running_pid()
+{
+    local pid=$1 name=$2
+    [ -z "$pid" ] && return 1 
+    [ ! -d /proc/$pid ] &&  return 1
+    cmd=`cat /proc/$pid/cmdline | tr "\000" "\n"|head -n 1 |cut -d : -f 1`
+    # Is this the expected child?
+    case $cmd in
+        $name|*/$name)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# running name
+#
+# Checks for a running process named 'name' by looking for a pidfile
+# named /var/run/openvswitch/${name}.pid
+running()
+{
+    local name=$1
+    local pidfile=/var/run/openvswitch/${name}.pid
+
+    # No pidfile, probably no daemon present
+    [ ! -f "$pidfile" ] && return 1
+
+    # Obtain the pid and check it against the binary name
+    pid=`cat $pidfile`
+    running_pid $pid $name || return 1
+    return 0
+}
+
+# force_stop name
+#
+# Checks for a running process named 'name', by looking for a pidfile
+# named /var/run/openvswitch/${name}.pid, and then kills it and waits 
+# for it to die.
+force_stop() {
+    local name=$1
+    local pidfile=/var/run/openvswitch/${name}.pid
+
+    [ ! -f "$pidfile" ] && return
+    if running $name; then
+        kill $pid
+        [ -n "$DODTIME" ] && sleep "$DODTIME"s
+        if running $name; then
+            kill -KILL $pid
+            [ -n "$DODTIME" ] && sleep "$DODTIME"s
+            if running $name; then
+                echo "Cannot kill $name (pid=$pid)!"
+                exit 1
+            fi
+        fi
+    fi
+    rm -f $pidfile
+    return 0
+}
+
+must_succeed() {
+    echo -n "$1: "
+    shift
+    if "$@"; then
+        echo "success."
+    else
+        echo " ERROR."
+        exit 1
+    fi
+}
+
+check_op() {
+    echo -n "$1: "
+    shift
+    if "$@"; then
+        echo "success."
+    else
+        echo " ERROR."
+    fi
+}
+
+# is_module_loaded module
+#
+# Returns 0 if 'module' is loaded, 1 otherwise.
+
+is_module_loaded() {
+    local module=$1
+    grep -q "^$module " /proc/modules
+}
+
+# load_module module
+#
+# Loads 'module' into the running kernel, if it is not already loaded.
+load_module() {
+    local module=$1
+    echo -n "Loading $module: "
+    if is_module_loaded $module; then
+        echo "already loaded, nothing to do."
+    elif modprobe $module; then
+        echo "success."
+    else
+        echo "ERROR."
+        echo "$module has probably not been built for this kernel."
+        if ! test -d /usr/share/doc/openvswitch-datapath-source; then
+            echo "Install the openvswitch-datapath-source package, then read"
+            echo "/usr/share/doc/openvswitch-datapath-source/README.Debian"
+        else
+            echo "For instructions, read"
+            echo "/usr/share/doc/openvswitch-datapath-source/README.Debian"
+        fi
+        exit 0
+    fi
+}
+
+# unload_module module
+#
+# Unloads 'module' from the running kernel, if it is loaded.
+unload_module() {
+    local module=$1
+    echo -n "Unloading $module: "
+    if is_module_loaded $module; then
+        if rmmod $module; then
+            echo "success."
+        else
+            echo "ERROR."
+            exit 1
+        fi
+    else
+        echo "not loaded, nothing to do."
+    fi
+}
+
+unload_modules() {
+    if is_module_loaded openvswitch_mod; then
+        for dp in $(ovs-dpctl dump-dps); do
+            echo -n "Deleting datapath $dp: "
+            if ovs-dpctl del-dp $dp; then
+                echo "success."
+            else
+                echo "ERROR."
+            fi
+        done
+    fi
+    unload_module openvswitch_mod
+}
+
+case "$1" in
+    start)
+        load_module openvswitch_mod
+
+        if test -n "$CORE_LIMIT"; then
+            check_op "Setting core limit to $CORE_LIMIT" ulimit -c "$CORE_LIMIT"
+        fi
+
+        # Create an empty configuration database if it doesn't exist.
+        if test ! -e /etc/openvswitch/conf.db; then
+            install -d -m 755 -o root -g root /etc/openvswitch
+
+            # Create configuration database.
+            ovsdb-tool -vANY:console:emer \
+                create /etc/openvswitch/conf.db \
+                /usr/share/openvswitch/vswitch.ovsschema
+        else
+            # Upgrade or downgrade schema and compact database.
+            ovsdb-tool -vANY:console:emer \
+                convert /etc/openvswitch/conf.db \
+                /usr/share/openvswitch/vswitch.ovsschema
+        fi
+
+        if test "$ENABLE_MONITOR" = y; then
+            monitor_opt=--monitor
+        else
+            monitor_opt=
+        fi
+
+        if [ ! -d /var/run/openvswitch ]; then
+            install -d -m 755 -o root -g root /var/run/openvswitch
+        fi
+
+        if [ ! -d /var/log/openvswitch ]; then
+            install -d -m 755 -o root -g root /var/log/openvswitch
+        fi
+
+        # Start ovsdb-server.
+        set --
+        set -- "$@" /etc/openvswitch/conf.db
+        set -- "$@" --verbose=ANY:console:emer --verbose=ANY:syslog:err
+        set -- "$@" --log-file=/var/log/openvswitch/ovsdb-server.log
+        set -- "$@" --detach --pidfile $monitor_opt
+        set -- "$@" --remote punix:/var/run/openvswitch/db.sock
+        set -- "$@" --remote db:Open_vSwitch,managers
+        set -- "$@" --private-key=db:SSL,private_key
+        set -- "$@" --certificate=db:SSL,certificate
+        set -- "$@" --bootstrap-ca-cert=db:SSL,ca_cert
+        set -- "$@" $OVSDB_SERVER_OPTS
+        echo -n "Starting ovsdb-server: "
+        start-stop-daemon --start --quiet \
+            --pidfile /var/run/openvswitch/ovsdb-server.pid \
+            --exec $ovsdb_server -- "$@"
+        if running ovsdb-server; then
+            echo "ovsdb-server."
+        else
+            echo " ERROR."
+        fi
+
+        ovs-vsctl --no-wait init
+
+        # Start ovs-vswitchd.
+        set --
+        set -- "$@" --verbose=ANY:console:emer --verbose=ANY:syslog:err
+        set -- "$@" --log-file=/var/log/openvswitch/ovs-vswitchd.log
+        set -- "$@" --detach --pidfile $monitor_opt
+        set -- "$@" unix:/var/run/openvswitch/db.sock
+        set -- "$@" $OVS_VSWITCHD_OPTS
+        echo -n "Starting ovs-vswitchd: "
+        start-stop-daemon --start --quiet \
+            --pidfile /var/run/openvswitch/ovs-vswitchd.pid \
+            --exec $ovs_vswitchd -- "$@"
+        if running ovs-vswitchd; then
+            echo "ovs-vswitchd."
+        else
+            echo " ERROR."
+        fi
+        ;;
+    stop)
+        echo -n "Stopping ovs-vswitchd: "
+        start-stop-daemon --stop --quiet --oknodo --retry 5 \
+            --pidfile /var/run/openvswitch/ovs-vswitchd.pid \
+            --exec $ovs_vswitchd
+        echo "ovs-vswitchd."
+
+        echo -n "Stopping ovsdb-server: "
+        start-stop-daemon --stop --quiet --oknodo --retry 5 \
+            --pidfile /var/run/openvswitch/ovsdb-server.pid \
+            --exec $ovsdb_server
+        echo "ovsdb-server."
+        ;;
+    force-stop)
+        echo -n "Forcefully stopping ovs-vswitchd: "
+        force_stop ovs-vswitchd
+        if ! running ovs-vswitchd; then
+            echo "ovs-vswitchd."
+        else
+            echo " ERROR."
+        fi
+
+        echo -n "Forcefully stopping ovsdb-server: "
+        force_stop ovsdb-server
+        if ! running ovsdb-server; then
+            echo "ovsdb-server."
+        else
+            echo " ERROR."
+        fi
+        ;;
+    unload)
+        unload_modules
+        ;;
+    reload)
+        ;;
+    force-reload)
+        # Nothing to do, since ovs-vswitchd automatically reloads
+        # whenever its configuration changes, and ovsdb-server doesn't
+        # have anything to reload.
+        ;;
+    restart)
+        $0 stop || true
+        $0 start
+        ;;
+    status)
+        for daemon in ovs-vswitchd ovsdb-server; do
+            echo -n "$daemon is "
+            if running $daemon;  then
+                echo "running"
+            else
+                echo " not running."
+                exit 1
+            fi
+        done
+        ;;
+    *)
+        N=/etc/init.d/openvswitch-switch
+        echo "Usage: $N {start|stop|restart|force-reload|status|force-stop|unload}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

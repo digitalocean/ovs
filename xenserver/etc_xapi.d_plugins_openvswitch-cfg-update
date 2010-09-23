@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+#
+# xapi plugin script to update the cache of configuration items in the
+# ovs-vswitchd configuration that are managed in the xapi database when 
+# integrated with Citrix management tools.
+
+# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# TBD: - error handling needs to be improved.  Currently this can leave
+# TBD:   the system in a bad state if anything goes wrong.
+
+import XenAPIPlugin
+import XenAPI
+import os
+import subprocess
+import syslog
+
+vsctl="/usr/bin/ovs-vsctl"
+cacert_filename="/etc/openvswitch/vswitchd.cacert"
+
+# Delete the CA certificate, so that we go back to boot-strapping mode
+def delete_cacert():
+    try:
+        os.remove(cacert_filename)
+    except OSError:
+        # Ignore error if file doesn't exist
+        pass
+
+def update(session, args):
+    # Refresh bridge network UUIDs in case this host joined or left a pool.
+    script = "/opt/xensource/libexec/interface-reconfigure"
+    try:
+        retval = subprocess.call([script, "rewrite"])
+        if retval != 0:
+            syslog.syslog("%s exited with status %d" % (script, retval))
+    except OSError, e:
+        syslog.syslog("%s: failed to execute (%s)" % (script, e.strerror))
+
+    pools = session.xenapi.pool.get_all()
+    # We assume there is only ever one pool...
+    if len(pools) == 0:
+        raise XenAPIPlugin.Failure("NO_POOL_FOR_HOST", [])
+    if len(pools) > 1:
+        raise XenAPIPlugin.Failure("MORE_THAN_ONE_POOL_FOR_HOST", [])
+    pool = session.xenapi.pool.get_record(pools[0])
+    try:
+        try:
+            controller = pool["vswitch_controller"]
+        except KeyError:
+            # On systems older than XenServer 5.6.0, we needed to store
+            # the key in "other_config".
+            controller = pool["other_config"]["vSwitchController"]
+    except KeyError, e:
+        controller = ""
+    currentController = vswitchCurrentController()
+    if controller == "" and currentController != "":
+        delete_cacert()
+        try:
+            emergency_reset(session, None)
+        except:
+            pass
+        removeControllerCfg()
+        return "Successfully removed controller config"
+    elif controller != currentController:
+        delete_cacert()
+        try:
+            emergency_reset(session, None)
+        except:
+            pass
+        setControllerCfg(controller)
+        return "Successfully set controller to " + controller
+    else:
+        return "No change to configuration"
+
+def vswitchCurrentController():
+    controller = vswitchCfgQuery(["get", "Open_vSwitch", 
+                                  ".", "managers"]).strip('[]"')
+    if controller == "":
+        return controller
+    if len(controller) < 4 or controller[0:4] != "ssl:":
+        return controller
+    else:
+        return controller.split(':')[1]
+
+def removeControllerCfg():
+    vswitchCfgMod(["--", "clear", "Open_vSwitch", ".", "managers",
+                   "--", "del-ssl"])
+
+def setControllerCfg(controller):
+    # /etc/xensource/xapi-ssl.pem is mentioned twice below because it
+    # contains both the private key and the certificate.
+    vswitchCfgMod(["--", "clear", "Open_vSwitch", ".", "managers",
+                   "--", "del-ssl",
+                   "--", "--bootstrap", "set-ssl",
+                   "/etc/xensource/xapi-ssl.pem",
+                   "/etc/xensource/xapi-ssl.pem",
+                   cacert_filename,
+                   "--", "set", "Open_vSwitch", ".",
+                   'managers="ssl:' + controller + ':6632"'])
+
+def vswitchCfgQuery(action_args):
+    cmd = [vsctl, "-vANY:console:emer"] + action_args
+    output = subprocess.Popen(cmd, stdout=subprocess.PIPE).communicate()
+    if len(output) == 0 or output[0] == None:
+        output = ""
+    else:
+        output = output[0].strip()
+    return output
+
+def vswitchCfgMod(action_args):
+    cmd = [vsctl, "-vANY:console:emer"] + action_args
+    exitcode = subprocess.call(cmd)
+    if exitcode != 0:
+        raise XenAPIPlugin.Failure("VSWITCH_CONFIG_MOD_FAILURE",
+                                   [ str(exitcode) , str(action_args) ])
+
+def emergency_reset(session, args):
+    cmd = [vsctl, "emer-reset"]
+    exitcode = subprocess.call(cmd)
+    if exitcode != 0:
+        raise XenAPIPlugin.Failure("VSWITCH_EMER_RESET_FAILURE",
+                                   [ str(exitcode) ])
+
+    return "Successfully reset configuration"
+    
+if __name__ == "__main__":
+    XenAPIPlugin.dispatch({"update": update,
+                           "emergency_reset": emergency_reset})
