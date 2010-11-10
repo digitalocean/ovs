@@ -1,0 +1,267 @@
+Description: Upstream changes introduced in version 1.1.0~pre2-3
+ This patch has been created by dpkg-source during the package build.
+ Here's the last changelog entry, hopefully it gives details on why
+ those changes were made:
+ .
+ openvswitch (1.1.0~pre2-3) unstable; urgency=low
+ .
+   * Remove the corekeeper package as it isn't strongly related
+     to Open vSwitch. It has subsequently been broken off into
+     a separate source repository and may be uploaded as its
+     own debian source package.
+     http://openvswitch.org/cgi-bin/gitweb.cgi?p=corekeeper;a=summary
+     (closes: #602946)
+   * Avoid the use of long socket names.
+     (closes: #602891, closes: #602911)
+ .
+ The person named in the Author field signed this changelog entry.
+Author: Simon Horman <horms@debian.org>
+Bug-Debian: http://bugs.debian.org/602891
+Bug-Debian: http://bugs.debian.org/602911
+Bug-Debian: http://bugs.debian.org/602946
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: http://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: <YYYY-MM-DD>
+
+--- openvswitch-1.1.0~pre2.orig/Makefile.in
++++ openvswitch-1.1.0~pre2/Makefile.in
+@@ -76,15 +76,15 @@ sbin_PROGRAMS = vswitchd/ovs-vswitchd$(E
+ 	ovsdb/ovsdb-server$(EXEEXT)
+ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-aes128$(EXEEXT) \
+ 	tests/test-classifier$(EXEEXT) tests/test-csum$(EXEEXT) \
+-	tests/test-dir_name$(EXEEXT) tests/test-flows$(EXEEXT) \
++	tests/test-file_name$(EXEEXT) tests/test-flows$(EXEEXT) \
+ 	tests/test-hash$(EXEEXT) tests/test-hmap$(EXEEXT) \
+ 	tests/test-json$(EXEEXT) tests/test-jsonrpc$(EXEEXT) \
+ 	tests/test-list$(EXEEXT) tests/test-lockfile$(EXEEXT) \
+-	tests/test-ovsdb$(EXEEXT) tests/test-reconnect$(EXEEXT) \
+-	tests/test-sha1$(EXEEXT) tests/test-timeval$(EXEEXT) \
+-	tests/test-strtok_r$(EXEEXT) tests/test-type-props$(EXEEXT) \
+-	tests/test-dhcp-client$(EXEEXT) tests/test-uuid$(EXEEXT) \
+-	tests/test-vconn$(EXEEXT)
++	tests/test-unix-socket$(EXEEXT) tests/test-ovsdb$(EXEEXT) \
++	tests/test-reconnect$(EXEEXT) tests/test-sha1$(EXEEXT) \
++	tests/test-timeval$(EXEEXT) tests/test-strtok_r$(EXEEXT) \
++	tests/test-type-props$(EXEEXT) tests/test-dhcp-client$(EXEEXT) \
++	tests/test-uuid$(EXEEXT) tests/test-vconn$(EXEEXT)
+ DIST_COMMON = README $(am__configure_deps) $(dist_check_SCRIPTS) \
+ 	$(dist_man_MANS) $(dist_pkgdata_DATA) $(dist_pkgdata_SCRIPTS) \
+ 	$(dist_sbin_SCRIPTS) $(noinst_HEADERS) $(srcdir)/Makefile.am \
+@@ -301,9 +301,9 @@ tests_test_csum_DEPENDENCIES = lib/libop
+ am_tests_test_dhcp_client_OBJECTS = tests/test-dhcp-client.$(OBJEXT)
+ tests_test_dhcp_client_OBJECTS = $(am_tests_test_dhcp_client_OBJECTS)
+ tests_test_dhcp_client_DEPENDENCIES = lib/libopenvswitch.a
+-am_tests_test_dir_name_OBJECTS = tests/test-dir_name.$(OBJEXT)
+-tests_test_dir_name_OBJECTS = $(am_tests_test_dir_name_OBJECTS)
+-tests_test_dir_name_DEPENDENCIES = lib/libopenvswitch.a
++am_tests_test_file_name_OBJECTS = tests/test-file_name.$(OBJEXT)
++tests_test_file_name_OBJECTS = $(am_tests_test_file_name_OBJECTS)
++tests_test_file_name_DEPENDENCIES = lib/libopenvswitch.a
+ am_tests_test_flows_OBJECTS = tests/test-flows.$(OBJEXT)
+ tests_test_flows_OBJECTS = $(am_tests_test_flows_OBJECTS)
+ tests_test_flows_DEPENDENCIES = lib/libopenvswitch.a
+@@ -346,6 +346,9 @@ tests_test_timeval_DEPENDENCIES = lib/li
+ am_tests_test_type_props_OBJECTS = tests/test-type-props.$(OBJEXT)
+ tests_test_type_props_OBJECTS = $(am_tests_test_type_props_OBJECTS)
+ tests_test_type_props_LDADD = $(LDADD)
++am_tests_test_unix_socket_OBJECTS = tests/test-unix-socket.$(OBJEXT)
++tests_test_unix_socket_OBJECTS = $(am_tests_test_unix_socket_OBJECTS)
++tests_test_unix_socket_DEPENDENCIES = lib/libopenvswitch.a
+ am_tests_test_uuid_OBJECTS = tests/test-uuid.$(OBJEXT)
+ tests_test_uuid_OBJECTS = $(am_tests_test_uuid_OBJECTS)
+ tests_test_uuid_DEPENDENCIES = lib/libopenvswitch.a
+@@ -445,15 +448,16 @@ SOURCES = $(lib_libopenvswitch_a_SOURCES
+ 	$(ovsdb_ovsdb_server_SOURCES) $(ovsdb_ovsdb_tool_SOURCES) \
+ 	$(tests_test_aes128_SOURCES) $(tests_test_classifier_SOURCES) \
+ 	$(tests_test_csum_SOURCES) $(tests_test_dhcp_client_SOURCES) \
+-	$(tests_test_dir_name_SOURCES) $(tests_test_flows_SOURCES) \
++	$(tests_test_file_name_SOURCES) $(tests_test_flows_SOURCES) \
+ 	$(tests_test_hash_SOURCES) $(tests_test_hmap_SOURCES) \
+ 	$(tests_test_json_SOURCES) $(tests_test_jsonrpc_SOURCES) \
+ 	$(tests_test_list_SOURCES) $(tests_test_lockfile_SOURCES) \
+ 	$(tests_test_ovsdb_SOURCES) $(tests_test_reconnect_SOURCES) \
+ 	$(tests_test_sha1_SOURCES) $(tests_test_strtok_r_SOURCES) \
+ 	$(tests_test_timeval_SOURCES) $(tests_test_type_props_SOURCES) \
+-	$(tests_test_uuid_SOURCES) $(tests_test_vconn_SOURCES) \
+-	$(utilities_nlmon_SOURCES) $(utilities_ovs_appctl_SOURCES) \
++	$(tests_test_unix_socket_SOURCES) $(tests_test_uuid_SOURCES) \
++	$(tests_test_vconn_SOURCES) $(utilities_nlmon_SOURCES) \
++	$(utilities_ovs_appctl_SOURCES) \
+ 	$(utilities_ovs_controller_SOURCES) \
+ 	$(utilities_ovs_discover_SOURCES) \
+ 	$(utilities_ovs_dpctl_SOURCES) $(utilities_ovs_kill_SOURCES) \
+@@ -468,14 +472,15 @@ DIST_SOURCES = $(am__lib_libopenvswitch_
+ 	$(ovsdb_ovsdb_server_SOURCES) $(ovsdb_ovsdb_tool_SOURCES) \
+ 	$(tests_test_aes128_SOURCES) $(tests_test_classifier_SOURCES) \
+ 	$(tests_test_csum_SOURCES) $(tests_test_dhcp_client_SOURCES) \
+-	$(tests_test_dir_name_SOURCES) $(tests_test_flows_SOURCES) \
++	$(tests_test_file_name_SOURCES) $(tests_test_flows_SOURCES) \
+ 	$(tests_test_hash_SOURCES) $(tests_test_hmap_SOURCES) \
+ 	$(tests_test_json_SOURCES) $(tests_test_jsonrpc_SOURCES) \
+ 	$(tests_test_list_SOURCES) $(tests_test_lockfile_SOURCES) \
+ 	$(tests_test_ovsdb_SOURCES) $(tests_test_reconnect_SOURCES) \
+ 	$(tests_test_sha1_SOURCES) $(tests_test_strtok_r_SOURCES) \
+ 	$(tests_test_timeval_SOURCES) $(tests_test_type_props_SOURCES) \
+-	$(tests_test_uuid_SOURCES) $(tests_test_vconn_SOURCES) \
++	$(tests_test_unix_socket_SOURCES) $(tests_test_uuid_SOURCES) \
++	$(tests_test_vconn_SOURCES) \
+ 	$(am__utilities_nlmon_SOURCES_DIST) \
+ 	$(utilities_ovs_appctl_SOURCES) \
+ 	$(utilities_ovs_controller_SOURCES) \
+@@ -714,9 +719,7 @@ EXTRA_DIST = CodingStyle INSTALL.KVM INS
+ 	third-party/README third-party/ofp-tcpdump.patch \
+ 	debian/changelog debian/compat debian/control \
+ 	debian/control.modules.in debian/copyright debian/copyright.in \
+-	debian/corekeeper.cron.daily debian/corekeeper.init \
+-	debian/corekeeper.override debian/dirs \
+-	debian/openvswitch-common.dirs \
++	debian/dirs debian/openvswitch-common.dirs \
+ 	debian/openvswitch-common.install \
+ 	debian/openvswitch-common.manpages \
+ 	debian/openvswitch-controller.README.Debian \
+@@ -757,8 +760,8 @@ EXTRA_DIST = CodingStyle INSTALL.KVM INS
+ 	ovsdb/ovsdbmonitor/HostWindow.ui \
+ 	ovsdb/ovsdbmonitor/LogWindow.ui \
+ 	ovsdb/ovsdbmonitor/MainWindow.ui \
+-	ovsdb/ovsdbmonitor/ovsdbmonitor.in xenserver/LICENSE \
+-	xenserver/README xenserver/automake.mk \
++	ovsdb/ovsdbmonitor/ovsdbmonitor.in xenserver/GPLv2 \
++	xenserver/LICENSE xenserver/README xenserver/automake.mk \
+ 	xenserver/etc_init.d_openvswitch \
+ 	xenserver/etc_init.d_openvswitch-xapi-update \
+ 	xenserver/etc_logrotate.d_openvswitch \
+@@ -951,7 +954,7 @@ TESTSUITE_AT = \
+ 	tests/daemon.at \
+ 	tests/daemon-py.at \
+ 	tests/vconn.at \
+-	tests/dir_name.at \
++	tests/file_name.at \
+ 	tests/aes128.at \
+ 	tests/uuid.at \
+ 	tests/json.at \
+@@ -996,7 +999,7 @@ lcov_wrappers = \
+ 	tests/lcov/test-classifier \
+ 	tests/lcov/test-csum \
+ 	tests/lcov/test-dhcp-client \
+-	tests/lcov/test-dir_name \
++	tests/lcov/test-file_name \
+ 	tests/lcov/test-flows \
+ 	tests/lcov/test-hash \
+ 	tests/lcov/test-hmap \
+@@ -1009,6 +1012,7 @@ lcov_wrappers = \
+ 	tests/lcov/test-sha1 \
+ 	tests/lcov/test-timeval \
+ 	tests/lcov/test-type-props \
++	tests/lcov/test-unix-socket \
+ 	tests/lcov/test-uuid \
+ 	tests/lcov/test-vconn
+ 
+@@ -1025,7 +1029,7 @@ valgrind_wrappers = \
+ 	tests/valgrind/test-classifier \
+ 	tests/valgrind/test-csum \
+ 	tests/valgrind/test-dhcp-client \
+-	tests/valgrind/test-dir_name \
++	tests/valgrind/test-file_name \
+ 	tests/valgrind/test-flows \
+ 	tests/valgrind/test-hash \
+ 	tests/valgrind/test-hmap \
+@@ -1038,6 +1042,7 @@ valgrind_wrappers = \
+ 	tests/valgrind/test-sha1 \
+ 	tests/valgrind/test-timeval \
+ 	tests/valgrind/test-type-props \
++	tests/valgrind/test-unix-socket \
+ 	tests/valgrind/test-uuid \
+ 	tests/valgrind/test-vconn
+ 
+@@ -1052,8 +1057,8 @@ tests_test_classifier_SOURCES = tests/te
+ tests_test_classifier_LDADD = lib/libopenvswitch.a
+ tests_test_csum_SOURCES = tests/test-csum.c
+ tests_test_csum_LDADD = lib/libopenvswitch.a
+-tests_test_dir_name_SOURCES = tests/test-dir_name.c
+-tests_test_dir_name_LDADD = lib/libopenvswitch.a
++tests_test_file_name_SOURCES = tests/test-file_name.c
++tests_test_file_name_LDADD = lib/libopenvswitch.a
+ tests_test_flows_SOURCES = tests/test-flows.c
+ tests_test_flows_LDADD = lib/libopenvswitch.a
+ dist_check_SCRIPTS = tests/flowgen.pl
+@@ -1069,6 +1074,8 @@ tests_test_list_SOURCES = tests/test-lis
+ tests_test_list_LDADD = lib/libopenvswitch.a
+ tests_test_lockfile_SOURCES = tests/test-lockfile.c
+ tests_test_lockfile_LDADD = lib/libopenvswitch.a
++tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
++tests_test_unix_socket_LDADD = lib/libopenvswitch.a
+ tests_test_ovsdb_SOURCES = \
+ 	tests/test-ovsdb.c \
+ 	tests/idltest.c \
+@@ -1600,11 +1607,11 @@ tests/test-dhcp-client.$(OBJEXT): tests/
+ tests/test-dhcp-client$(EXEEXT): $(tests_test_dhcp_client_OBJECTS) $(tests_test_dhcp_client_DEPENDENCIES) tests/$(am__dirstamp)
+ 	@rm -f tests/test-dhcp-client$(EXEEXT)
+ 	$(LINK) $(tests_test_dhcp_client_OBJECTS) $(tests_test_dhcp_client_LDADD) $(LIBS)
+-tests/test-dir_name.$(OBJEXT): tests/$(am__dirstamp) \
++tests/test-file_name.$(OBJEXT): tests/$(am__dirstamp) \
+ 	tests/$(DEPDIR)/$(am__dirstamp)
+-tests/test-dir_name$(EXEEXT): $(tests_test_dir_name_OBJECTS) $(tests_test_dir_name_DEPENDENCIES) tests/$(am__dirstamp)
+-	@rm -f tests/test-dir_name$(EXEEXT)
+-	$(LINK) $(tests_test_dir_name_OBJECTS) $(tests_test_dir_name_LDADD) $(LIBS)
++tests/test-file_name$(EXEEXT): $(tests_test_file_name_OBJECTS) $(tests_test_file_name_DEPENDENCIES) tests/$(am__dirstamp)
++	@rm -f tests/test-file_name$(EXEEXT)
++	$(LINK) $(tests_test_file_name_OBJECTS) $(tests_test_file_name_LDADD) $(LIBS)
+ tests/test-flows.$(OBJEXT): tests/$(am__dirstamp) \
+ 	tests/$(DEPDIR)/$(am__dirstamp)
+ tests/test-flows$(EXEEXT): $(tests_test_flows_OBJECTS) $(tests_test_flows_DEPENDENCIES) tests/$(am__dirstamp)
+@@ -1672,6 +1679,11 @@ tests/test-type-props.$(OBJEXT): tests/$
+ tests/test-type-props$(EXEEXT): $(tests_test_type_props_OBJECTS) $(tests_test_type_props_DEPENDENCIES) tests/$(am__dirstamp)
+ 	@rm -f tests/test-type-props$(EXEEXT)
+ 	$(LINK) $(tests_test_type_props_OBJECTS) $(tests_test_type_props_LDADD) $(LIBS)
++tests/test-unix-socket.$(OBJEXT): tests/$(am__dirstamp) \
++	tests/$(DEPDIR)/$(am__dirstamp)
++tests/test-unix-socket$(EXEEXT): $(tests_test_unix_socket_OBJECTS) $(tests_test_unix_socket_DEPENDENCIES) tests/$(am__dirstamp)
++	@rm -f tests/test-unix-socket$(EXEEXT)
++	$(LINK) $(tests_test_unix_socket_OBJECTS) $(tests_test_unix_socket_LDADD) $(LIBS)
+ tests/test-uuid.$(OBJEXT): tests/$(am__dirstamp) \
+ 	tests/$(DEPDIR)/$(am__dirstamp)
+ tests/test-uuid$(EXEEXT): $(tests_test_uuid_OBJECTS) $(tests_test_uuid_DEPENDENCIES) tests/$(am__dirstamp)
+@@ -1973,7 +1985,7 @@ mostlyclean-compile:
+ 	-rm -f tests/test-classifier.$(OBJEXT)
+ 	-rm -f tests/test-csum.$(OBJEXT)
+ 	-rm -f tests/test-dhcp-client.$(OBJEXT)
+-	-rm -f tests/test-dir_name.$(OBJEXT)
++	-rm -f tests/test-file_name.$(OBJEXT)
+ 	-rm -f tests/test-flows.$(OBJEXT)
+ 	-rm -f tests/test-hash.$(OBJEXT)
+ 	-rm -f tests/test-hmap.$(OBJEXT)
+@@ -1987,6 +1999,7 @@ mostlyclean-compile:
+ 	-rm -f tests/test-strtok_r.$(OBJEXT)
+ 	-rm -f tests/test-timeval.$(OBJEXT)
+ 	-rm -f tests/test-type-props.$(OBJEXT)
++	-rm -f tests/test-unix-socket.$(OBJEXT)
+ 	-rm -f tests/test-uuid.$(OBJEXT)
+ 	-rm -f tests/test-vconn.$(OBJEXT)
+ 	-rm -f utilities/nlmon.$(OBJEXT)
+@@ -2119,7 +2132,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-classifier.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-csum.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-dhcp-client.Po@am__quote@
+-@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-dir_name.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-file_name.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-flows.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-hash.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-hmap.Po@am__quote@
+@@ -2133,6 +2146,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-strtok_r.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-timeval.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-type-props.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-unix-socket.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-uuid.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-vconn.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@utilities/$(DEPDIR)/nlmon.Po@am__quote@

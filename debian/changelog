@@ -1,3 +1,16 @@
+openvswitch (1.1.0~pre2-3) unstable; urgency=low
+
+  * Remove the corekeeper package as it isn't strongly related
+    to Open vSwitch. It has subsequently been broken off into
+    a separate source repository and may be uploaded as its
+    own debian source package.
+    http://openvswitch.org/cgi-bin/gitweb.cgi?p=corekeeper;a=summary
+    (closes: #602946)
+  * Avoid the use of long socket names.
+    (closes: #602891, closes: #602911)
+
+ -- Simon Horman <horms@debian.org>  Thu, 11 Nov 2010 06:35:05 +0900
+
 openvswitch (1.1.0~pre2-2) unstable; urgency=low
 
   * Clarify licensing of files in xenserver/

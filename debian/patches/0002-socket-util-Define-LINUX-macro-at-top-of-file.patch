@@ -1,0 +1,42 @@
+From 631a74ad09a44bfd34e3135057e89e99f691ed78 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Tue, 9 Nov 2010 15:59:26 -0800
+Subject: [PATCH 2/3] socket-util: Define LINUX macro at top of file.
+
+This will be used further in the following commit.
+---
+ lib/socket-util.c |   16 ++++++++++------
+ 1 files changed, 10 insertions(+), 6 deletions(-)
+
+--- a/lib/socket-util.c
++++ b/lib/socket-util.c
+@@ -36,6 +36,15 @@
+ 
+ VLOG_DEFINE_THIS_MODULE(socket_util)
+ 
++/* #ifdefs make it a pain to maintain code: you have to try to build both ways.
++ * Thus, this file compiles all of the code regardless of the target, by
++ * writing "if (LINUX)" instead of "#ifdef __linux__". */
++#ifdef __linux__
++#define LINUX 1
++#else
++#define LINUX 0
++#endif
++
+ /* Sets 'fd' to non-blocking mode.  Returns 0 if successful, otherwise a
+  * positive errno value. */
+ int
+@@ -171,12 +180,7 @@
+          *
+          * On other Unix-like OSes, MSG_TRUNC has no effect in the flags
+          * argument. */
+-#ifdef __linux__
+-#define BUFFER_SIZE 1
+-#else
+-#define BUFFER_SIZE 2048
+-#endif
+-        char buffer[BUFFER_SIZE];
++        char buffer[LINUX ? 1 : 2048];
+         ssize_t n_bytes = recv(fd, buffer, sizeof buffer,
+                                MSG_TRUNC | MSG_DONTWAIT);
+         if (n_bytes <= 0 || n_bytes >= rcvbuf) {

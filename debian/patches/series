@@ -5,3 +5,7 @@
 0005-xenserver-Add-license-to-uuid.py.patch
 0006-xenserver-Now-everything-is-free.patch
 debian-changes-1.1.0~pre2-2
+0001-util-New-function-base_name.patch
+0002-socket-util-Define-LINUX-macro-at-top-of-file.patch
+0003-socket-util-Work-around-Unix-domain-socket-path-name.patch
+debian-changes-1.1.0~pre2-3
