@@ -1,0 +1,39 @@
+From 2ed7d6e227c009f0f6bdabbb85262d8aac896e00 Mon Sep 17 00:00:00 2001
+From: Simon Horman <horms@verge.net.au>
+Date: Tue, 21 Sep 2010 12:06:12 +0900
+Subject: [PATCH] debian: Add override of non-standard-dir-perm to corekeeper
+
+Remove code to restart openvswitch-switch from its postinst script
+as this is automatically added by dh_installinit
+
+Signed-off-by: Simon Horman <horms@verge.net.au>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ debian/openvswitch-switch.postinst |   11 -----------
+ 1 files changed, 0 insertions(+), 11 deletions(-)
+
+diff --git a/debian/openvswitch-switch.postinst b/debian/openvswitch-switch.postinst
+index 4be5a30..74b52ba 100755
+--- a/debian/openvswitch-switch.postinst
++++ b/debian/openvswitch-switch.postinst
+@@ -33,17 +33,6 @@ case "$1" in
+                 fi
+             done
+ 	fi
+-
+-        if /etc/init.d/openvswitch-switch status >/dev/null 2>&1; then
+-            running=true
+-            /etc/init.d/openvswitch-switch stop
+-        else
+-            running=false
+-        fi
+-
+-        if $running; then
+-            /etc/init.d/openvswitch-switch start
+-        fi
+         ;;
+ 
+     abort-upgrade|abort-remove|abort-deconfigure)
+-- 
+1.7.1
+

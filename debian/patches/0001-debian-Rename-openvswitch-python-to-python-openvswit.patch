@@ -1,0 +1,98 @@
+From 1d273d6d802e5daeebe551e8ca0c3e99f4dda15e Mon Sep 17 00:00:00 2001
+From: Sajjad Lateef <slateef@nicira.com>
+Date: Tue, 21 Sep 2010 11:18:26 -0700
+Subject: [PATCH] debian: Rename openvswitch-python to python-openvswitch
+
+Package name changed to be consistent with
+Debian Python policy.
+
+The python files are installed in
+/usr/share/python-support/python-openvswitch/ovs and
+/usr/share/python-support/python-openvswitch/ovs/db
+
+Changed Section to python, per lintian
+---
+ debian/automake.mk                |    4 ++--
+ debian/control                    |    3 ++-
+ debian/openvswitch-python.dirs    |    2 --
+ debian/openvswitch-python.install |    2 --
+ debian/python-openvswitch.dirs    |    2 ++
+ debian/python-openvswitch.install |    2 ++
+ 6 files changed, 8 insertions(+), 7 deletions(-)
+ delete mode 100644 debian/openvswitch-python.dirs
+ delete mode 100644 debian/openvswitch-python.install
+ create mode 100644 debian/python-openvswitch.dirs
+ create mode 100644 debian/python-openvswitch.install
+
+diff --git a/debian/automake.mk b/debian/automake.mk
+index dc18961..c768d56 100644
+--- a/debian/automake.mk
++++ b/debian/automake.mk
+@@ -29,8 +29,6 @@ EXTRA_DIST += \
+ 	debian/openvswitch-pki-server.install \
+ 	debian/openvswitch-pki-server.postinst \
+ 	debian/openvswitch-pki.postinst \
+-	debian/openvswitch-python.dirs \
+-	debian/openvswitch-python.install \
+ 	debian/openvswitch-switch.README.Debian \
+ 	debian/openvswitch-switch.dirs \
+ 	debian/openvswitch-switch.init \
+@@ -41,6 +39,8 @@ EXTRA_DIST += \
+ 	debian/openvswitch-switch.manpages \
+ 	debian/openvswitch-switch.postrm \
+ 	debian/openvswitch-switch.template \
++	debian/python-openvswitch.dirs \
++	debian/python-openvswitch.install \
+ 	debian/rules \
+ 	debian/rules.modules
+ 
+diff --git a/debian/control b/debian/control
+index fde640e..b7f2248 100644
+--- a/debian/control
++++ b/debian/control
+@@ -96,8 +96,9 @@ Description: Debug symbols for Open vSwitch packages
+  packages.  Install it to debug one of them or to examine a core dump
+  produced by one of them.
+ 
+-Package: openvswitch-python 
++Package: python-openvswitch 
+ Architecture: all
++Section: python
+ Depends: ${python:Depends}, openvswitch-switch (= ${binary:Version})
+ Provides: ${python:Provides}
+ Description: Python bindings for Open vSwitch
+diff --git a/debian/openvswitch-python.dirs b/debian/openvswitch-python.dirs
+deleted file mode 100644
+index 055838c..0000000
+--- a/debian/openvswitch-python.dirs
++++ /dev/null
+@@ -1,2 +0,0 @@
+-usr/share/python-support/openvswitch-python/ovs/
+-usr/share/python-support/openvswitch-python/ovs/db/
+diff --git a/debian/openvswitch-python.install b/debian/openvswitch-python.install
+deleted file mode 100644
+index 35d35e7..0000000
+--- a/debian/openvswitch-python.install
++++ /dev/null
+@@ -1,2 +0,0 @@
+-python/ovs/*.py usr/share/python-support/openvswitch-python/ovs/
+-python/ovs/db/*.py usr/share/python-support/openvswitch-python/ovs/db/
+diff --git a/debian/python-openvswitch.dirs b/debian/python-openvswitch.dirs
+new file mode 100644
+index 0000000..9bc6912
+--- /dev/null
++++ b/debian/python-openvswitch.dirs
+@@ -0,0 +1,2 @@
++usr/share/python-support/python-openvswitch/ovs/
++usr/share/python-support/python-openvswitch/ovs/db/
+diff --git a/debian/python-openvswitch.install b/debian/python-openvswitch.install
+new file mode 100644
+index 0000000..211ed30
+--- /dev/null
++++ b/debian/python-openvswitch.install
+@@ -0,0 +1,2 @@
++python/ovs/*.py usr/share/python-support/python-openvswitch/ovs/
++python/ovs/db/*.py usr/share/python-support/python-openvswitch/ovs/db/
+-- 
+1.7.1
+
