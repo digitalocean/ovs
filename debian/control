@@ -22,7 +22,7 @@ Description: Source code for Open vSwitch datapath Linux module
  Open vSwitch is a full-featured software-based Ethernet switch.
 
 Package: openvswitch-common
-Architecture: any
+Architecture: linux-any
 Depends: ${shlibs:Depends}, openssl, ${misc:Depends}
 Description: Open vSwitch common components
  openvswitch-common provides components required by both openvswitch-switch
@@ -31,7 +31,7 @@ Description: Open vSwitch common components
  Open vSwitch is a full-featured software-based Ethernet switch.
 
 Package: openvswitch-switch
-Architecture: any
+Architecture: linux-any
 Suggests: openvswitch-datapath-module
 Depends: ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps
 Description: Open vSwitch switch implementations
@@ -65,7 +65,7 @@ Description: Open vSwitch public key infrastructure (HTTP server support)
  Open vSwitch is a full-featured software-based Ethernet switch.
 
 Package: openvswitch-controller
-Architecture: any
+Architecture: linux-any
 Depends:
  ${shlibs:Depends}, openvswitch-common (= ${binary:Version}),
  openvswitch-pki (= ${source:Version}), ${misc:Depends}
@@ -77,7 +77,7 @@ Description: Open vSwitch controller implementation
 
 Package: openvswitch-dbg
 Section: debug
-Architecture: any
+Architecture: linux-any
 Depends:
  ${shlibs:Depends}, ${misc:Depends},
  openvswitch-common (= ${binary:Version}),

@@ -1,3 +1,10 @@
+openvswitch (1.1.0~pre2-5) unstable; urgency=low
+
+  * Open vSwitch only works on Linux so set
+    the Architecture of binary packages to linux-any accordingly
+
+ -- Simon Horman <horms@debian.org>  Tue, 23 Nov 2010 07:55:19 +0900
+
 openvswitch (1.1.0~pre2-4) unstable; urgency=low
 
   * Add procps to Build-Depends
