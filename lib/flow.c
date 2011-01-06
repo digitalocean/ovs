@@ -20,18 +20,21 @@
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include "byte-order.h"
 #include "coverage.h"
 #include "dynamic-string.h"
 #include "hash.h"
+#include "ofp-util.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "openvswitch/datapath-protocol.h"
 #include "packets.h"
 #include "unaligned.h"
 #include "vlog.h"
-#include "xtoxll.h"
 
-VLOG_DEFINE_THIS_MODULE(flow)
+VLOG_DEFINE_THIS_MODULE(flow);
+
+COVERAGE_DEFINE(flow_extract);
 
 static struct arp_eth_header *
 pull_arp(struct ofpbuf *packet)
@@ -78,27 +81,26 @@ pull_icmp(struct ofpbuf *packet)
 }
 
 static void
-parse_vlan(struct ofpbuf *b, flow_t *flow)
+parse_vlan(struct ofpbuf *b, struct flow *flow)
 {
     struct qtag_prefix {
-        uint16_t eth_type;      /* ETH_TYPE_VLAN */
-        uint16_t tci;
+        ovs_be16 eth_type;      /* ETH_TYPE_VLAN */
+        ovs_be16 tci;
     };
 
-    if (b->size >= sizeof(struct qtag_prefix) + sizeof(uint16_t)) {
+    if (b->size >= sizeof(struct qtag_prefix) + sizeof(ovs_be16)) {
         struct qtag_prefix *qp = ofpbuf_pull(b, sizeof *qp);
-        flow->dl_vlan = qp->tci & htons(VLAN_VID_MASK);
-        flow->dl_vlan_pcp = (ntohs(qp->tci) & VLAN_PCP_MASK) >> VLAN_PCP_SHIFT;
+        flow->vlan_tci = qp->tci | htons(VLAN_CFI);
     }
 }
 
-static uint16_t
+static ovs_be16
 parse_ethertype(struct ofpbuf *b)
 {
     struct llc_snap_header *llc;
-    uint16_t proto;
+    ovs_be16 proto;
 
-    proto = *(uint16_t *) ofpbuf_pull(b, sizeof proto);
+    proto = *(ovs_be16 *) ofpbuf_pull(b, sizeof proto);
     if (ntohs(proto) >= ODP_DL_TYPE_ETH2_CUTOFF) {
         return proto;
     }
@@ -120,10 +122,8 @@ parse_ethertype(struct ofpbuf *b)
     return llc->snap.snap_type;
 }
 
-/* 'tun_id' is in network byte order, while 'in_port' is in host byte order.
- * These byte orders are the same as they are in struct odp_flow_key.
- *
- * Initializes packet header pointers as follows:
+/* Initializes 'flow' members from 'packet', 'tun_id', and 'in_port.
+ * Initializes 'packet' header pointers as follows:
  *
  *    - packet->l2 to the start of the Ethernet header.
  *
@@ -138,8 +138,8 @@ parse_ethertype(struct ofpbuf *b)
  *      present and has a correct length, and otherwise NULL.
  */
 int
-flow_extract(struct ofpbuf *packet, uint32_t tun_id, uint16_t in_port,
-             flow_t *flow)
+flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t in_port,
+             struct flow *flow)
 {
     struct ofpbuf b = *packet;
     struct eth_header *eth;
@@ -150,7 +150,6 @@ flow_extract(struct ofpbuf *packet, uint32_t tun_id, uint16_t in_port,
     memset(flow, 0, sizeof *flow);
     flow->tun_id = tun_id;
     flow->in_port = in_port;
-    flow->dl_vlan = htons(OFP_VLAN_NONE);
 
     packet->l2 = b.data;
     packet->l3 = NULL;
@@ -166,7 +165,7 @@ flow_extract(struct ofpbuf *packet, uint32_t tun_id, uint16_t in_port,
     memcpy(flow->dl_src, eth->eth_src, ETH_ADDR_LEN);
     memcpy(flow->dl_dst, eth->eth_dst, ETH_ADDR_LEN);
 
-    /* dl_type, dl_vlan, dl_vlan_pcp. */
+    /* dl_type, vlan_tci. */
     ofpbuf_pull(&b, ETH_ADDR_LEN * 2);
     if (eth->eth_type == htons(ETH_TYPE_VLAN)) {
         parse_vlan(&b, flow);
@@ -178,8 +177,8 @@ flow_extract(struct ofpbuf *packet, uint32_t tun_id, uint16_t in_port,
     if (flow->dl_type == htons(ETH_TYPE_IP)) {
         const struct ip_header *nh = pull_ip(&b);
         if (nh) {
-            flow->nw_src = get_unaligned_u32(&nh->ip_src);
-            flow->nw_dst = get_unaligned_u32(&nh->ip_dst);
+            flow->nw_src = get_unaligned_be32(&nh->ip_src);
+            flow->nw_dst = get_unaligned_be32(&nh->ip_dst);
             flow->nw_tos = nh->ip_tos & IP_DSCP_MASK;
             flow->nw_proto = nh->ip_proto;
             packet->l4 = b.data;
@@ -235,7 +234,7 @@ flow_extract(struct ofpbuf *packet, uint32_t tun_id, uint16_t in_port,
  * arguments must have been initialized through a call to flow_extract().
  */
 void
-flow_extract_stats(const flow_t *flow, struct ofpbuf *packet,
+flow_extract_stats(const struct flow *flow, struct ofpbuf *packet,
         struct odp_flow_stats *stats)
 {
     memset(stats, '\0', sizeof(*stats));
@@ -251,68 +250,8 @@ flow_extract_stats(const flow_t *flow, struct ofpbuf *packet,
     stats->n_packets = 1;
 }
 
-/* Extract 'flow' with 'wildcards' into the OpenFlow match structure
- * 'match'. */
-void
-flow_to_match(const flow_t *flow, uint32_t wildcards, bool tun_id_from_cookie,
-              struct ofp_match *match)
-{
-    if (!tun_id_from_cookie) {
-        wildcards &= OFPFW_ALL;
-    }
-    match->wildcards = htonl(wildcards);
-
-    match->in_port = htons(flow->in_port == ODPP_LOCAL ? OFPP_LOCAL
-                           : flow->in_port);
-    match->dl_vlan = flow->dl_vlan;
-    match->dl_vlan_pcp = flow->dl_vlan_pcp;
-    memcpy(match->dl_src, flow->dl_src, ETH_ADDR_LEN);
-    memcpy(match->dl_dst, flow->dl_dst, ETH_ADDR_LEN);
-    match->dl_type = flow->dl_type;
-    match->nw_src = flow->nw_src;
-    match->nw_dst = flow->nw_dst;
-    match->nw_tos = flow->nw_tos;
-    match->nw_proto = flow->nw_proto;
-    match->tp_src = flow->tp_src;
-    match->tp_dst = flow->tp_dst;
-    memset(match->pad1, '\0', sizeof match->pad1);
-    memset(match->pad2, '\0', sizeof match->pad2);
-}
-
-void
-flow_from_match(const struct ofp_match *match, bool tun_id_from_cookie,
-                uint64_t cookie, flow_t *flow, uint32_t *flow_wildcards)
-{
-	uint32_t wildcards = ntohl(match->wildcards);
-
-    flow->nw_src = match->nw_src;
-    flow->nw_dst = match->nw_dst;
-    if (tun_id_from_cookie && !(wildcards & NXFW_TUN_ID)) {
-        flow->tun_id = htonl(ntohll(cookie) >> 32);
-    } else {
-        wildcards |= NXFW_TUN_ID;
-        flow->tun_id = 0;
-    }
-    flow->in_port = (match->in_port == htons(OFPP_LOCAL) ? ODPP_LOCAL
-                     : ntohs(match->in_port));
-    flow->dl_vlan = match->dl_vlan;
-    flow->dl_vlan_pcp = match->dl_vlan_pcp;
-    flow->dl_type = match->dl_type;
-    flow->tp_src = match->tp_src;
-    flow->tp_dst = match->tp_dst;
-    memcpy(flow->dl_src, match->dl_src, ETH_ADDR_LEN);
-    memcpy(flow->dl_dst, match->dl_dst, ETH_ADDR_LEN);
-    flow->nw_tos = match->nw_tos;
-    flow->nw_proto = match->nw_proto;
-    memset(flow->reserved, 0, sizeof flow->reserved);
-
-    if (flow_wildcards) {
-        *flow_wildcards = wildcards;
-    }
-}
-
 char *
-flow_to_string(const flow_t *flow)
+flow_to_string(const struct flow *flow)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     flow_format(&ds, flow);
@@ -320,20 +259,23 @@ flow_to_string(const flow_t *flow)
 }
 
 void
-flow_format(struct ds *ds, const flow_t *flow)
+flow_format(struct ds *ds, const struct flow *flow)
 {
-    ds_put_format(ds, "tunnel%08"PRIx32":in_port%04"PRIx16
-                      ":vlan%"PRIu16":pcp%"PRIu8
-                      " mac"ETH_ADDR_FMT"->"ETH_ADDR_FMT
+    ds_put_format(ds, "tunnel%#"PRIx64":in_port%04"PRIx16":tci(",
+                  flow->tun_id, flow->in_port);
+    if (flow->vlan_tci) {
+        ds_put_format(ds, "vlan%"PRIu16",pcp%d",
+                      vlan_tci_to_vid(flow->vlan_tci),
+                      vlan_tci_to_pcp(flow->vlan_tci));
+    } else {
+        ds_put_char(ds, '0');
+    }
+    ds_put_format(ds, ") mac"ETH_ADDR_FMT"->"ETH_ADDR_FMT
                       " type%04"PRIx16
                       " proto%"PRIu8
                       " tos%"PRIu8
                       " ip"IP_FMT"->"IP_FMT
                       " port%"PRIu16"->%"PRIu16,
-                  ntohl(flow->tun_id),
-                  flow->in_port,
-                  ntohs(flow->dl_vlan),
-                  flow->dl_vlan_pcp,
                   ETH_ADDR_ARGS(flow->dl_src),
                   ETH_ADDR_ARGS(flow->dl_dst),
                   ntohs(flow->dl_type),
@@ -346,9 +288,170 @@ flow_format(struct ds *ds, const flow_t *flow)
 }
 
 void
-flow_print(FILE *stream, const flow_t *flow)
+flow_print(FILE *stream, const struct flow *flow)
 {
     char *s = flow_to_string(flow);
     fputs(s, stream);
     free(s);
+}
+
+/* flow_wildcards functions. */
+
+/* Initializes 'wc' as a set of wildcards that matches every packet. */
+void
+flow_wildcards_init_catchall(struct flow_wildcards *wc)
+{
+    wc->wildcards = FWW_ALL;
+    wc->nw_src_mask = htonl(0);
+    wc->nw_dst_mask = htonl(0);
+    memset(wc->reg_masks, 0, sizeof wc->reg_masks);
+    wc->vlan_tci_mask = htons(0);
+    wc->zero = 0;
+}
+
+/* Initializes 'wc' as an exact-match set of wildcards; that is, 'wc' does not
+ * wildcard any bits or fields. */
+void
+flow_wildcards_init_exact(struct flow_wildcards *wc)
+{
+    wc->wildcards = 0;
+    wc->nw_src_mask = htonl(UINT32_MAX);
+    wc->nw_dst_mask = htonl(UINT32_MAX);
+    memset(wc->reg_masks, 0xff, sizeof wc->reg_masks);
+    wc->vlan_tci_mask = htons(UINT16_MAX);
+    wc->zero = 0;
+}
+
+/* Returns true if 'wc' is exact-match, false if 'wc' wildcards any bits or
+ * fields. */
+bool
+flow_wildcards_is_exact(const struct flow_wildcards *wc)
+{
+    int i;
+
+    if (wc->wildcards
+        || wc->nw_src_mask != htonl(UINT32_MAX)
+        || wc->nw_dst_mask != htonl(UINT32_MAX)
+        || wc->vlan_tci_mask != htons(UINT16_MAX)) {
+        return false;
+    }
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        if (wc->reg_masks[i] != htonl(UINT32_MAX)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Initializes 'dst' as the combination of wildcards in 'src1' and 'src2'.
+ * That is, a bit or a field is wildcarded in 'dst' if it is wildcarded in
+ * 'src1' or 'src2' or both.  */
+void
+flow_wildcards_combine(struct flow_wildcards *dst,
+                       const struct flow_wildcards *src1,
+                       const struct flow_wildcards *src2)
+{
+    int i;
+
+    dst->wildcards = src1->wildcards | src2->wildcards;
+    dst->nw_src_mask = src1->nw_src_mask & src2->nw_src_mask;
+    dst->nw_dst_mask = src1->nw_dst_mask & src2->nw_dst_mask;
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        dst->reg_masks[i] = src1->reg_masks[i] & src2->reg_masks[i];
+    }
+    dst->vlan_tci_mask = src1->vlan_tci_mask & src2->vlan_tci_mask;
+}
+
+/* Returns a hash of the wildcards in 'wc'. */
+uint32_t
+flow_wildcards_hash(const struct flow_wildcards *wc)
+{
+    /* If you change struct flow_wildcards and thereby trigger this
+     * assertion, please check that the new struct flow_wildcards has no holes
+     * in it before you update the assertion. */
+    BUILD_ASSERT_DECL(sizeof *wc == 16 + FLOW_N_REGS * 4);
+    return hash_bytes(wc, sizeof *wc, 0);
+}
+
+/* Returns true if 'a' and 'b' represent the same wildcards, false if they are
+ * different. */
+bool
+flow_wildcards_equal(const struct flow_wildcards *a,
+                     const struct flow_wildcards *b)
+{
+    int i;
+
+    if (a->wildcards != b->wildcards
+        || a->nw_src_mask != b->nw_src_mask
+        || a->nw_dst_mask != b->nw_dst_mask
+        || a->vlan_tci_mask != b->vlan_tci_mask) {
+        return false;
+    }
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        if (a->reg_masks[i] != b->reg_masks[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Returns true if at least one bit or field is wildcarded in 'a' but not in
+ * 'b', false otherwise. */
+bool
+flow_wildcards_has_extra(const struct flow_wildcards *a,
+                         const struct flow_wildcards *b)
+{
+    int i;
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        if ((a->reg_masks[i] & b->reg_masks[i]) != b->reg_masks[i]) {
+            return true;
+        }
+    }
+
+    return (a->wildcards & ~b->wildcards
+            || (a->nw_src_mask & b->nw_src_mask) != b->nw_src_mask
+            || (a->nw_dst_mask & b->nw_dst_mask) != b->nw_dst_mask
+            || (a->vlan_tci_mask & b->vlan_tci_mask) != b->vlan_tci_mask);
+}
+
+static bool
+set_nw_mask(ovs_be32 *maskp, ovs_be32 mask)
+{
+    if (ip_is_cidr(mask)) {
+        *maskp = mask;
+        return true;
+    } else {
+        return false;
+    }
+}
+
+/* Sets the IP (or ARP) source wildcard mask to CIDR 'mask' (consisting of N
+ * high-order 1-bit and 32-N low-order 0-bits).  Returns true if successful,
+ * false if 'mask' is not a CIDR mask.  */
+bool
+flow_wildcards_set_nw_src_mask(struct flow_wildcards *wc, ovs_be32 mask)
+{
+    return set_nw_mask(&wc->nw_src_mask, mask);
+}
+
+/* Sets the IP (or ARP) destination wildcard mask to CIDR 'mask' (consisting of
+ * N high-order 1-bit and 32-N low-order 0-bits).  Returns true if successful,
+ * false if 'mask' is not a CIDR mask.  */
+bool
+flow_wildcards_set_nw_dst_mask(struct flow_wildcards *wc, ovs_be32 mask)
+{
+    return set_nw_mask(&wc->nw_dst_mask, mask);
+}
+
+/* Sets the wildcard mask for register 'idx' in 'wc' to 'mask'.
+ * (A 0-bit indicates a wildcard bit.) */
+void
+flow_wildcards_set_reg_mask(struct flow_wildcards *wc, int idx, uint32_t mask)
+{
+    wc->reg_masks[idx] = mask;
 }

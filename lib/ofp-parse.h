@@ -19,15 +19,22 @@
 #ifndef OFP_PARSE_H
 #define OFP_PARSE_H 1
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include "openflow/nicira-ext.h"
 
-struct ofp_match;
+struct flow_mod;
+struct flow_stats_request;
+struct list;
 struct ofpbuf;
 
-void parse_ofp_str(char *string, struct ofp_match *match,
-                   struct ofpbuf *actions, uint8_t *table_idx,
-                   uint16_t *out_port, uint16_t *priority,
-                   uint16_t *idle_timeout, uint16_t *hard_timeout,
-                   uint64_t *cookie);
+void parse_ofp_flow_mod_str(struct list *packets, enum nx_flow_format *cur,
+                            char *string, uint16_t command);
+bool parse_ofp_add_flow_file(struct list *packets, enum nx_flow_format *cur,
+                             FILE *);
+
+void parse_ofp_flow_stats_request_str(struct flow_stats_request *,
+                                      bool aggregate, char *string);
 
 #endif /* ofp-parse.h */

@@ -607,12 +607,14 @@ HAVE_WNO_UNUSED_PARAMETER_TRUE
 HAVE_WNO_UNUSED_FALSE
 HAVE_WNO_UNUSED_TRUE
 WARNING_FLAGS
+USE_LINKER_SECTIONS_FALSE
+USE_LINKER_SECTIONS_TRUE
 RUNDIR
 PKIDIR
 HAVE_IF_PACKET_FALSE
 HAVE_IF_PACKET_TRUE
-BUILD_ER_DIAGRAMS_FALSE
-BUILD_ER_DIAGRAMS_TRUE
+HAVE_DOT_FALSE
+HAVE_DOT_TRUE
 BUILD_OVSDBMONITOR_FALSE
 BUILD_OVSDBMONITOR_TRUE
 PYUIC4
@@ -5304,12 +5306,12 @@ if test -n "$SSL_CFLAGS"; then
     pkg_cv_SSL_CFLAGS="$SSL_CFLAGS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libssl\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libssl") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"openssl\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "openssl") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_SSL_CFLAGS=`$PKG_CONFIG --cflags "libssl" 2>/dev/null`
+  pkg_cv_SSL_CFLAGS=`$PKG_CONFIG --cflags "openssl" 2>/dev/null`
 else
   pkg_failed=yes
 fi
@@ -5320,12 +5322,12 @@ if test -n "$SSL_LIBS"; then
     pkg_cv_SSL_LIBS="$SSL_LIBS"
  elif test -n "$PKG_CONFIG"; then
     if test -n "$PKG_CONFIG" && \
-    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libssl\""; } >&5
-  ($PKG_CONFIG --exists --print-errors "libssl") 2>&5
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"openssl\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "openssl") 2>&5
   ac_status=$?
   $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
   test $ac_status = 0; }; then
-  pkg_cv_SSL_LIBS=`$PKG_CONFIG --libs "libssl" 2>/dev/null`
+  pkg_cv_SSL_LIBS=`$PKG_CONFIG --libs "openssl" 2>/dev/null`
 else
   pkg_failed=yes
 fi
@@ -5345,49 +5347,49 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-	        SSL_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors "libssl" 2>&1`
+	        SSL_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors "openssl" 2>&1`
         else
-	        SSL_PKG_ERRORS=`$PKG_CONFIG --print-errors "libssl" 2>&1`
+	        SSL_PKG_ERRORS=`$PKG_CONFIG --print-errors "openssl" 2>&1`
         fi
 	# Put the nasty error message in config.log where it belongs
 	echo "$SSL_PKG_ERRORS" >&5
 
 	HAVE_OPENSSL=no
           if test "$ssl" = check; then
-            { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cannot find libssl:
+            { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cannot find openssl:
 
 $SSL_PKG_ERRORS
 
 OpenFlow connections over SSL will not be supported.
 (You may use --disable-ssl to suppress this warning.)" >&5
-$as_echo "$as_me: WARNING: Cannot find libssl:
+$as_echo "$as_me: WARNING: Cannot find openssl:
 
 $SSL_PKG_ERRORS
 
 OpenFlow connections over SSL will not be supported.
 (You may use --disable-ssl to suppress this warning.)" >&2;}
           else
-            as_fn_error $? "Cannot find libssl (use --disable-ssl to configure without SSL support)" "$LINENO" 5
+            as_fn_error $? "Cannot find openssl (use --disable-ssl to configure without SSL support)" "$LINENO" 5
           fi
 elif test $pkg_failed = untried; then
      	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 	HAVE_OPENSSL=no
           if test "$ssl" = check; then
-            { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cannot find libssl:
+            { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cannot find openssl:
 
 $SSL_PKG_ERRORS
 
 OpenFlow connections over SSL will not be supported.
 (You may use --disable-ssl to suppress this warning.)" >&5
-$as_echo "$as_me: WARNING: Cannot find libssl:
+$as_echo "$as_me: WARNING: Cannot find openssl:
 
 $SSL_PKG_ERRORS
 
 OpenFlow connections over SSL will not be supported.
 (You may use --disable-ssl to suppress this warning.)" >&2;}
           else
-            as_fn_error $? "Cannot find libssl (use --disable-ssl to configure without SSL support)" "$LINENO" 5
+            as_fn_error $? "Cannot find openssl (use --disable-ssl to configure without SSL support)" "$LINENO" 5
           fi
 else
 	SSL_CFLAGS=$pkg_cv_SSL_CFLAGS
@@ -5655,7 +5657,7 @@ $as_echo_n "checking for dot... " >&6; }
 if test "${ovs_cv_dot+set}" = set; then :
   $as_echo_n "(cached) " >&6
 else
-       if (dot -V) 2>&1 | grep '^dot - gGraphviz version' >/dev/null 2>&1; then
+       if (dot -V) 2>&1 | grep '^dot - [gG]raphviz version' >/dev/null 2>&1; then
        ovs_cv_dot=yes
      else
        ovs_cv_dot=no
@@ -5663,27 +5665,12 @@ else
 fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_dot" >&5
 $as_echo "$ovs_cv_dot" >&6; }
-
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build E-R diagrams for database" >&5
-$as_echo_n "checking whether to build E-R diagrams for database... " >&6; }
-if test "${ovs_cv_er_diagrams+set}" = set; then :
-  $as_echo_n "(cached) " >&6
+    if test "$ovs_cv_dot" = yes; then
+  HAVE_DOT_TRUE=
+  HAVE_DOT_FALSE='#'
 else
-  if test $ovs_cv_dot != no && test $ovs_cv_python != no; then
-       ovs_cv_er_diagrams=yes
-     else
-       ovs_cv_er_diagrams=no
-     fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_er_diagrams" >&5
-$as_echo "$ovs_cv_er_diagrams" >&6; }
-    if test $ovs_cv_er_diagrams = yes; then
-  BUILD_ER_DIAGRAMS_TRUE=
-  BUILD_ER_DIAGRAMS_FALSE='#'
-else
-  BUILD_ER_DIAGRAMS_TRUE='#'
-  BUILD_ER_DIAGRAMS_FALSE=
+  HAVE_DOT_TRUE='#'
+  HAVE_DOT_FALSE=
 fi
 
 ac_fn_c_check_header_mongrel "$LINENO" "net/if_packet.h" "ac_cv_header_net_if_packet_h" "$ac_includes_default"
@@ -5775,15 +5762,29 @@ _ACEOF
 
 fi
 
-for ac_func in mlockall
+for ac_func in mlockall strsignal getloadavg statvfs setmntent
 do :
-  ac_fn_c_check_func "$LINENO" "mlockall" "ac_cv_func_mlockall"
-if test "x$ac_cv_func_mlockall" = x""yes; then :
+  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
   cat >>confdefs.h <<_ACEOF
-#define HAVE_MLOCKALL 1
+#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
 _ACEOF
 
 fi
+done
+
+for ac_header in mntent.h sys/statvfs.h
+do :
+  as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
+ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
+if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
+  cat >>confdefs.h <<_ACEOF
+#define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+fi
+
 done
 
 
@@ -6026,17 +6027,13 @@ $as_echo "$ovs_cv_use_linker_sections" >&6; }
 $as_echo "#define USE_LINKER_SECTIONS 1" >>confdefs.h
 
    fi
-
-for ac_func in strsignal
-do :
-  ac_fn_c_check_func "$LINENO" "strsignal" "ac_cv_func_strsignal"
-if test "x$ac_cv_func_strsignal" = x""yes; then :
-  cat >>confdefs.h <<_ACEOF
-#define HAVE_STRSIGNAL 1
-_ACEOF
-
+    if test $ovs_cv_use_linker_sections = yes; then
+  USE_LINKER_SECTIONS_TRUE=
+  USE_LINKER_SECTIONS_FALSE='#'
+else
+  USE_LINKER_SECTIONS_TRUE='#'
+  USE_LINKER_SECTIONS_FALSE=
 fi
-done
 
 
 
@@ -6764,98 +6761,152 @@ $as_echo "2.$patchlevel.$sublevel" >&6; }
   : > datapath/linux-2.6/kcompat.h.new
 
 
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether src_err, matches in $KSRC26/arch/x86/include/asm/checksum_32.h" >&5
+$as_echo_n "checking whether src_err, matches in $KSRC26/arch/x86/include/asm/checksum_32.h... " >&6; }
+  if test -f $KSRC26/arch/x86/include/asm/checksum_32.h; then
+    grep 'src_err,' $KSRC26/arch/x86/include/asm/checksum_32.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+  echo '#define HAVE_CSUM_COPY_DBG 1' >> datapath/linux-2.6/kcompat.h.new
+
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
+
+
+
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether ERR_CAST matches in $KSRC26/include/linux/err.h" >&5
 $as_echo_n "checking whether ERR_CAST matches in $KSRC26/include/linux/err.h... " >&6; }
-  grep 'ERR_CAST' $KSRC26/include/linux/err.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/err.h; then
+    grep 'ERR_CAST' $KSRC26/include/linux/err.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_ERR_CAST 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether ipv4_is_multicast matches in $KSRC26/include/linux/in.h" >&5
 $as_echo_n "checking whether ipv4_is_multicast matches in $KSRC26/include/linux/in.h... " >&6; }
-  grep 'ipv4_is_multicast' $KSRC26/include/linux/in.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/in.h; then
+    grep 'ipv4_is_multicast' $KSRC26/include/linux/in.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_IPV4_IS_MULTICAST 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether dev_disable_lro matches in $KSRC26/include/linux/netdevice.h" >&5
 $as_echo_n "checking whether dev_disable_lro matches in $KSRC26/include/linux/netdevice.h... " >&6; }
-  grep 'dev_disable_lro' $KSRC26/include/linux/netdevice.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/netdevice.h; then
+    grep 'dev_disable_lro' $KSRC26/include/linux/netdevice.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_DEV_DISABLE_LRO 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether dev_get_stats matches in $KSRC26/include/linux/netdevice.h" >&5
 $as_echo_n "checking whether dev_get_stats matches in $KSRC26/include/linux/netdevice.h... " >&6; }
-  grep 'dev_get_stats' $KSRC26/include/linux/netdevice.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/netdevice.h; then
+    grep 'dev_get_stats' $KSRC26/include/linux/netdevice.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_DEV_GET_STATS 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
@@ -6866,305 +6917,439 @@ $as_echo "no" >&6; }
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether [^@]proto_data_valid matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether [^@]proto_data_valid matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep '[^@]proto_data_valid' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep '[^@]proto_data_valid' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_PROTO_DATA_VALID 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether raw matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether raw matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'raw' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'raw' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_MAC_RAW 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether skb_dst( matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether skb_dst( matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'skb_dst(' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'skb_dst(' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_SKB_DST_ACCESSOR_FUNCS 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether skb_copy_from_linear_data_offset matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether skb_copy_from_linear_data_offset matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'skb_copy_from_linear_data_offset' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'skb_copy_from_linear_data_offset' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_SKB_COPY_FROM_LINEAR_DATA_OFFSET 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether skb_cow_head matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether skb_cow_head matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'skb_cow_head' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'skb_cow_head' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_SKB_COW_HEAD 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether skb_transport_header matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether skb_transport_header matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'skb_transport_header' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'skb_transport_header' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_SKBUFF_HEADER_HELPERS 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether skb_warn_if_lro matches in $KSRC26/include/linux/skbuff.h" >&5
 $as_echo_n "checking whether skb_warn_if_lro matches in $KSRC26/include/linux/skbuff.h... " >&6; }
-  grep 'skb_warn_if_lro' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/skbuff.h; then
+    grep 'skb_warn_if_lro' $KSRC26/include/linux/skbuff.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_SKB_WARN_LRO 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether kmemdup matches in $KSRC26/include/linux/string.h $KSRC26/include/linux/slab.h" >&5
-$as_echo_n "checking whether kmemdup matches in $KSRC26/include/linux/string.h $KSRC26/include/linux/slab.h... " >&6; }
-  grep 'kmemdup' $KSRC26/include/linux/string.h $KSRC26/include/linux/slab.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether kmemdup matches in $KSRC26/include/linux/string.h" >&5
+$as_echo_n "checking whether kmemdup matches in $KSRC26/include/linux/string.h... " >&6; }
+  if test -f $KSRC26/include/linux/string.h; then
+    grep 'kmemdup' $KSRC26/include/linux/string.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_KMEMDUP 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether kmemdup matches in $KSRC26/include/linux/slab.h" >&5
+$as_echo_n "checking whether kmemdup matches in $KSRC26/include/linux/slab.h... " >&6; }
+  if test -f $KSRC26/include/linux/slab.h; then
+    grep 'kmemdup' $KSRC26/include/linux/slab.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+  echo '#define HAVE_KMEMDUP 1' >> datapath/linux-2.6/kcompat.h.new
+
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
+
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether kmemdup matches in $KSRC26/include/linux/slab.h" >&5
+$as_echo_n "checking whether kmemdup matches in $KSRC26/include/linux/slab.h... " >&6; }
+  if test -f $KSRC26/include/linux/slab.h; then
+    grep 'kmemdup' $KSRC26/include/linux/slab.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+  echo '#define HAVE_KMEMDUP 1' >> datapath/linux-2.6/kcompat.h.new
+
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
+
+  fi
 
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether bool matches in $KSRC26/include/linux/types.h" >&5
 $as_echo_n "checking whether bool matches in $KSRC26/include/linux/types.h... " >&6; }
-  grep 'bool' $KSRC26/include/linux/types.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/types.h; then
+    grep 'bool' $KSRC26/include/linux/types.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_BOOL_TYPE 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether __wsum matches in $KSRC26/include/linux/types.h" >&5
 $as_echo_n "checking whether __wsum matches in $KSRC26/include/linux/types.h... " >&6; }
-  grep '__wsum' $KSRC26/include/linux/types.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/linux/types.h; then
+    grep '__wsum' $KSRC26/include/linux/types.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_CSUM_TYPES 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether csum_unfold matches in $KSRC26/include/net/checksum.h" >&5
 $as_echo_n "checking whether csum_unfold matches in $KSRC26/include/net/checksum.h... " >&6; }
-  grep 'csum_unfold' $KSRC26/include/net/checksum.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/net/checksum.h; then
+    grep 'csum_unfold' $KSRC26/include/net/checksum.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_CSUM_UNFOLD 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether NLA_NUL_STRING matches in $KSRC26/include/net/netlink.h" >&5
 $as_echo_n "checking whether NLA_NUL_STRING matches in $KSRC26/include/net/netlink.h... " >&6; }
-  grep 'NLA_NUL_STRING' $KSRC26/include/net/netlink.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/net/netlink.h; then
+    grep 'NLA_NUL_STRING' $KSRC26/include/net/netlink.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_NLA_NUL_STRING 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether nla_get_be16 matches in $KSRC26/include/net/netlink.h" >&5
 $as_echo_n "checking whether nla_get_be16 matches in $KSRC26/include/net/netlink.h... " >&6; }
-  grep 'nla_get_be16' $KSRC26/include/net/netlink.h >/dev/null 2>&1
-  status=$?
-  case $status in
-    0)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+  if test -f $KSRC26/include/net/netlink.h; then
+    grep 'nla_get_be16' $KSRC26/include/net/netlink.h >/dev/null 2>&1
+    status=$?
+    case $status in
+      0)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
   echo '#define HAVE_NLA_GET_BE16 1' >> datapath/linux-2.6/kcompat.h.new
 
-      ;;
-    1)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+        ;;
+      1)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
-      ;;
-    *)
-      as_fn_error $? "grep exited with status $status" "$LINENO" 5
-      ;;
-  esac
+        ;;
+      *)
+        as_fn_error $? "grep exited with status $status" "$LINENO" 5
+        ;;
+    esac
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: file not found" >&5
+$as_echo "file not found" >&6; }
+
+  fi
 
 
 
@@ -7346,12 +7531,16 @@ if test -z "${BUILD_OVSDBMONITOR_TRUE}" && test -z "${BUILD_OVSDBMONITOR_FALSE}"
   as_fn_error $? "conditional \"BUILD_OVSDBMONITOR\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
-if test -z "${BUILD_ER_DIAGRAMS_TRUE}" && test -z "${BUILD_ER_DIAGRAMS_FALSE}"; then
-  as_fn_error $? "conditional \"BUILD_ER_DIAGRAMS\" was never defined.
+if test -z "${HAVE_DOT_TRUE}" && test -z "${HAVE_DOT_FALSE}"; then
+  as_fn_error $? "conditional \"HAVE_DOT\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${HAVE_IF_PACKET_TRUE}" && test -z "${HAVE_IF_PACKET_FALSE}"; then
   as_fn_error $? "conditional \"HAVE_IF_PACKET\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${USE_LINKER_SECTIONS_TRUE}" && test -z "${USE_LINKER_SECTIONS_FALSE}"; then
+  as_fn_error $? "conditional \"USE_LINKER_SECTIONS\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${HAVE_WNO_UNUSED_TRUE}" && test -z "${HAVE_WNO_UNUSED_FALSE}"; then

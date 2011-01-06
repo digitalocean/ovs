@@ -30,7 +30,10 @@
 #include "timeval.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(poll_loop)
+VLOG_DEFINE_THIS_MODULE(poll_loop);
+
+COVERAGE_DEFINE(poll_fd_wait);
+COVERAGE_DEFINE(poll_zero_timeout);
 
 /* An event that will wake the following call to poll_block(). */
 struct poll_waiter {
@@ -171,7 +174,7 @@ poll_block(void)
     }
 
     n_pollfds = 0;
-    LIST_FOR_EACH (pw, struct poll_waiter, node, &waiters) {
+    LIST_FOR_EACH (pw, node, &waiters) {
         pw->pollfd = &pollfds[n_pollfds];
         pollfds[n_pollfds].fd = pw->fd;
         pollfds[n_pollfds].events = pw->events;
@@ -190,7 +193,7 @@ poll_block(void)
         log_wakeup(&timeout_backtrace, "%d-ms timeout", timeout);
     }
 
-    LIST_FOR_EACH_SAFE (pw, next, struct poll_waiter, node, &waiters) {
+    LIST_FOR_EACH_SAFE (pw, next, node, &waiters) {
         if (pw->pollfd->revents && VLOG_IS_DBG_ENABLED()) {
             log_wakeup(pw->backtrace, "%s%s%s%s%s on fd %d",
                        pw->pollfd->revents & POLLIN ? "[POLLIN]" : "",

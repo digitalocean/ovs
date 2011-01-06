@@ -1,3 +1,9 @@
+openvswitch (1.1.0~pre2.g1.bbe8d06e-1) unstable; urgency=low
+
+  * Git snaptshot
+
+ -- Simon Horman <horms@debian.org>  Thu, 06 Jan 2011 11:11:55 +0900
+
 openvswitch (1.1.0~pre2-5) unstable; urgency=low
 
   * Open vSwitch only works on Linux so set

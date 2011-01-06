@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira Networks.
+ * Copyright (c) 2009, 2010 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "random.h"
+#include "unaligned.h"
 #include "util.h"
 
 #undef NDEBUG
@@ -29,7 +30,7 @@
 
 struct test_case {
     char *data;
-    size_t size;
+    size_t size;                /* Test requires a multiple of 4. */
     uint16_t csum;
 };
 
@@ -37,15 +38,22 @@ struct test_case {
 
 static const struct test_case test_cases[] = {
     /* RFC 1071 section 3. */
-    TEST_CASE("\x00\x01\xf2\x03\xf4\xf5\xf6\xf7", (uint16_t) ~0xddf2),
+    TEST_CASE("\x00\x01\xf2\x03"
+              "\xf4\xf5\xf6\xf7",
+              (uint16_t) ~0xddf2),
 
     /* http://www.sbprojects.com/projects/tcpip/theory/theory14.htm */
-    TEST_CASE("\x45\x00\x00\x28\x1F\xFD\x40\x00\x80\x06"
-              "\x00\x00\xC0\xA8\x3B\x0A\xC0\xA8\x3B\x32",
+    TEST_CASE("\x45\x00\x00\x28"
+              "\x1F\xFD\x40\x00"
+              "\x80\x06\x00\x00"
+              "\xC0\xA8\x3B\x0A"
+              "\xC0\xA8\x3B\x32",
               0xe345),
 
     /* http://mathforum.org/library/drmath/view/54379.html */
-    TEST_CASE("\x86\x5e\xac\x60\x71\x2a\x81\xb5", 0xda60),
+    TEST_CASE("\x86\x5e\xac\x60"
+              "\x71\x2a\x81\xb5",
+              0xda60),
 };
 
 static void
@@ -134,7 +142,6 @@ main(void)
         const uint16_t *data16 = (const uint16_t *) tc->data;
         const uint32_t *data32 = (const uint32_t *) tc->data;
         uint32_t partial;
-        size_t i;
 
         /* Test csum(). */
         assert(ntohs(csum(tc->data, tc->size)) == tc->csum);
@@ -143,7 +150,7 @@ main(void)
         /* Test csum_add16(). */
         partial = 0;
         for (i = 0; i < tc->size / 2; i++) {
-            partial = csum_add16(partial, data16[i]);
+            partial = csum_add16(partial, get_unaligned_u16(&data16[i]));
         }
         assert(ntohs(csum_finish(partial)) == tc->csum);
         mark('.');
@@ -151,7 +158,7 @@ main(void)
         /* Test csum_add32(). */
         partial = 0;
         for (i = 0; i < tc->size / 4; i++) {
-            partial = csum_add32(partial, data32[i]);
+            partial = csum_add32(partial, get_unaligned_u32(&data32[i]));
         }
         assert(ntohs(csum_finish(partial)) == tc->csum);
         mark('.');
@@ -160,10 +167,12 @@ main(void)
         partial = 0;
         for (i = 0; i < tc->size / 4; i++) {
             if (i % 2) {
-                partial = csum_add32(partial, data32[i]);
+                partial = csum_add32(partial, get_unaligned_u32(&data32[i]));
             } else {
-                partial = csum_add16(partial, data16[i * 2]);
-                partial = csum_add16(partial, data16[i * 2 + 1]);
+                uint16_t u0 = get_unaligned_u16(&data16[i * 2]);
+                uint16_t u1 = get_unaligned_u16(&data16[i * 2 + 1]);
+                partial = csum_add16(partial, u0);
+                partial = csum_add16(partial, u1);
             }
         }
         assert(ntohs(csum_finish(partial)) == tc->csum);

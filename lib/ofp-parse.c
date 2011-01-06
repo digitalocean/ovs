@@ -18,10 +18,15 @@
 
 #include "ofp-parse.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
 
+#include "byte-order.h"
+#include "dynamic-string.h"
 #include "netdev.h"
+#include "multipath.h"
+#include "nx-match.h"
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
@@ -30,16 +35,17 @@
 #include "vconn.h"
 #include "vlog.h"
 
-
-VLOG_DEFINE_THIS_MODULE(ofp_parse)
-
-#define DEFAULT_IDLE_TIMEOUT 60
+VLOG_DEFINE_THIS_MODULE(ofp_parse);
 
 static uint32_t
 str_to_u32(const char *str)
 {
     char *tail;
     uint32_t value;
+
+    if (!str) {
+        ovs_fatal(0, "missing required numeric argument");
+    }
 
     errno = 0;
     value = strtoul(str, &tail, 0);
@@ -72,14 +78,15 @@ str_to_mac(const char *str, uint8_t mac[6])
     }
 }
 
-static uint32_t
-str_to_ip(const char *str_, uint32_t *ip)
+static void
+str_to_ip(const char *str_, ovs_be32 *ip, ovs_be32 *maskp)
 {
     char *str = xstrdup(str_);
     char *save_ptr = NULL;
     const char *name, *netmask;
     struct in_addr in_addr;
-    int n_wild, retval;
+    ovs_be32 mask;
+    int retval;
 
     name = strtok_r(str, "/", &save_ptr);
     retval = name ? lookup_ip(name, &in_addr) : EINVAL;
@@ -93,38 +100,32 @@ str_to_ip(const char *str_, uint32_t *ip)
         uint8_t o[4];
         if (sscanf(netmask, "%"SCNu8".%"SCNu8".%"SCNu8".%"SCNu8,
                    &o[0], &o[1], &o[2], &o[3]) == 4) {
-            uint32_t nm = (o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3];
-            int i;
-
-            /* Find first 1-bit. */
-            for (i = 0; i < 32; i++) {
-                if (nm & (1u << i)) {
-                    break;
-                }
-            }
-            n_wild = i;
-
-            /* Verify that the rest of the bits are 1-bits. */
-            for (; i < 32; i++) {
-                if (!(nm & (1u << i))) {
-                    ovs_fatal(0, "%s: %s is not a valid netmask",
-                              str, netmask);
-                }
-            }
+            mask = htonl((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]);
         } else {
             int prefix = atoi(netmask);
             if (prefix <= 0 || prefix > 32) {
                 ovs_fatal(0, "%s: network prefix bits not between 1 and 32",
                           str);
+            } else if (prefix == 32) {
+                mask = htonl(UINT32_MAX);
+            } else {
+                mask = htonl(((1u << prefix) - 1) << (32 - prefix));
             }
-            n_wild = 32 - prefix;
         }
     } else {
-        n_wild = 0;
+        mask = htonl(UINT32_MAX);
+    }
+    *ip &= mask;
+
+    if (maskp) {
+        *maskp = mask;
+    } else {
+        if (mask != htonl(UINT32_MAX)) {
+            ovs_fatal(0, "%s: netmask not allowed here", str_);
+        }
     }
 
     free(str);
-    return n_wild;
 }
 
 static void *
@@ -194,26 +195,66 @@ parse_port_name(const char *name, uint16_t *port)
 static void
 str_to_action(char *str, struct ofpbuf *b)
 {
-    char *act, *arg;
-    char *saveptr = NULL;
     bool drop = false;
     int n_actions;
+    char *pos;
 
-    for (act = strtok_r(str, ", \t\r\n", &saveptr), n_actions = 0; act;
-         act = strtok_r(NULL, ", \t\r\n", &saveptr), n_actions++)
-    {
+    pos = str;
+    n_actions = 0;
+    for (;;) {
+        char *act, *arg;
+        size_t actlen;
         uint16_t port;
+
+        pos += strspn(pos, ", \t\r\n");
+        if (*pos == '\0') {
+            break;
+        }
 
         if (drop) {
             ovs_fatal(0, "Drop actions must not be followed by other actions");
         }
 
-        /* Arguments are separated by colons */
-        arg = strchr(act, ':');
-        if (arg) {
-            *arg = '\0';
-            arg++;
+        act = pos;
+        actlen = strcspn(pos, ":(, \t\r\n");
+        if (act[actlen] == ':') {
+            /* The argument can be separated by a colon. */
+            size_t arglen;
+
+            arg = act + actlen + 1;
+            arglen = strcspn(arg, ", \t\r\n");
+            pos = arg + arglen + (arg[arglen] != '\0');
+            arg[arglen] = '\0';
+        } else if (act[actlen] == '(') {
+            /* The argument can be surrounded by balanced parentheses.  The
+             * outermost set of parentheses is removed. */
+            int level = 1;
+            size_t arglen;
+
+            arg = act + actlen + 1;
+            for (arglen = 0; level > 0; arglen++) {
+                switch (arg[arglen]) {
+                case '\0':
+                    ovs_fatal(0, "unbalanced parentheses in argument to %s "
+                              "action", act);
+
+                case '(':
+                    level++;
+                    break;
+
+                case ')':
+                    level--;
+                    break;
+                }
+            }
+            arg[arglen - 1] = '\0';
+            pos = arg + arglen;
+        } else {
+            /* There might be no argument at all. */
+            arg = NULL;
+            pos = act + actlen + (act[actlen] != '\0');
         }
+        act[actlen] = '\0';
 
         if (!strcasecmp(act, "mod_vlan_vid")) {
             struct ofp_action_vlan_vid *va;
@@ -234,11 +275,11 @@ str_to_action(char *str, struct ofpbuf *b)
         } else if (!strcasecmp(act, "mod_nw_src")) {
             struct ofp_action_nw_addr *na;
             na = put_action(b, sizeof *na, OFPAT_SET_NW_SRC);
-            str_to_ip(arg, &na->nw_addr);
+            str_to_ip(arg, &na->nw_addr, NULL);
         } else if (!strcasecmp(act, "mod_nw_dst")) {
             struct ofp_action_nw_addr *na;
             na = put_action(b, sizeof *na, OFPAT_SET_NW_DST);
-            str_to_ip(arg, &na->nw_addr);
+            str_to_ip(arg, &na->nw_addr, NULL);
         } else if (!strcasecmp(act, "mod_tp_src")) {
             struct ofp_action_tp_port *ta;
             ta = put_action(b, sizeof *ta, OFPAT_SET_TP_SRC);
@@ -257,27 +298,97 @@ str_to_action(char *str, struct ofpbuf *b)
             nar->vendor = htonl(NX_VENDOR_ID);
             nar->subtype = htons(NXAST_RESUBMIT);
             nar->in_port = htons(str_to_u32(arg));
-        } else if (!strcasecmp(act, "set_tunnel")) {
-            struct nx_action_set_tunnel *nast;
-            nast = put_action(b, sizeof *nast, OFPAT_VENDOR);
-            nast->vendor = htonl(NX_VENDOR_ID);
-            nast->subtype = htons(NXAST_SET_TUNNEL);
-            nast->tun_id = htonl(str_to_u32(arg));
+        } else if (!strcasecmp(act, "set_tunnel")
+                   || !strcasecmp(act, "set_tunnel64")) {
+            uint64_t tun_id = str_to_u64(arg);
+            if (!strcasecmp(act, "set_tunnel64") || tun_id > UINT32_MAX) {
+                struct nx_action_set_tunnel64 *nast64;
+                nast64 = put_action(b, sizeof *nast64, OFPAT_VENDOR);
+                nast64->vendor = htonl(NX_VENDOR_ID);
+                nast64->subtype = htons(NXAST_SET_TUNNEL64);
+                nast64->tun_id = htonll(tun_id);
+            } else {
+                struct nx_action_set_tunnel *nast;
+                nast = put_action(b, sizeof *nast, OFPAT_VENDOR);
+                nast->vendor = htonl(NX_VENDOR_ID);
+                nast->subtype = htons(NXAST_SET_TUNNEL);
+                nast->tun_id = htonl(tun_id);
+            }
         } else if (!strcasecmp(act, "drop_spoofed_arp")) {
             struct nx_action_header *nah;
             nah = put_action(b, sizeof *nah, OFPAT_VENDOR);
             nah->vendor = htonl(NX_VENDOR_ID);
             nah->subtype = htons(NXAST_DROP_SPOOFED_ARP);
+        } else if (!strcasecmp(act, "set_queue")) {
+            struct nx_action_set_queue *nasq;
+            nasq = put_action(b, sizeof *nasq, OFPAT_VENDOR);
+            nasq->vendor = htonl(NX_VENDOR_ID);
+            nasq->subtype = htons(NXAST_SET_QUEUE);
+            nasq->queue_id = htonl(str_to_u32(arg));
+        } else if (!strcasecmp(act, "pop_queue")) {
+            struct nx_action_header *nah;
+            nah = put_action(b, sizeof *nah, OFPAT_VENDOR);
+            nah->vendor = htonl(NX_VENDOR_ID);
+            nah->subtype = htons(NXAST_POP_QUEUE);
+        } else if (!strcasecmp(act, "note")) {
+            size_t start_ofs = b->size;
+            struct nx_action_note *nan;
+            int remainder;
+            size_t len;
+
+            nan = put_action(b, sizeof *nan, OFPAT_VENDOR);
+            nan->vendor = htonl(NX_VENDOR_ID);
+            nan->subtype = htons(NXAST_NOTE);
+
+            b->size -= sizeof nan->note;
+            while (arg && *arg != '\0') {
+                uint8_t byte;
+                bool ok;
+
+                if (*arg == '.') {
+                    arg++;
+                }
+                if (*arg == '\0') {
+                    break;
+                }
+
+                byte = hexits_value(arg, 2, &ok);
+                if (!ok) {
+                    ovs_fatal(0, "bad hex digit in `note' argument");
+                }
+                ofpbuf_put(b, &byte, 1);
+
+                arg += 2;
+            }
+
+            len = b->size - start_ofs;
+            remainder = len % OFP_ACTION_ALIGN;
+            if (remainder) {
+                ofpbuf_put_zeros(b, OFP_ACTION_ALIGN - remainder);
+            }
+            nan->len = htons(b->size - start_ofs);
+        } else if (!strcasecmp(act, "move")) {
+            struct nx_action_reg_move *move;
+            move = ofpbuf_put_uninit(b, sizeof *move);
+            nxm_parse_reg_move(move, arg);
+        } else if (!strcasecmp(act, "load")) {
+            struct nx_action_reg_load *load;
+            load = ofpbuf_put_uninit(b, sizeof *load);
+            nxm_parse_reg_load(load, arg);
+        } else if (!strcasecmp(act, "multipath")) {
+            struct nx_action_multipath *nam;
+            nam = ofpbuf_put_uninit(b, sizeof *nam);
+            multipath_parse(nam, arg);
         } else if (!strcasecmp(act, "output")) {
             put_output_action(b, str_to_u32(arg));
         } else if (!strcasecmp(act, "enqueue")) {
             char *sp = NULL;
-            char *port = strtok_r(arg, ":q", &sp);
+            char *port_s = strtok_r(arg, ":q", &sp);
             char *queue = strtok_r(NULL, "", &sp);
-            if (port == NULL || queue == NULL) {
+            if (port_s == NULL || queue == NULL) {
                 ovs_fatal(0, "\"enqueue\" syntax is \"enqueue:PORT:QUEUE\"");
             }
-            put_enqueue_action(b, str_to_u32(port), str_to_u32(queue));
+            put_enqueue_action(b, str_to_u32(port_s), str_to_u32(queue));
         } else if (!strcasecmp(act, "drop")) {
             /* A drop action in OpenFlow occurs by just not setting
              * an action. */
@@ -304,6 +415,7 @@ str_to_action(char *str, struct ofpbuf *b)
         } else {
             ovs_fatal(0, "Unknown action: %s", act);
         }
+        n_actions++;
     }
 }
 
@@ -335,34 +447,43 @@ parse_protocol(const char *name, const struct protocol **p_out)
     return false;
 }
 
+#define FIELDS                                              \
+    FIELD(F_TUN_ID,      "tun_id",      FWW_TUN_ID)         \
+    FIELD(F_IN_PORT,     "in_port",     FWW_IN_PORT)        \
+    FIELD(F_DL_VLAN,     "dl_vlan",     0)                  \
+    FIELD(F_DL_VLAN_PCP, "dl_vlan_pcp", 0)                  \
+    FIELD(F_DL_SRC,      "dl_src",      FWW_DL_SRC)         \
+    FIELD(F_DL_DST,      "dl_dst",      FWW_DL_DST)         \
+    FIELD(F_DL_TYPE,     "dl_type",     FWW_DL_TYPE)        \
+    FIELD(F_NW_SRC,      "nw_src",      0)                  \
+    FIELD(F_NW_DST,      "nw_dst",      0)                  \
+    FIELD(F_NW_PROTO,    "nw_proto",    FWW_NW_PROTO)       \
+    FIELD(F_NW_TOS,      "nw_tos",      FWW_NW_TOS)         \
+    FIELD(F_TP_SRC,      "tp_src",      FWW_TP_SRC)         \
+    FIELD(F_TP_DST,      "tp_dst",      FWW_TP_DST)         \
+    FIELD(F_ICMP_TYPE,   "icmp_type",   FWW_TP_SRC)         \
+    FIELD(F_ICMP_CODE,   "icmp_code",   FWW_TP_DST)
+
+enum field_index {
+#define FIELD(ENUM, NAME, WILDCARD) ENUM,
+    FIELDS
+#undef FIELD
+    N_FIELDS
+};
+
 struct field {
+    enum field_index index;
     const char *name;
-    uint32_t wildcard;
-    enum { F_U8, F_U16, F_MAC, F_IP } type;
-    size_t offset, shift;
+    flow_wildcards_t wildcard;  /* FWW_* bit. */
 };
 
 static bool
-parse_field(const char *name, const struct field **f_out)
+parse_field_name(const char *name, const struct field **f_out)
 {
-#define F_OFS(MEMBER) offsetof(struct ofp_match, MEMBER)
-    static const struct field fields[] = {
-        { "in_port", OFPFW_IN_PORT, F_U16, F_OFS(in_port), 0 },
-        { "dl_vlan", OFPFW_DL_VLAN, F_U16, F_OFS(dl_vlan), 0 },
-        { "dl_vlan_pcp", OFPFW_DL_VLAN_PCP, F_U8, F_OFS(dl_vlan_pcp), 0 },
-        { "dl_src", OFPFW_DL_SRC, F_MAC, F_OFS(dl_src), 0 },
-        { "dl_dst", OFPFW_DL_DST, F_MAC, F_OFS(dl_dst), 0 },
-        { "dl_type", OFPFW_DL_TYPE, F_U16, F_OFS(dl_type), 0 },
-        { "nw_src", OFPFW_NW_SRC_MASK, F_IP,
-          F_OFS(nw_src), OFPFW_NW_SRC_SHIFT },
-        { "nw_dst", OFPFW_NW_DST_MASK, F_IP,
-          F_OFS(nw_dst), OFPFW_NW_DST_SHIFT },
-        { "nw_proto", OFPFW_NW_PROTO, F_U8, F_OFS(nw_proto), 0 },
-        { "nw_tos", OFPFW_NW_TOS, F_U8, F_OFS(nw_tos), 0 },
-        { "tp_src", OFPFW_TP_SRC, F_U16, F_OFS(tp_src), 0 },
-        { "tp_dst", OFPFW_TP_DST, F_U16, F_OFS(tp_dst), 0 },
-        { "icmp_type", OFPFW_ICMP_TYPE, F_U16, F_OFS(icmp_type), 0 },
-        { "icmp_code", OFPFW_ICMP_CODE, F_U16, F_OFS(icmp_code), 0 }
+    static const struct field fields[N_FIELDS] = {
+#define FIELD(ENUM, NAME, WILDCARD) { ENUM, NAME, WILDCARD },
+        FIELDS
+#undef FIELD
     };
     const struct field *f;
 
@@ -376,40 +497,129 @@ parse_field(const char *name, const struct field **f_out)
     return false;
 }
 
-/* Convert 'string' (as described in the Flow Syntax section of the
- * ovs-ofctl man page) into 'match'.  The other arguments are optional
- * and may be NULL if their value is not needed.  If 'actions' is
- * specified, an action must be in 'string' and may be expanded or
- * reallocated. */
-void
-parse_ofp_str(char *string, struct ofp_match *match, struct ofpbuf *actions,
-              uint8_t *table_idx, uint16_t *out_port, uint16_t *priority,
-              uint16_t *idle_timeout, uint16_t *hard_timeout,
-              uint64_t *cookie)
+static void
+parse_field_value(struct cls_rule *rule, enum field_index index,
+                  const char *value)
 {
-    struct ofp_match normalized;
+    uint8_t mac[ETH_ADDR_LEN];
+    ovs_be32 ip, mask;
+    uint16_t port_no;
+
+    switch (index) {
+    case F_TUN_ID:
+        cls_rule_set_tun_id(rule, htonll(str_to_u64(value)));
+        break;
+
+    case F_IN_PORT:
+        if (!parse_port_name(value, &port_no)) {
+            port_no = atoi(value);
+        }
+        if (port_no == OFPP_LOCAL) {
+            port_no = ODPP_LOCAL;
+        }
+        cls_rule_set_in_port(rule, port_no);
+        break;
+
+    case F_DL_VLAN:
+        cls_rule_set_dl_vlan(rule, htons(str_to_u32(value)));
+        break;
+
+    case F_DL_VLAN_PCP:
+        cls_rule_set_dl_vlan_pcp(rule, str_to_u32(value));
+        break;
+
+    case F_DL_SRC:
+        str_to_mac(value, mac);
+        cls_rule_set_dl_src(rule, mac);
+        break;
+
+    case F_DL_DST:
+        str_to_mac(value, mac);
+        cls_rule_set_dl_dst(rule, mac);
+        break;
+
+    case F_DL_TYPE:
+        cls_rule_set_dl_type(rule, htons(str_to_u32(value)));
+        break;
+
+    case F_NW_SRC:
+        str_to_ip(value, &ip, &mask);
+        cls_rule_set_nw_src_masked(rule, ip, mask);
+        break;
+
+    case F_NW_DST:
+        str_to_ip(value, &ip, &mask);
+        cls_rule_set_nw_dst_masked(rule, ip, mask);
+        break;
+
+    case F_NW_PROTO:
+        cls_rule_set_nw_proto(rule, str_to_u32(value));
+        break;
+
+    case F_NW_TOS:
+        cls_rule_set_nw_tos(rule, str_to_u32(value));
+        break;
+
+    case F_TP_SRC:
+        cls_rule_set_tp_src(rule, htons(str_to_u32(value)));
+        break;
+
+    case F_TP_DST:
+        cls_rule_set_tp_dst(rule, htons(str_to_u32(value)));
+        break;
+
+    case F_ICMP_TYPE:
+        cls_rule_set_icmp_type(rule, str_to_u32(value));
+        break;
+
+    case F_ICMP_CODE:
+        cls_rule_set_icmp_code(rule, str_to_u32(value));
+        break;
+
+    case N_FIELDS:
+        NOT_REACHED();
+    }
+}
+
+static void
+parse_reg_value(struct cls_rule *rule, int reg_idx, const char *value)
+{
+    uint32_t reg_value, reg_mask;
+
+    if (!strcmp(value, "ANY") || !strcmp(value, "*")) {
+        cls_rule_set_reg_masked(rule, reg_idx, 0, 0);
+    } else if (sscanf(value, "%"SCNi32"/%"SCNi32,
+                      &reg_value, &reg_mask) == 2) {
+        cls_rule_set_reg_masked(rule, reg_idx, reg_value, reg_mask);
+    } else if (sscanf(value, "%"SCNi32, &reg_value)) {
+        cls_rule_set_reg(rule, reg_idx, reg_value);
+    } else {
+        ovs_fatal(0, "register fields must take the form <value> "
+                  "or <value>/<mask>");
+    }
+}
+
+/* Convert 'string' (as described in the Flow Syntax section of the ovs-ofctl
+ * man page) into 'pf'.  If 'actions' is specified, an action must be in
+ * 'string' and may be expanded or reallocated. */
+static void
+parse_ofp_str(struct flow_mod *fm, uint8_t *table_idx,
+              struct ofpbuf *actions, char *string)
+{
     char *save_ptr = NULL;
     char *name;
-    uint32_t wildcards;
 
     if (table_idx) {
         *table_idx = 0xff;
     }
-    if (out_port) {
-        *out_port = OFPP_NONE;
-    }
-    if (priority) {
-        *priority = OFP_DEFAULT_PRIORITY;
-    }
-    if (idle_timeout) {
-        *idle_timeout = DEFAULT_IDLE_TIMEOUT;
-    }
-    if (hard_timeout) {
-        *hard_timeout = OFP_FLOW_PERMANENT;
-    }
-    if (cookie) {
-        *cookie = 0;
-    }
+    cls_rule_init_catchall(&fm->cr, OFP_DEFAULT_PRIORITY);
+    fm->cookie = htonll(0);
+    fm->command = UINT16_MAX;
+    fm->idle_timeout = OFP_FLOW_PERMANENT;
+    fm->hard_timeout = OFP_FLOW_PERMANENT;
+    fm->buffer_id = UINT32_MAX;
+    fm->out_port = OFPP_NONE;
+    fm->flags = 0;
     if (actions) {
         char *act_str = strstr(string, "action");
         if (!act_str) {
@@ -425,19 +635,20 @@ parse_ofp_str(char *string, struct ofp_match *match, struct ofpbuf *actions,
         act_str++;
 
         str_to_action(act_str, actions);
+        fm->actions = actions->data;
+        fm->n_actions = actions->size / sizeof(union ofp_action);
+    } else {
+        fm->actions = NULL;
+        fm->n_actions = 0;
     }
-    memset(match, 0, sizeof *match);
-    wildcards = OFPFW_ALL;
     for (name = strtok_r(string, "=, \t\r\n", &save_ptr); name;
          name = strtok_r(NULL, "=, \t\r\n", &save_ptr)) {
         const struct protocol *p;
 
         if (parse_protocol(name, &p)) {
-            wildcards &= ~OFPFW_DL_TYPE;
-            match->dl_type = htons(p->dl_type);
+            cls_rule_set_dl_type(&fm->cr, htons(p->dl_type));
             if (p->nw_proto) {
-                wildcards &= ~OFPFW_NW_PROTO;
-                match->nw_proto = p->nw_proto;
+                cls_rule_set_nw_proto(&fm->cr, p->nw_proto);
             }
         } else {
             const struct field *f;
@@ -450,55 +661,127 @@ parse_ofp_str(char *string, struct ofp_match *match, struct ofpbuf *actions,
 
             if (table_idx && !strcmp(name, "table")) {
                 *table_idx = atoi(value);
-            } else if (out_port && !strcmp(name, "out_port")) {
-                *out_port = atoi(value);
-            } else if (priority && !strcmp(name, "priority")) {
-                *priority = atoi(value);
-            } else if (idle_timeout && !strcmp(name, "idle_timeout")) {
-                *idle_timeout = atoi(value);
-            } else if (hard_timeout && !strcmp(name, "hard_timeout")) {
-                *hard_timeout = atoi(value);
-            } else if (cookie && !strcmp(name, "cookie")) {
-                *cookie = str_to_u64(value);
-            } else if (!strcmp(name, "tun_id_wild")) {
-                wildcards |= NXFW_TUN_ID;
-            } else if (parse_field(name, &f)) {
-                void *data = (char *) match + f->offset;
+            } else if (!strcmp(name, "out_port")) {
+                fm->out_port = atoi(value);
+            } else if (!strcmp(name, "priority")) {
+                fm->cr.priority = atoi(value);
+            } else if (!strcmp(name, "idle_timeout")) {
+                fm->idle_timeout = atoi(value);
+            } else if (!strcmp(name, "hard_timeout")) {
+                fm->hard_timeout = atoi(value);
+            } else if (!strcmp(name, "cookie")) {
+                fm->cookie = htonll(str_to_u64(value));
+            } else if (parse_field_name(name, &f)) {
                 if (!strcmp(value, "*") || !strcmp(value, "ANY")) {
-                    wildcards |= f->wildcard;
-                } else {
-                    wildcards &= ~f->wildcard;
-                    if (f->wildcard == OFPFW_IN_PORT
-                        && parse_port_name(value, (uint16_t *) data)) {
-                        /* Nothing to do. */
-                    } else if (f->type == F_U8) {
-                        *(uint8_t *) data = str_to_u32(value);
-                    } else if (f->type == F_U16) {
-                        *(uint16_t *) data = htons(str_to_u32(value));
-                    } else if (f->type == F_MAC) {
-                        str_to_mac(value, data);
-                    } else if (f->type == F_IP) {
-                        wildcards |= str_to_ip(value, data) << f->shift;
+                    if (f->wildcard) {
+                        fm->cr.wc.wildcards |= f->wildcard;
+                        cls_rule_zero_wildcarded_fields(&fm->cr);
+                    } else if (f->index == F_NW_SRC) {
+                        cls_rule_set_nw_src_masked(&fm->cr, 0, 0);
+                    } else if (f->index == F_NW_DST) {
+                        cls_rule_set_nw_dst_masked(&fm->cr, 0, 0);
+                    } else if (f->index == F_DL_VLAN) {
+                        cls_rule_set_any_vid(&fm->cr);
+                    } else if (f->index == F_DL_VLAN_PCP) {
+                        cls_rule_set_any_pcp(&fm->cr);
                     } else {
                         NOT_REACHED();
                     }
+                } else {
+                    parse_field_value(&fm->cr, f->index, value);
                 }
+            } else if (!strncmp(name, "reg", 3) && isdigit(name[3])) {
+                unsigned int reg_idx = atoi(name + 3);
+                if (reg_idx >= FLOW_N_REGS) {
+                    ovs_fatal(0, "only %d registers supported", FLOW_N_REGS);
+                }
+                parse_reg_value(&fm->cr, reg_idx, value);
             } else {
                 ovs_fatal(0, "unknown keyword %s", name);
             }
         }
     }
-    match->wildcards = htonl(wildcards);
-
-    normalized = *match;
-    normalize_match(&normalized);
-    if (memcmp(match, &normalized, sizeof normalized)) {
-        char *old = ofp_match_to_literal_string(match);
-        char *new = ofp_match_to_literal_string(&normalized);
-        VLOG_WARN("The specified flow is not in normal form:");
-        VLOG_WARN(" as specified: %s", old);
-        VLOG_WARN("as normalized: %s", new);
-        free(old);
-        free(new);
-    }
 }
+
+/* Parses 'string' as an OFPT_FLOW_MOD or NXT_FLOW_MOD with command 'command'
+ * (one of OFPFC_*) and appends the parsed OpenFlow message to 'packets'.
+ * '*cur_format' should initially contain the flow format currently configured
+ * on the connection; this function will add a message to change the flow
+ * format and update '*cur_format', if this is necessary to add the parsed
+ * flow. */
+void
+parse_ofp_flow_mod_str(struct list *packets, enum nx_flow_format *cur_format,
+                       char *string, uint16_t command)
+{
+    bool is_del = command == OFPFC_DELETE || command == OFPFC_DELETE_STRICT;
+    enum nx_flow_format min_format, next_format;
+    struct ofpbuf actions;
+    struct ofpbuf *ofm;
+    struct flow_mod fm;
+
+    ofpbuf_init(&actions, 64);
+    parse_ofp_str(&fm, NULL, is_del ? NULL : &actions, string);
+    fm.command = command;
+
+    min_format = ofputil_min_flow_format(&fm.cr, true, fm.cookie);
+    next_format = MAX(*cur_format, min_format);
+    if (next_format != *cur_format) {
+        struct ofpbuf *sff = ofputil_make_set_flow_format(next_format);
+        list_push_back(packets, &sff->list_node);
+        *cur_format = next_format;
+    }
+
+    ofm = ofputil_encode_flow_mod(&fm, *cur_format);
+    list_push_back(packets, &ofm->list_node);
+
+    ofpbuf_uninit(&actions);
+}
+
+/* Similar to parse_ofp_flow_mod_str(), except that the string is read from
+ * 'stream' and the command is always OFPFC_ADD.  Returns false if end-of-file
+ * is reached before reading a flow, otherwise true. */
+bool
+parse_ofp_add_flow_file(struct list *packets, enum nx_flow_format *cur,
+                        FILE *stream)
+{
+    struct ds s = DS_EMPTY_INITIALIZER;
+    bool ok = false;
+
+    while (!ds_get_line(&s, stream)) {
+        char *line = ds_cstr(&s);
+        char *comment;
+
+        /* Delete comments. */
+        comment = strchr(line, '#');
+        if (comment) {
+            *comment = '\0';
+        }
+
+        /* Drop empty lines. */
+        if (line[strspn(line, " \t\n")] == '\0') {
+            continue;
+        }
+
+        parse_ofp_flow_mod_str(packets, cur, line, OFPFC_ADD);
+        ok = true;
+        break;
+    }
+    ds_destroy(&s);
+
+    return ok;
+}
+
+void
+parse_ofp_flow_stats_request_str(struct flow_stats_request *fsr,
+                                 bool aggregate, char *string)
+{
+    struct flow_mod fm;
+    uint8_t table_id;
+
+    parse_ofp_str(&fm, &table_id, NULL, string);
+    fsr->aggregate = aggregate;
+    fsr->match = fm.cr;
+    fsr->out_port = fm.out_port;
+    fsr->table_id = table_id;
+}
+

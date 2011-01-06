@@ -25,7 +25,9 @@
 #include "coverage.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(util)
+VLOG_DEFINE_THIS_MODULE(util);
+
+COVERAGE_DEFINE(util_xalloc);
 
 const char *program_name;
 
@@ -358,9 +360,37 @@ hexit_value(int c)
 
     case 'f': case 'F':
         return 0xf;
-    }
 
-    NOT_REACHED();
+    default:
+        return -1;
+    }
+}
+
+/* Returns the integer value of the 'n' hexadecimal digits starting at 's', or
+ * UINT_MAX if one of those "digits" is not really a hex digit.  If 'ok' is
+ * nonnull, '*ok' is set to true if the conversion succeeds or to false if a
+ * non-hex digit is detected. */
+unsigned int
+hexits_value(const char *s, size_t n, bool *ok)
+{
+    unsigned int value;
+    size_t i;
+
+    value = 0;
+    for (i = 0; i < n; i++) {
+        int hexit = hexit_value(s[i]);
+        if (hexit < 0) {
+            if (ok) {
+                *ok = false;
+            }
+            return UINT_MAX;
+        }
+        value = (value << 4) + hexit;
+    }
+    if (ok) {
+        *ok = true;
+    }
+    return value;
 }
 
 /* Returns the current working directory as a malloc()'d string, or a null
@@ -394,6 +424,14 @@ get_cwd(void)
     }
 }
 
+static char *
+all_slashes_name(const char *s)
+{
+    return xstrdup(s[0] == '/' && s[1] == '/' && s[2] != '/' ? "//"
+                   : s[0] == '/' ? "/"
+                   : ".");
+}
+
 /* Returns the directory name portion of 'file_name' as a malloc()'d string,
  * similar to the POSIX dirname() function but thread-safe. */
 char *
@@ -409,15 +447,31 @@ dir_name(const char *file_name)
     while (len > 0 && file_name[len - 1] == '/') {
         len--;
     }
-    if (!len) {
-        return xstrdup((file_name[0] == '/'
-                        && file_name[1] == '/'
-                        && file_name[2] != '/') ? "//"
-                       : file_name[0] == '/' ? "/"
-                       : ".");
-    } else {
-        return xmemdup0(file_name, len);
+    return len ? xmemdup0(file_name, len) : all_slashes_name(file_name);
+}
+
+/* Returns the file name portion of 'file_name' as a malloc()'d string,
+ * similar to the POSIX basename() function but thread-safe. */
+char *
+base_name(const char *file_name)
+{
+    size_t end, start;
+
+    end = strlen(file_name);
+    while (end > 0 && file_name[end - 1] == '/') {
+        end--;
     }
+
+    if (!end) {
+        return all_slashes_name(file_name);
+    }
+
+    start = end;
+    while (start > 0 && file_name[start - 1] != '/') {
+        start--;
+    }
+
+    return xmemdup0(file_name + start, end - start);
 }
 
 /* If 'file_name' starts with '/', returns a copy of 'file_name'.  Otherwise,

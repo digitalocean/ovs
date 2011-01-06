@@ -276,7 +276,7 @@ idltest_link1_set_i(const struct idltest_link1 *row, int64_t i)
 }
 
 void
-idltest_link1_set_k(const struct idltest_link1 *row, struct idltest_link1 *k)
+idltest_link1_set_k(const struct idltest_link1 *row, const struct idltest_link1 *k)
 {
     struct ovsdb_datum datum;
 
@@ -306,7 +306,7 @@ idltest_link1_set_ka(const struct idltest_link1 *row, struct idltest_link1 **ka,
 }
 
 void
-idltest_link1_set_l2(const struct idltest_link1 *row, struct idltest_link2 *l2)
+idltest_link1_set_l2(const struct idltest_link1 *row, const struct idltest_link2 *l2)
 {
     struct ovsdb_datum datum;
 
@@ -513,7 +513,7 @@ idltest_link2_set_i(const struct idltest_link2 *row, int64_t i)
 }
 
 void
-idltest_link2_set_l1(const struct idltest_link2 *row, struct idltest_link1 *l1)
+idltest_link2_set_l1(const struct idltest_link2 *row, const struct idltest_link1 *l1)
 {
     struct ovsdb_datum datum;
 
@@ -1130,7 +1130,7 @@ idltest_simple_set_b(const struct idltest_simple *row, bool b)
 }
 
 void
-idltest_simple_set_ba(const struct idltest_simple *row, bool *ba, size_t n_ba)
+idltest_simple_set_ba(const struct idltest_simple *row, const bool *ba, size_t n_ba)
 {
     struct ovsdb_datum datum;
     size_t i;
@@ -1160,7 +1160,7 @@ idltest_simple_set_i(const struct idltest_simple *row, int64_t i)
 }
 
 void
-idltest_simple_set_ia(const struct idltest_simple *row, int64_t *ia, size_t n_ia)
+idltest_simple_set_ia(const struct idltest_simple *row, const int64_t *ia, size_t n_ia)
 {
     struct ovsdb_datum datum;
     size_t i;
@@ -1190,7 +1190,7 @@ idltest_simple_set_r(const struct idltest_simple *row, double r)
 }
 
 void
-idltest_simple_set_ra(const struct idltest_simple *row, double *ra, size_t n_ra)
+idltest_simple_set_ra(const struct idltest_simple *row, const double *ra, size_t n_ra)
 {
     struct ovsdb_datum datum;
     size_t i;
@@ -1338,7 +1338,7 @@ idltest_simple_columns_init(void)
     c->name = "s";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
-    c->type.key.u.string.maxLen = 2147483647;
+    c->type.key.u.string.maxLen = 9223372036854775807;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
@@ -1350,7 +1350,7 @@ idltest_simple_columns_init(void)
     c->name = "sa";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
-    c->type.key.u.string.maxLen = 2147483647;
+    c->type.key.u.string.maxLen = 9223372036854775807;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;

@@ -31,6 +31,7 @@
 #include "compiler.h"
 #include "daemon.h"
 #include "dpif.h"
+#include "dummy.h"
 #include "leak-checker.h"
 #include "netdev.h"
 #include "ovsdb-idl.h"
@@ -40,6 +41,7 @@
 #include "signals.h"
 #include "stream-ssl.h"
 #include "stream.h"
+#include "stress.h"
 #include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
@@ -48,7 +50,7 @@
 #include "vlog.h"
 #include "vswitchd/vswitch-idl.h"
 
-VLOG_DEFINE_THIS_MODULE(vswitchd)
+VLOG_DEFINE_THIS_MODULE(vswitchd);
 
 static unixctl_cb_func ovs_vswitchd_exit;
 
@@ -66,6 +68,7 @@ main(int argc, char *argv[])
 
     proctitle_init(argc, argv);
     set_program_name(argv[0]);
+    stress_init_command();
     remote = parse_options(argc, argv);
     signal(SIGPIPE, SIG_IGN);
     sighup = signal_register(SIGHUP);
@@ -99,8 +102,13 @@ main(int argc, char *argv[])
         unixctl_server_wait(unixctl);
         dp_wait();
         netdev_wait();
+        if (exiting) {
+            poll_immediate_wake();
+        }
         poll_block();
     }
+    bridge_exit();
+    unixctl_server_destroy(unixctl);
 
     return 0;
 }
@@ -114,7 +122,8 @@ parse_options(int argc, char *argv[])
         OPT_FAKE_PROC_NET,
         VLOG_OPTION_ENUMS,
         LEAK_CHECKER_OPTION_ENUMS,
-        OPT_BOOTSTRAP_CA_CERT
+        OPT_BOOTSTRAP_CA_CERT,
+        OPT_ENABLE_DUMMY
     };
     static struct option long_options[] = {
         {"help",        no_argument, 0, 'h'},
@@ -129,6 +138,7 @@ parse_options(int argc, char *argv[])
         {"peer-ca-cert", required_argument, 0, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, 0, OPT_BOOTSTRAP_CA_CERT},
 #endif
+        {"enable-dummy", no_argument, 0, OPT_ENABLE_DUMMY},
         {0, 0, 0, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
@@ -184,6 +194,10 @@ parse_options(int argc, char *argv[])
             stream_ssl_set_ca_cert_file(optarg, true);
             break;
 #endif
+
+        case OPT_ENABLE_DUMMY:
+            dummy_enable();
+            break;
 
         case '?':
             exit(EXIT_FAILURE);

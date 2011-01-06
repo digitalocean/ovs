@@ -38,7 +38,11 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(vconn)
+VLOG_DEFINE_THIS_MODULE(vconn);
+
+COVERAGE_DEFINE(vconn_open);
+COVERAGE_DEFINE(vconn_received);
+COVERAGE_DEFINE(vconn_sent);
 
 /* State of an active vconn.*/
 enum vconn_state {
@@ -317,7 +321,7 @@ vconn_get_name(const struct vconn *vconn)
 
 /* Returns the IP address of the peer, or 0 if the peer is not connected over
  * an IP-based protocol or if its IP address is not yet known. */
-uint32_t
+ovs_be32
 vconn_get_remote_ip(const struct vconn *vconn)
 {
     return vconn->remote_ip;
@@ -325,7 +329,7 @@ vconn_get_remote_ip(const struct vconn *vconn)
 
 /* Returns the transport port of the peer, or 0 if the connection does not
  * contain a port or if the port is not yet known. */
-uint16_t
+ovs_be16
 vconn_get_remote_port(const struct vconn *vconn)
 {
     return vconn->remote_port;
@@ -334,7 +338,7 @@ vconn_get_remote_port(const struct vconn *vconn)
 /* Returns the IP address used to connect to the peer, or 0 if the
  * connection is not an IP-based protocol or if its IP address is not
  * yet known. */
-uint32_t
+ovs_be32
 vconn_get_local_ip(const struct vconn *vconn)
 {
     return vconn->local_ip;
@@ -342,7 +346,7 @@ vconn_get_local_ip(const struct vconn *vconn)
 
 /* Returns the transport port used to connect to the peer, or 0 if the
  * connection does not contain a port or if the port is not yet known. */
-uint16_t
+ovs_be16
 vconn_get_local_port(const struct vconn *vconn)
 {
     return vconn->local_port;
@@ -648,10 +652,10 @@ vconn_recv_block(struct vconn *vconn, struct ofpbuf **msgp)
  *
  * 'request' is always destroyed, regardless of the return value. */
 int
-vconn_recv_xid(struct vconn *vconn, uint32_t xid, struct ofpbuf **replyp)
+vconn_recv_xid(struct vconn *vconn, ovs_be32 xid, struct ofpbuf **replyp)
 {
     for (;;) {
-        uint32_t recv_xid;
+        ovs_be32 recv_xid;
         struct ofpbuf *reply;
         int error;
 
@@ -667,7 +671,8 @@ vconn_recv_xid(struct vconn *vconn, uint32_t xid, struct ofpbuf **replyp)
         }
 
         VLOG_DBG_RL(&bad_ofmsg_rl, "%s: received reply with xid %08"PRIx32
-                    " != expected %08"PRIx32, vconn->name, recv_xid, xid);
+                    " != expected %08"PRIx32,
+                    vconn->name, ntohl(recv_xid), ntohl(xid));
         ofpbuf_delete(reply);
     }
 }
@@ -677,12 +682,16 @@ vconn_recv_xid(struct vconn *vconn, uint32_t xid, struct ofpbuf **replyp)
  * is stored in '*replyp' for the caller to examine and free.  Otherwise
  * returns a positive errno value, or EOF, and sets '*replyp' to null.
  *
+ * 'request' should be an OpenFlow request that requires a reply.  Otherwise,
+ * if there is no reply, this function can end up blocking forever (or until
+ * the peer drops the connection).
+ *
  * 'request' is always destroyed, regardless of the return value. */
 int
 vconn_transact(struct vconn *vconn, struct ofpbuf *request,
                struct ofpbuf **replyp)
 {
-    uint32_t send_xid = ((struct ofp_header *) request->data)->xid;
+    ovs_be32 send_xid = ((struct ofp_header *) request->data)->xid;
     int error;
 
     *replyp = NULL;
@@ -691,6 +700,104 @@ vconn_transact(struct vconn *vconn, struct ofpbuf *request,
         ofpbuf_delete(request);
     }
     return error ? error : vconn_recv_xid(vconn, send_xid, replyp);
+}
+
+/* Sends 'request' followed by a barrier request to 'vconn', then blocks until
+ * it receives a reply to the barrier.  If successful, stores the reply to
+ * 'request' in '*replyp', if one was received, and otherwise NULL, then
+ * returns 0.  Otherwise returns a positive errno value, or EOF, and sets
+ * '*replyp' to null.
+ *
+ * This function is useful for sending an OpenFlow request that doesn't
+ * ordinarily include a reply but might report an error in special
+ * circumstances.
+ *
+ * 'request' is always destroyed, regardless of the return value. */
+int
+vconn_transact_noreply(struct vconn *vconn, struct ofpbuf *request,
+                       struct ofpbuf **replyp)
+{
+    ovs_be32 request_xid;
+    ovs_be32 barrier_xid;
+    struct ofpbuf *barrier;
+    int error;
+
+    *replyp = NULL;
+
+    /* Send request. */
+    request_xid = ((struct ofp_header *) request->data)->xid;
+    error = vconn_send_block(vconn, request);
+    if (error) {
+        ofpbuf_delete(request);
+        return error;
+    }
+
+    /* Send barrier. */
+    make_openflow(sizeof(struct ofp_header), OFPT_BARRIER_REQUEST, &barrier);
+    barrier_xid = ((struct ofp_header *) barrier->data)->xid;
+    error = vconn_send_block(vconn, barrier);
+    if (error) {
+        ofpbuf_delete(barrier);
+        return error;
+    }
+
+    for (;;) {
+        struct ofpbuf *msg;
+        ovs_be32 msg_xid;
+        int error;
+
+        error = vconn_recv_block(vconn, &msg);
+        if (error) {
+            ofpbuf_delete(*replyp);
+            *replyp = NULL;
+            return error;
+        }
+
+        msg_xid = ((struct ofp_header *) msg->data)->xid;
+        if (msg_xid == request_xid) {
+            if (*replyp) {
+                VLOG_WARN_RL(&bad_ofmsg_rl, "%s: duplicate replies with "
+                             "xid %08"PRIx32, vconn->name, ntohl(msg_xid));
+                ofpbuf_delete(*replyp);
+            }
+            *replyp = msg;
+        } else {
+            ofpbuf_delete(msg);
+            if (msg_xid == barrier_xid) {
+                return 0;
+            } else {
+                VLOG_DBG_RL(&bad_ofmsg_rl, "%s: reply with xid %08"PRIx32
+                            " != expected %08"PRIx32" or %08"PRIx32,
+                            vconn->name, ntohl(msg_xid),
+                            ntohl(request_xid), ntohl(barrier_xid));
+            }
+        }
+    }
+}
+
+/* vconn_transact_noreply() for a list of "struct ofpbuf"s, sent one by one.
+ * All of the requests on 'requests' are always destroyed, regardless of the
+ * return value. */
+int
+vconn_transact_multiple_noreply(struct vconn *vconn, struct list *requests,
+                                struct ofpbuf **replyp)
+{
+    struct ofpbuf *request, *next;
+
+    LIST_FOR_EACH_SAFE (request, next, list_node, requests) {
+        int error;
+
+        list_remove(&request->list_node);
+
+        error = vconn_transact_noreply(vconn, request, replyp);
+        if (error || *replyp) {
+            ofpbuf_list_delete(requests);
+            return error;
+        }
+    }
+
+    *replyp = NULL;
+    return 0;
 }
 
 void
@@ -902,25 +1009,25 @@ vconn_init(struct vconn *vconn, struct vconn_class *class, int connect_status,
 }
 
 void
-vconn_set_remote_ip(struct vconn *vconn, uint32_t ip)
+vconn_set_remote_ip(struct vconn *vconn, ovs_be32 ip)
 {
     vconn->remote_ip = ip;
 }
 
 void
-vconn_set_remote_port(struct vconn *vconn, uint16_t port)
+vconn_set_remote_port(struct vconn *vconn, ovs_be16 port)
 {
     vconn->remote_port = port;
 }
 
 void
-vconn_set_local_ip(struct vconn *vconn, uint32_t ip)
+vconn_set_local_ip(struct vconn *vconn, ovs_be32 ip)
 {
     vconn->local_ip = ip;
 }
 
 void
-vconn_set_local_port(struct vconn *vconn, uint16_t port)
+vconn_set_local_port(struct vconn *vconn, ovs_be16 port)
 {
     vconn->local_port = port;
 }

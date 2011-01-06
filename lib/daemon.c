@@ -23,6 +23,7 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "command-line.h"
 #include "fatal-signal.h"
@@ -34,13 +35,17 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(daemon)
+VLOG_DEFINE_THIS_MODULE(daemon);
 
 /* --detach: Should we run in the background? */
 static bool detach;
 
 /* --pidfile: Name of pidfile (null if none). */
 static char *pidfile;
+
+/* Device and inode of pidfile, so we can avoid reopening it. */
+static dev_t pidfile_dev;
+static ino_t pidfile_ino;
 
 /* --overwrite-pidfile: Create pidfile even if one already exists and is
    locked? */
@@ -62,8 +67,8 @@ char *
 make_pidfile_name(const char *name)
 {
     return (!name
-            ? xasprintf("%s/%s.pid", ovs_rundir, program_name)
-            : abs_file_name(ovs_rundir, name));
+            ? xasprintf("%s/%s.pid", ovs_rundir(), program_name)
+            : abs_file_name(ovs_rundir(), name));
 }
 
 /* Sets up a following call to daemonize() to create a pidfile named 'name'.
@@ -208,6 +213,15 @@ make_pidfile(void)
                         close(fd);
                     } else {
                         /* Keep 'fd' open to retain the lock. */
+                        struct stat s;
+
+                        if (!fstat(fd, &s)) {
+                            pidfile_dev = s.st_dev;
+                            pidfile_ino = s.st_ino;
+                        } else {
+                            VLOG_ERR("%s: fstat failed: %s",
+                                     pidfile, strerror(errno));
+                        }
                     }
                     free(text);
                 } else {
@@ -330,11 +344,13 @@ monitor_daemon(pid_t daemon_pid)
     const char *saved_program_name;
     time_t last_restart;
     char *status_msg;
+    int crashes;
 
     saved_program_name = program_name;
     program_name = xasprintf("monitor(%s)", program_name);
     status_msg = xstrdup("healthy");
     last_restart = TIME_MIN;
+    crashes = 0;
     for (;;) {
         int retval;
         int status;
@@ -351,12 +367,13 @@ monitor_daemon(pid_t daemon_pid)
             ovs_fatal(errno, "waitpid failed");
         } else if (retval == daemon_pid) {
             char *s = process_status_msg(status);
-            free(status_msg);
-            status_msg = xasprintf("pid %lu died, %s",
-                                   (unsigned long int) daemon_pid, s);
-            free(s);
-
             if (should_restart(status)) {
+                free(status_msg);
+                status_msg = xasprintf("%d crashes: pid %lu died, %s",
+                                       ++crashes,
+                                       (unsigned long int) daemon_pid, s);
+                free(s);
+
                 if (WCOREDUMP(status)) {
                     /* Disable further core dumps to save disk space. */
                     struct rlimit r;
@@ -390,7 +407,9 @@ monitor_daemon(pid_t daemon_pid)
                     break;
                 }
             } else {
-                VLOG_INFO("%s, exiting", status_msg);
+                VLOG_INFO("pid %lu died, %s, exiting",
+                          (unsigned long int) daemon_pid, s);
+                free(s);
                 exit(0);
             }
         }
@@ -481,7 +500,7 @@ daemon_usage(void)
         "  --pidfile[=FILE]        create pidfile (default: %s/%s.pid)\n"
         "  --overwrite-pidfile     with --pidfile, start even if already "
                                    "running\n",
-        ovs_rundir, program_name);
+        ovs_rundir(), program_name);
 }
 
 /* Opens and reads a PID from 'pidfile'.  Returns the nonnegative PID if
@@ -491,8 +510,20 @@ read_pidfile(const char *pidfile)
 {
     char line[128];
     struct flock lck;
+    struct stat s;
     FILE *file;
     int error;
+
+    if ((pidfile_ino || pidfile_dev)
+        && !stat(pidfile, &s)
+        && s.st_ino == pidfile_ino && s.st_dev == pidfile_dev) {
+        /* It's our own pidfile.  We can't afford to open it, because closing
+         * *any* fd for a file that a process has locked also releases all the
+         * locks on that file.
+         *
+         * Fortunately, we know the associated pid anyhow: */
+        return getpid();
+    }
 
     file = fopen(pidfile, "r");
     if (!file) {

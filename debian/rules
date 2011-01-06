@@ -29,6 +29,7 @@ configure-stamp:
 	dh_testdir
 	test -e configure || ./boot.sh
 	test -d _debian || mkdir _debian
+	echo $(DEB_BUILD_OPTIONS)
 	echo $$CC
 	cd _debian && ( \
 		test -e Makefile || \
@@ -44,7 +45,10 @@ build-arch: build-arch-stamp
 build-arch-stamp: configure-stamp 
 	$(MAKE) -C _debian
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	$(MAKE) -C _debian check
+	if $(MAKE) -C _debian check; then :; else \
+		cat _debian/tests/testsuite.log; \
+		exit 1; \
+	fi
 endif
 	touch $@
 
@@ -73,7 +77,6 @@ install-indep: build-indep
 		> debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
 	chmod 755 debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
 	cd debian/openvswitch-datapath-source/usr/src && tar -c modules | bzip2 -9 > openvswitch-datapath.tar.bz2 && rm -rf modules
-	install -m644 debian/openvswitch-pki-server.apache2 debian/openvswitch-pki-server/etc/apache2/sites-available/openvswitch-pki
 
 install-arch: build-arch
 	dh_testdir
@@ -102,6 +105,7 @@ binary-common:
 	dh_strip --dbg-package=openvswitch-dbg
 	dh_compress 
 	dh_fixperms -X var/log/core
+	dh_pysupport
 	dh_perl
 	dh_makeshlibs
 	dh_installdeb
@@ -116,3 +120,9 @@ binary-arch: install-arch
 
 binary: binary-arch binary-indep
 .PHONY: build clean binary-indep binary-arch binary install install-indep install-arch configure
+
+# This GNU make extensions disables parallel builds for the current Makefile
+# but not for sub-Makefiles.  This is appropriate here because build-arch and
+# build-indep both invoke "make" on OVS, which can update some of the same
+# targets in ways that conflict (e.g. both update tests/testsuite).
+.NOTPARALLEL:

@@ -25,7 +25,7 @@
 
 /* List of statically compiled vport implementations.  Don't forget to also
  * add yours to the list at the bottom of vport.h. */
-static struct vport_ops *base_vport_ops_list[] = {
+static const struct vport_ops *base_vport_ops_list[] = {
 	&netdev_vport_ops,
 	&internal_vport_ops,
 	&patch_vport_ops,
@@ -47,7 +47,7 @@ static struct hlist_head *dev_table;
  * one of these locks if you don't want the vport to be deleted out from under
  * you.
  *
- * If you get a reference to a vport through a dp_port, it is protected
+ * If you get a reference to a vport through a datapath, it is protected
  * by RCU and you need to hold rcu_read_lock instead when reading.
  *
  * If multiple locks are taken, the hierarchy is:
@@ -113,7 +113,7 @@ int vport_init(void)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(base_vport_ops_list); i++) {
-		struct vport_ops *new_ops = base_vport_ops_list[i];
+		const struct vport_ops *new_ops = base_vport_ops_list[i];
 
 		if (new_ops->init)
 			err = new_ops->init();
@@ -177,185 +177,36 @@ void vport_exit(void)
 	kfree(dev_table);
 }
 
-static int do_vport_add(struct odp_vport_add *vport_config)
-{
-	struct vport *vport;
-	int err = 0;
-
-	vport_config->port_type[VPORT_TYPE_SIZE - 1] = '\0';
-	vport_config->devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-
-	vport = vport_locate(vport_config->devname);
-	if (vport) {
-		err = -EBUSY;
-		goto out;
-	}
-
-	vport_lock();
-	vport = vport_add(vport_config->devname, vport_config->port_type,
-			  vport_config->config);
-	vport_unlock();
-
-	if (IS_ERR(vport))
-		err = PTR_ERR(vport);
-
-out:
-	rtnl_unlock();
-	return err;
-}
-
-/**
- *	vport_user_add - add vport device (for userspace callers)
- *
- * @uvport_config: New port configuration.
- *
- * Creates a new vport with the specified configuration (which is dependent
- * on device type).  This function is for userspace callers and assumes no
- * locks are held.
- */
-int vport_user_add(const struct odp_vport_add __user *uvport_config)
-{
-	struct odp_vport_add vport_config;
-
-	if (copy_from_user(&vport_config, uvport_config, sizeof(struct odp_vport_add)))
-		return -EFAULT;
-
-	return do_vport_add(&vport_config);
-}
-
-#ifdef CONFIG_COMPAT
-int compat_vport_user_add(struct compat_odp_vport_add *ucompat)
-{
-	struct compat_odp_vport_add compat;
-	struct odp_vport_add vport_config;
-
-	if (copy_from_user(&compat, ucompat, sizeof(struct compat_odp_vport_add)))
-		return -EFAULT;
-
-	memcpy(vport_config.port_type, compat.port_type, VPORT_TYPE_SIZE);
-	memcpy(vport_config.devname, compat.devname, IFNAMSIZ);
-	vport_config.config = compat_ptr(compat.config);
-
-	return do_vport_add(&vport_config);
-}
-#endif
-
-static int do_vport_mod(struct odp_vport_mod *vport_config)
-{
-	struct vport *vport;
-	int err;
-
-	vport_config->devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-
-	vport = vport_locate(vport_config->devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	vport_lock();
-	err = vport_mod(vport, vport_config->config);
-	vport_unlock();
-
-out:
-	rtnl_unlock();
-	return err;
-}
-
 /**
  *	vport_user_mod - modify existing vport device (for userspace callers)
  *
- * @uvport_config: New configuration for vport
+ * @uport: New configuration for vport
  *
  * Modifies an existing device with the specified configuration (which is
  * dependent on device type).  This function is for userspace callers and
  * assumes no locks are held.
  */
-int vport_user_mod(const struct odp_vport_mod __user *uvport_config)
+int vport_user_mod(const struct odp_port __user *uport)
 {
-	struct odp_vport_mod vport_config;
-
-	if (copy_from_user(&vport_config, uvport_config, sizeof(struct odp_vport_mod)))
-		return -EFAULT;
-
-	return do_vport_mod(&vport_config);
-}
-
-#ifdef CONFIG_COMPAT
-int compat_vport_user_mod(struct compat_odp_vport_mod *ucompat)
-{
-	struct compat_odp_vport_mod compat;
-	struct odp_vport_mod vport_config;
-
-	if (copy_from_user(&compat, ucompat, sizeof(struct compat_odp_vport_mod)))
-		return -EFAULT;
-
-	memcpy(vport_config.devname, compat.devname, IFNAMSIZ);
-	vport_config.config = compat_ptr(compat.config);
-
-	return do_vport_mod(&vport_config);
-}
-#endif
-
-/**
- *	vport_user_del - delete existing vport device (for userspace callers)
- *
- * @udevname: Name of device to delete
- *
- * Deletes the specified device.  Detaches the device from a datapath first
- * if it is attached.  Deleting the device will fail if it does not exist or it
- * is the datapath local port.  It is also possible to fail for less obvious
- * reasons, such as lack of memory.  This function is for userspace callers and
- * assumes no locks are held.
- */
-int vport_user_del(const char __user *udevname)
-{
-	char devname[IFNAMSIZ];
+	struct odp_port port;
 	struct vport *vport;
-	struct dp_port *dp_port;
-	int err = 0;
-	int retval;
+	int err;
 
-	retval = strncpy_from_user(devname, udevname, IFNAMSIZ);
-	if (retval < 0)
+	if (copy_from_user(&port, uport, sizeof(port)))
 		return -EFAULT;
-	else if (retval >= IFNAMSIZ)
-		return -ENAMETOOLONG;
+
+	port.devname[IFNAMSIZ - 1] = '\0';
 
 	rtnl_lock();
 
-	vport = vport_locate(devname);
+	vport = vport_locate(port.devname);
 	if (!vport) {
 		err = -ENODEV;
 		goto out;
 	}
 
-	dp_port = vport_get_dp_port(vport);
-	if (dp_port) {
-		struct datapath *dp = dp_port->dp;
-
-		mutex_lock(&dp->mutex);
-
-		if (!strcmp(dp_name(dp), devname)) {
-			err = -EINVAL;
-			goto dp_port_out;
-		}
-
-		err = dp_detach_port(dp_port, 0);
-
-dp_port_out:
-		mutex_unlock(&dp->mutex);
-
-		if (err)
-			goto out;
-	}
-
 	vport_lock();
-	err = vport_del(vport);
+	err = vport_mod(vport, &port);
 	vport_unlock();
 
 out:
@@ -646,6 +497,19 @@ static void unregister_vport(struct vport *vport)
 	hlist_del(&vport->hash_node);
 }
 
+static void release_vport(struct kobject *kobj)
+{
+	struct vport *p = container_of(kobj, struct vport, kobj);
+	kfree(p);
+}
+
+static struct kobj_type brport_ktype = {
+#ifdef CONFIG_SYSFS
+	.sysfs_ops = &brport_sysfs_ops,
+#endif
+	.release = release_vport
+};
+
 /**
  *	vport_alloc - allocate and initialize new vport
  *
@@ -657,7 +521,7 @@ static void unregister_vport(struct vport *vport)
  * vport_priv().  vports that are no longer needed should be released with
  * vport_free().
  */
-struct vport *vport_alloc(int priv_size, const struct vport_ops *ops)
+struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const struct vport_parms *parms)
 {
 	struct vport *vport;
 	size_t alloc_size;
@@ -672,7 +536,15 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops)
 	if (!vport)
 		return ERR_PTR(-ENOMEM);
 
+	vport->dp = parms->dp;
+	vport->port_no = parms->port_no;
+	atomic_set(&vport->sflow_pool, 0);
 	vport->ops = ops;
+
+	/* Initialize kobject for bridge.  This will be added as
+	 * /sys/class/net/<devname>/brport later, if sysfs is enabled. */
+	vport->kobj.kset = NULL;
+	kobject_init(&vport->kobj, &brport_ktype);
 
 	if (vport->ops->flags & VPORT_F_GEN_STATS) {
 		vport->percpu_stats = alloc_percpu(struct vport_percpu_stats);
@@ -697,21 +569,19 @@ void vport_free(struct vport *vport)
 	if (vport->ops->flags & VPORT_F_GEN_STATS)
 		free_percpu(vport->percpu_stats);
 
-	kfree(vport);
+	kobject_put(&vport->kobj);
 }
 
 /**
  *	vport_add - add vport device (for kernel callers)
  *
- * @name: Name of new device.
- * @type: Type of new device (to be matched against types in registered vport
- * ops).
- * @config: Device type specific configuration.  Userspace pointer.
+ * @parms: Information about new vport.
  *
- * Creates a new vport with the specified configuration (which is dependent
- * on device type).  Both RTNL and vport locks must be held.
+ * Creates a new vport with the specified configuration (which is dependent on
+ * device type) and attaches it to a datapath.  Both RTNL and vport locks must
+ * be held.
  */
-struct vport *vport_add(const char *name, const char *type, const void __user *config)
+struct vport *vport_add(const struct vport_parms *parms)
 {
 	struct vport *vport;
 	int err = 0;
@@ -721,8 +591,8 @@ struct vport *vport_add(const char *name, const char *type, const void __user *c
 	ASSERT_VPORT();
 
 	for (i = 0; i < n_vport_types; i++) {
-		if (!strcmp(vport_ops_list[i]->type, type)) {
-			vport = vport_ops_list[i]->create(name, config);
+		if (!strcmp(vport_ops_list[i]->type, parms->type)) {
+			vport = vport_ops_list[i]->create(parms);
 			if (IS_ERR(vport)) {
 				err = PTR_ERR(vport);
 				goto out;
@@ -743,18 +613,18 @@ out:
  *	vport_mod - modify existing vport device (for kernel callers)
  *
  * @vport: vport to modify.
- * @config: Device type specific configuration.  Userspace pointer.
+ * @port: New configuration.
  *
  * Modifies an existing device with the specified configuration (which is
  * dependent on device type).  Both RTNL and vport locks must be held.
  */
-int vport_mod(struct vport *vport, const void __user *config)
+int vport_mod(struct vport *vport, struct odp_port *port)
 {
 	ASSERT_RTNL();
 	ASSERT_VPORT();
 
 	if (vport->ops->modify)
-		return vport->ops->modify(vport, config);
+		return vport->ops->modify(vport, port);
 	else
 		return -EOPNOTSUPP;
 }
@@ -764,76 +634,17 @@ int vport_mod(struct vport *vport, const void __user *config)
  *
  * @vport: vport to delete.
  *
- * Deletes the specified device.  The device must not be currently attached to
- * a datapath.  It is possible to fail for reasons such as lack of memory.
- * Both RTNL and vport locks must be held.
+ * Detaches @vport from its datapath and destroys it.  It is possible to fail
+ * for reasons such as lack of memory.  Both RTNL and vport locks must be held.
  */
 int vport_del(struct vport *vport)
 {
 	ASSERT_RTNL();
 	ASSERT_VPORT();
-	BUG_ON(vport_get_dp_port(vport));
 
 	unregister_vport(vport);
 
 	return vport->ops->destroy(vport);
-}
-
-/**
- *	vport_attach - attach a vport to a datapath
- *
- * @vport: vport to attach.
- * @dp_port: Datapath port to attach the vport to.
- *
- * Attaches a vport to a specific datapath so that packets may be exchanged.
- * Both ports must be currently unattached.  @dp_port must be successfully
- * attached to a vport before it is connected to a datapath and must not be
- * modified while connected.  RTNL lock and the appropriate DP mutex must be held.
- */
-int vport_attach(struct vport *vport, struct dp_port *dp_port)
-{
-	ASSERT_RTNL();
-
-	if (vport_get_dp_port(vport))
-		return -EBUSY;
-
-	if (vport->ops->attach) {
-		int err;
-
-		err = vport->ops->attach(vport);
-		if (err)
-			return err;
-	}
-
-	rcu_assign_pointer(vport->dp_port, dp_port);
-
-	return 0;
-}
-
-/**
- *	vport_detach - detach a vport from a datapath
- *
- * @vport: vport to detach.
- *
- * Detaches a vport from a datapath.  May fail for a variety of reasons,
- * including lack of memory.  RTNL lock and the appropriate DP mutex must be held.
- */
-int vport_detach(struct vport *vport)
-{
-	struct dp_port *dp_port;
-
-	ASSERT_RTNL();
-
-	dp_port = vport_get_dp_port(vport);
-	if (!dp_port)
-		return -EINVAL;
-
-	rcu_assign_pointer(vport->dp_port, NULL);
-
-	if (vport->ops->detach)
-		return vport->ops->detach(vport);
-	else
-		return 0;
 }
 
 /**
@@ -858,12 +669,8 @@ int vport_set_mtu(struct vport *vport, int mtu)
 
 		ret = vport->ops->set_mtu(vport, mtu);
 
-		if (!ret && !is_internal_vport(vport)) {
-			struct dp_port *dp_port = vport_get_dp_port(vport);
-
-			if (dp_port)
-				set_internal_devs_mtu(dp_port->dp);
-		}
+		if (!ret && !is_internal_vport(vport))
+			set_internal_devs_mtu(vport->dp);
 
 		return ret;
 	} else
@@ -904,13 +711,13 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
  * support setting the stats, in which case the result will always be
  * -EOPNOTSUPP.  RTNL lock must be held.
  */
-int vport_set_stats(struct vport *vport, struct odp_vport_stats *stats)
+int vport_set_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 {
 	ASSERT_RTNL();
 
 	if (vport->ops->flags & VPORT_F_GEN_STATS) {
 		spin_lock_bh(&vport->stats_lock);
-		memcpy(&vport->offset_stats, stats, sizeof(struct odp_vport_stats));
+		vport->offset_stats = *stats;
 		spin_unlock_bh(&vport->stats_lock);
 
 		return 0;
@@ -961,20 +768,6 @@ const unsigned char *vport_get_addr(const struct vport *vport)
 }
 
 /**
- *	vport_get_dp_port - retrieve attached datapath port
- *
- * @vport: vport from which to retrieve the datapath port.
- *
- * Retrieves the attached datapath port or null if not attached.  Either RTNL
- * lock or rcu_read_lock must be held for the entire duration that the datapath
- * port is being accessed.
- */
-struct dp_port *vport_get_dp_port(const struct vport *vport)
-{
-	return rcu_dereference(vport->dp_port);
-}
-
-/**
  *	vport_get_kobj - retrieve associated kobj
  *
  * @vport: vport from which to retrieve the associated kobj
@@ -998,10 +791,10 @@ struct kobject *vport_get_kobj(const struct vport *vport)
  *
  * Retrieves transmit, receive, and error stats for the given device.
  */
-int vport_get_stats(struct vport *vport, struct odp_vport_stats *stats)
+int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 {
-	struct odp_vport_stats dev_stats;
-	struct odp_vport_stats *dev_statsp = NULL;
+	struct rtnl_link_stats64 dev_stats;
+	struct rtnl_link_stats64 *dev_statsp = NULL;
 	int err;
 
 	if (vport->ops->get_stats) {
@@ -1030,31 +823,35 @@ int vport_get_stats(struct vport *vport, struct odp_vport_stats *stats)
 
 		spin_lock_bh(&vport->stats_lock);
 
-		memcpy(stats, &vport->offset_stats, sizeof(struct odp_vport_stats));
+		*stats = vport->offset_stats;
 
-		stats->rx_errors	+= vport->err_stats.rx_errors
-						+ vport->err_stats.rx_frame_err
-						+ vport->err_stats.rx_over_err
-						+ vport->err_stats.rx_crc_err;
+		stats->rx_errors	+= vport->err_stats.rx_errors;
 		stats->tx_errors	+= vport->err_stats.tx_errors;
 		stats->tx_dropped	+= vport->err_stats.tx_dropped;
 		stats->rx_dropped	+= vport->err_stats.rx_dropped;
-		stats->rx_over_err	+= vport->err_stats.rx_over_err;
-		stats->rx_crc_err	+= vport->err_stats.rx_crc_err;
-		stats->rx_frame_err	+= vport->err_stats.rx_frame_err;
-		stats->collisions	+= vport->err_stats.collisions;
 
 		spin_unlock_bh(&vport->stats_lock);
 
 		if (dev_statsp) {
-			stats->rx_errors	+= dev_statsp->rx_errors;
-			stats->tx_errors	+= dev_statsp->tx_errors;
-			stats->rx_dropped	+= dev_statsp->rx_dropped;
-			stats->tx_dropped	+= dev_statsp->tx_dropped;
-			stats->rx_over_err	+= dev_statsp->rx_over_err;
-			stats->rx_crc_err	+= dev_statsp->rx_crc_err;
-			stats->rx_frame_err	+= dev_statsp->rx_frame_err;
-			stats->collisions	+= dev_statsp->collisions;
+			stats->rx_errors           += dev_statsp->rx_errors;
+			stats->tx_errors           += dev_statsp->tx_errors;
+			stats->rx_dropped          += dev_statsp->rx_dropped;
+			stats->tx_dropped          += dev_statsp->tx_dropped;
+			stats->multicast           += dev_statsp->multicast;
+			stats->collisions          += dev_statsp->collisions;
+			stats->rx_length_errors    += dev_statsp->rx_length_errors;
+			stats->rx_over_errors      += dev_statsp->rx_over_errors;
+			stats->rx_crc_errors       += dev_statsp->rx_crc_errors;
+			stats->rx_frame_errors     += dev_statsp->rx_frame_errors;
+			stats->rx_fifo_errors      += dev_statsp->rx_fifo_errors;
+			stats->rx_missed_errors    += dev_statsp->rx_missed_errors;
+			stats->tx_aborted_errors   += dev_statsp->tx_aborted_errors;
+			stats->tx_carrier_errors   += dev_statsp->tx_carrier_errors;
+			stats->tx_fifo_errors      += dev_statsp->tx_fifo_errors;
+			stats->tx_heartbeat_errors += dev_statsp->tx_heartbeat_errors;
+			stats->tx_window_errors    += dev_statsp->tx_window_errors;
+			stats->rx_compressed       += dev_statsp->rx_compressed;
+			stats->tx_compressed       += dev_statsp->tx_compressed;
 		}
 
 		for_each_possible_cpu(i) {
@@ -1127,25 +924,17 @@ unsigned char vport_get_operstate(const struct vport *vport)
  *
  * @vport: vport from which to retrieve index
  *
- * Retrieves the system interface index of the given device.  Not all devices
- * will have system indexes, in which case the index of the datapath local
- * port is returned.  Returns a negative index on error.  Either RTNL lock or
+ * Retrieves the system interface index of the given device or 0 if
+ * the device does not have one (in the case of virtual ports).
+ * Returns a negative index on error. Either RTNL lock or
  * rcu_read_lock must be held.
  */
 int vport_get_ifindex(const struct vport *vport)
 {
-	const struct dp_port *dp_port;
-
 	if (vport->ops->get_ifindex)
 		return vport->ops->get_ifindex(vport);
-
-	/* If we don't actually have an ifindex, use the local port's.
-	 * Userspace doesn't check it anyways. */
-	dp_port = vport_get_dp_port(vport);
-	if (!dp_port)
-		return -EAGAIN;
-
-	return vport_get_ifindex(dp_port->dp->ports[ODPP_LOCAL]->vport);
+	else
+		return 0;
 }
 
 /**
@@ -1183,6 +972,22 @@ int vport_get_mtu(const struct vport *vport)
 }
 
 /**
+ *	vport_get_config - retrieve device configuration
+ *
+ * @vport: vport from which to retrieve the configuration.
+ * @config: buffer to store config, which must be at least the length
+ *          of VPORT_CONFIG_SIZE.
+ *
+ * Retrieves the configuration of the given device.  Either RTNL lock or
+ * rcu_read_lock must be held.
+ */
+void vport_get_config(const struct vport *vport, void *config)
+{
+	if (vport->ops->get_config)
+		vport->ops->get_config(vport, config);
+}
+
+/**
  *	vport_receive - pass up received packet to the datapath for processing
  *
  * @vport: vport that received the packet
@@ -1194,15 +999,6 @@ int vport_get_mtu(const struct vport *vport)
  */
 void vport_receive(struct vport *vport, struct sk_buff *skb)
 {
-	struct dp_port *dp_port = vport_get_dp_port(vport);
-
-	if (!dp_port) {
-		vport_record_error(vport, VPORT_E_RX_DROPPED);
-		kfree_skb(skb);
-
-		return;
-	}
-
 	if (vport->ops->flags & VPORT_F_GEN_STATS) {
 		struct vport_percpu_stats *stats;
 
@@ -1217,10 +1013,13 @@ void vport_receive(struct vport *vport, struct sk_buff *skb)
 		local_bh_enable();
 	}
 
+	if (!(vport->ops->flags & VPORT_F_FLOW))
+		OVS_CB(skb)->flow = NULL;
+
 	if (!(vport->ops->flags & VPORT_F_TUN_ID))
 		OVS_CB(skb)->tun_id = 0;
 
-	dp_process_received_packet(dp_port, skb);
+	dp_process_received_packet(vport, skb);
 }
 
 static inline unsigned packet_length(const struct sk_buff *skb)
@@ -1251,8 +1050,7 @@ int vport_send(struct vport *vport, struct sk_buff *skb)
 	if (unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
 		if (net_ratelimit())
 			pr_warn("%s: dropped over-mtu packet: %d > %d\n",
-				dp_name(vport_get_dp_port(vport)->dp),
-				packet_length(skb), mtu);
+				dp_name(vport->dp), packet_length(skb), mtu);
 		goto error;
 	}
 
@@ -1304,28 +1102,12 @@ void vport_record_error(struct vport *vport, enum vport_err_type err_type)
 			vport->err_stats.rx_errors++;
 			break;
 
-		case VPORT_E_RX_FRAME:
-			vport->err_stats.rx_frame_err++;
-			break;
-
-		case VPORT_E_RX_OVER:
-			vport->err_stats.rx_over_err++;
-			break;
-
-		case VPORT_E_RX_CRC:
-			vport->err_stats.rx_crc_err++;
-			break;
-
 		case VPORT_E_TX_DROPPED:
 			vport->err_stats.tx_dropped++;
 			break;
 
 		case VPORT_E_TX_ERROR:
 			vport->err_stats.tx_errors++;
-			break;
-
-		case VPORT_E_COLLISION:
-			vport->err_stats.collisions++;
 			break;
 		};
 

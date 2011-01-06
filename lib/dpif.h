@@ -30,6 +30,8 @@ extern "C" {
 #endif
 
 struct dpif;
+struct netdev;
+struct nlattr;
 struct ofpbuf;
 struct svec;
 struct dpif_class;
@@ -59,8 +61,7 @@ int dpif_get_dp_stats(const struct dpif *, struct odp_stats *);
 int dpif_get_drop_frags(const struct dpif *, bool *drop_frags);
 int dpif_set_drop_frags(struct dpif *, bool drop_frags);
 
-int dpif_port_add(struct dpif *, const char *devname, uint16_t flags,
-                  uint16_t *port_no);
+int dpif_port_add(struct dpif *, struct netdev *, uint16_t *port_nop);
 int dpif_port_del(struct dpif *, uint16_t port_no);
 int dpif_port_query_by_number(const struct dpif *, uint16_t port_no,
                               struct odp_port *);
@@ -73,11 +74,6 @@ int dpif_port_list(const struct dpif *, struct odp_port **, size_t *n_ports);
 int dpif_port_poll(const struct dpif *, char **devnamep);
 void dpif_port_poll_wait(const struct dpif *);
 
-int dpif_port_group_get(const struct dpif *, uint16_t group,
-                        uint16_t **ports, size_t *n_ports);
-int dpif_port_group_set(struct dpif *, uint16_t group,
-                        const uint16_t ports[], size_t n_ports);
-
 int dpif_flow_flush(struct dpif *);
 int dpif_flow_put(struct dpif *, struct odp_flow_put *);
 int dpif_flow_del(struct dpif *, struct odp_flow *);
@@ -88,17 +84,16 @@ int dpif_flow_list(const struct dpif *, struct odp_flow[], size_t n,
 int dpif_flow_list_all(const struct dpif *,
                        struct odp_flow **flowsp, size_t *np);
 
-int dpif_execute(struct dpif *, uint16_t in_port,
-                 const union odp_action[], size_t n_actions,
-                 const struct ofpbuf *);
+int dpif_execute(struct dpif *, const struct nlattr *actions,
+                 size_t actions_len, const struct ofpbuf *);
 
 /* Minimum number of bytes of headroom for a packet returned by dpif_recv()
  * member function.  This headroom allows "struct odp_msg" to be replaced by
  * "struct ofp_packet_in" without copying the buffer. */
-#define DPIF_RECV_MSG_PADDING (sizeof(struct ofp_packet_in) \
-                               - sizeof(struct odp_msg))
+#define DPIF_RECV_MSG_PADDING \
+        ROUND_UP(sizeof(struct ofp_packet_in) - sizeof(struct odp_msg), 8)
 BUILD_ASSERT_DECL(sizeof(struct ofp_packet_in) > sizeof(struct odp_msg));
-BUILD_ASSERT_DECL(DPIF_RECV_MSG_PADDING % 4 == 0);
+BUILD_ASSERT_DECL(DPIF_RECV_MSG_PADDING % 8 == 0);
 
 int dpif_recv_get_mask(const struct dpif *, int *listen_mask);
 int dpif_recv_set_mask(struct dpif *, int listen_mask);

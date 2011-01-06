@@ -18,9 +18,12 @@
 #define PACKETS_H 1
 
 #include <inttypes.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <stdint.h>
 #include <string.h>
 #include "compiler.h"
+#include "openvswitch/types.h"
 #include "random.h"
 #include "util.h"
 
@@ -150,6 +153,7 @@ void compose_benign_packet(struct ofpbuf *, const char *tag,
 #define ETH_TYPE_IP            0x0800
 #define ETH_TYPE_ARP           0x0806
 #define ETH_TYPE_VLAN          0x8100
+#define ETH_TYPE_CFM           0x8902
 
 #define ETH_HEADER_LEN 14
 #define ETH_PAYLOAD_MIN 46
@@ -198,6 +202,24 @@ BUILD_ASSERT_DECL(LLC_SNAP_HEADER_LEN == sizeof(struct llc_snap_header));
 #define VLAN_PCP_MASK 0xe000
 #define VLAN_PCP_SHIFT 13
 
+#define VLAN_CFI 0x1000
+
+/* Given the vlan_tci field from an 802.1Q header, in network byte order,
+ * returns the VLAN ID in host byte order. */
+static inline uint16_t
+vlan_tci_to_vid(uint16_t vlan_tci)
+{
+    return (ntohs(vlan_tci) & VLAN_VID_MASK) >> VLAN_VID_SHIFT;
+}
+
+/* Given the vlan_tci field from an 802.1Q header, in network byte order,
+ * returns the priority code point (PCP) in host byte order. */
+static inline int
+vlan_tci_to_pcp(uint16_t vlan_tci)
+{
+    return (ntohs(vlan_tci) & VLAN_PCP_MASK) >> VLAN_PCP_SHIFT;
+}
+
 #define VLAN_HEADER_LEN 4
 struct vlan_header {
     uint16_t vlan_tci;          /* Lowest 12 bits are VLAN ID. */
@@ -215,6 +237,23 @@ struct vlan_eth_header {
 } __attribute__((packed));
 BUILD_ASSERT_DECL(VLAN_ETH_HEADER_LEN == sizeof(struct vlan_eth_header));
 
+/* A 'ccm' represents a Continuity Check Message from the 802.1ag specification.
+ * Continuity Check Messages are broadcast periodically so that hosts can
+ * determine who they have connectivity to. */
+#define CCM_LEN 74
+#define CCM_MAID_LEN 48
+struct ccm {
+    uint8_t  mdlevel_version; /* MD Level and Version */
+    uint8_t  opcode;
+    uint8_t  flags;
+    uint8_t  tlv_offset;
+    uint32_t seq;
+    uint16_t mpid;
+    uint8_t  maid[CCM_MAID_LEN];
+    uint8_t  zero[16]; /* Defined by ITU-T Y.1731 should be zero */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(CCM_LEN == sizeof(struct ccm));
+
 /* The "(void) (ip)[0]" below has no effect on the value, since it's the first
  * argument of a comma expression, but it makes sure that 'ip' is a pointer.
  * This is useful since a common mistake is to pass an integer instead of a
@@ -225,6 +264,15 @@ BUILD_ASSERT_DECL(VLAN_ETH_HEADER_LEN == sizeof(struct vlan_eth_header));
         ((uint8_t *) ip)[1],                    \
         ((uint8_t *) ip)[2],                    \
         ((uint8_t *) ip)[3]
+
+/* Returns true if 'netmask' is a CIDR netmask, that is, if it consists of N
+ * high-order 1-bits and 32-N low-order 0-bits. */
+static inline bool
+ip_is_cidr(ovs_be32 netmask)
+{
+    uint32_t x = ~ntohl(netmask);
+    return !(x & (x + 1));
+}
 
 #define IP_VER(ip_ihl_ver) ((ip_ihl_ver) >> 4)
 #define IP_IHL(ip_ihl_ver) ((ip_ihl_ver) & 15)

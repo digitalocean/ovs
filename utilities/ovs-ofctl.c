@@ -26,11 +26,15 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include "byte-order.h"
+#include "classifier.h"
 #include "command-line.h"
 #include "compiler.h"
 #include "dirs.h"
 #include "dpif.h"
+#include "dynamic-string.h"
 #include "netlink.h"
+#include "nx-match.h"
 #include "odp-util.h"
 #include "ofp-parse.h"
 #include "ofp-print.h"
@@ -44,18 +48,18 @@
 #include "util.h"
 #include "vconn.h"
 #include "vlog.h"
-#include "xtoxll.h"
 
-VLOG_DEFINE_THIS_MODULE(ofctl)
+VLOG_DEFINE_THIS_MODULE(ofctl);
 
-
-#define MOD_PORT_CMD_UP      "up"
-#define MOD_PORT_CMD_DOWN    "down"
-#define MOD_PORT_CMD_FLOOD   "flood"
-#define MOD_PORT_CMD_NOFLOOD "noflood"
-
-/* Use strict matching for flow mod commands? */
+/* --strict: Use strict matching for flow mod commands? */
 static bool strict;
+
+/* -F, --flow-format: Flow format to use.  Either one of NXFF_* to force a
+ * particular flow format or -1 to let ovs-ofctl choose intelligently. */
+static int preferred_flow_format = -1;
+
+/* -m, --more: Additional verbosity for ofp-print functions. */
+static int verbosity;
 
 static const struct command all_commands[];
 
@@ -82,6 +86,8 @@ parse_options(int argc, char *argv[])
     static struct option long_options[] = {
         {"timeout", required_argument, 0, 't'},
         {"strict", no_argument, 0, OPT_STRICT},
+        {"flow-format", required_argument, 0, 'F'},
+        {"more", no_argument, 0, 'm'},
         {"help", no_argument, 0, 'h'},
         {"version", no_argument, 0, 'V'},
         VLOG_LONG_OPTIONS,
@@ -108,6 +114,17 @@ parse_options(int argc, char *argv[])
             } else {
                 time_alarm(timeout);
             }
+            break;
+
+        case 'F':
+            preferred_flow_format = ofputil_flow_format_from_string(optarg);
+            if (preferred_flow_format < 0) {
+                ovs_fatal(0, "unknown flow format `%s'", optarg);
+            }
+            break;
+
+        case 'm':
+            verbosity++;
             break;
 
         case 'h':
@@ -150,6 +167,7 @@ usage(void)
            "  dump-flows SWITCH FLOW      print matching FLOWs\n"
            "  dump-aggregate SWITCH       print aggregate flow statistics\n"
            "  dump-aggregate SWITCH FLOW  print aggregate stats for FLOWs\n"
+           "  queue-stats SWITCH [PORT [QUEUE]]  dump queue stats\n"
            "  add-flow SWITCH FLOW        add flow described by FLOW\n"
            "  add-flows SWITCH FILE       add flows from FILE\n"
            "  mod-flows SWITCH FLOW       modify actions of matching FLOWs\n"
@@ -165,6 +183,8 @@ usage(void)
     vlog_usage();
     printf("\nOther options:\n"
            "  --strict                    use strict match for flow commands\n"
+           "  -F, --flow-format=FORMAT    force particular flow format\n"
+           "  -m, --more                  be more verbose printing OpenFlow\n"
            "  -t, --timeout=SECS          give up after SECS seconds\n"
            "  -h, --help                  display this help message\n"
            "  -V, --version               display version information\n");
@@ -199,7 +219,7 @@ static void
 open_vconn_socket(const char *name, struct vconn **vconnp)
 {
     char *vconn_name = xasprintf("unix:%s", name);
-    VLOG_INFO("connecting to %s", vconn_name);
+    VLOG_DBG("connecting to %s", vconn_name);
     run(vconn_open_block(vconn_name, OFP_VERSION, vconnp),
         "connecting to %s", vconn_name);
     free(vconn_name);
@@ -213,7 +233,7 @@ open_vconn__(const char *name, const char *default_suffix,
     struct stat s;
     char *bridge_path, *datapath_name, *datapath_type;
 
-    bridge_path = xasprintf("%s/%s.%s", ovs_rundir, name, default_suffix);
+    bridge_path = xasprintf("%s/%s.%s", ovs_rundir(), name, default_suffix);
     dp_parse_name(name, &datapath_name, &datapath_type);
 
     if (strstr(name, ":")) {
@@ -231,11 +251,11 @@ open_vconn__(const char *name, const char *default_suffix,
             "obtaining name of %s", dpif_name);
         dpif_close(dpif);
         if (strcmp(dpif_name, name)) {
-            VLOG_INFO("datapath %s is named %s", name, dpif_name);
+            VLOG_DBG("datapath %s is named %s", name, dpif_name);
         }
 
         socket_name = xasprintf("%s/%s.%s",
-                                ovs_rundir, dpif_name, default_suffix);
+                                ovs_rundir(), dpif_name, default_suffix);
         if (stat(socket_name, &s)) {
             ovs_fatal(errno, "cannot connect to %s: stat failed on %s",
                       name, socket_name);
@@ -288,7 +308,7 @@ dump_transaction(const char *vconn_name, struct ofpbuf *request)
     update_openflow_length(request);
     open_vconn(vconn_name, &vconn);
     run(vconn_transact(vconn, request, &reply), "talking to %s", vconn_name);
-    ofp_print(stdout, reply->data, reply->size, 1);
+    ofp_print(stdout, reply->data, reply->size, verbosity + 1);
     vconn_close(vconn);
 }
 
@@ -303,7 +323,7 @@ dump_trivial_transaction(const char *vconn_name, uint8_t request_type)
 static void
 dump_stats_transaction(const char *vconn_name, struct ofpbuf *request)
 {
-    uint32_t send_xid = ((struct ofp_header *) request->data)->xid;
+    ovs_be32 send_xid = ((struct ofp_header *) request->data)->xid;
     struct vconn *vconn;
     bool done = false;
 
@@ -318,7 +338,7 @@ dump_stats_transaction(const char *vconn_name, struct ofpbuf *request)
         if (send_xid == recv_xid) {
             struct ofp_stats_reply *osr;
 
-            ofp_print(stdout, reply->data, reply->size, 1);
+            ofp_print(stdout, reply->data, reply->size, verbosity + 1);
 
             osr = ofpbuf_at(reply, 0, sizeof *osr);
             done = !osr || !(ntohs(osr->flags) & OFPSF_REPLY_MORE);
@@ -339,6 +359,40 @@ dump_trivial_stats_transaction(const char *vconn_name, uint8_t stats_type)
     dump_stats_transaction(vconn_name, request);
 }
 
+/* Sends 'request', which should be a request that only has a reply if an error
+ * occurs, and waits for it to succeed or fail.  If an error does occur, prints
+ * it and exits with an error. */
+static void
+transact_multiple_noreply(struct vconn *vconn, struct list *requests)
+{
+    struct ofpbuf *request, *reply;
+
+    LIST_FOR_EACH (request, list_node, requests) {
+        update_openflow_length(request);
+    }
+
+    run(vconn_transact_multiple_noreply(vconn, requests, &reply),
+        "talking to %s", vconn_get_name(vconn));
+    if (reply) {
+        ofp_print(stderr, reply->data, reply->size, verbosity + 2);
+        exit(1);
+    }
+    ofpbuf_delete(reply);
+}
+
+/* Sends 'request', which should be a request that only has a reply if an error
+ * occurs, and waits for it to succeed or fail.  If an error does occur, prints
+ * it and exits with an error. */
+static void
+transact_noreply(struct vconn *vconn, struct ofpbuf *request)
+{
+    struct list requests;
+
+    list_init(&requests);
+    list_push_back(&requests, &request->list_node);
+    transact_multiple_noreply(vconn, &requests);
+}
+
 static void
 do_show(int argc OVS_UNUSED, char *argv[])
 {
@@ -353,9 +407,7 @@ do_status(int argc, char *argv[])
     struct vconn *vconn;
     struct ofpbuf *b;
 
-    request = make_openflow(sizeof *request, OFPT_VENDOR, &b);
-    request->vendor = htonl(NX_VENDOR_ID);
-    request->subtype = htonl(NXT_STATUS_REQUEST);
+    request = make_nxmsg(sizeof *request, NXT_STATUS_REQUEST, &b);
     if (argc > 2) {
         ofpbuf_put(b, argv[2], strlen(argv[2]));
         update_openflow_length(b);
@@ -371,7 +423,7 @@ do_status(int argc, char *argv[])
     if (reply->header.type != OFPT_VENDOR
         || reply->vendor != ntohl(NX_VENDOR_ID)
         || reply->subtype != ntohl(NXT_STATUS_REPLY)) {
-        ofp_print(stderr, b->data, b->size, 2);
+        ofp_print(stderr, b->data, b->size, verbosity + 2);
         ovs_fatal(0, "bad reply");
     }
 
@@ -390,245 +442,244 @@ do_dump_tables(int argc OVS_UNUSED, char *argv[])
     dump_trivial_stats_transaction(argv[1], OFPST_TABLE);
 }
 
-static uint16_t
-str_to_port_no(const char *vconn_name, const char *str)
+/* Opens a connection to 'vconn_name', fetches the ofp_phy_port structure for
+ * 'port_name' (which may be a port name or number), and copies it into
+ * '*oppp'. */
+static void
+fetch_ofp_phy_port(const char *vconn_name, const char *port_name,
+                   struct ofp_phy_port *oppp)
 {
     struct ofpbuf *request, *reply;
     struct ofp_switch_features *osf;
+    unsigned int port_no;
     struct vconn *vconn;
     int n_ports;
     int port_idx;
-    unsigned int port_no;
 
-
-    /* Check if the argument is a port index.  Otherwise, treat it as
-     * the port name. */
-    if (str_to_uint(str, 10, &port_no)) {
-        return port_no;
+    /* Try to interpret the argument as a port number. */
+    if (!str_to_uint(port_name, 10, &port_no)) {
+        port_no = UINT_MAX;
     }
 
-    /* Send a "Features Request" to resolve the name into a number. */
+    /* Fetch the switch's ofp_switch_features. */
     make_openflow(sizeof(struct ofp_header), OFPT_FEATURES_REQUEST, &request);
     open_vconn(vconn_name, &vconn);
     run(vconn_transact(vconn, request, &reply), "talking to %s", vconn_name);
 
     osf = reply->data;
+    if (reply->size < sizeof *osf) {
+        ovs_fatal(0, "%s: received too-short features reply (only %zu bytes)",
+                  vconn_name, reply->size);
+    }
     n_ports = (reply->size - sizeof *osf) / sizeof *osf->ports;
 
     for (port_idx = 0; port_idx < n_ports; port_idx++) {
-        /* Check argument as an interface name */
-        if (!strncmp((char *)osf->ports[port_idx].name, str,
-                    sizeof osf->ports[0].name)) {
-            break;
+        const struct ofp_phy_port *opp = &osf->ports[port_idx];
+
+        if (port_no != UINT_MAX
+            ? htons(port_no) == opp->port_no
+            : !strncmp(opp->name, port_name, sizeof opp->name)) {
+            *oppp = *opp;
+            ofpbuf_delete(reply);
+            vconn_close(vconn);
+            return;
         }
     }
-    if (port_idx == n_ports) {
-        ovs_fatal(0, "couldn't find monitored port: %s", str);
+    ovs_fatal(0, "%s: couldn't find port `%s'", vconn_name, port_name);
+}
+
+/* Returns the port number corresponding to 'port_name' (which may be a port
+ * name or number) within the switch 'vconn_name'. */
+static uint16_t
+str_to_port_no(const char *vconn_name, const char *port_name)
+{
+    unsigned int port_no;
+
+    if (str_to_uint(port_name, 10, &port_no)) {
+        return port_no;
+    } else {
+        struct ofp_phy_port opp;
+
+        fetch_ofp_phy_port(vconn_name, port_name, &opp);
+        return ntohs(opp.port_no);
+    }
+}
+
+static bool
+try_set_flow_format(struct vconn *vconn, enum nx_flow_format flow_format)
+{
+    struct ofpbuf *sff, *reply;
+
+    sff = ofputil_make_set_flow_format(flow_format);
+    run(vconn_transact_noreply(vconn, sff, &reply),
+        "talking to %s", vconn_get_name(vconn));
+    if (reply) {
+        char *s = ofp_to_string(reply->data, reply->size, 2);
+        VLOG_DBG("%s: failed to set flow format %s, controller replied: %s",
+                 vconn_get_name(vconn),
+                 ofputil_flow_format_to_string(flow_format),
+                 s);
+        free(s);
+        ofpbuf_delete(reply);
+        return false;
+    }
+    return true;
+}
+
+static void
+set_flow_format(struct vconn *vconn, enum nx_flow_format flow_format)
+{
+    struct ofpbuf *sff = ofputil_make_set_flow_format(flow_format);
+    transact_noreply(vconn, sff);
+    VLOG_DBG("%s: using user-specified flow format %s",
+             vconn_get_name(vconn),
+             ofputil_flow_format_to_string(flow_format));
+}
+
+static enum nx_flow_format
+negotiate_highest_flow_format(struct vconn *vconn, const struct cls_rule *rule,
+                              bool cookie_support, ovs_be64 cookie)
+{
+    int flow_format;
+
+    if (preferred_flow_format != -1) {
+        enum nx_flow_format min_format;
+
+        min_format = ofputil_min_flow_format(rule, cookie_support, cookie);
+        if (preferred_flow_format >= min_format) {
+            set_flow_format(vconn, preferred_flow_format);
+            return preferred_flow_format;
+        }
+
+        VLOG_WARN("%s: cannot use requested flow format %s for "
+                  "specified flow", vconn_get_name(vconn),
+                  ofputil_flow_format_to_string(min_format));
     }
 
-    ofpbuf_delete(reply);
-    vconn_close(vconn);
+    if (try_set_flow_format(vconn, NXFF_NXM)) {
+        flow_format = NXFF_NXM;
+    } else if (try_set_flow_format(vconn, NXFF_TUN_ID_FROM_COOKIE)) {
+        flow_format = NXFF_TUN_ID_FROM_COOKIE;
+    } else {
+        flow_format = NXFF_OPENFLOW10;
+    }
 
-    return port_idx;
+    VLOG_DBG("%s: negotiated flow format %s", vconn_get_name(vconn),
+             ofputil_flow_format_to_string(flow_format));
+    return flow_format;
+}
+
+static void
+do_dump_flows__(int argc, char *argv[], bool aggregate)
+{
+    enum nx_flow_format flow_format;
+    struct flow_stats_request fsr;
+    struct ofpbuf *request;
+    struct vconn *vconn;
+
+    parse_ofp_flow_stats_request_str(&fsr, aggregate, argc > 2 ? argv[2] : "");
+
+    open_vconn(argv[1], &vconn);
+    flow_format = negotiate_highest_flow_format(vconn, &fsr.match, false, 0);
+    request = ofputil_encode_flow_stats_request(&fsr, flow_format);
+    dump_stats_transaction(argv[1], request);
+    vconn_close(vconn);
 }
 
 static void
 do_dump_flows(int argc, char *argv[])
 {
-    struct ofp_flow_stats_request *req;
-    uint16_t out_port;
-    struct ofpbuf *request;
-
-    req = alloc_stats_request(sizeof *req, OFPST_FLOW, &request);
-    parse_ofp_str(argc > 2 ? argv[2] : "", &req->match, NULL,
-                  &req->table_id, &out_port, NULL, NULL, NULL, NULL);
-    memset(&req->pad, 0, sizeof req->pad);
-    req->out_port = htons(out_port);
-
-    dump_stats_transaction(argv[1], request);
+    return do_dump_flows__(argc, argv, false);
 }
 
 static void
 do_dump_aggregate(int argc, char *argv[])
 {
-    struct ofp_aggregate_stats_request *req;
-    struct ofpbuf *request;
-    uint16_t out_port;
+    return do_dump_flows__(argc, argv, true);
+}
 
-    req = alloc_stats_request(sizeof *req, OFPST_AGGREGATE, &request);
-    parse_ofp_str(argc > 2 ? argv[2] : "", &req->match, NULL,
-                  &req->table_id, &out_port, NULL, NULL, NULL, NULL);
-    memset(&req->pad, 0, sizeof req->pad);
-    req->out_port = htons(out_port);
+static void
+do_queue_stats(int argc, char *argv[])
+{
+    struct ofp_queue_stats_request *req;
+    struct ofpbuf *request;
+
+    req = alloc_stats_request(sizeof *req, OFPST_QUEUE, &request);
+
+    if (argc > 2 && argv[2][0] && strcasecmp(argv[2], "all")) {
+        req->port_no = htons(str_to_port_no(argv[1], argv[2]));
+    } else {
+        req->port_no = htons(OFPP_ALL);
+    }
+    if (argc > 3 && argv[3][0] && strcasecmp(argv[3], "all")) {
+        req->queue_id = htonl(atoi(argv[3]));
+    } else {
+        req->queue_id = htonl(OFPQ_ALL);
+    }
+
+    memset(req->pad, 0, sizeof req->pad);
 
     dump_stats_transaction(argv[1], request);
 }
 
 static void
-do_add_flow(int argc OVS_UNUSED, char *argv[])
+do_flow_mod__(int argc OVS_UNUSED, char *argv[], uint16_t command)
 {
+    enum nx_flow_format flow_format;
+    struct list requests;
     struct vconn *vconn;
-    struct ofpbuf *buffer;
-    struct ofp_flow_mod *ofm;
-    uint16_t priority, idle_timeout, hard_timeout;
-    uint64_t cookie;
-    struct ofp_match match;
 
-    /* Parse and send.  parse_ofp_str() will expand and reallocate the
-     * data in 'buffer', so we can't keep pointers to across the
-     * parse_ofp_str() call. */
-    make_openflow(sizeof *ofm, OFPT_FLOW_MOD, &buffer);
-    parse_ofp_str(argv[2], &match, buffer,
-                  NULL, NULL, &priority, &idle_timeout, &hard_timeout,
-                  &cookie);
-    ofm = buffer->data;
-    ofm->match = match;
-    ofm->command = htons(OFPFC_ADD);
-    ofm->cookie = htonll(cookie);
-    ofm->idle_timeout = htons(idle_timeout);
-    ofm->hard_timeout = htons(hard_timeout);
-    ofm->buffer_id = htonl(UINT32_MAX);
-    ofm->priority = htons(priority);
+    list_init(&requests);
+    flow_format = NXFF_OPENFLOW10;
+    parse_ofp_flow_mod_str(&requests, &flow_format, argc > 2 ? argv[2] : "",
+                           command);
 
     open_vconn(argv[1], &vconn);
-    send_openflow_buffer(vconn, buffer);
+    transact_multiple_noreply(vconn, &requests);
     vconn_close(vconn);
+}
+
+static void
+do_add_flow(int argc, char *argv[])
+{
+    do_flow_mod__(argc, argv, OFPFC_ADD);
 }
 
 static void
 do_add_flows(int argc OVS_UNUSED, char *argv[])
 {
+    enum nx_flow_format flow_format;
+    struct list requests;
     struct vconn *vconn;
     FILE *file;
-    char line[1024];
 
     file = fopen(argv[2], "r");
     if (file == NULL) {
         ovs_fatal(errno, "%s: open", argv[2]);
     }
 
+    list_init(&requests);
+    flow_format = NXFF_OPENFLOW10;
+
     open_vconn(argv[1], &vconn);
-    while (fgets(line, sizeof line, file)) {
-        struct ofpbuf *buffer;
-        struct ofp_flow_mod *ofm;
-        uint16_t priority, idle_timeout, hard_timeout;
-        uint64_t cookie;
-        struct ofp_match match;
-
-        char *comment;
-
-        /* Delete comments. */
-        comment = strchr(line, '#');
-        if (comment) {
-            *comment = '\0';
-        }
-
-        /* Drop empty lines. */
-        if (line[strspn(line, " \t\n")] == '\0') {
-            continue;
-        }
-
-        /* Parse and send.  parse_ofp_str() will expand and reallocate
-         * the data in 'buffer', so we can't keep pointers to across the
-         * parse_ofp_str() call. */
-        make_openflow(sizeof *ofm, OFPT_FLOW_MOD, &buffer);
-        parse_ofp_str(line, &match, buffer,
-                      NULL, NULL, &priority, &idle_timeout, &hard_timeout,
-                      &cookie);
-        ofm = buffer->data;
-        ofm->match = match;
-        ofm->command = htons(OFPFC_ADD);
-        ofm->cookie = htonll(cookie);
-        ofm->idle_timeout = htons(idle_timeout);
-        ofm->hard_timeout = htons(hard_timeout);
-        ofm->buffer_id = htonl(UINT32_MAX);
-        ofm->priority = htons(priority);
-
-        send_openflow_buffer(vconn, buffer);
+    while (parse_ofp_add_flow_file(&requests, &flow_format, file)) {
+        transact_multiple_noreply(vconn, &requests);
     }
     vconn_close(vconn);
+
     fclose(file);
 }
 
 static void
-do_mod_flows(int argc OVS_UNUSED, char *argv[])
+do_mod_flows(int argc, char *argv[])
 {
-    uint16_t priority, idle_timeout, hard_timeout;
-    uint64_t cookie;
-    struct vconn *vconn;
-    struct ofpbuf *buffer;
-    struct ofp_flow_mod *ofm;
-    struct ofp_match match;
-
-    /* Parse and send.  parse_ofp_str() will expand and reallocate the
-     * data in 'buffer', so we can't keep pointers to across the
-     * parse_ofp_str() call. */
-    make_openflow(sizeof *ofm, OFPT_FLOW_MOD, &buffer);
-    parse_ofp_str(argv[2], &match, buffer,
-                  NULL, NULL, &priority, &idle_timeout, &hard_timeout,
-                  &cookie);
-    ofm = buffer->data;
-    ofm->match = match;
-    if (strict) {
-        ofm->command = htons(OFPFC_MODIFY_STRICT);
-    } else {
-        ofm->command = htons(OFPFC_MODIFY);
-    }
-    ofm->idle_timeout = htons(idle_timeout);
-    ofm->hard_timeout = htons(hard_timeout);
-    ofm->cookie = htonll(cookie);
-    ofm->buffer_id = htonl(UINT32_MAX);
-    ofm->priority = htons(priority);
-
-    open_vconn(argv[1], &vconn);
-    send_openflow_buffer(vconn, buffer);
-    vconn_close(vconn);
-}
-
-static void do_del_flows(int argc, char *argv[])
-{
-    struct vconn *vconn;
-    uint16_t priority;
-    uint16_t out_port;
-    struct ofpbuf *buffer;
-    struct ofp_flow_mod *ofm;
-
-    /* Parse and send. */
-    ofm = make_openflow(sizeof *ofm, OFPT_FLOW_MOD, &buffer);
-    parse_ofp_str(argc > 2 ? argv[2] : "", &ofm->match, NULL, NULL,
-                  &out_port, &priority, NULL, NULL, NULL);
-    if (strict) {
-        ofm->command = htons(OFPFC_DELETE_STRICT);
-    } else {
-        ofm->command = htons(OFPFC_DELETE);
-    }
-    ofm->idle_timeout = htons(0);
-    ofm->hard_timeout = htons(0);
-    ofm->buffer_id = htonl(UINT32_MAX);
-    ofm->out_port = htons(out_port);
-    ofm->priority = htons(priority);
-
-    open_vconn(argv[1], &vconn);
-    send_openflow_buffer(vconn, buffer);
-    vconn_close(vconn);
+    do_flow_mod__(argc, argv, strict ? OFPFC_MODIFY_STRICT : OFPFC_MODIFY);
 }
 
 static void
-do_tun_cookie(int argc OVS_UNUSED, char *argv[])
+do_del_flows(int argc, char *argv[])
 {
-    struct nxt_tun_id_cookie *tun_id_cookie;
-    struct ofpbuf *buffer;
-    struct vconn *vconn;
-
-    tun_id_cookie = make_openflow(sizeof *tun_id_cookie, OFPT_VENDOR, &buffer);
-
-    tun_id_cookie->vendor = htonl(NX_VENDOR_ID);
-    tun_id_cookie->subtype = htonl(NXT_TUN_ID_FROM_COOKIE);
-    tun_id_cookie->set = !strcmp(argv[2], "true");
-
-    open_vconn(argv[1], &vconn);
-    send_openflow_buffer(vconn, buffer);
-    vconn_close(vconn);
+    do_flow_mod__(argc, argv, strict ? OFPFC_DELETE_STRICT : OFPFC_DELETE);
 }
 
 static void
@@ -637,7 +688,7 @@ monitor_vconn(struct vconn *vconn)
     for (;;) {
         struct ofpbuf *b;
         run(vconn_recv_block(vconn, &b), "vconn_recv");
-        ofp_print(stderr, b->data, b->size, 2);
+        ofp_print(stderr, b->data, b->size, verbosity + 2);
         ofpbuf_delete(b);
     }
 }
@@ -655,7 +706,7 @@ do_monitor(int argc, char *argv[])
 
         osc = make_openflow(sizeof *osc, OFPT_SET_CONFIG, &buf);
         osc->miss_send_len = htons(miss_send_len);
-        send_openflow_buffer(vconn, buf);
+        transact_noreply(vconn, buf);
     }
     monitor_vconn(vconn);
 }
@@ -702,80 +753,36 @@ do_probe(int argc OVS_UNUSED, char *argv[])
 static void
 do_mod_port(int argc OVS_UNUSED, char *argv[])
 {
-    struct ofpbuf *request, *reply;
-    struct ofp_switch_features *osf;
     struct ofp_port_mod *opm;
+    struct ofp_phy_port opp;
+    struct ofpbuf *request;
     struct vconn *vconn;
-    char *endptr;
-    int n_ports;
-    int port_idx;
-    int port_no;
 
-
-    /* Check if the argument is a port index.  Otherwise, treat it as
-     * the port name. */
-    port_no = strtol(argv[2], &endptr, 10);
-    if (port_no == 0 && endptr == argv[2]) {
-        port_no = -1;
-    }
-
-    /* Send a "Features Request" to get the information we need in order
-     * to modify the port. */
-    make_openflow(sizeof(struct ofp_header), OFPT_FEATURES_REQUEST, &request);
-    open_vconn(argv[1], &vconn);
-    run(vconn_transact(vconn, request, &reply), "talking to %s", argv[1]);
-
-    osf = reply->data;
-    n_ports = (reply->size - sizeof *osf) / sizeof *osf->ports;
-
-    for (port_idx = 0; port_idx < n_ports; port_idx++) {
-        if (port_no != -1) {
-            /* Check argument as a port index */
-            if (osf->ports[port_idx].port_no == htons(port_no)) {
-                break;
-            }
-        } else {
-            /* Check argument as an interface name */
-            if (!strncmp((char *)osf->ports[port_idx].name, argv[2],
-                        sizeof osf->ports[0].name)) {
-                break;
-            }
-
-        }
-    }
-    if (port_idx == n_ports) {
-        ovs_fatal(0, "couldn't find monitored port: %s", argv[2]);
-    }
+    fetch_ofp_phy_port(argv[1], argv[2], &opp);
 
     opm = make_openflow(sizeof(struct ofp_port_mod), OFPT_PORT_MOD, &request);
-    opm->port_no = osf->ports[port_idx].port_no;
-    memcpy(opm->hw_addr, osf->ports[port_idx].hw_addr, sizeof opm->hw_addr);
+    opm->port_no = opp.port_no;
+    memcpy(opm->hw_addr, opp.hw_addr, sizeof opm->hw_addr);
     opm->config = htonl(0);
     opm->mask = htonl(0);
     opm->advertise = htonl(0);
 
-    printf("modifying port: %s\n", osf->ports[port_idx].name);
-
-    if (!strncasecmp(argv[3], MOD_PORT_CMD_UP, sizeof MOD_PORT_CMD_UP)) {
+    if (!strcasecmp(argv[3], "up")) {
         opm->mask |= htonl(OFPPC_PORT_DOWN);
-    } else if (!strncasecmp(argv[3], MOD_PORT_CMD_DOWN,
-                sizeof MOD_PORT_CMD_DOWN)) {
+    } else if (!strcasecmp(argv[3], "down")) {
         opm->mask |= htonl(OFPPC_PORT_DOWN);
         opm->config |= htonl(OFPPC_PORT_DOWN);
-    } else if (!strncasecmp(argv[3], MOD_PORT_CMD_FLOOD,
-                sizeof MOD_PORT_CMD_FLOOD)) {
+    } else if (!strcasecmp(argv[3], "flood")) {
         opm->mask |= htonl(OFPPC_NO_FLOOD);
-    } else if (!strncasecmp(argv[3], MOD_PORT_CMD_NOFLOOD,
-                sizeof MOD_PORT_CMD_NOFLOOD)) {
+    } else if (!strcasecmp(argv[3], "noflood")) {
         opm->mask |= htonl(OFPPC_NO_FLOOD);
         opm->config |= htonl(OFPPC_NO_FLOOD);
     } else {
         ovs_fatal(0, "unknown mod-port command '%s'", argv[3]);
     }
 
-    send_openflow_buffer(vconn, request);
-
-    ofpbuf_delete(reply);
+    open_vconn(argv[1], &vconn);
+    transact_noreply(vconn, request);
     vconn_close(vconn);
 }
 
@@ -812,12 +819,12 @@ do_ping(int argc, char *argv[])
             || rpy_hdr->xid != rq_hdr->xid
             || rpy_hdr->type != OFPT_ECHO_REPLY) {
             printf("Reply does not match request.  Request:\n");
-            ofp_print(stdout, request, request->size, 2);
+            ofp_print(stdout, request, request->size, verbosity + 2);
             printf("Reply:\n");
-            ofp_print(stdout, reply, reply->size, 2);
+            ofp_print(stdout, reply, reply->size, verbosity + 2);
         }
         printf("%zu bytes from %s: xid=%08"PRIx32" time=%.1f ms\n",
-               reply->size - sizeof *rpy_hdr, argv[1], rpy_hdr->xid,
+               reply->size - sizeof *rpy_hdr, argv[1], ntohl(rpy_hdr->xid),
                    (1000*(double)(end.tv_sec - start.tv_sec))
                    + (.001*(end.tv_usec - start.tv_usec)));
         ofpbuf_delete(request);
@@ -874,6 +881,92 @@ do_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     usage();
 }
+
+/* Undocumented commands for unit testing. */
+
+static void
+do_parse_flows(int argc OVS_UNUSED, char *argv[])
+{
+    enum nx_flow_format flow_format;
+    struct list packets;
+    FILE *file;
+
+    file = fopen(argv[1], "r");
+    if (file == NULL) {
+        ovs_fatal(errno, "%s: open", argv[2]);
+    }
+
+    list_init(&packets);
+    flow_format = NXFF_OPENFLOW10;
+    if (preferred_flow_format > 0) {
+        flow_format = preferred_flow_format;
+    }
+
+    while (parse_ofp_add_flow_file(&packets, &flow_format, file)) {
+        struct ofpbuf *packet, *next;
+
+        LIST_FOR_EACH_SAFE (packet, next, list_node, &packets) {
+            ofp_print(stdout, packet->data, packet->size, verbosity);
+            list_remove(&packet->list_node);
+            ofpbuf_delete(packet);
+        }
+    }
+    fclose(file);
+}
+
+static void
+do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct ds in;
+
+    ds_init(&in);
+    while (!ds_get_line(&in, stdin)) {
+        struct ofpbuf nx_match;
+        struct cls_rule rule;
+        int match_len;
+        int error;
+        char *s;
+
+        /* Delete comments, skip blank lines. */
+        s = ds_cstr(&in);
+        if (*s == '#') {
+            puts(s);
+            continue;
+        }
+        if (strchr(s, '#')) {
+            *strchr(s, '#') = '\0';
+        }
+        if (s[strspn(s, " ")] == '\0') {
+            putchar('\n');
+            continue;
+        }
+
+        /* Convert string to nx_match. */
+        ofpbuf_init(&nx_match, 0);
+        match_len = nx_match_from_string(ds_cstr(&in), &nx_match);
+
+        /* Convert nx_match to cls_rule. */
+        error = nx_pull_match(&nx_match, match_len, 0, &rule);
+        if (!error) {
+            char *out;
+
+            /* Convert cls_rule back to nx_match. */
+            ofpbuf_uninit(&nx_match);
+            ofpbuf_init(&nx_match, 0);
+            match_len = nx_put_match(&nx_match, &rule);
+
+            /* Convert nx_match to string. */
+            out = nx_match_to_string(nx_match.data, match_len);
+            puts(out);
+            free(out);
+        } else {
+            printf("nx_pull_match() returned error %x\n", error);
+        }
+
+        ofpbuf_uninit(&nx_match);
+    }
+    ds_destroy(&in);
+}
 
 static const struct command all_commands[] = {
     { "show", 1, 1, do_show },
@@ -884,16 +977,21 @@ static const struct command all_commands[] = {
     { "dump-tables", 1, 1, do_dump_tables },
     { "dump-flows", 1, 2, do_dump_flows },
     { "dump-aggregate", 1, 2, do_dump_aggregate },
+    { "queue-stats", 1, 3, do_queue_stats },
     { "add-flow", 2, 2, do_add_flow },
     { "add-flows", 2, 2, do_add_flows },
     { "mod-flows", 2, 2, do_mod_flows },
     { "del-flows", 1, 2, do_del_flows },
-    { "tun-cookie", 2, 2, do_tun_cookie },
     { "dump-ports", 1, 2, do_dump_ports },
     { "mod-port", 3, 3, do_mod_port },
     { "probe", 1, 1, do_probe },
     { "ping", 1, 2, do_ping },
     { "benchmark", 3, 3, do_benchmark },
     { "help", 0, INT_MAX, do_help },
+
+    /* Undocumented commands for testing. */
+    { "parse-flows", 1, 1, do_parse_flows },
+    { "parse-nx-match", 0, 0, do_parse_nx_match },
+
     { NULL, 0, 0, NULL },
 };

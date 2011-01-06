@@ -37,12 +37,13 @@
 #include "dynamic-string.h"
 #include "netdev.h"
 #include "odp-util.h"
+#include "shash.h"
 #include "svec.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(dpctl)
+VLOG_DEFINE_THIS_MODULE(dpctl);
 
 static const struct command all_commands[];
 
@@ -127,8 +128,7 @@ usage(void)
            "  show                     show basic info on all datapaths\n"
            "  show DP...               show basic info on each DP\n"
            "  dump-flows DP            display flows in DP\n"
-           "  del-flows DP             delete all flows from DP\n"
-           "  dump-groups DP           display port groups in DP\n",
+           "  del-flows DP             delete all flows from DP\n",
            program_name, program_name);
     vlog_usage();
     printf("\nOther options:\n"
@@ -239,45 +239,55 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
     run(parsed_dpif_open(argv[1], false, &dpif), "opening datapath");
     for (i = 2; i < argc; i++) {
         char *save_ptr = NULL;
-        char *devname, *suboptions;
-        int flags = 0;
+        struct netdev_options options;
+        struct netdev *netdev;
+        struct shash args;
+        char *option;
         int error;
 
-        devname = strtok_r(argv[i], ",", &save_ptr);
-        if (!devname) {
+        options.name = strtok_r(argv[i], ",", &save_ptr);
+        options.type = "system";
+        options.args = &args;
+        options.ethertype = NETDEV_ETH_TYPE_NONE;
+
+        if (!options.name) {
             ovs_error(0, "%s is not a valid network device name", argv[i]);
             continue;
         }
 
-        suboptions = strtok_r(NULL, "", &save_ptr);
-        if (suboptions) {
-            enum {
-                AP_INTERNAL
-            };
-            static char *options[] = {
-                "internal"
-            };
+        shash_init(&args);
+        while ((option = strtok_r(NULL, "", &save_ptr)) != NULL) {
+            char *save_ptr_2 = NULL;
+            char *key, *value;
 
-            while (*suboptions != '\0') {
-                char *value;
+            key = strtok_r(option, "=", &save_ptr_2);
+            value = strtok_r(NULL, "", &save_ptr_2);
+            if (!value) {
+                value = "";
+            }
 
-                switch (getsubopt(&suboptions, options, &value)) {
-                case AP_INTERNAL:
-                    flags |= ODP_PORT_INTERNAL;
-                    break;
-
-                default:
-                    ovs_error(0, "unknown suboption '%s'", value);
-                    break;
-                }
+            if (!strcmp(key, "type")) {
+                options.type = value;
+            } else if (!shash_add_once(&args, key, value)) {
+                ovs_error(0, "duplicate \"%s\" option", key);
             }
         }
 
-        error = dpif_port_add(dpif, devname, flags, NULL);
+        error = netdev_open(&options, &netdev);
         if (error) {
-            ovs_error(error, "adding %s to %s failed", devname, argv[1]);
-            failure = true;
-        } else if (if_up(devname)) {
+            ovs_error(error, "%s: failed to open network device",
+                      options.name);
+        } else {
+            error = dpif_port_add(dpif, netdev, NULL);
+            if (error) {
+                ovs_error(error, "adding %s to %s failed",
+                          options.name, argv[1]);
+            } else {
+                error = if_up(options.name);
+            }
+            netdev_close(netdev);
+        }
+        if (error) {
             failure = true;
         }
     }
@@ -290,21 +300,15 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
 static bool
 get_port_number(struct dpif *dpif, const char *name, uint16_t *port)
 {
-    struct odp_port *ports;
-    size_t n_ports;
-    size_t i;
+    struct odp_port odp_port;
 
-    query_ports(dpif, &ports, &n_ports);
-    for (i = 0; i < n_ports; i++) {
-        if (!strcmp(name, ports[i].devname)) {
-            *port = ports[i].port;
-            free(ports);
-            return true;
-        }
+    if (!dpif_port_query_by_name(dpif, name, &odp_port)) {
+        *port = odp_port.port;
+        return true;
+    } else {
+        ovs_error(0, "no port named %s", name);
+        return false;
     }
-    free(ports);
-    ovs_error(0, "no port named %s", name);
-    return false;
 }
 
 static void
@@ -354,7 +358,6 @@ show_dpif(struct dpif *dpif)
                stats.n_flows, stats.cur_capacity, stats.max_capacity);
         printf("\tports: cur:%"PRIu32", max:%"PRIu32"\n",
                stats.n_ports, stats.max_ports);
-        printf("\tgroups: max:%"PRIu16"\n", stats.max_groups);
         printf("\tlookups: frags:%llu, hit:%llu, missed:%llu, lost:%llu\n",
                (unsigned long long int) stats.n_frags,
                (unsigned long long int) stats.n_hit,
@@ -365,11 +368,15 @@ show_dpif(struct dpif *dpif)
     }
     query_ports(dpif, &ports, &n_ports);
     for (i = 0; i < n_ports; i++) {
-        printf("\tport %u: %s", ports[i].port, ports[i].devname);
-        if (ports[i].flags & ODP_PORT_INTERNAL) {
-            printf(" (internal)");
-        }
-        printf("\n");
+        const struct odp_port *p = &ports[i];
+        struct ds ds;
+
+        printf("\tport %u: %s", p->port, p->devname);
+
+        ds_init(&ds);
+        format_odp_port_type(&ds, p);
+        printf("%s\n", ds_cstr(&ds));
+        ds_destroy(&ds);
     }
     free(ports);
     dpif_close(dpif);
@@ -467,11 +474,11 @@ do_dump_flows(int argc OVS_UNUSED, char *argv[])
     ds_init(&ds);
     for (i = 0; i < n_flows; i++) {
         struct odp_flow *f = &flows[i];
-        enum { MAX_ACTIONS = 4096 / sizeof(union odp_action) };
-        union odp_action actions[MAX_ACTIONS];
+        enum { MAX_ACTIONS = 4096 }; /* An arbitrary but large number. */
+        struct nlattr actions[MAX_ACTIONS];
 
         f->actions = actions;
-        f->n_actions = MAX_ACTIONS;
+        f->actions_len = sizeof actions;
         if (!dpif_flow_get(dpif, f)) {
             ds_clear(&ds);
             format_odp_flow(&ds, f);
@@ -493,33 +500,6 @@ do_del_flows(int argc OVS_UNUSED, char *argv[])
 }
 
 static void
-do_dump_groups(int argc OVS_UNUSED, char *argv[])
-{
-    struct odp_stats stats;
-    struct dpif *dpif;
-    unsigned int i;
-
-    run(parsed_dpif_open(argv[1], false, &dpif), "opening datapath");
-    run(dpif_get_dp_stats(dpif, &stats), "get datapath stats");
-    for (i = 0; i < stats.max_groups; i++) {
-        uint16_t *ports;
-        size_t n_ports;
-
-        if (!dpif_port_group_get(dpif, i, &ports, &n_ports) && n_ports) {
-            size_t j;
-
-            printf("group %u:", i);
-            for (j = 0; j < n_ports; j++) {
-                printf(" %"PRIu16, ports[j]);
-            }
-            printf("\n");
-        }
-        free(ports);
-    }
-    dpif_close(dpif);
-}
-
-static void
 do_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     usage();
@@ -534,7 +514,6 @@ static const struct command all_commands[] = {
     { "show", 0, INT_MAX, do_show },
     { "dump-flows", 1, 1, do_dump_flows },
     { "del-flows", 1, 1, do_del_flows },
-    { "dump-groups", 1, 1, do_dump_groups },
     { "help", 0, INT_MAX, do_help },
     { NULL, 0, 0, NULL },
 };

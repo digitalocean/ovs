@@ -29,6 +29,7 @@
 #include "daemon.h"
 #include "dirs.h"
 #include "dpif.h"
+#include "dummy.h"
 #include "leak-checker.h"
 #include "list.h"
 #include "netdev.h"
@@ -46,14 +47,17 @@
 #include "vconn.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(openflowd)
+VLOG_DEFINE_THIS_MODULE(openflowd);
 
 /* Settings that may be configured by the user. */
 struct ofsettings {
+    const char *unixctl_path;   /* File name for unixctl socket. */
+
     /* Controller configuration. */
     struct ofproto_controller *controllers;
     size_t n_controllers;
     enum ofproto_fail_mode fail_mode;
+    bool run_forever;           /* Continue running even with no controller? */
 
     /* Datapath. */
     uint64_t datapath_id;       /* Datapath ID. */
@@ -78,6 +82,8 @@ struct ofsettings {
     struct svec netflow;        /* NetFlow targets. */
 };
 
+static unixctl_cb_func ovs_openflowd_exit;
+
 static void parse_options(int argc, char *argv[], struct ofsettings *);
 static void usage(void) NO_RETURN;
 
@@ -90,6 +96,7 @@ main(int argc, char *argv[])
     int error;
     struct dpif *dpif;
     struct netflow_options nf_options;
+    bool exiting;
 
     proctitle_init(argc, argv);
     set_program_name(argv[0]);
@@ -100,10 +107,12 @@ main(int argc, char *argv[])
     daemonize_start();
 
     /* Start listening for ovs-appctl requests. */
-    error = unixctl_server_create(NULL, &unixctl);
+    error = unixctl_server_create(s.unixctl_path, &unixctl);
     if (error) {
         exit(EXIT_FAILURE);
     }
+
+    unixctl_command_register("exit", ovs_openflowd_exit, &exiting);
 
     VLOG_INFO("Open vSwitch version %s", VERSION BUILDNR);
     VLOG_INFO("OpenFlow protocol version 0x%02x", OFP_VERSION);
@@ -119,10 +128,19 @@ main(int argc, char *argv[])
         size_t i;
 
         SVEC_FOR_EACH (i, port, &s.ports) {
-            error = dpif_port_add(dpif, port, 0, NULL);
+            struct netdev *netdev;
+
+            error = netdev_open_default(port, &netdev);
+            if (error) {
+                ovs_fatal(error, "%s: failed to open network device", port);
+            }
+
+            error = dpif_port_add(dpif, netdev, NULL);
             if (error) {
                 ovs_fatal(error, "failed to add %s as a port", port);
             }
+
+            netdev_close(netdev);
         }
     }
 
@@ -152,7 +170,8 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    while (ofproto_is_alive(ofproto)) {
+    exiting = false;
+    while (!exiting && (s.run_forever || ofproto_is_alive(ofproto))) {
         error = ofproto_run(ofproto);
         if (error) {
             ovs_fatal(error, "unrecoverable datapath error");
@@ -165,12 +184,24 @@ main(int argc, char *argv[])
         unixctl_server_wait(unixctl);
         dp_wait();
         netdev_wait();
+        if (exiting) {
+            poll_immediate_wake();
+        }
         poll_block();
     }
 
     dpif_close(dpif);
 
     return 0;
+}
+
+static void
+ovs_openflowd_exit(struct unixctl_conn *conn, const char *args OVS_UNUSED,
+                   void *exiting_)
+{
+    bool *exiting = exiting_;
+    *exiting = true;
+    unixctl_command_reply(conn, 200, NULL);
 }
 
 /* User interface. */
@@ -200,6 +231,8 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
         OPT_IN_BAND,
         OPT_NETFLOW,
         OPT_PORTS,
+        OPT_UNIXCTL,
+        OPT_ENABLE_DUMMY,
         VLOG_OPTION_ENUMS,
         LEAK_CHECKER_OPTION_ENUMS
     };
@@ -226,6 +259,8 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
         {"in-band",     no_argument, 0, OPT_IN_BAND},
         {"netflow",     required_argument, 0, OPT_NETFLOW},
         {"ports",       required_argument, 0, OPT_PORTS},
+        {"unixctl",     required_argument, 0, OPT_UNIXCTL},
+        {"enable-dummy", no_argument, 0, OPT_ENABLE_DUMMY},
         {"verbose",     optional_argument, 0, 'v'},
         {"help",        no_argument, 0, 'h'},
         {"version",     no_argument, 0, 'V'},
@@ -252,6 +287,7 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     controller_opts.update_resolv_conf = true;
     controller_opts.rate_limit = 0;
     controller_opts.burst_limit = 0;
+    s->unixctl_path = NULL;
     s->fail_mode = OFPROTO_FAIL_STANDALONE;
     s->datapath_id = 0;
     s->mfr_desc = NULL;
@@ -390,6 +426,14 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
             svec_split(&s->ports, optarg, ",");
             break;
 
+        case OPT_UNIXCTL:
+            s->unixctl_path = optarg;
+            break;
+
+        case OPT_ENABLE_DUMMY:
+            dummy_enable();
+            break;
+
         case 'h':
             usage();
 
@@ -443,12 +487,17 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     dp_parse_name(argv[0], &s->dp_name, &s->dp_type);
 
     /* Figure out controller names. */
+    s->run_forever = false;
     if (!controllers.n) {
-        svec_add_nocopy(&controllers,
-                        xasprintf("punix:%s/%s.mgmt", ovs_rundir, s->dp_name));
+        svec_add_nocopy(&controllers, xasprintf("punix:%s/%s.mgmt",
+                                                ovs_rundir(), s->dp_name));
     }
     for (i = 1; i < argc; i++) {
-        svec_add(&controllers, argv[i]);
+        if (!strcmp(argv[i], "none")) {
+            s->run_forever = true;
+        } else {
+            svec_add(&controllers, argv[i]);
+        }
     }
     if (argc < 2) {
         svec_add(&controllers, "discover");
@@ -457,19 +506,13 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     /* Set up controllers. */
     s->n_controllers = controllers.n;
     s->controllers = xmalloc(s->n_controllers * sizeof *s->controllers);
-    if (argc > 1) {
-        size_t i;
-
-        for (i = 0; i < s->n_controllers; i++) {
-            s->controllers[i] = controller_opts;
-            s->controllers[i].target = controllers.names[i];
-        }
+    for (i = 0; i < s->n_controllers; i++) {
+        s->controllers[i] = controller_opts;
+        s->controllers[i].target = controllers.names[i];
     }
 
     /* Sanity check. */
     if (controller_opts.band == OFPROTO_OUT_OF_BAND) {
-        size_t i;
-
         for (i = 0; i < s->n_controllers; i++) {
             if (!strcmp(s->controllers[i].target, "discover")) {
                 ovs_fatal(0, "Cannot perform discovery with out-of-band "
@@ -483,8 +526,9 @@ static void
 usage(void)
 {
     printf("%s: an OpenFlow switch implementation.\n"
-           "usage: %s [OPTIONS] DATAPATH [CONTROLLER...]\n"
-           "DATAPATH is a local datapath (e.g. \"dp0\").\n"
+           "usage: %s [OPTIONS] [TYPE@]DATAPATH [CONTROLLER...]\n"
+           "where DATAPATH is a local datapath (e.g. \"dp0\")\n"
+           "optionally with an explicit TYPE (default: \"system\").\n"
            "Each CONTROLLER is an active OpenFlow connection method.  If\n"
            "none is given, ovs-openflowd performs controller discovery.\n",
            program_name, program_name);
@@ -520,6 +564,7 @@ usage(void)
     daemon_usage();
     vlog_usage();
     printf("\nOther options:\n"
+           "  --unixctl=SOCKET        override default control socket name\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
     leak_checker_usage();

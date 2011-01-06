@@ -1,0 +1,351 @@
+AT_BANNER([ovs-ofctl])
+
+AT_SETUP([ovs-ofctl parse-flows])
+AT_DATA([flows.txt], [[
+# comment
+tcp,tp_src=123,actions=flood
+in_port=LOCAL dl_vlan=9 dl_src=00:0A:E4:25:6B:B0 actions=drop
+arp,nw_src=192.168.0.1 actions=drop_spoofed_arp,NORMAL
+udp dl_vlan_pcp=7 idle_timeout=5 actions=strip_vlan output:0
+tcp,nw_src=192.168.0.3,tp_dst=80 actions=set_queue:37,output:1
+udp,nw_src=192.168.0.3,tp_dst=53 actions=pop_queue,output:1
+cookie=0x123456789abcdef hard_timeout=10 priority=60000 actions=controller
+actions=note:41.42.43,note:00.01.02.03.04.05.06.07,note
+tun_id=0x1234,cookie=0x5678,actions=flood
+actions=set_tunnel:0x1234,set_tunnel64:0x9876,set_tunnel:0x123456789
+actions=multipath(eth_src, 50, hrw, 12, 0, NXM_NX_REG0[0..3]),multipath(symmetric_l4, 1024, iter_hash, 5000, 5050, NXM_NX_REG0[0..12])
+actions=drop
+]])
+AT_CHECK([ovs-ofctl parse-flows flows.txt
+], [0], [stdout], [stderr])
+AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0], 
+[[OFPT_FLOW_MOD: ADD tcp,tp_src=123 actions=FLOOD
+OFPT_FLOW_MOD: ADD in_port=65534,dl_vlan=9,dl_src=00:0a:e4:25:6b:b0 actions=drop
+OFPT_FLOW_MOD: ADD arp,nw_src=192.168.0.1 actions=drop_spoofed_arp,NORMAL
+OFPT_FLOW_MOD: ADD udp,dl_vlan_pcp=7 idle:5 actions=strip_vlan,output:0
+OFPT_FLOW_MOD: ADD tcp,nw_src=192.168.0.3,tp_dst=80 actions=set_queue:37,output:1
+OFPT_FLOW_MOD: ADD udp,nw_src=192.168.0.3,tp_dst=53 actions=pop_queue,output:1
+OFPT_FLOW_MOD: ADD priority=60000 cookie:0x123456789abcdef hard:10 actions=CONTROLLER:65535
+OFPT_FLOW_MOD: ADD actions=note:41.42.43.00.00.00,note:00.01.02.03.04.05.06.07.00.00.00.00.00.00,note:00.00.00.00.00.00
+NXT_TUN_ID_FROM_COOKIE: set=1
+OFPT_FLOW_MOD: ADD cookie:0x123400005678 actions=FLOOD
+OFPT_FLOW_MOD: ADD actions=set_tunnel:0x1234,set_tunnel64:0x9876,set_tunnel64:0x123456789
+OFPT_FLOW_MOD: ADD actions=multipath(eth_src,50,hrw,12,0,NXM_NX_REG0[0..3]),multipath(symmetric_l4,1024,iter_hash,5000,5050,NXM_NX_REG0[0..12])
+OFPT_FLOW_MOD: ADD actions=drop
+]])
+AT_CHECK([sed 's/.*|//' stderr], [0], [dnl
+normalization changed ofp_match, details:
+ pre: wildcards=  0x3820f8  in_port=65534  dl_src=00:0a:e4:25:6b:b0  dl_dst=00:00:00:00:00:00  dl_vlan=    9  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+post: wildcards=  0x3ffff8  in_port=65534  dl_src=00:0a:e4:25:6b:b0  dl_dst=00:00:00:00:00:00  dl_vlan=    9  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+normalization changed ofp_match, details:
+ pre: wildcards=  0x3820ff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+post: wildcards=  0x3fffff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+normalization changed ofp_match, details:
+ pre: wildcards=  0x3820ff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+post: wildcards=  0x3fffff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+normalization changed ofp_match, details:
+ pre: wildcards=  0x3820ff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+post: wildcards=  0x3fffff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+normalization changed ofp_match, details:
+ pre: wildcards= 0x23820ff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+post: wildcards= 0x23fffff  in_port=65534  dl_src=00:00:00:00:00:00  dl_dst=00:00:00:00:00:00  dl_vlan=    0  dl_vlan_pcp=  0  dl_type=     0  nw_tos=   0  nw_proto=   0  nw_src=         0  nw_dst=         0  tp_src=    0  tp_dst=    0
+])
+AT_CLEANUP
+
+AT_SETUP([ovs-ofctl -F nxm parse-flows])
+AT_DATA([flows.txt], [
+# comment
+tcp,tp_src=123,actions=flood
+in_port=LOCAL dl_vlan=9 dl_src=00:0A:E4:25:6B:B0 actions=drop
+arp,nw_src=192.168.0.1 actions=drop_spoofed_arp,NORMAL
+udp dl_vlan_pcp=7 idle_timeout=5 actions=strip_vlan output:0
+tcp,nw_src=192.168.0.3,tp_dst=80 actions=set_queue:37,output:1
+udp,nw_src=192.168.0.3,tp_dst=53 actions=pop_queue,output:1
+cookie=0x123456789abcdef hard_timeout=10 priority=60000 actions=controller
+actions=note:41.42.43,note:00.01.02.03.04.05.06.07,note
+tun_id=0x1234,cookie=0x5678,actions=flood
+actions=drop
+])
+AT_CHECK([ovs-ofctl -F nxm parse-flows flows.txt], [0], [stdout])
+AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0], [dnl
+NXT_FLOW_MOD: ADD tcp,tp_src=123 actions=FLOOD
+NXT_FLOW_MOD: ADD in_port=65534,dl_vlan=9,dl_src=00:0a:e4:25:6b:b0 actions=drop
+NXT_FLOW_MOD: ADD arp,nw_src=192.168.0.1 actions=drop_spoofed_arp,NORMAL
+NXT_FLOW_MOD: ADD udp,dl_vlan_pcp=7 idle:5 actions=strip_vlan,output:0
+NXT_FLOW_MOD: ADD tcp,nw_src=192.168.0.3,tp_dst=80 actions=set_queue:37,output:1
+NXT_FLOW_MOD: ADD udp,nw_src=192.168.0.3,tp_dst=53 actions=pop_queue,output:1
+NXT_FLOW_MOD: ADD priority=60000 cookie:0x123456789abcdef hard:10 actions=CONTROLLER:65535
+NXT_FLOW_MOD: ADD actions=note:41.42.43.00.00.00,note:00.01.02.03.04.05.06.07.00.00.00.00.00.00,note:00.00.00.00.00.00
+NXT_FLOW_MOD: ADD tun_id=0x1234 cookie:0x5678 actions=FLOOD
+NXT_FLOW_MOD: ADD actions=drop
+])
+AT_CLEANUP
+
+AT_SETUP([ovs-ofctl -F nxm -mmm parse-flows])
+AT_DATA([flows.txt], [[
+# comment
+tcp,tp_src=123,actions=flood
+in_port=LOCAL dl_vlan=9 dl_src=00:0A:E4:25:6B:B0 actions=drop
+arp,nw_src=192.168.0.1 actions=drop_spoofed_arp,NORMAL
+udp dl_vlan_pcp=7 idle_timeout=5 actions=strip_vlan output:0
+tcp,nw_src=192.168.0.3,tp_dst=80 actions=set_queue:37,output:1
+udp,nw_src=192.168.0.3,tp_dst=53 actions=pop_queue,output:1
+cookie=0x123456789abcdef hard_timeout=10 priority=60000 actions=controller
+actions=note:41.42.43,note:00.01.02.03.04.05.06.07,note
+tun_id=0x1234,cookie=0x5678,actions=flood
+actions=drop
+reg0=123,actions=move:NXM_NX_REG0[0..5]->NXM_NX_REG1[26..31],load:55->NXM_NX_REG2[0..31],move:NXM_NX_REG0[0..31]->NXM_NX_TUN_ID[0..31],move:NXM_NX_REG0[0..15]->NXM_OF_VLAN_TCI[]
+]])
+AT_CHECK([ovs-ofctl -F nxm -mmm parse-flows flows.txt], [0], [stdout])
+AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0],
+[[NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(06), NXM_OF_TCP_SRC(007b) actions=FLOOD
+NXT_FLOW_MOD: ADD NXM_OF_IN_PORT(fffe), NXM_OF_ETH_SRC(000ae4256bb0), NXM_OF_VLAN_TCI_W(1009/1fff) actions=drop
+NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_SPA(c0a80001) actions=drop_spoofed_arp,NORMAL
+NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0800), NXM_OF_VLAN_TCI_W(f000/f000), NXM_OF_IP_PROTO(11) idle:5 actions=strip_vlan,output:0
+NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0800), NXM_OF_IP_SRC(c0a80003), NXM_OF_IP_PROTO(06), NXM_OF_TCP_DST(0050) actions=set_queue:37,output:1
+NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0800), NXM_OF_IP_SRC(c0a80003), NXM_OF_IP_PROTO(11), NXM_OF_UDP_DST(0035) actions=pop_queue,output:1
+NXT_FLOW_MOD: ADD <any> cookie:0x123456789abcdef hard:10 pri:60000 actions=CONTROLLER:65535
+NXT_FLOW_MOD: ADD <any> actions=note:41.42.43.00.00.00,note:00.01.02.03.04.05.06.07.00.00.00.00.00.00,note:00.00.00.00.00.00
+NXT_FLOW_MOD: ADD NXM_NX_TUN_ID(0000000000001234) cookie:0x5678 actions=FLOOD
+NXT_FLOW_MOD: ADD <any> actions=drop
+NXT_FLOW_MOD: ADD NXM_NX_REG0(0000007b) actions=move:NXM_NX_REG0[0..5]->NXM_NX_REG1[26..31],load:55->NXM_NX_REG2[],move:NXM_NX_REG0[]->NXM_NX_TUN_ID[0..31],move:NXM_NX_REG0[0..15]->NXM_OF_VLAN_TCI[]
+]])
+AT_CLEANUP
+
+AT_SETUP([ovs-ofctl parse-nx-match])
+AT_KEYWORDS([nx-match])
+AT_DATA([nx-match.txt], [dnl
+<any>
+
+# in port
+NXM_OF_IN_PORT(0000)
+NXM_OF_IN_PORT(fffe)
+
+# eth dst
+NXM_OF_ETH_DST(0002e30f80a4)
+NXM_OF_ETH_DST_W(010000000000/010000000000)
+NXM_OF_ETH_DST_W(000000000000/010000000000)
+NXM_OF_ETH_DST_W(ffffffffffff/010000000000)
+NXM_OF_ETH_DST_W(0002e30f80a4/ffffffffffff)
+NXM_OF_ETH_DST_W(0002e30f80a4/feffffffffff)
+
+# eth src
+NXM_OF_ETH_SRC(020898456ddb)
+
+# eth type
+NXM_OF_ETH_TYPE(0800)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IN_PORT(0012)
+
+# vlan tci
+NXM_OF_VLAN_TCI(f009)
+NXM_OF_VLAN_TCI(f009) NXM_OF_VLAN_TCI(f009)
+NXM_OF_VLAN_TCI(0000)           # Packets without 802.1Q header.
+NXM_OF_VLAN_TCI(3123)           # Packets with VID=123, PCP=1.
+NXM_OF_VLAN_TCI(0123)           # Does not make sense (but supported anyway)
+NXM_OF_VLAN_TCI_W(1123/1fff)    # Packets with VID=123, any PCP.
+NXM_OF_VLAN_TCI_W(f000/f000)    # Packets with any VID, PCP=7.
+NXM_OF_VLAN_TCI_W(0000/e000)    # No 802.1Q or with VID=0
+
+# IP TOS
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_TOS(f0)
+NXM_OF_IP_TOS(f0)
+
+# IP protocol
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(01)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(05)
+NXM_OF_IP_PROTO(05)
+
+# IP source
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_SRC(ac100014)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_SRC_W(C0a80000/FFFF0000)
+NXM_OF_ETH_TYPE(0806) NXM_OF_IP_SRC(ac100014)
+NXM_OF_IP_SRC_W(C0D80000/FFFF0000)
+
+# IP destination
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_DST(ac100014)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_DST_W(C0a88012/FFFF0000)
+NXM_OF_IP_DST(ac100014)
+NXM_OF_ETH_TYPE(0806) NXM_OF_IP_DST_W(C0D80000/FFFF0000)
+
+# TCP source port
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(06) NXM_OF_TCP_SRC(4231)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(07) NXM_OF_TCP_SRC(4231)
+
+# TCP destination port
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(06) NXM_OF_TCP_DST(4231)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(07) NXM_OF_TCP_DST(4231)
+
+# UDP source port
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(11) NXM_OF_UDP_SRC(8732)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(06) NXM_OF_UDP_SRC(7823)
+
+# UDP destination port
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(11) NXM_OF_UDP_DST(1782)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(02) NXM_OF_UDP_DST(1293)
+
+# ICMP type
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(01) NXM_OF_ICMP_TYPE(12)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(00) NXM_OF_ICMP_TYPE(10)
+
+# ICMP code
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(01) NXM_OF_ICMP_CODE(12)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(00) NXM_OF_ICMP_CODE(10)
+NXM_OF_ETH_TYPE(0800) NXM_OF_ICMP_CODE(10)
+NXM_OF_ICMP_CODE(00)
+
+# ARP opcode
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_OP(0001)
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_OP(1111)
+NXM_OF_ETH_TYPE(0000) NXM_OF_ARP_OP(0001)
+NXM_OF_ARP_OP(0001)
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_OP(0001) NXM_OF_ARP_OP(0001)
+
+# ARP source
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_SPA(ac100014)
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_SPA_W(C0a81234/FFFFFF00)
+NXM_OF_ETH_TYPE(0800) NXM_OF_ARP_SPA(ac100014)
+NXM_OF_ARP_SPA_W(C0D8fedc/FFFF0000)
+
+# ARP destination
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_TPA(ac100014)
+NXM_OF_ETH_TYPE(0806) NXM_OF_ARP_TPA_W(C0a812fe/FFFFFF00)
+NXM_OF_ETH_TYPE(0800) NXM_OF_ARP_TPA(ac100014)
+NXM_OF_ARP_TPA_W(C0D80000/FFFF0000)
+
+# Tunnel ID.
+NXM_NX_TUN_ID(00000000abcdef01)
+
+# Register 0.
+NXM_NX_REG0(acebdf56)
+NXM_NX_REG0_W(a0e0d050/f0f0f0f0)
+
+# Invalid field number.
+01020304(1111/2222)
+
+# Unimplemented registers.
+#
+# This test assumes that at least two registers, but fewer than 16,
+# registers are implemented.
+00010004(12345678)
+00010108(12345678/12345678)
+00011e04(12345678)
+00011f08(12345678/12345678)
+])
+AT_CHECK([ovs-ofctl parse-nx-match < nx-match.txt], [0], [dnl
+<any>
+
+# in port
+NXM_OF_IN_PORT(fffe)
+NXM_OF_IN_PORT(fffe)
+
+# eth dst
+NXM_OF_ETH_DST(0002e30f80a4)
+NXM_OF_ETH_DST_W(010000000000/010000000000)
+NXM_OF_ETH_DST_W(000000000000/010000000000)
+NXM_OF_ETH_DST_W(010000000000/010000000000)
+NXM_OF_ETH_DST(0002e30f80a4)
+NXM_OF_ETH_DST_W(0002e30f80a4/feffffffffff)
+
+# eth src
+NXM_OF_ETH_SRC(020898456ddb)
+
+# eth type
+NXM_OF_ETH_TYPE(0800)
+NXM_OF_IN_PORT(0012), NXM_OF_ETH_TYPE(0800) 
+
+# vlan tci
+NXM_OF_VLAN_TCI(f009)
+nx_pull_match() returned error 44010105
+NXM_OF_VLAN_TCI(0000)
+NXM_OF_VLAN_TCI(3123)
+NXM_OF_VLAN_TCI(0123)
+NXM_OF_VLAN_TCI_W(1123/1fff)
+NXM_OF_VLAN_TCI_W(f000/f000)
+NXM_OF_VLAN_TCI_W(0000/e000)
+
+# IP TOS
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_TOS(f0)
+nx_pull_match() returned error 44010104
+
+# IP protocol
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(01)
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(05)
+nx_pull_match() returned error 44010104
+
+# IP source
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_SRC(ac100014)
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_SRC_W(c0a80000/ffff0000)
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+
+# IP destination
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_DST(ac100014)
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_DST_W(c0a80000/ffff0000)
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+
+# TCP source port
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(06), NXM_OF_TCP_SRC(4231)
+nx_pull_match() returned error 44010104
+
+# TCP destination port
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(06), NXM_OF_TCP_DST(4231)
+nx_pull_match() returned error 44010104
+
+# UDP source port
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(11), NXM_OF_UDP_SRC(8732)
+nx_pull_match() returned error 44010104
+
+# UDP destination port
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(11), NXM_OF_UDP_DST(1782)
+nx_pull_match() returned error 44010104
+
+# ICMP type
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(01), NXM_OF_ICMP_TYPE(12)
+nx_pull_match() returned error 44010104
+
+# ICMP code
+NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(01), NXM_OF_ICMP_CODE(12)
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+
+# ARP opcode
+NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_OP(0001)
+nx_pull_match() returned error 44010102
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010105
+
+# ARP source
+NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_SPA(ac100014)
+NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_SPA_W(c0a81200/ffffff00)
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+
+# ARP destination
+NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_TPA(ac100014)
+NXM_OF_ETH_TYPE(0806), NXM_OF_ARP_TPA_W(c0a81200/ffffff00)
+nx_pull_match() returned error 44010104
+nx_pull_match() returned error 44010104
+
+# Tunnel ID.
+NXM_NX_TUN_ID(00000000abcdef01)
+
+# Register 0.
+NXM_NX_REG0(acebdf56)
+NXM_NX_REG0_W(a0e0d050/f0f0f0f0)
+
+# Invalid field number.
+nx_pull_match() returned error 44010101
+
+# Unimplemented registers.
+#
+# This test assumes that at least two registers, but fewer than 16,
+# registers are implemented.
+NXM_NX_REG0(12345678)
+NXM_NX_REG0_W(12345678/12345678)
+nx_pull_match() returned error 44010101
+nx_pull_match() returned error 44010101
+])
+AT_CLEANUP

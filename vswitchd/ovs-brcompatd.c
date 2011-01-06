@@ -43,6 +43,7 @@
 #include "leak-checker.h"
 #include "netdev.h"
 #include "netlink.h"
+#include "netlink-socket.h"
 #include "ofpbuf.h"
 #include "openvswitch/brcompat-netlink.h"
 #include "ovsdb-idl.h"
@@ -57,7 +58,7 @@
 #include "vlog.h"
 #include "vswitchd/vswitch-idl.h"
 
-VLOG_DEFINE_THIS_MODULE(brcompatd)
+VLOG_DEFINE_THIS_MODULE(brcompatd);
 
 
 /* xxx Just hangs if datapath is rmmod/insmod.  Learn to reconnect? */
@@ -1324,7 +1325,7 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    idl = ovsdb_idl_create(remote, &ovsrec_idl_class);
+    idl = ovsdb_idl_create(remote, &ovsrec_idl_class, true);
 
     for (;;) {
         const struct ovsrec_open_vswitch *ovs;
@@ -1413,7 +1414,7 @@ parse_options(int argc, char *argv[])
     };
     char *short_options = long_options_to_short_options(long_options);
 
-    appctl_command = xasprintf("%s/ovs-appctl %%s", ovs_bindir);
+    appctl_command = xasprintf("%s/ovs-appctl %%s", ovs_bindir());
     for (;;) {
         int c;
 

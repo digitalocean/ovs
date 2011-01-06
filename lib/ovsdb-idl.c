@@ -36,7 +36,7 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(ovsdb_idl)
+VLOG_DEFINE_THIS_MODULE(ovsdb_idl);
 
 /* An arc from one idl_row to another.  When row A contains a UUID that
  * references row B, this is represented by an arc from A (the source) to B
@@ -66,7 +66,7 @@ struct ovsdb_idl {
     const struct ovsdb_idl_class *class;
     struct jsonrpc_session *session;
     struct shash table_by_name;
-    struct ovsdb_idl_table *tables;
+    struct ovsdb_idl_table *tables; /* Contains "struct ovsdb_idl_table *"s.*/
     struct json *monitor_request_id;
     unsigned int last_monitor_request_seqno;
     unsigned int change_seqno;
@@ -140,12 +140,28 @@ static bool ovsdb_idl_txn_process_reply(struct ovsdb_idl *,
  * form acceptable to jsonrpc_session_open().  The connection will maintain an
  * in-memory replica of the remote database whose schema is described by
  * 'class'.  (Ordinarily 'class' is compiled from an OVSDB schema automatically
- * by ovsdb-idlc.) */
+ * by ovsdb-idlc.)
+ *
+ * If 'monitor_everything_by_default' is true, then everything in the remote
+ * database will be replicated by default.  ovsdb_idl_omit() and
+ * ovsdb_idl_omit_alert() may be used to selectively drop some columns from
+ * monitoring.
+ *
+ * If 'monitor_everything_by_default' is false, then no columns or tables will
+ * be replicated by default.  ovsdb_idl_add_column() and ovsdb_idl_add_table()
+ * must be used to choose some columns or tables to replicate.
+ */
 struct ovsdb_idl *
-ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class)
+ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
+                 bool monitor_everything_by_default)
 {
     struct ovsdb_idl *idl;
+    uint8_t default_mode;
     size_t i;
+
+    default_mode = (monitor_everything_by_default
+                    ? OVSDB_IDL_MONITOR | OVSDB_IDL_ALERT
+                    : 0);
 
     idl = xzalloc(sizeof *idl);
     idl->class = class;
@@ -160,7 +176,8 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class)
         shash_add_assert(&idl->table_by_name, tc->name, table);
         table->class = tc;
         table->modes = xmalloc(tc->n_columns);
-        memset(table->modes, OVSDB_IDL_MODE_RW, tc->n_columns);
+        memset(table->modes, default_mode, tc->n_columns);
+        table->need_table = false;
         shash_init(&table->columns);
         for (j = 0; j < tc->n_columns; j++) {
             const struct ovsdb_idl_column *column = &tc->columns[j];
@@ -215,15 +232,13 @@ ovsdb_idl_clear(struct ovsdb_idl *idl)
         }
 
         changed = true;
-        HMAP_FOR_EACH_SAFE (row, next_row, struct ovsdb_idl_row, hmap_node,
-                            &table->rows) {
+        HMAP_FOR_EACH_SAFE (row, next_row, hmap_node, &table->rows) {
             struct ovsdb_idl_arc *arc, *next_arc;
 
             if (!ovsdb_idl_row_is_orphan(row)) {
                 ovsdb_idl_row_unparse(row);
             }
-            LIST_FOR_EACH_SAFE (arc, next_arc, struct ovsdb_idl_arc, src_node,
-                                &row->src_arcs) {
+            LIST_FOR_EACH_SAFE (arc, next_arc, src_node, &row->src_arcs) {
                 free(arc);
             }
             /* No need to do anything with dst_arcs: some node has those arcs
@@ -361,22 +376,84 @@ ovsdb_idl_force_reconnect(struct ovsdb_idl *idl)
 {
     jsonrpc_session_force_reconnect(idl->session);
 }
-
-static void
-ovsdb_idl_set_mode(struct ovsdb_idl *idl,
-                   const struct ovsdb_idl_column *column,
-                   enum ovsdb_idl_mode mode)
+
+static unsigned char *
+ovsdb_idl_get_mode(struct ovsdb_idl *idl,
+                   const struct ovsdb_idl_column *column)
 {
     size_t i;
+
+    assert(!idl->change_seqno);
 
     for (i = 0; i < idl->class->n_tables; i++) {
         const struct ovsdb_idl_table *table = &idl->tables[i];
         const struct ovsdb_idl_table_class *tc = table->class;
 
         if (column >= tc->columns && column < &tc->columns[tc->n_columns]) {
-            unsigned char *modep = &table->modes[column - tc->columns];
-            assert(*modep == OVSDB_IDL_MODE_RW || *modep == mode);
-            *modep = mode;
+            return &table->modes[column - tc->columns];
+        }
+    }
+
+    NOT_REACHED();
+}
+
+static void
+add_ref_table(struct ovsdb_idl *idl, const struct ovsdb_base_type *base)
+{
+    if (base->type == OVSDB_TYPE_UUID && base->u.uuid.refTableName) {
+        struct ovsdb_idl_table *table;
+
+        table = shash_find_data(&idl->table_by_name,
+                                base->u.uuid.refTableName);
+        if (table) {
+            table->need_table = true;
+        } else {
+            VLOG_WARN("%s IDL class missing referenced table %s",
+                      idl->class->database, base->u.uuid.refTableName);
+        }
+    }
+}
+
+/* Turns on OVSDB_IDL_MONITOR and OVSDB_IDL_ALERT for 'column' in 'idl'.  Also
+ * ensures that any tables referenced by 'column' will be replicated, even if
+ * no columns in that table are selected for replication (see
+ * ovsdb_idl_add_table() for more information).
+ *
+ * This function is only useful if 'monitor_everything_by_default' was false in
+ * the call to ovsdb_idl_create().  This function should be called between
+ * ovsdb_idl_create() and the first call to ovsdb_idl_run().
+ */
+void
+ovsdb_idl_add_column(struct ovsdb_idl *idl,
+                     const struct ovsdb_idl_column *column)
+{
+    *ovsdb_idl_get_mode(idl, column) = OVSDB_IDL_MONITOR | OVSDB_IDL_ALERT;
+    add_ref_table(idl, &column->type.key);
+    add_ref_table(idl, &column->type.value);
+}
+
+/* Ensures that the table with class 'tc' will be replicated on 'idl' even if
+ * no columns are selected for replication.  This can be useful because it
+ * allows 'idl' to keep track of what rows in the table actually exist, which
+ * in turn allows columns that reference the table to have accurate contents.
+ * (The IDL presents the database with references to rows that do not exist
+ * removed.)
+ *
+ * This function is only useful if 'monitor_everything_by_default' was false in
+ * the call to ovsdb_idl_create().  This function should be called between
+ * ovsdb_idl_create() and the first call to ovsdb_idl_run().
+ */
+void
+ovsdb_idl_add_table(struct ovsdb_idl *idl,
+                    const struct ovsdb_idl_table_class *tc)
+{
+    size_t i;
+
+    for (i = 0; i < idl->class->n_tables; i++) {
+        struct ovsdb_idl_table *table = &idl->tables[i];
+
+        if (table->class == tc) {
+            table->need_table = true;
             return;
         }
     }
@@ -384,41 +461,28 @@ ovsdb_idl_set_mode(struct ovsdb_idl *idl,
     NOT_REACHED();
 }
 
-/* By default, 'idl' replicates all of the columns in the remote database, and
- * ovsdb_idl_run() returns true upon a change to any column in the database.
- * Call this function to avoid alerting ovsdb_idl_run()'s caller upon changes
- * to 'column'.
+/* Turns off OVSDB_IDL_ALERT for 'column' in 'idl'.
  *
- * This is useful for columns that a client treats as "write-only", that is, it
- * updates them but doesn't want to get alerted about its own updates.  It also
- * won't be alerted about other clients' updates, so this is suitable only for
- * use by a client that "owns" a particular column.
- *
- * The client must be careful not to retain pointers to data in 'column' across
- * calls to ovsdb_idl_run(), even when that function returns false, because
- * the client is not alerted to changes.
- *
- * This function should be called after ovsdb_idl_create(), but before the
- * first call to ovsdb_idl_run().  For any given column, this function may be
- * called or ovsdb_idl_omit() may be called, but not both. */
+ * This function should be called between ovsdb_idl_create() and the first call
+ * to ovsdb_idl_run().
+ */
 void
-ovsdb_idl_set_write_only(struct ovsdb_idl *idl,
-                         const struct ovsdb_idl_column *column)
+ovsdb_idl_omit_alert(struct ovsdb_idl *idl,
+                     const struct ovsdb_idl_column *column)
 {
-    ovsdb_idl_set_mode(idl, column, OVSDB_IDL_MODE_WO);
+    *ovsdb_idl_get_mode(idl, column) &= ~OVSDB_IDL_ALERT;
 }
 
-/* By default, 'idl' replicates all of the columns in the remote database.
- * Call this function to omit replicating 'column'.  This saves CPU time and
- * bandwidth to the database.
+/* Sets the mode for 'column' in 'idl' to 0.  See the big comment above
+ * OVSDB_IDL_MONITOR for details.
  *
- * This function should be called after ovsdb_idl_create(), but before the
- * first call to ovsdb_idl_run().  For any given column, this function may be
- * called or ovsdb_idl_set_write_only() may be called, but not both. */
+ * This function should be called between ovsdb_idl_create() and the first call
+ * to ovsdb_idl_run().
+ */
 void
 ovsdb_idl_omit(struct ovsdb_idl *idl, const struct ovsdb_idl_column *column)
 {
-    ovsdb_idl_set_mode(idl, column, OVSDB_IDL_MODE_NONE);
+    *ovsdb_idl_get_mode(idl, column) = 0;
 }
 
 static void
@@ -433,18 +497,24 @@ ovsdb_idl_send_monitor_request(struct ovsdb_idl *idl)
         const struct ovsdb_idl_table *table = &idl->tables[i];
         const struct ovsdb_idl_table_class *tc = table->class;
         struct json *monitor_request, *columns;
-        size_t i;
+        size_t j;
 
-        monitor_request = json_object_create();
-        columns = json_array_create_empty();
-        for (i = 0; i < tc->n_columns; i++) {
-            const struct ovsdb_idl_column *column = &tc->columns[i];
-            if (table->modes[i] != OVSDB_IDL_MODE_NONE) {
+        columns = table->need_table ? json_array_create_empty() : NULL;
+        for (j = 0; j < tc->n_columns; j++) {
+            const struct ovsdb_idl_column *column = &tc->columns[j];
+            if (table->modes[j] & OVSDB_IDL_MONITOR) {
+                if (!columns) {
+                    columns = json_array_create_empty();
+                }
                 json_array_add(columns, json_string_create(column->name));
             }
         }
-        json_object_put(monitor_request, "columns", columns);
-        json_object_put(monitor_requests, tc->name, monitor_request);
+
+        if (columns) {
+            monitor_request = json_object_create();
+            json_object_put(monitor_request, "columns", columns);
+            json_object_put(monitor_requests, tc->name, monitor_request);
+        }
     }
 
     json_destroy(idl->monitor_request_id);
@@ -553,8 +623,7 @@ ovsdb_idl_get_row(struct ovsdb_idl_table *table, const struct uuid *uuid)
 {
     struct ovsdb_idl_row *row;
 
-    HMAP_FOR_EACH_WITH_HASH (row, struct ovsdb_idl_row, hmap_node,
-                             uuid_hash(uuid), &table->rows) {
+    HMAP_FOR_EACH_WITH_HASH (row, hmap_node, uuid_hash(uuid), &table->rows) {
         if (uuid_equals(&row->uuid, uuid)) {
             return row;
         }
@@ -645,7 +714,7 @@ ovsdb_idl_row_update(struct ovsdb_idl_row *row, const struct json *row_json)
 
             if (!ovsdb_datum_equals(old, &datum, &column->type)) {
                 ovsdb_datum_swap(old, &datum);
-                if (table->modes[column_idx] == OVSDB_IDL_MODE_RW) {
+                if (table->modes[column_idx] & OVSDB_IDL_ALERT) {
                     changed = true;
                 }
             } else {
@@ -771,8 +840,7 @@ ovsdb_idl_row_clear_arcs(struct ovsdb_idl_row *row, bool destroy_dsts)
 
     /* Delete all forward arcs.  If 'destroy_dsts', destroy any orphaned rows
      * that this causes to be unreferenced. */
-    LIST_FOR_EACH_SAFE (arc, next, struct ovsdb_idl_arc, src_node,
-                        &row->src_arcs) {
+    LIST_FOR_EACH_SAFE (arc, next, src_node, &row->src_arcs) {
         list_remove(&arc->dst_node);
         if (destroy_dsts
             && ovsdb_idl_row_is_orphan(arc->dst)
@@ -800,8 +868,7 @@ ovsdb_idl_row_reparse_backrefs(struct ovsdb_idl_row *row)
      * (If duplicate arcs were possible then we would need to make sure that
      * 'next' didn't also point into 'arc''s destination, but we forbid
      * duplicate arcs.) */
-    LIST_FOR_EACH_SAFE (arc, next, struct ovsdb_idl_arc, dst_node,
-                        &row->dst_arcs) {
+    LIST_FOR_EACH_SAFE (arc, next, dst_node, &row->dst_arcs) {
         struct ovsdb_idl_row *ref = arc->src;
 
         ovsdb_idl_row_unparse(ref);
@@ -1145,8 +1212,7 @@ ovsdb_idl_txn_destroy(struct ovsdb_idl_txn *txn)
     free(txn->inc_table);
     free(txn->inc_column);
     json_destroy(txn->inc_where);
-    HMAP_FOR_EACH_SAFE (insert, next, struct ovsdb_idl_txn_insert, hmap_node,
-                        &txn->inserted_rows) {
+    HMAP_FOR_EACH_SAFE (insert, next, hmap_node, &txn->inserted_rows) {
         free(insert);
     }
     hmap_destroy(&txn->inserted_rows);
@@ -1196,8 +1262,7 @@ ovsdb_idl_txn_get_row(const struct ovsdb_idl_txn *txn, const struct uuid *uuid)
 {
     const struct ovsdb_idl_row *row;
 
-    HMAP_FOR_EACH_WITH_HASH (row, struct ovsdb_idl_row, txn_node,
-                             uuid_hash(uuid), &txn->txn_rows) {
+    HMAP_FOR_EACH_WITH_HASH (row, txn_node, uuid_hash(uuid), &txn->txn_rows) {
         if (uuid_equals(&row->uuid, uuid)) {
             return row;
         }
@@ -1255,8 +1320,7 @@ ovsdb_idl_txn_disassemble(struct ovsdb_idl_txn *txn)
      * transaction and fail to update the graph.  */
     txn->idl->txn = NULL;
 
-    HMAP_FOR_EACH_SAFE (row, next, struct ovsdb_idl_row, txn_node,
-                        &txn->txn_rows) {
+    HMAP_FOR_EACH_SAFE (row, next, txn_node, &txn->txn_rows) {
         if (row->old) {
             if (row->written) {
                 ovsdb_idl_row_unparse(row);
@@ -1300,7 +1364,7 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
         json_string_create(txn->idl->class->database));
 
     /* Add prerequisites and declarations of new rows. */
-    HMAP_FOR_EACH (row, struct ovsdb_idl_row, txn_node, &txn->txn_rows) {
+    HMAP_FOR_EACH (row, txn_node, &txn->txn_rows) {
         /* XXX check that deleted rows exist even if no prereqs? */
         if (row->prereqs) {
             const struct ovsdb_idl_table_class *class = row->table->class;
@@ -1332,7 +1396,7 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
 
     /* Add updates. */
     any_updates = false;
-    HMAP_FOR_EACH (row, struct ovsdb_idl_row, txn_node, &txn->txn_rows) {
+    HMAP_FOR_EACH (row, txn_node, &txn->txn_rows) {
         const struct ovsdb_idl_table_class *class = row->table->class;
 
         if (row->old == row->new) {
@@ -1530,7 +1594,7 @@ ovsdb_idl_txn_get_insert_uuid(const struct ovsdb_idl_txn *txn,
     const struct ovsdb_idl_txn_insert *insert;
 
     assert(txn->status == TXN_SUCCESS || txn->status == TXN_UNCHANGED);
-    HMAP_FOR_EACH_IN_BUCKET (insert, struct ovsdb_idl_txn_insert, hmap_node,
+    HMAP_FOR_EACH_IN_BUCKET (insert, hmap_node,
                              uuid_hash(uuid), &txn->inserted_rows) {
         if (uuid_equals(uuid, &insert->dummy)) {
             return &insert->real;
@@ -1547,6 +1611,19 @@ ovsdb_idl_txn_complete(struct ovsdb_idl_txn *txn,
     hmap_remove(&txn->idl->outstanding_txns, &txn->hmap_node);
 }
 
+/* Writes 'datum' to the specified 'column' in 'row_'.  Updates both 'row_'
+ * itself and the structs derived from it (e.g. the "struct ovsrec_*", for
+ * ovs-vswitchd).
+ *
+ * 'datum' must have the correct type for its column.  The IDL does not check
+ * that it meets schema constraints, but ovsdb-server will do so at commit time
+ * so it had better be correct.
+ *
+ * A transaction must be in progress.  Replication of 'column' must not have
+ * been disabled (by calling ovsdb_idl_omit()).
+ *
+ * Usually this function is used indirectly through one of the "set" functions
+ * generated by ovsdb-idlc. */
 void
 ovsdb_idl_txn_write(const struct ovsdb_idl_row *row_,
                     const struct ovsdb_idl_column *column,
@@ -1558,7 +1635,8 @@ ovsdb_idl_txn_write(const struct ovsdb_idl_row *row_,
 
     assert(row->new != NULL);
     assert(column_idx < class->n_columns);
-    assert(row->table->modes[column_idx] != OVSDB_IDL_MODE_NONE);
+    assert(row->old == NULL ||
+           row->table->modes[column_idx] & OVSDB_IDL_MONITOR);
 
     if (hmap_node_is_null(&row->txn_node)) {
         hmap_insert(&row->table->idl->txn->txn_rows, &row->txn_node,
@@ -1580,6 +1658,32 @@ ovsdb_idl_txn_write(const struct ovsdb_idl_row *row_,
     (column->parse)(row, &row->new[column_idx]);
 }
 
+/* Causes the original contents of 'column' in 'row_' to be verified as a
+ * prerequisite to completing the transaction.  That is, if 'column' in 'row_'
+ * changed (or if 'row_' was deleted) between the time that the IDL originally
+ * read its contents and the time that the transaction commits, then the
+ * transaction aborts and ovsdb_idl_txn_commit() returns TXN_TRY_AGAIN.
+ *
+ * The intention is that, to ensure that no transaction commits based on dirty
+ * reads, an application should call ovsdb_idl_txn_verify() on each data item
+ * read as part of a read-modify-write operation.
+ *
+ * In some cases ovsdb_idl_txn_verify() reduces to a no-op, because the current
+ * value of 'column' is already known:
+ *
+ *   - If 'row_' is a row created by the current transaction (returned by
+ *     ovsdb_idl_txn_insert()).
+ *
+ *   - If 'column' has already been modified (with ovsdb_idl_txn_write())
+ *     within the current transaction.
+ *
+ * Because of the latter property, always call ovsdb_idl_txn_verify() *before*
+ * ovsdb_idl_txn_write() for a given read-modify-write.
+ *
+ * A transaction must be in progress.
+ *
+ * Usually this function is used indirectly through one of the "verify"
+ * functions generated by ovsdb-idlc. */
 void
 ovsdb_idl_txn_verify(const struct ovsdb_idl_row *row_,
                      const struct ovsdb_idl_column *column)
@@ -1589,6 +1693,8 @@ ovsdb_idl_txn_verify(const struct ovsdb_idl_row *row_,
     size_t column_idx = column - class->columns;
 
     assert(row->new != NULL);
+    assert(row->old == NULL ||
+           row->table->modes[column_idx] & OVSDB_IDL_MONITOR);
     if (!row->old
         || (row->written && bitmap_is_set(row->written, column_idx))) {
         return;
@@ -1604,6 +1710,13 @@ ovsdb_idl_txn_verify(const struct ovsdb_idl_row *row_,
     bitmap_set1(row->prereqs, column_idx);
 }
 
+/* Deletes 'row_' from its table.  May free 'row_', so it must not be
+ * accessed afterward.
+ *
+ * A transaction must be in progress.
+ *
+ * Usually this function is used indirectly through one of the "delete"
+ * functions generated by ovsdb-idlc. */
 void
 ovsdb_idl_txn_delete(const struct ovsdb_idl_row *row_)
 {
@@ -1627,6 +1740,18 @@ ovsdb_idl_txn_delete(const struct ovsdb_idl_row *row_)
     row->new = NULL;
 }
 
+/* Inserts and returns a new row in the table with the specified 'class' in the
+ * database with open transaction 'txn'.
+ *
+ * The new row is assigned a provisional UUID.  If 'uuid' is null then one is
+ * randomly generated; otherwise 'uuid' should specify a randomly generated
+ * UUID not otherwise in use.  ovsdb-server will assign a different UUID when
+ * 'txn' is committed, but the IDL will replace any uses of the provisional
+ * UUID in the data to be to be committed by the UUID assigned by
+ * ovsdb-server.
+ *
+ * Usually this function is used indirectly through one of the "insert"
+ * functions generated by ovsdb-idlc. */
 const struct ovsdb_idl_row *
 ovsdb_idl_txn_insert(struct ovsdb_idl_txn *txn,
                      const struct ovsdb_idl_table_class *class,
@@ -1653,8 +1778,7 @@ ovsdb_idl_txn_abort_all(struct ovsdb_idl *idl)
 {
     struct ovsdb_idl_txn *txn;
 
-    HMAP_FOR_EACH (txn, struct ovsdb_idl_txn, hmap_node,
-                   &idl->outstanding_txns) {
+    HMAP_FOR_EACH (txn, hmap_node, &idl->outstanding_txns) {
         ovsdb_idl_txn_complete(txn, TXN_TRY_AGAIN);
     }
 }
@@ -1664,7 +1788,7 @@ ovsdb_idl_txn_find(struct ovsdb_idl *idl, const struct json *id)
 {
     struct ovsdb_idl_txn *txn;
 
-    HMAP_FOR_EACH_WITH_HASH (txn, struct ovsdb_idl_txn, hmap_node,
+    HMAP_FOR_EACH_WITH_HASH (txn, hmap_node,
                              json_hash(id, 0), &idl->outstanding_txns) {
         if (json_equal(id, txn->request_id)) {
             return txn;
@@ -1844,8 +1968,7 @@ ovsdb_idl_txn_process_reply(struct ovsdb_idl *idl,
                 hard_errors++;
             }
 
-            HMAP_FOR_EACH (insert, struct ovsdb_idl_txn_insert, hmap_node,
-                           &txn->inserted_rows) {
+            HMAP_FOR_EACH (insert, hmap_node, &txn->inserted_rows) {
                 if (!ovsdb_idl_txn_process_insert_reply(insert, ops)) {
                     hard_errors++;
                 }

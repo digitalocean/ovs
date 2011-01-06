@@ -209,22 +209,26 @@ AUTOMAKE_OPTIONS = -Wno-portability
 both_modules = openvswitch brcompat
 build_modules = $(both_modules)	# Modules to build
 dist_modules = $(both_modules)	# Modules to distribute
-openvswitch_sources = actions.c datapath.c dp_notify.c dp_sysfs_dp.c \
-	dp_sysfs_if.c flow.c table.c tunnel.c vport.c vport-capwap.c \
-	vport-generic.c vport-gre.c vport-internal_dev.c \
-	vport-netdev.c vport-patch.c \
+openvswitch_sources = actions.c checksum.c datapath.c dp_notify.c \
+	dp_sysfs_dp.c dp_sysfs_if.c flow.c loop_counter.c table.c \
+	tunnel.c vport.c vport-capwap.c vport-generic.c vport-gre.c \
+	vport-internal_dev.c vport-netdev.c vport-patch.c \
 	linux-2.6/compat-2.6/addrconf_core-openvswitch.c \
 	linux-2.6/compat-2.6/dev-openvswitch.c \
 	linux-2.6/compat-2.6/genetlink-openvswitch.c \
 	linux-2.6/compat-2.6/ip_output-openvswitch.c \
-	linux-2.6/compat-2.6/kmemdup.c linux-2.6/compat-2.6/random32.c \
+	linux-2.6/compat-2.6/kmemdup.c \
+	linux-2.6/compat-2.6/netdevice.c \
 	linux-2.6/compat-2.6/skbuff-openvswitch.c \
 	linux-2.6/compat-2.6/time.c
-openvswitch_headers = actions.h compat.h datapath.h dp_sysfs.h flow.h \
-	odp-compat.h table.h tunnel.h vport.h vport-generic.h \
-	vport-internal_dev.h vport-netdev.h \
+openvswitch_headers = actions.h checksum.h compat.h datapath.h \
+	dp_sysfs.h flow.h loop_counter.h odp-compat.h table.h tunnel.h \
+	vport.h vport-generic.h vport-internal_dev.h vport-netdev.h \
 	linux-2.6/compat-2.6/compat26.h \
 	linux-2.6/compat-2.6/include/asm-generic/bug.h \
+	linux-2.6/compat-2.6/include/linux/bottom_half.h \
+	linux-2.6/compat-2.6/include/linux/compiler.h \
+	linux-2.6/compat-2.6/include/linux/compiler-gcc.h \
 	linux-2.6/compat-2.6/include/linux/cpumask.h \
 	linux-2.6/compat-2.6/include/linux/dmi.h \
 	linux-2.6/compat-2.6/include/linux/err.h \
@@ -247,7 +251,6 @@ openvswitch_headers = actions.h compat.h datapath.h dp_sysfs.h flow.h \
 	linux-2.6/compat-2.6/include/linux/netfilter_bridge.h \
 	linux-2.6/compat-2.6/include/linux/netfilter_ipv4.h \
 	linux-2.6/compat-2.6/include/linux/netlink.h \
-	linux-2.6/compat-2.6/include/linux/random.h \
 	linux-2.6/compat-2.6/include/linux/rculist.h \
 	linux-2.6/compat-2.6/include/linux/rtnetlink.h \
 	linux-2.6/compat-2.6/include/linux/skbuff.h \
@@ -263,6 +266,7 @@ openvswitch_headers = actions.h compat.h datapath.h dp_sysfs.h flow.h \
 	linux-2.6/compat-2.6/include/net/genetlink.h \
 	linux-2.6/compat-2.6/include/net/ip.h \
 	linux-2.6/compat-2.6/include/net/netlink.h \
+	linux-2.6/compat-2.6/include/net/protocol.h \
 	linux-2.6/compat-2.6/include/net/route.h
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
 dist_headers = $(foreach module,$(dist_modules),$($(module)_headers))
@@ -278,6 +282,7 @@ brcompat_sources = \
 brcompat_headers = \
 	brc_procfs.h
 
+CLEANFILES = distfiles
 all: all-recursive
 
 .SUFFIXES:
@@ -527,6 +532,7 @@ install-strip:
 mostlyclean-generic:
 
 clean-generic:
+	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 
 distclean-generic:
 	-test -z "$(CONFIG_CLEAN_FILES)" || rm -f $(CONFIG_CLEAN_FILES)
@@ -617,6 +623,15 @@ uninstall-am:
 	mostlyclean mostlyclean-generic pdf pdf-am ps ps-am tags \
 	tags-recursive uninstall uninstall-am
 
+
+# The following is based on commands for the Automake "distdir" target.
+distfiles: Makefile
+	@srcdirstrip=`echo "$(srcdir)" | sed 's/[].[^$$\\*]/\\\\&/g'`; \
+	topsrcdirstrip=`echo "$(top_srcdir)" | sed 's/[].[^$$\\*]/\\\\&/g'`; \
+	list='$(DISTFILES)'; \
+	for file in $$list; do echo $$file; done | \
+	  sed -e "s|^$$srcdirstrip/||;t" \
+	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | sort -u > $@
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

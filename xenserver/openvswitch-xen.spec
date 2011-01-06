@@ -73,8 +73,8 @@ install -m 644 xenserver/opt_xensource_libexec_InterfaceReconfigureVswitch.py \
              $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/InterfaceReconfigureVswitch.py
 install -m 755 xenserver/etc_xensource_scripts_vif \
              $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/vif
-install -m 755 xenserver/usr_share_openvswitch_scripts_monitor-external-ids \
-               $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/monitor-external-ids
+install -m 755 xenserver/usr_share_openvswitch_scripts_ovs-external-ids \
+               $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/ovs-external-ids
 install -m 755 xenserver/usr_share_openvswitch_scripts_refresh-xs-network-uuids \
                $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/refresh-xs-network-uuids
 install -m 755 xenserver/usr_sbin_xen-bugtool \
@@ -392,7 +392,7 @@ fi
 /usr/share/openvswitch/python/ovs/timeval.py
 /usr/share/openvswitch/python/ovs/util.py
 /usr/share/openvswitch/python/uuid.py
-/usr/share/openvswitch/scripts/monitor-external-ids
+/usr/share/openvswitch/scripts/ovs-external-ids
 /usr/share/openvswitch/scripts/refresh-xs-network-uuids
 /usr/share/openvswitch/scripts/interface-reconfigure
 /usr/share/openvswitch/scripts/InterfaceReconfigure.py
@@ -409,6 +409,9 @@ fi
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
 /usr/bin/ovs-ofctl
+/usr/bin/ovs-pcap
+/usr/bin/ovs-tcpundump
+/usr/bin/ovs-vlan-test
 /usr/bin/ovs-vsctl
 /usr/bin/ovsdb-client
 /usr/bin/ovsdb-tool
@@ -422,6 +425,9 @@ fi
 /usr/share/man/man8/ovs-dpctl.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
 /usr/share/man/man8/ovs-parse-leaks.8.gz
+/usr/share/man/man1/ovs-pcap.1.gz
+/usr/share/man/man1/ovs-tcpundump.1.gz
+/usr/share/man/man8/ovs-vlan-test.8.gz
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
 /var/lib/openvswitch

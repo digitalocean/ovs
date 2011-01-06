@@ -16,30 +16,6 @@
 #include <asm/pgtable.h>
 
 /**
- * struct tbl - hash table
- * @n_buckets: number of buckets (a power of 2 between %TBL_L1_SIZE and
- * %TBL_MAX_BUCKETS)
- * @buckets: pointer to @n_buckets/%TBL_L1_SIZE pointers to %TBL_L1_SIZE pointers
- * to buckets
- * @rcu: RCU callback structure
- * @obj_destructor: Called on each element when the table is destroyed.
- *
- * The @buckets array is logically an array of pointers to buckets.  It is
- * broken into two levels to avoid the need to kmalloc() any object larger than
- * a single page or to use vmalloc().  @buckets is always nonnull, as is each
- * @buckets[i], but each @buckets[i][j] is nonnull only if the specified hash
- * bucket is nonempty (for 0 <= i < @n_buckets/%TBL_L1_SIZE, 0 <= j <
- * %TBL_L1_SIZE).
- */
-struct tbl {
-	struct rcu_head rcu;
-	unsigned int n_buckets;
-	struct tbl_bucket ***buckets;
-	unsigned int count;
-	void (*obj_destructor)(struct tbl_node *);
-};
-
-/**
  * struct tbl_bucket - single bucket within a hash table
  * @rcu: RCU callback structure
  * @n_objs: number of objects in @objs[] array
@@ -64,17 +40,18 @@ static struct tbl_bucket *bucket_alloc(int n_objs)
 	return kmalloc(bucket_size(n_objs), GFP_KERNEL);
 }
 
-static void free_buckets(struct tbl_bucket ***l1, unsigned int n_buckets,
+static void free_buckets(struct tbl_bucket __rcu ***l1,
+			 unsigned int n_buckets,
 			 void (*free_obj)(struct tbl_node *))
 {
 	unsigned int i;
 
-	for (i = 0; i < n_buckets >> TBL_L1_BITS; i++) {
-		struct tbl_bucket **l2 = l1[i];
+	for (i = 0; i < n_buckets >> TBL_L1_SHIFT; i++) {
+		struct tbl_bucket __rcu **l2 = l1[i];
 		unsigned int j;
 
-		for (j = 0; j < TBL_L1_SIZE; j++) {
-			struct tbl_bucket *bucket = l2[j];
+		for (j = 0; j < TBL_L2_SIZE; j++) {
+			struct tbl_bucket *bucket = (struct tbl_bucket __force *)l2[j];
 			if (!bucket)
 				continue;
 
@@ -90,19 +67,19 @@ static void free_buckets(struct tbl_bucket ***l1, unsigned int n_buckets,
 	kfree(l1);
 }
 
-static struct tbl_bucket ***alloc_buckets(unsigned int n_buckets)
+static struct tbl_bucket __rcu ***alloc_buckets(unsigned int n_buckets)
 {
-	struct tbl_bucket ***l1;
+	struct tbl_bucket __rcu ***l1;
 	unsigned int i;
 
-	l1 = kmalloc((n_buckets >> TBL_L1_BITS) * sizeof(struct tbl_bucket **),
+	l1 = kmalloc((n_buckets >> TBL_L1_SHIFT) * sizeof(struct tbl_bucket **),
 		     GFP_KERNEL);
 	if (!l1)
 		return NULL;
-	for (i = 0; i < n_buckets >> TBL_L1_BITS; i++) {
-		l1[i] = (struct tbl_bucket **)get_zeroed_page(GFP_KERNEL);
+	for (i = 0; i < n_buckets >> TBL_L1_SHIFT; i++) {
+		l1[i] = (struct tbl_bucket __rcu **)get_zeroed_page(GFP_KERNEL);
 		if (!l1[i]) {
-			free_buckets(l1, i << TBL_L1_BITS, 0);
+			free_buckets(l1, i << TBL_L1_SHIFT, NULL);
 			return NULL;
 		}
 	}
@@ -114,15 +91,12 @@ static struct tbl_bucket ***alloc_buckets(unsigned int n_buckets)
  * @n_buckets: number of buckets in the new table
  *
  * Creates and returns a new hash table, or %NULL if memory cannot be
- * allocated.  @n_buckets must be a power of 2 in the range %TBL_L1_SIZE to
+ * allocated.  @n_buckets must be a power of 2 in the range %TBL_MIN_BUCKETS to
  * %TBL_MAX_BUCKETS.
  */
 struct tbl *tbl_create(unsigned int n_buckets)
 {
 	struct tbl *table;
-
-	if (!n_buckets)
-		n_buckets = TBL_L1_SIZE;
 
 	table = kzalloc(sizeof *table, GFP_KERNEL);
 	if (!table)
@@ -185,7 +159,7 @@ void tbl_deferred_destroy(struct tbl *table, void (*destructor)(struct tbl_node 
 	call_rcu(&table->rcu, destroy_table_rcu);
 }
 
-static struct tbl_bucket **find_bucket(struct tbl *table, u32 hash)
+static struct tbl_bucket __rcu **find_bucket(struct tbl *table, u32 hash)
 {
 	unsigned int l1 = (hash & (table->n_buckets - 1)) >> TBL_L1_SHIFT;
 	unsigned int l2 = hash & ((1 << TBL_L2_BITS) - 1);
@@ -198,7 +172,7 @@ static int search_bucket(const struct tbl_bucket *bucket, void *target, u32 hash
 	int i;
 
 	for (i = 0; i < bucket->n_objs; i++) {
-		struct tbl_node *obj = rcu_dereference(bucket->objs[i]);
+		struct tbl_node *obj = bucket->objs[i];
 		if (obj->hash == hash && likely(cmp(obj, target)))
 			return i;
 	}
@@ -221,7 +195,7 @@ static int search_bucket(const struct tbl_bucket *bucket, void *target, u32 hash
 struct tbl_node *tbl_lookup(struct tbl *table, void *target, u32 hash,
 			    int (*cmp)(const struct tbl_node *, void *))
 {
-	struct tbl_bucket **bucketp = find_bucket(table, hash);
+	struct tbl_bucket __rcu **bucketp = find_bucket(table, hash);
 	struct tbl_bucket *bucket = rcu_dereference(*bucketp);
 	int index;
 
@@ -252,16 +226,23 @@ struct tbl_node *tbl_lookup(struct tbl *table, void *target, u32 hash,
 int tbl_foreach(struct tbl *table,
 		int (*callback)(struct tbl_node *, void *aux), void *aux)
 {
-	unsigned int i, j, k;
-	for (i = 0; i < table->n_buckets >> TBL_L1_BITS; i++) {
-		struct tbl_bucket **l2 = table->buckets[i];
-		for (j = 0; j < TBL_L1_SIZE; j++) {
-			struct tbl_bucket *bucket = rcu_dereference(l2[j]);
+	unsigned int n_l1 = table->n_buckets >> TBL_L1_SHIFT;
+	unsigned int l1_idx;
+
+	for (l1_idx = 0; l1_idx < n_l1; l1_idx++) {
+		struct tbl_bucket __rcu **l2 = table->buckets[l1_idx];
+		unsigned int l2_idx;
+
+		for (l2_idx = 0; l2_idx < TBL_L2_SIZE; l2_idx++) {
+			struct tbl_bucket *bucket;
+			unsigned int i;
+
+			bucket = rcu_dereference(l2[l2_idx]);
 			if (!bucket)
 				continue;
 
-			for (k = 0; k < bucket->n_objs; k++) {
-				int error = (*callback)(bucket->objs[k], aux);
+			for (i = 0; i < bucket->n_objs; i++) {
+				int error = (*callback)(bucket->objs[i], aux);
 				if (error)
 					return error;
 			}
@@ -297,7 +278,7 @@ struct tbl *tbl_expand(struct tbl *table)
 	}
 
 	err = -ENOMEM;
-	new_table = tbl_create(n_buckets);
+	new_table = tbl_create(TBL_MIN_BUCKETS);
 	if (!new_table)
 		goto error;
 
@@ -342,8 +323,8 @@ static void free_bucket_rcu(struct rcu_head *rcu)
  */
 int tbl_insert(struct tbl *table, struct tbl_node *target, u32 hash)
 {
-	struct tbl_bucket **oldp = find_bucket(table, hash);
-	struct tbl_bucket *old = *rcu_dereference(oldp);
+	struct tbl_bucket __rcu **oldp = find_bucket(table, hash);
+	struct tbl_bucket *old = rcu_dereference(*oldp);
 	unsigned int n = old ? old->n_objs : 0;
 	struct tbl_bucket *new = bucket_alloc(n + 1);
 
@@ -380,8 +361,8 @@ int tbl_insert(struct tbl *table, struct tbl_node *target, u32 hash)
  */
 int tbl_remove(struct tbl *table, struct tbl_node *target)
 {
-	struct tbl_bucket **oldp = find_bucket(table, target->hash);
-	struct tbl_bucket *old = *rcu_dereference(oldp);
+	struct tbl_bucket __rcu **oldp = find_bucket(table, target->hash);
+	struct tbl_bucket *old = rcu_dereference(*oldp);
 	unsigned int n = old->n_objs;
 	struct tbl_bucket *new;
 

@@ -4,6 +4,7 @@ The original sources for this package can be found at:
 
 Upstream Authors (from AUTHORS):
 
+  Andrew Lambeth          wal@nicira.com
   Andy Southgate          andy.southgate@citrix.com
   Ben Pfaff               blp@nicira.com
   Bryan Phillippe         bp@toroki.com
@@ -24,6 +25,7 @@ Upstream Authors (from AUTHORS):
   Neil McKee              neil.mckee@inmon.com
   Paul Fazzone            pfazzone@nicira.com
   Reid Price              reid@nicira.com
+  Romain Lenglet          romain.lenglet@berabera.info
   Simon Horman            horms@verge.net.au
   Tetsuo NAKAGAWA         nakagawa@mxc.nes.nec.co.jp
   Thomas Lacroix          thomas.lacroix@citrix.com
@@ -78,10 +80,11 @@ License:
   why the executable file might be covered by the GNU Lesser General
   Public License.
 
-* The following component is licensed under the
+* The following components are licensed under the
   GNU Lesser General Public Licence version 2.1.
 
-	xenserver/usr_sbin_xen-bugtool
+	debian/ovs-bugtool
+	xenserver/usr_sbin_xen-bugtool [*]
 
 	* This component is only distributed in the source package.
 	  It does not appear in any binary packages.

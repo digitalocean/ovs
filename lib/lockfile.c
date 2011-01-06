@@ -31,7 +31,12 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(lockfile)
+VLOG_DEFINE_THIS_MODULE(lockfile);
+
+COVERAGE_DEFINE(lockfile_lock);
+COVERAGE_DEFINE(lockfile_timeout);
+COVERAGE_DEFINE(lockfile_error);
+COVERAGE_DEFINE(lockfile_unlock);
 
 struct lockfile {
     struct hmap_node hmap_node;
@@ -151,7 +156,7 @@ lockfile_postfork(void)
 {
     struct lockfile *lockfile;
 
-    HMAP_FOR_EACH (lockfile, struct lockfile, hmap_node, &lock_table) {
+    HMAP_FOR_EACH (lockfile, hmap_node, &lock_table) {
         if (lockfile->fd >= 0) {
             VLOG_WARN("%s: child does not inherit lock", lockfile->name);
             lockfile_unhash(lockfile);
@@ -171,7 +176,7 @@ lockfile_find(dev_t device, ino_t inode)
 {
     struct lockfile *lockfile;
 
-    HMAP_FOR_EACH_WITH_HASH (lockfile, struct lockfile, hmap_node,
+    HMAP_FOR_EACH_WITH_HASH (lockfile, hmap_node,
                              lockfile_hash(device, inode), &lock_table) {
         if (lockfile->device == device && lockfile->inode == inode) {
             return lockfile;

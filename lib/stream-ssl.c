@@ -45,7 +45,10 @@
 #include "timeval.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(stream_ssl)
+VLOG_DEFINE_THIS_MODULE(stream_ssl);
+
+COVERAGE_DEFINE(ssl_session);
+COVERAGE_DEFINE(ssl_session_reused);
 
 /* Active SSL. */
 
@@ -385,7 +388,7 @@ do_ca_cert_bootstrap(struct stream *stream)
 
     file = fdopen(fd, "w");
     if (!file) {
-        int error = errno;
+        error = errno;
         VLOG_ERR("could not bootstrap CA cert: fdopen failed: %s",
                  strerror(error));
         unlink(ca_cert.file_name);
@@ -402,7 +405,7 @@ do_ca_cert_bootstrap(struct stream *stream)
     }
 
     if (fclose(file)) {
-        int error = errno;
+        error = errno;
         VLOG_ERR("could not bootstrap CA cert: writing %s failed: %s",
                  ca_cert.file_name, strerror(error));
         unlink(ca_cert.file_name);
@@ -921,7 +924,7 @@ pssl_accept(struct pstream *pstream, struct stream **new_streamp)
 
     new_fd = accept(pssl->fd, &sin, &sin_len);
     if (new_fd < 0) {
-        int error = errno;
+        error = errno;
         if (error != EAGAIN) {
             VLOG_DBG_RL(&rl, "accept: %s", strerror(error));
         }
@@ -988,7 +991,9 @@ do_ssl_init(void)
     SSL_library_init();
     SSL_load_error_strings();
 
-    method = TLSv1_method();
+    /* New OpenSSL changed TLSv1_method() to return a "const" pointer, so the
+     * cast is needed to avoid a warning with those newer versions. */
+    method = (SSL_METHOD *) TLSv1_method();
     if (method == NULL) {
         VLOG_ERR("TLSv1_method: %s", ERR_error_string(ERR_get_error(), NULL));
         return ENOPROTOOPT;
@@ -1286,7 +1291,7 @@ stream_ssl_set_ca_cert_file__(const char *file_name, bool bootstrap)
         for (i = 0; i < n_certs; i++) {
             /* SSL_CTX_add_client_CA makes a copy of the relevant data. */
             if (SSL_CTX_add_client_CA(ctx, certs[i]) != 1) {
-                VLOG_ERR("failed to add client certificate %d from %s: %s",
+                VLOG_ERR("failed to add client certificate %zu from %s: %s",
                          i, file_name,
                          ERR_error_string(ERR_get_error(), NULL));
             } else {

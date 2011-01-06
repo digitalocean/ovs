@@ -117,6 +117,12 @@ else
     monitor_opt=
 fi
 
+function hup_monitor_external_ids {
+    if [ -e /var/run/openvswitch/ovs-external-ids.pid ]; then
+        action "Configuring Open vSwitch external IDs" kill -HUP `cat /var/run/openvswitch/ovs-external-ids.pid`
+    fi
+}
+
 function dp_list {
     "$dpctl" show | grep '^dp[0-9]\+:' | cut -d':' -f 1
 }
@@ -292,10 +298,12 @@ EOF
 
 function set_system_ids {
     if [ -f /etc/xensource-inventory ]; then
+        OVS_VERSION=`ovs-vswitchd --version | sed 's/.*) //;1q'`
         action "Configuring Open vSwitch system IDs" true
-        $vsctl --no-wait set Open_vSwitch . \
-            external-ids:system-type="$PRODUCT_BRAND" \
-            external-ids:system-version="$PRODUCT_VERSION-$BUILD_NUMBER" \
+        $vsctl --no-wait --timeout=5 set Open_vSwitch . \
+            ovs-version="$OVS_VERSION" \
+            system-type="$PRODUCT_BRAND" \
+            system-version="$PRODUCT_VERSION-$BUILD_NUMBER" \
             external-ids:system-id="$INSTALLATION_UUID" \
             external-ids:xs-system-uuid="$INSTALLATION_UUID"
     else
@@ -317,6 +325,7 @@ function start {
     # Allow GRE traffic.
     iptables -I INPUT -p gre -j ACCEPT
 
+    schemaver=`$ovsdb_tool schema-version "$VSWITCHD_OVSDB_SCHEMA"`
     if [ ! -e "$OVSDB_SERVER_DB" ]; then
         warning "$OVSDB_SERVER_DB does not exist"
         install -d -m 755 -o root -g root `dirname $OVSDB_SERVER_DB`
@@ -324,16 +333,24 @@ function start {
         action "Creating empty database $OVSDB_SERVER_DB" true
         $ovsdb_tool -vANY:console:emer create "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
     else
+        # If schema version changed, then back up the old version.
+        oldver=`$ovsdb_tool db-version "$OVSDB_SERVER_DB"`
+        if test "X$oldver" != "X$schemaver"; then
+            backup=$OVSDB_SERVER_DB.backup$oldver
+            action "Backing up $OVSDB_SERVER_DB in $backup before converting from schema version \"$oldver\" to \"$schemaver\"" true
+            cp "$OVSDB_SERVER_DB" "$backup"
+        fi
+
         # Upgrade or downgrade schema and compact database.
         $ovsdb_tool -vANY:console:emer convert "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
     fi
 
     start_ovsdb_server
-    $vsctl --no-wait init
+    $vsctl --no-wait --timeout=5 init -- set Open_vSwitch . db-version="$schemaver"
     if [ ! -e /var/run/openvswitch.booted ]; then
         touch /var/run/openvswitch.booted
         for bridge in $($vsctl list-br); do
-            $vsctl --no-wait del-br $bridge
+            $vsctl --no-wait --timeout=5 del-br $bridge
         done
     fi
 
@@ -346,8 +363,8 @@ function start {
 
     # Start daemon to monitor external ids
     PYTHONPATH=/usr/share/openvswitch/python \
-               /usr/share/openvswitch/scripts/monitor-external-ids \
-               --pidfile --detach "$VSWITCHD_OVSDB_SERVER"
+               /usr/share/openvswitch/scripts/ovs-external-ids \
+               --pidfile --detach $monitor_opt "$VSWITCHD_OVSDB_SERVER"
 
     touch /var/lock/subsys/openvswitch
 }
@@ -356,8 +373,8 @@ function stop {
     stop_daemon BRCOMPATD "$brcompatd"
     stop_daemon VSWITCHD "$vswitchd"
     stop_daemon OVSDB_SERVER "$ovsdb_server"
-    if [ -e /var/run/openvswitch/monitor-external-ids.pid ]; then
-        kill `cat /var/run/openvswitch/monitor-external-ids.pid`
+    if [ -e /var/run/openvswitch/ovs-external-ids.pid ]; then
+        kill `cat /var/run/openvswitch/ovs-external-ids.pid`
     fi
     rm -f /var/lock/subsys/openvswitch
 }
@@ -380,8 +397,10 @@ case "$1" in
         restart
         ;;
     reload|force-reload)
-	# Nothing to do--ovs-vswitchd and ovsdb-server keep their configuration
-	# up-to-date all the time.
+        # Nothing to do to ovs-vswitchd and ovsdb-server as they keep their
+        # configuration up-to-date all the time.  HUP ovs-external-ids so it
+        # re-runs.
+        hup_monitor_external_ids
 	;;
     strace-vswitchd)
         shift

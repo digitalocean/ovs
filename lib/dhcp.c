@@ -26,7 +26,7 @@
 #include "ofpbuf.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(dhcp)
+VLOG_DEFINE_THIS_MODULE(dhcp);
 
 /* Information about a DHCP argument type. */
 struct arg_type {
@@ -561,8 +561,7 @@ parse_options(struct dhcp_msg *msg, const char *name, void *data, size_t size,
 {
     struct ofpbuf b;
 
-    b.data = data;
-    b.size = size;
+    ofpbuf_use_const(&b, data, size);
     for (;;) {
         uint8_t *code, *len;
         void *payload;

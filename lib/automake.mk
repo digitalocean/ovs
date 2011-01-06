@@ -14,8 +14,11 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/backtrace.h \
 	lib/bitmap.c \
 	lib/bitmap.h \
+	lib/byte-order.h \
 	lib/byteq.c \
 	lib/byteq.h \
+	lib/cfm.c \
+	lib/cfm.h \
 	lib/classifier.c \
 	lib/classifier.h \
 	lib/command-line.c \
@@ -23,11 +26,12 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/compiler.h \
 	lib/coverage.c \
 	lib/coverage.h \
-	lib/coverage-counters.h \
 	lib/csum.c \
 	lib/csum.h \
 	lib/daemon.c \
 	lib/daemon.h \
+	lib/dummy.c \
+	lib/dummy.h \
 	lib/dhcp-client.c \
 	lib/dhcp-client.h \
 	lib/dhcp.c \
@@ -64,9 +68,17 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/lockfile.h \
 	lib/mac-learning.c \
 	lib/mac-learning.h \
+	lib/multipath.c \
+	lib/multipath.h \
+	lib/netdev-dummy.c \
 	lib/netdev-provider.h \
 	lib/netdev.c \
 	lib/netdev.h \
+	lib/netlink.c \
+	lib/netlink.h \
+	lib/nx-match.c \
+	lib/nx-match.def \
+	lib/nx-match.h \
 	lib/odp-util.c \
 	lib/odp-util.h \
 	lib/ofp-parse.c \
@@ -94,12 +106,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/pcap.h \
 	lib/poll-loop.c \
 	lib/poll-loop.h \
-	lib/port-array.c \
-	lib/port-array.h \
 	lib/process.c \
 	lib/process.h \
-	lib/queue.c \
-	lib/queue.h \
 	lib/random.c \
 	lib/random.h \
 	lib/rconn.c \
@@ -125,6 +133,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/stream-unix.c \
 	lib/stream.c \
 	lib/stream.h \
+	lib/stress.c \
+	lib/stress.h \
 	lib/string.h \
 	lib/svec.c \
 	lib/svec.h \
@@ -147,12 +157,9 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/vconn-stream.c \
 	lib/vconn.c \
 	lib/vconn.h \
-	lib/vlog-modules.def \
 	lib/vlog.c \
-	lib/vlog.h \
-	lib/xtoxll.h
+	lib/vlog.h
 nodist_lib_libopenvswitch_a_SOURCES = \
-	lib/coverage-counters.c \
 	lib/dirs.c
 CLEANFILES += $(nodist_lib_libopenvswitch_a_SOURCES)
 
@@ -176,15 +183,17 @@ if HAVE_NETLINK
 lib_libopenvswitch_a_SOURCES += \
 	lib/dpif-linux.c \
 	lib/netdev-linux.c \
-	lib/netdev-patch.c \
-	lib/netdev-tunnel.c \
 	lib/netdev-vport.c \
 	lib/netdev-vport.h \
 	lib/netlink-protocol.h \
-	lib/netlink.c \
-	lib/netlink.h \
+	lib/netlink-socket.c \
+	lib/netlink-socket.h \
 	lib/rtnetlink.c \
-	lib/rtnetlink.h
+	lib/rtnetlink.h \
+	lib/rtnetlink-link.c \
+	lib/rtnetlink-link.h \
+	lib/rtnetlink-route.c \
+	lib/rtnetlink-route.h
 endif
 
 if HAVE_OPENSSL
@@ -203,7 +212,7 @@ EXTRA_DIST += \
 	lib/dh1024.pem \
 	lib/dh2048.pem \
 	lib/dh4096.pem \
-	lib/dhparams.h
+	lib/dirs.c.in
 
 EXTRA_DIST += \
 	lib/common.man \
@@ -217,6 +226,7 @@ EXTRA_DIST += \
 	lib/ssl-peer-ca-cert.man \
 	lib/ssl.man \
 	lib/ssl-syn.man \
+	lib/stress-unixctl.man \
 	lib/unixctl.man \
 	lib/unixctl-syn.man \
 	lib/vconn-active.man \
@@ -225,13 +235,14 @@ EXTRA_DIST += \
 	lib/vlog-syn.man \
 	lib/vlog.man
 
-
-lib/dirs.c: Makefile
-	($(ro_c) && \
-	 echo 'const char ovs_pkgdatadir[] = "$(pkgdatadir)";' && \
-	 echo 'const char ovs_rundir[] = "@RUNDIR@";' && \
-	 echo 'const char ovs_logdir[] = "@LOGDIR@";' && \
-	 echo 'const char ovs_bindir[] = "$(bindir)";') > lib/dirs.c.tmp
+lib/dirs.c: lib/dirs.c.in Makefile
+	($(ro_c) && sed < $(srcdir)/lib/dirs.c.in \
+		-e 's,[@]srcdir[@],$(srcdir),g' \
+		-e 's,[@]LOGDIR[@],"$(LOGDIR)",g' \
+		-e 's,[@]RUNDIR[@],"$(RUNDIR)",g' \
+		-e 's,[@]bindir[@],"$(bindir)",g' \
+		-e 's,[@]pkgdatadir[@],"$(pkgdatadir)",g') \
+	     > lib/dirs.c.tmp
 	mv lib/dirs.c.tmp lib/dirs.c
 
 install-data-local: lib-install-data-local
@@ -240,38 +251,30 @@ lib-install-data-local:
 	$(MKDIR_P) $(DESTDIR)$(PKIDIR)
 	$(MKDIR_P) $(DESTDIR)$(LOGDIR)
 
-# All the source files that have coverage counters.
-COVERAGE_FILES = \
-	lib/dpif.c \
-	lib/flow.c \
-	lib/lockfile.c \
-	lib/hmap.c \
-	lib/mac-learning.c \
-	lib/netdev.c \
-	lib/netdev-linux.c \
-	lib/netlink.c \
-	lib/odp-util.c \
-	lib/poll-loop.c \
-	lib/process.c \
-	lib/rconn.c \
-	lib/rtnetlink.c \
-	lib/stream.c \
-	lib/stream-ssl.c \
-	lib/timeval.c \
-	lib/unixctl.c \
-	lib/util.c \
-	lib/vconn.c \
-	ofproto/ofproto.c \
-	ofproto/pktbuf.c \
-	vswitchd/bridge.c \
-	vswitchd/ovs-brcompatd.c
-lib/coverage-counters.c: $(COVERAGE_FILES) lib/coverage-scan.pl
-	(cd $(srcdir) && $(PERL) lib/coverage-scan.pl $(COVERAGE_FILES)) > $@.tmp
-	mv $@.tmp $@
-EXTRA_DIST += lib/coverage-scan.pl
+if !USE_LINKER_SECTIONS
+# All distributed sources, with names adjust properly for referencing
+# from $(builddir).
+all_sources = \
+	`for file in $(DIST_SOURCES); do \
+		if test -f $$file; then \
+			echo $$file; \
+		else \
+			echo $(VPATH)/$$file; \
+		fi; \
+	 done`
 
-ALL_LOCAL += check-vlog-modules
-check-vlog-modules:
-	cd $(srcdir) && build-aux/check-vlog-modules
-.PHONY: check-vlog-modules
-EXTRA_DIST += build-aux/check-vlog-modules
+lib/coverage.$(OBJEXT): lib/coverage.def
+lib/coverage.def: $(DIST_SOURCES)
+	sed -n 's|^COVERAGE_DEFINE(\([_a-zA-Z0-9]\{1,\}\)).*$$|COVERAGE_COUNTER(\1)|p' $(all_sources) | LC_ALL=C sort -u > $@
+CLEANFILES += lib/coverage.def
+
+lib/stress.$(OBJEXT): lib/stress.def
+lib/stress.def: $(DIST_SOURCES)
+	sed -n '/^STRESS_OPTION(/,/);$$/{s/);$$/)/;p}' $(all_sources) > $@
+CLEANFILES += lib/stress.def
+
+lib/vlog.$(OBJEXT): lib/vlog-modules.def
+lib/vlog-modules.def: $(DIST_SOURCES)
+	sed -n 's|^VLOG_DEFINE_\(THIS_\)\{0,1\}MODULE(\([_a-zA-Z0-9]\{1,\}\)).*$$|VLOG_MODULE(\2)|p' $(all_sources) | LC_ALL=C sort -u > $@
+CLEANFILES += lib/vlog-modules.def
+endif

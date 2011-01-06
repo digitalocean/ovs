@@ -8,6 +8,12 @@ bin_PROGRAMS += \
 	utilities/ovs-openflowd \
 	utilities/ovs-vsctl
 bin_SCRIPTS += utilities/ovs-pki utilities/ovs-vsctl
+if HAVE_PYTHON
+bin_SCRIPTS += \
+	utilities/ovs-pcap \
+	utilities/ovs-tcpundump \
+	utilities/ovs-vlan-test
+endif
 noinst_SCRIPTS += utilities/ovs-pki-cgi utilities/ovs-parse-leaks
 
 EXTRA_DIST += \
@@ -20,9 +26,15 @@ EXTRA_DIST += \
 	utilities/ovs-openflowd.8.in \
 	utilities/ovs-parse-leaks.8 \
 	utilities/ovs-parse-leaks.in \
+	utilities/ovs-pcap.1.in \
+	utilities/ovs-pcap.in \
 	utilities/ovs-pki-cgi.in \
 	utilities/ovs-pki.8.in \
 	utilities/ovs-pki.in \
+	utilities/ovs-tcpundump.1.in \
+	utilities/ovs-tcpundump.in \
+	utilities/ovs-vlan-test.in \
+	utilities/ovs-vlan-test.8.in \
 	utilities/ovs-vsctl.8.in
 DISTCLEANFILES += \
 	utilities/ovs-appctl.8 \
@@ -33,9 +45,15 @@ DISTCLEANFILES += \
 	utilities/ovs-ofctl.8 \
 	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks \
+	utilities/ovs-pcap \
+	utilities/ovs-pcap.1 \
 	utilities/ovs-pki \
 	utilities/ovs-pki-cgi \
 	utilities/ovs-pki.8 \
+	utilities/ovs-tcpundump \
+	utilities/ovs-tcpundump.1 \
+	utilities/ovs-vlan-test \
+	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
 
 man_MANS += \
@@ -47,7 +65,10 @@ man_MANS += \
 	utilities/ovs-ofctl.8 \
 	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks.8 \
+	utilities/ovs-pcap.1 \
 	utilities/ovs-pki.8 \
+	utilities/ovs-tcpundump.1 \
+	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c

@@ -50,10 +50,11 @@ License:
   why the executable file might be covered by the GNU Lesser General
   Public License.
 
-* The following component is licensed under the
+* The following components are licensed under the
   GNU Lesser General Public Licence version 2.1.
 
-	xenserver/usr_sbin_xen-bugtool
+	debian/ovs-bugtool
+	xenserver/usr_sbin_xen-bugtool [*]
 
 	* This component is only distributed in the source package.
 	  It does not appear in any binary packages.

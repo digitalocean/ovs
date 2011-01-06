@@ -42,7 +42,10 @@
 #include <time.h>
 #endif
 
-VLOG_DEFINE_THIS_MODULE(unixctl)
+VLOG_DEFINE_THIS_MODULE(unixctl);
+
+COVERAGE_DEFINE(unixctl_received);
+COVERAGE_DEFINE(unixctl_replied);
 
 struct unixctl_command {
     unixctl_cb_func *cb;
@@ -174,6 +177,9 @@ unixctl_command_reply(struct unixctl_conn *conn,
  *
  *      - NULL, in which case <rundir>/<program>.<pid>.ctl is used.
  *
+ *      - "none", in which case the function will return successfully but
+ *        no socket will actually be created.
+ *
  *      - A name that does not start with '/', in which case it is put in
  *        <rundir>.
  *
@@ -186,12 +192,18 @@ unixctl_command_reply(struct unixctl_conn *conn,
  * "ovs-appctl --target=<program>" will fail.)
  *
  * Returns 0 if successful, otherwise a positive errno value.  If successful,
- * sets '*serverp' to the new unixctl_server, otherwise to NULL. */
+ * sets '*serverp' to the new unixctl_server (or to NULL if 'path' was "none"),
+ * otherwise to NULL. */
 int
 unixctl_server_create(const char *path, struct unixctl_server **serverp)
 {
     struct unixctl_server *server;
     int error;
+
+    if (path && !strcmp(path, "none")) {
+        *serverp = NULL;
+        return 0;
+    }
 
     unixctl_command_register("help", unixctl_help, NULL);
 
@@ -199,9 +211,9 @@ unixctl_server_create(const char *path, struct unixctl_server **serverp)
     list_init(&server->conns);
 
     if (path) {
-        server->path = abs_file_name(ovs_rundir, path);
+        server->path = abs_file_name(ovs_rundir(), path);
     } else {
-        server->path = xasprintf("%s/%s.%ld.ctl", ovs_rundir,
+        server->path = xasprintf("%s/%s.%ld.ctl", ovs_rundir(),
                                  program_name, (long int) getpid());
     }
 
@@ -400,6 +412,10 @@ unixctl_server_run(struct unixctl_server *server)
     struct unixctl_conn *conn, *next;
     int i;
 
+    if (!server) {
+        return;
+    }
+
     for (i = 0; i < 10; i++) {
         int fd = accept(server->fd, NULL, NULL);
         if (fd < 0) {
@@ -411,8 +427,7 @@ unixctl_server_run(struct unixctl_server *server)
         new_connection(server, fd);
     }
 
-    LIST_FOR_EACH_SAFE (conn, next,
-                        struct unixctl_conn, node, &server->conns) {
+    LIST_FOR_EACH_SAFE (conn, next, node, &server->conns) {
         int error = run_connection(conn);
         if (error && error != EAGAIN) {
             kill_connection(conn);
@@ -425,8 +440,12 @@ unixctl_server_wait(struct unixctl_server *server)
 {
     struct unixctl_conn *conn;
 
+    if (!server) {
+        return;
+    }
+
     poll_fd_wait(server->fd, POLLIN);
-    LIST_FOR_EACH (conn, struct unixctl_conn, node, &server->conns) {
+    LIST_FOR_EACH (conn, node, &server->conns) {
         if (conn->state == S_RECV) {
             poll_fd_wait(conn->fd, POLLIN);
         } else if (conn->state == S_SEND) {
@@ -442,8 +461,7 @@ unixctl_server_destroy(struct unixctl_server *server)
     if (server) {
         struct unixctl_conn *conn, *next;
 
-        LIST_FOR_EACH_SAFE (conn, next,
-                            struct unixctl_conn, node, &server->conns) {
+        LIST_FOR_EACH_SAFE (conn, next, node, &server->conns) {
             kill_connection(conn);
         }
 
@@ -456,7 +474,7 @@ unixctl_server_destroy(struct unixctl_server *server)
 
 /* Connects to a Vlog server socket.  'path' should be the name of a Vlog
  * server socket.  If it does not start with '/', it will be prefixed with
- * ovs_rundir (e.g. /var/run/openvswitch).
+ * the rundir (e.g. /usr/local/var/run/openvswitch).
  *
  * Returns 0 if successful, otherwise a positive errno value.  If successful,
  * sets '*clientp' to the new unixctl_client, otherwise to NULL. */
@@ -470,7 +488,7 @@ unixctl_client_create(const char *path, struct unixctl_client **clientp)
 
     /* Determine location. */
     client = xmalloc(sizeof *client);
-    client->connect_path = abs_file_name(ovs_rundir, path);
+    client->connect_path = abs_file_name(ovs_rundir(), path);
     client->bind_path = xasprintf("/tmp/vlog.%ld.%d",
                                   (long int) getpid(), counter++);
 

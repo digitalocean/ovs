@@ -23,10 +23,12 @@
 #include <net/if.h>
 #include <string.h>
 #include <stdlib.h>
+#include "classifier.h"
 #include "dhcp.h"
 #include "dpif.h"
 #include "flow.h"
 #include "netdev.h"
+#include "netlink.h"
 #include "odp-util.h"
 #include "ofproto.h"
 #include "ofpbuf.h"
@@ -37,7 +39,7 @@
 #include "timeval.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(in_band)
+VLOG_DEFINE_THIS_MODULE(in_band);
 
 /* In-band control allows a single network to be used for OpenFlow
  * traffic and other data traffic.  Refer to ovs-vswitchd.conf(5) and
@@ -223,12 +225,6 @@ enum {
     IBR_FROM_REMOTE_TCP           /* (i) From remote IP, TCP port. */
 };
 
-struct in_band_rule {
-    flow_t flow;
-    uint32_t wildcards;
-    unsigned int priority;
-};
-
 /* Track one remote IP and next hop information. */
 struct in_band_remote {
     struct sockaddr_in remote_addr; /* IP address, in network byte order. */
@@ -240,6 +236,7 @@ struct in_band_remote {
 struct in_band {
     struct ofproto *ofproto;
     struct status_category *ss_cat;
+    int queue_id, prev_queue_id;
 
     /* Remote information. */
     time_t next_remote_refresh; /* Refresh timer. */
@@ -396,7 +393,7 @@ in_band_status_cb(struct status_reply *sr, void *in_band_)
 /* Returns true if 'packet' should be sent to the local port regardless
  * of the flow table. */
 bool
-in_band_msg_in_hook(struct in_band *in_band, const flow_t *flow,
+in_band_msg_in_hook(struct in_band *in_band, const struct flow *flow,
                     const struct ofpbuf *packet)
 {
     if (!in_band) {
@@ -431,8 +428,8 @@ in_band_msg_in_hook(struct in_band *in_band, const flow_t *flow,
 /* Returns true if the rule that would match 'flow' with 'actions' is
  * allowed to be set up in the datapath. */
 bool
-in_band_rule_check(struct in_band *in_band, const flow_t *flow,
-                   const struct odp_actions *actions)
+in_band_rule_check(struct in_band *in_band, const struct flow *flow,
+                   const struct nlattr *actions, size_t actions_len)
 {
     if (!in_band) {
         return true;
@@ -444,11 +441,12 @@ in_band_rule_check(struct in_band *in_band, const flow_t *flow,
             && flow->nw_proto == IP_TYPE_UDP
             && flow->tp_src == htons(DHCP_SERVER_PORT)
             && flow->tp_dst == htons(DHCP_CLIENT_PORT)) {
-        int i;
+        const struct nlattr *a;
+        unsigned int left;
 
-        for (i=0; i<actions->n_actions; i++) {
-            if (actions->actions[i].output.type == ODPAT_OUTPUT
-                    && actions->actions[i].output.port == ODPP_LOCAL) {
+        NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
+            if (nl_attr_type(a) == ODPAT_OUTPUT
+                && nl_attr_get_u32(a) == ODPP_LOCAL) {
                 return true;
             }
         }
@@ -459,108 +457,35 @@ in_band_rule_check(struct in_band *in_band, const flow_t *flow,
 }
 
 static void
-init_rule(struct in_band_rule *rule, unsigned int priority)
-{
-    rule->wildcards = OVSFW_ALL;
-    rule->priority = priority;
-
-    /* Not strictly necessary but seems cleaner. */
-    memset(&rule->flow, 0, sizeof rule->flow);
-}
-
-static void
-set_in_port(struct in_band_rule *rule, uint16_t odp_port)
-{
-    rule->wildcards &= ~OFPFW_IN_PORT;
-    rule->flow.in_port = odp_port;
-}
-
-static void
-set_dl_type(struct in_band_rule *rule, uint16_t dl_type)
-{
-    rule->wildcards &= ~OFPFW_DL_TYPE;
-    rule->flow.dl_type = dl_type;
-}
-
-static void
-set_dl_src(struct in_band_rule *rule, const uint8_t dl_src[ETH_ADDR_LEN])
-{
-    rule->wildcards &= ~OFPFW_DL_SRC;
-    memcpy(rule->flow.dl_src, dl_src, ETH_ADDR_LEN);
-}
-
-static void
-set_dl_dst(struct in_band_rule *rule, const uint8_t dl_dst[ETH_ADDR_LEN])
-{
-    rule->wildcards &= ~OFPFW_DL_DST;
-    memcpy(rule->flow.dl_dst, dl_dst, ETH_ADDR_LEN);
-}
-
-static void
-set_tp_src(struct in_band_rule *rule, uint16_t tp_src)
-{
-    rule->wildcards &= ~OFPFW_TP_SRC;
-    rule->flow.tp_src = tp_src;
-}
-
-static void
-set_tp_dst(struct in_band_rule *rule, uint16_t tp_dst)
-{
-    rule->wildcards &= ~OFPFW_TP_DST;
-    rule->flow.tp_dst = tp_dst;
-}
-
-static void
-set_nw_proto(struct in_band_rule *rule, uint8_t nw_proto)
-{
-    rule->wildcards &= ~OFPFW_NW_PROTO;
-    rule->flow.nw_proto = nw_proto;
-}
-
-static void
-set_nw_src(struct in_band_rule *rule, const struct in_addr nw_src)
-{
-    rule->wildcards &= ~OFPFW_NW_SRC_MASK;
-    rule->flow.nw_src = nw_src.s_addr;
-}
-
-static void
-set_nw_dst(struct in_band_rule *rule, const struct in_addr nw_dst)
-{
-    rule->wildcards &= ~OFPFW_NW_DST_MASK;
-    rule->flow.nw_dst = nw_dst.s_addr;
-}
-
-static void
 make_rules(struct in_band *ib,
-           void (*cb)(struct in_band *, const struct in_band_rule *))
+           void (*cb)(struct in_band *, const struct cls_rule *))
 {
-    struct in_band_rule rule;
+    struct cls_rule rule;
     size_t i;
 
     if (!eth_addr_is_zero(ib->installed_local_mac)) {
         /* (a) Allow DHCP requests sent from the local port. */
-        init_rule(&rule, IBR_FROM_LOCAL_DHCP);
-        set_in_port(&rule, ODPP_LOCAL);
-        set_dl_type(&rule, htons(ETH_TYPE_IP));
-        set_dl_src(&rule, ib->installed_local_mac);
-        set_nw_proto(&rule, IP_TYPE_UDP);
-        set_tp_src(&rule, htons(DHCP_CLIENT_PORT));
-        set_tp_dst(&rule, htons(DHCP_SERVER_PORT));
+        cls_rule_init_catchall(&rule, IBR_FROM_LOCAL_DHCP);
+        cls_rule_set_in_port(&rule, ODPP_LOCAL);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
+        cls_rule_set_dl_src(&rule, ib->installed_local_mac);
+        cls_rule_set_nw_proto(&rule, IP_TYPE_UDP);
+        cls_rule_set_tp_src(&rule, htons(DHCP_CLIENT_PORT));
+        cls_rule_set_tp_dst(&rule, htons(DHCP_SERVER_PORT));
         cb(ib, &rule);
 
         /* (b) Allow ARP replies to the local port's MAC address. */
-        init_rule(&rule, IBR_TO_LOCAL_ARP);
-        set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        set_dl_dst(&rule, ib->installed_local_mac);
-        set_nw_proto(&rule, ARP_OP_REPLY);
+        cls_rule_init_catchall(&rule, IBR_TO_LOCAL_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_dl_dst(&rule, ib->installed_local_mac);
+        cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
         cb(ib, &rule);
 
         /* (c) Allow ARP requests from the local port's MAC address.  */
-        init_rule(&rule, IBR_FROM_LOCAL_ARP);
-        set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        set_dl_src(&rule, ib->installed_local_mac);
-        set_nw_proto(&rule, ARP_OP_REQUEST);
+        cls_rule_init_catchall(&rule, IBR_FROM_LOCAL_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_dl_src(&rule, ib->installed_local_mac);
+        cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
         cb(ib, &rule);
     }
 
@@ -576,17 +501,17 @@ make_rules(struct in_band *ib,
         }
 
         /* (d) Allow ARP replies to the next hop's MAC address. */
-        init_rule(&rule, IBR_TO_NEXT_HOP_ARP);
-        set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        set_dl_dst(&rule, remote_mac);
-        set_nw_proto(&rule, ARP_OP_REPLY);
+        cls_rule_init_catchall(&rule, IBR_TO_NEXT_HOP_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_dl_dst(&rule, remote_mac);
+        cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
         cb(ib, &rule);
 
         /* (e) Allow ARP requests from the next hop's MAC address. */
-        init_rule(&rule, IBR_FROM_NEXT_HOP_ARP);
-        set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        set_dl_src(&rule, remote_mac);
-        set_nw_proto(&rule, ARP_OP_REQUEST);
+        cls_rule_init_catchall(&rule, IBR_FROM_NEXT_HOP_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_dl_src(&rule, remote_mac);
+        cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
         cb(ib, &rule);
     }
 
@@ -596,18 +521,18 @@ make_rules(struct in_band *ib,
         if (!i || a->sin_addr.s_addr != a[-1].sin_addr.s_addr) {
             /* (f) Allow ARP replies containing the remote's IP address as a
              * target. */
-            init_rule(&rule, IBR_TO_REMOTE_ARP);
-            set_dl_type(&rule, htons(ETH_TYPE_ARP));
-            set_nw_proto(&rule, ARP_OP_REPLY);
-            set_nw_dst(&rule, a->sin_addr);
+            cls_rule_init_catchall(&rule, IBR_TO_REMOTE_ARP);
+            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+            cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
+            cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
             cb(ib, &rule);
 
             /* (g) Allow ARP requests containing the remote's IP address as a
              * source. */
-            init_rule(&rule, IBR_FROM_REMOTE_ARP);
-            set_dl_type(&rule, htons(ETH_TYPE_ARP));
-            set_nw_proto(&rule, ARP_OP_REQUEST);
-            set_nw_src(&rule, a->sin_addr);
+            cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_ARP);
+            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+            cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
+            cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
             cb(ib, &rule);
         }
 
@@ -615,29 +540,28 @@ make_rules(struct in_band *ib,
             || a->sin_addr.s_addr != a[-1].sin_addr.s_addr
             || a->sin_port != a[-1].sin_port) {
             /* (h) Allow TCP traffic to the remote's IP and port. */
-            init_rule(&rule, IBR_TO_REMOTE_TCP);
-            set_dl_type(&rule, htons(ETH_TYPE_IP));
-            set_nw_proto(&rule, IP_TYPE_TCP);
-            set_nw_dst(&rule, a->sin_addr);
-            set_tp_dst(&rule, a->sin_port);
+            cls_rule_init_catchall(&rule, IBR_TO_REMOTE_TCP);
+            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
+            cls_rule_set_nw_proto(&rule, IP_TYPE_TCP);
+            cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
+            cls_rule_set_tp_dst(&rule, a->sin_port);
             cb(ib, &rule);
 
             /* (i) Allow TCP traffic from the remote's IP and port. */
-            init_rule(&rule, IBR_FROM_REMOTE_TCP);
-            set_dl_type(&rule, htons(ETH_TYPE_IP));
-            set_nw_proto(&rule, IP_TYPE_TCP);
-            set_nw_src(&rule, a->sin_addr);
-            set_tp_src(&rule, a->sin_port);
+            cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_TCP);
+            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
+            cls_rule_set_nw_proto(&rule, IP_TYPE_TCP);
+            cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
+            cls_rule_set_tp_src(&rule, a->sin_port);
             cb(ib, &rule);
         }
     }
 }
 
 static void
-drop_rule(struct in_band *ib, const struct in_band_rule *rule)
+drop_rule(struct in_band *ib, const struct cls_rule *rule)
 {
-    ofproto_delete_flow(ib->ofproto, &rule->flow,
-                        rule->wildcards, rule->priority);
+    ofproto_delete_flow(ib->ofproto, rule);
 }
 
 /* Drops from the flow table all of the flows set up by 'ib', then clears out
@@ -662,16 +586,33 @@ drop_rules(struct in_band *ib)
 }
 
 static void
-add_rule(struct in_band *ib, const struct in_band_rule *rule)
+add_rule(struct in_band *ib, const struct cls_rule *rule)
 {
-    union ofp_action action;
+    struct {
+        struct nx_action_set_queue nxsq;
+        struct ofp_action_output oao;
+    } actions;
 
-    action.type = htons(OFPAT_OUTPUT);
-    action.output.len = htons(sizeof action);
-    action.output.port = htons(OFPP_NORMAL);
-    action.output.max_len = htons(0);
-    ofproto_add_flow(ib->ofproto, &rule->flow, rule->wildcards,
-                     rule->priority, &action, 1, 0);
+    memset(&actions, 0, sizeof actions);
+
+    actions.oao.type = htons(OFPAT_OUTPUT);
+    actions.oao.len = htons(sizeof actions.oao);
+    actions.oao.port = htons(OFPP_NORMAL);
+    actions.oao.max_len = htons(0);
+
+    if (ib->queue_id < 0) {
+        ofproto_add_flow(ib->ofproto, rule,
+                         (union ofp_action *) &actions.oao, 1);
+    } else {
+        actions.nxsq.type = htons(OFPAT_VENDOR);
+        actions.nxsq.len = htons(sizeof actions.nxsq);
+        actions.nxsq.vendor = htonl(NX_VENDOR_ID);
+        actions.nxsq.subtype = htons(NXAST_SET_QUEUE);
+        actions.nxsq.queue_id = htonl(ib->queue_id);
+
+        ofproto_add_flow(ib->ofproto, rule, (union ofp_action *) &actions,
+                         sizeof actions / sizeof(union ofp_action));
+    }
 }
 
 /* Inserts flows into the flow table for the current state of 'ib'. */
@@ -706,15 +647,17 @@ compare_macs(const void *a, const void *b)
 void
 in_band_run(struct in_band *ib)
 {
+    bool local_change, remote_change, queue_id_change;
     struct in_band_remote *r;
-    bool local_change, remote_change;
 
     local_change = refresh_local(ib);
     remote_change = refresh_remotes(ib);
-    if (!local_change && !remote_change) {
+    queue_id_change = ib->queue_id != ib->prev_queue_id;
+    if (!local_change && !remote_change && !queue_id_change) {
         /* Nothing changed, nothing to do. */
         return;
     }
+    ib->prev_queue_id = ib->queue_id;
 
     /* Drop old rules. */
     drop_rules(ib);
@@ -768,6 +711,7 @@ in_band_create(struct ofproto *ofproto, struct dpif *dpif,
     struct netdev *local_netdev;
     int error;
 
+    *in_bandp = NULL;
     error = dpif_port_get_name(dpif, ODPP_LOCAL,
                                local_name, sizeof local_name);
     if (error) {
@@ -787,6 +731,7 @@ in_band_create(struct ofproto *ofproto, struct dpif *dpif,
     in_band->ofproto = ofproto;
     in_band->ss_cat = switch_status_register(ss, "in-band",
                                              in_band_status_cb, in_band);
+    in_band->queue_id = in_band->prev_queue_id = -1;
     in_band->next_remote_refresh = TIME_MIN;
     in_band->next_local_refresh = TIME_MIN;
     in_band->local_netdev = local_netdev;
@@ -857,3 +802,13 @@ in_band_set_remotes(struct in_band *ib,
     /* Force refresh in next call to in_band_run(). */
     ib->next_remote_refresh = TIME_MIN;
 }
+
+/* Sets the OpenFlow queue used by flows set up by 'ib' to 'queue_id'.  If
+ * 'queue_id' is negative, 'ib' will not set any queue (which is also the
+ * default). */
+void
+in_band_set_queue(struct in_band *ib, int queue_id)
+{
+    ib->queue_id = queue_id;
+}
+

@@ -705,7 +705,6 @@ json_lex_number(struct json_parser *p)
      *
      * We suppress negative zeros as a matter of policy. */
     if (!significand) {
-        struct json_token token;
         token.type = T_INTEGER;
         token.u.integer = 0;
         json_parser_input(p, &token);
@@ -747,19 +746,15 @@ json_lex_number(struct json_parser *p)
 static const char *
 json_lex_4hex(const char *cp, const char *end, int *valuep)
 {
-    int value, i;
+    unsigned int value;
 
     if (cp + 4 > end) {
         return "quoted string ends within \\u escape";
     }
 
-    value = 0;
-    for (i = 0; i < 4; i++) {
-        unsigned char c = *cp++;
-        if (!isxdigit(c)) {
-            return "malformed \\u escape";
-        }
-        value = (value << 4) | hexit_value(c);
+    value = hexits_value(cp, 4, NULL);
+    if (value == UINT_MAX) {
+        return "malformed \\u escape";
     }
     if (!value) {
         return "null bytes not supported in quoted strings";

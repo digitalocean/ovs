@@ -10,10 +10,10 @@
 #define FLOW_H 1
 
 #include <linux/kernel.h>
+#include <linux/netlink.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/rcupdate.h>
-#include <linux/gfp.h>
 #include <linux/if_ether.h>
 #include <linux/jiffies.h>
 #include <linux/time.h>
@@ -25,8 +25,8 @@ struct sk_buff;
 
 struct sw_flow_actions {
 	struct rcu_head rcu;
-	unsigned int n_actions;
-	union odp_action actions[];
+	u32 actions_len;
+	struct nlattr actions[];
 };
 
 struct sw_flow {
@@ -34,7 +34,10 @@ struct sw_flow {
 	struct tbl_node tbl_node;
 
 	struct odp_flow_key key;
-	struct sw_flow_actions *sf_acts;
+	struct sw_flow_actions __rcu *sf_acts;
+
+	atomic_t refcnt;
+	bool dead;
 
 	spinlock_t lock;	/* Lock for values below. */
 	unsigned long used;	/* Last used time (in jiffies). */
@@ -56,22 +59,26 @@ struct arp_eth_header
 	unsigned char       ar_sip[4];		/* sender IP address        */
 	unsigned char       ar_tha[ETH_ALEN];	/* target hardware address  */
 	unsigned char       ar_tip[4];		/* target IP address        */
-} __attribute__((packed));
+} __packed;
 
-extern struct kmem_cache *flow_cache;
+int flow_init(void);
+void flow_exit(void);
 
-struct sw_flow_actions *flow_actions_alloc(size_t n_actions);
+struct sw_flow *flow_alloc(void);
 void flow_deferred_free(struct sw_flow *);
+void flow_free_tbl(struct tbl_node *);
+
+struct sw_flow_actions *flow_actions_alloc(u32 actions_len);
 void flow_deferred_free_acts(struct sw_flow_actions *);
-int flow_extract(struct sk_buff *, u16 in_port, struct odp_flow_key *);
+
+void flow_hold(struct sw_flow *);
+void flow_put(struct sw_flow *);
+
+int flow_extract(struct sk_buff *, u16 in_port, struct odp_flow_key *, bool *is_frag);
 void flow_used(struct sw_flow *, struct sk_buff *);
 
 u32 flow_hash(const struct odp_flow_key *key);
 int flow_cmp(const struct tbl_node *, void *target);
-void flow_free_tbl(struct tbl_node *);
-
-int flow_init(void);
-void flow_exit(void);
 
 static inline struct sw_flow *flow_cast(const struct tbl_node *node)
 {

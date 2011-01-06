@@ -31,6 +31,7 @@
 #include "hash.h"
 #include "list.h"
 #include "netdev-provider.h"
+#include "netdev-vport.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "packets.h"
@@ -39,17 +40,12 @@
 #include "svec.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(netdev)
+VLOG_DEFINE_THIS_MODULE(netdev);
 
-static const struct netdev_class *base_netdev_classes[] = {
-#ifdef HAVE_NETLINK
-    &netdev_linux_class,
-    &netdev_tap_class,
-    &netdev_patch_class,
-    &netdev_gre_class,
-    &netdev_capwap_class,
-#endif
-};
+COVERAGE_DEFINE(netdev_received);
+COVERAGE_DEFINE(netdev_sent);
+COVERAGE_DEFINE(netdev_add_router);
+COVERAGE_DEFINE(netdev_get_stats);
 
 static struct shash netdev_classes = SHASH_INITIALIZER(&netdev_classes);
 
@@ -70,17 +66,19 @@ void update_device_args(struct netdev_dev *, const struct shash *args);
 static void
 netdev_initialize(void)
 {
-    static int status = -1;
+    static bool inited;
 
-    if (status < 0) {
-        int i;
+    if (!inited) {
+        inited = true;
 
         fatal_signal_add_hook(close_all_netdevs, NULL, NULL, true);
 
-        status = 0;
-        for (i = 0; i < ARRAY_SIZE(base_netdev_classes); i++) {
-            netdev_register_provider(base_netdev_classes[i]);
-        }
+#ifdef HAVE_NETLINK
+        netdev_register_provider(&netdev_linux_class);
+        netdev_register_provider(&netdev_internal_class);
+        netdev_register_provider(&netdev_tap_class);
+        netdev_vport_register();
+#endif
     }
 }
 
@@ -121,8 +119,6 @@ netdev_wait(void)
 int
 netdev_register_provider(const struct netdev_class *new_class)
 {
-    struct netdev_class *new_provider;
-
     if (shash_find(&netdev_classes, new_class->type)) {
         VLOG_WARN("attempted to register duplicate netdev provider: %s",
                    new_class->type);
@@ -138,10 +134,7 @@ netdev_register_provider(const struct netdev_class *new_class)
         }
     }
 
-    new_provider = xmalloc(sizeof *new_provider);
-    memcpy(new_provider, new_class, sizeof *new_provider);
-
-    shash_add(&netdev_classes, new_class->type, new_provider);
+    shash_add(&netdev_classes, new_class->type, new_class);
 
     return 0;
 }
@@ -171,9 +164,15 @@ netdev_unregister_provider(const char *type)
     }
 
     shash_delete(&netdev_classes, del_node);
-    free(del_node->data);
 
     return 0;
+}
+
+const struct netdev_class *
+netdev_lookup_provider(const char *type)
+{
+    netdev_initialize();
+    return shash_find_data(&netdev_classes, type && type[0] ? type : "system");
 }
 
 /* Clears 'types' and enumerates the types of all currently registered netdev
@@ -261,37 +260,17 @@ update_device_args(struct netdev_dev *dev, const struct shash *args)
     qsort(dev->args, dev->n_args, sizeof *dev->args, compare_args);
 }
 
-static int
-create_device(struct netdev_options *options, struct netdev_dev **netdev_devp)
-{
-    struct netdev_class *netdev_class;
-
-    if (!options->type || strlen(options->type) == 0) {
-        /* Default to system. */
-        options->type = "system";
-    }
-
-    netdev_class = shash_find_data(&netdev_classes, options->type);
-    if (!netdev_class) {
-        return EAFNOSUPPORT;
-    }
-
-    return netdev_class->create(options->name, options->type, options->args,
-                                netdev_devp);
-}
-
 /* Opens the network device named 'name' (e.g. "eth0") and returns zero if
  * successful, otherwise a positive errno value.  On success, sets '*netdevp'
  * to the new network device, otherwise to null.
  *
  * If this is the first time the device has been opened, then create is called
- * before opening.  The device is  created using the given type and arguments.
+ * before opening.  The device is created using the given type and arguments.
  *
  * 'ethertype' may be a 16-bit Ethernet protocol value in host byte order to
  * capture frames of that type received on the device.  It may also be one of
  * the 'enum netdev_pseudo_ethertype' values to receive frames in one of those
  * categories. */
-
 int
 netdev_open(struct netdev_options *options, struct netdev **netdevp)
 {
@@ -309,14 +288,20 @@ netdev_open(struct netdev_options *options, struct netdev **netdevp)
     netdev_dev = shash_find_data(&netdev_dev_shash, options->name);
 
     if (!netdev_dev) {
-        error = create_device(options, &netdev_dev);
+        const struct netdev_class *class;
+
+        class = netdev_lookup_provider(options->type);
+        if (!class) {
+            VLOG_WARN("could not create netdev %s of unknown type %s",
+                      options->name, options->type);
+            return EAFNOSUPPORT;
+        }
+        error = class->create(class, options->name, options->args,
+                              &netdev_dev);
         if (error) {
-            if (error == EAFNOSUPPORT) {
-                VLOG_WARN("could not create netdev %s of unknown type %s",
-                          options->name, options->type);
-            }
             return error;
         }
+        assert(netdev_dev->netdev_class == class);
         update_device_args(netdev_dev, options->args);
 
     } else if (!shash_is_empty(options->args) &&
@@ -465,8 +450,7 @@ netdev_enumerate(struct svec *svec)
  * be returned.
  *
  * Some network devices may not implement support for this function.  In such
- * cases this function will always return EOPNOTSUPP.
- */
+ * cases this function will always return EOPNOTSUPP. */
 int
 netdev_recv(struct netdev *netdev, struct ofpbuf *buffer)
 {
@@ -632,8 +616,7 @@ netdev_get_ifindex(const struct netdev *netdev)
  * passed-in values are set to 0.
  *
  * Some network devices may not implement support for this function.  In such
- * cases this function will always return EOPNOTSUPP.
- */
+ * cases this function will always return EOPNOTSUPP. */
 int
 netdev_get_features(struct netdev *netdev,
                     uint32_t *current, uint32_t *advertised,
@@ -718,8 +701,8 @@ netdev_set_advertisements(struct netdev *netdev, uint32_t advertise)
  *
  *   - EOPNOTSUPP: No IPv4 network stack attached to 'netdev'.
  *
- * 'address' or 'netmask' or both may be null, in which case the address or netmask
- * is not reported. */
+ * 'address' or 'netmask' or both may be null, in which case the address or 
+ * netmask is not reported. */
 int
 netdev_get_in4(const struct netdev *netdev,
                struct in_addr *address_, struct in_addr *netmask_)
@@ -784,6 +767,16 @@ netdev_get_next_hop(const struct netdev *netdev,
         *netdev_name = NULL;
     }
     return error;
+}
+
+const char *
+netdev_get_tnl_iface(const struct netdev *netdev)
+{
+    struct netdev_dev *dev = netdev_get_dev(netdev);
+
+    return (dev->netdev_class->get_tnl_iface
+            ? dev->netdev_class->get_tnl_iface(netdev)
+            : NULL);
 }
 
 /* If 'netdev' has an assigned IPv6 address, sets '*in6' to that address and
@@ -909,19 +902,32 @@ netdev_arp_lookup(const struct netdev *netdev,
     return error;
 }
 
-/* Sets 'carrier' to true if carrier is active (link light is on) on
- * 'netdev'. */
-int
-netdev_get_carrier(const struct netdev *netdev, bool *carrier)
+/* Returns true if carrier is active (link light is on) on 'netdev'. */
+bool
+netdev_get_carrier(const struct netdev *netdev)
 {
-    int error = (netdev_get_dev(netdev)->netdev_class->get_carrier
-                 ? netdev_get_dev(netdev)->netdev_class->get_carrier(netdev,
-                        carrier)
-                 : EOPNOTSUPP);
-    if (error) {
-        *carrier = false;
+    int error;
+    enum netdev_flags flags;
+    bool carrier;
+
+    netdev_get_flags(netdev, &flags);
+    if (!(flags & NETDEV_UP)) {
+        return false;
     }
-    return error;
+
+    if (!netdev_get_dev(netdev)->netdev_class->get_carrier) {
+        return true;
+    }
+
+    error = netdev_get_dev(netdev)->netdev_class->get_carrier(netdev,
+                                                              &carrier);
+    if (error) {
+        VLOG_DBG("%s: failed to get network device carrier status, assuming "
+                 "down: %s", netdev_get_name(netdev), strerror(error));
+        carrier = false;
+    }
+
+    return carrier;
 }
 
 /* Retrieves current device stats for 'netdev'. */
@@ -1150,8 +1156,7 @@ netdev_get_queue(const struct netdev *netdev,
  * the current form of QoS (e.g. as returned by netdev_get_n_queues(netdev)).
  *
  * This function does not modify 'details', and the caller retains ownership of
- * it.
- */
+ * it. */
 int
 netdev_set_queue(struct netdev *netdev,
                  unsigned int queue_id, const struct shash *details)
@@ -1543,8 +1548,7 @@ netdev_monitor_remove(struct netdev_monitor *monitor, struct netdev *netdev)
  * sets '*devnamep' to the name of a device that has changed and returns 0.
  * The caller is responsible for freeing '*devnamep' (with free()).
  *
- * If no devices have changed, sets '*devnamep' to NULL and returns EAGAIN.
- */
+ * If no devices have changed, sets '*devnamep' to NULL and returns EAGAIN. */
 int
 netdev_monitor_poll(struct netdev_monitor *monitor, char **devnamep)
 {
@@ -1553,8 +1557,7 @@ netdev_monitor_poll(struct netdev_monitor *monitor, char **devnamep)
         *devnamep = NULL;
         return EAGAIN;
     } else {
-        *devnamep = xstrdup(node->name);
-        shash_delete(&monitor->changed_netdevs, node);
+        *devnamep = shash_steal(&monitor->changed_netdevs, node);
         return 0;
     }
 }
@@ -1597,7 +1600,7 @@ static void
 close_all_netdevs(void *aux OVS_UNUSED)
 {
     struct netdev *netdev, *next;
-    LIST_FOR_EACH_SAFE(netdev, next, struct netdev, node, &netdev_list) {
+    LIST_FOR_EACH_SAFE(netdev, next, node, &netdev_list) {
         netdev_close(netdev);
     }
 }

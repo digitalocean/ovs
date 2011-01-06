@@ -28,12 +28,13 @@
 #include "leak-checker.h"
 #include "poll-loop.h"
 #include "socket-util.h"
+#include "stress.h"
 #include "util.h"
 #include "stream-provider.h"
 #include "stream.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(stream_fd)
+VLOG_DEFINE_THIS_MODULE(stream_fd);
 
 /* Active file descriptor stream. */
 
@@ -96,19 +97,39 @@ fd_connect(struct stream *stream)
     return check_connection_completion(s->fd);
 }
 
+STRESS_OPTION(
+    stream_flaky_recv, "simulate failure of fd stream recvs",
+    100, 0, -1, 0);
+
 static ssize_t
 fd_recv(struct stream *stream, void *buffer, size_t n)
 {
     struct stream_fd *s = stream_fd_cast(stream);
-    ssize_t retval = read(s->fd, buffer, n);
+    ssize_t retval;
+
+    if (STRESS(stream_flaky_recv)) {
+        return -EIO;
+    }
+
+    retval = read(s->fd, buffer, n);
     return retval >= 0 ? retval : -errno;
 }
+
+STRESS_OPTION(
+    stream_flaky_send, "simulate failure of fd stream sends",
+    100, 0, -1, 0);
 
 static ssize_t
 fd_send(struct stream *stream, const void *buffer, size_t n)
 {
     struct stream_fd *s = stream_fd_cast(stream);
-    ssize_t retval = write(s->fd, buffer, n);
+    ssize_t retval;
+
+    if (STRESS(stream_flaky_send)) {
+        return -EIO;
+    }
+
+    retval = write(s->fd, buffer, n);
     return (retval > 0 ? retval
             : retval == 0 ? -EAGAIN
             : -errno);
@@ -214,7 +235,7 @@ pfd_accept(struct pstream *pstream, struct stream **new_streamp)
 
     new_fd = accept(ps->fd, (struct sockaddr *) &ss, &ss_len);
     if (new_fd < 0) {
-        int retval = errno;
+        retval = errno;
         if (retval != EAGAIN) {
             VLOG_DBG_RL(&rl, "accept: %s", strerror(retval));
         }

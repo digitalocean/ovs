@@ -24,6 +24,7 @@
 
 #include "flow.h"
 
+struct list;
 struct ofpbuf;
 struct ofp_action_header;
 struct ofp_header;
@@ -39,15 +40,18 @@ int vconn_verify_name(const char *name);
 int vconn_open(const char *name, int min_version, struct vconn **);
 void vconn_close(struct vconn *);
 const char *vconn_get_name(const struct vconn *);
-uint32_t vconn_get_remote_ip(const struct vconn *);
-uint16_t vconn_get_remote_port(const struct vconn *);
-uint32_t vconn_get_local_ip(const struct vconn *);
-uint16_t vconn_get_local_port(const struct vconn *);
+ovs_be32 vconn_get_remote_ip(const struct vconn *);
+ovs_be16 vconn_get_remote_port(const struct vconn *);
+ovs_be32 vconn_get_local_ip(const struct vconn *);
+ovs_be16 vconn_get_local_port(const struct vconn *);
 int vconn_connect(struct vconn *);
 int vconn_recv(struct vconn *, struct ofpbuf **);
 int vconn_send(struct vconn *, struct ofpbuf *);
 int vconn_recv_xid(struct vconn *, uint32_t xid, struct ofpbuf **);
 int vconn_transact(struct vconn *, struct ofpbuf *, struct ofpbuf **);
+int vconn_transact_noreply(struct vconn *, struct ofpbuf *, struct ofpbuf **);
+int vconn_transact_multiple_noreply(struct vconn *, struct list *requests,
+                                    struct ofpbuf **replyp);
 
 void vconn_run(struct vconn *);
 void vconn_run_wait(struct vconn *);

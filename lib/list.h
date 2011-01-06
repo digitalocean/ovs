@@ -31,6 +31,7 @@ struct list {
 #define LIST_INITIALIZER(LIST) { LIST, LIST }
 
 void list_init(struct list *);
+void list_poison(struct list *);
 
 /* List insertion. */
 void list_insert(struct list *, struct list *);
@@ -53,18 +54,19 @@ struct list *list_back(struct list *);
 size_t list_size(const struct list *);
 bool list_is_empty(const struct list *);
 
-#define LIST_FOR_EACH(ITER, STRUCT, MEMBER, LIST)                   \
-    for (ITER = CONTAINER_OF((LIST)->next, STRUCT, MEMBER);         \
-         &(ITER)->MEMBER != (LIST);                                 \
-         ITER = CONTAINER_OF((ITER)->MEMBER.next, STRUCT, MEMBER))
-#define LIST_FOR_EACH_REVERSE(ITER, STRUCT, MEMBER, LIST)           \
-    for (ITER = CONTAINER_OF((LIST)->prev, STRUCT, MEMBER);         \
-         &(ITER)->MEMBER != (LIST);                                 \
-         ITER = CONTAINER_OF((ITER)->MEMBER.prev, STRUCT, MEMBER))
-#define LIST_FOR_EACH_SAFE(ITER, NEXT, STRUCT, MEMBER, LIST)        \
-    for (ITER = CONTAINER_OF((LIST)->next, STRUCT, MEMBER);         \
-         (NEXT = CONTAINER_OF((ITER)->MEMBER.next, STRUCT, MEMBER), \
-          &(ITER)->MEMBER != (LIST));                               \
-         ITER = NEXT)
+#define LIST_FOR_EACH(ITER, MEMBER, LIST)                               \
+    for (ASSIGN_CONTAINER(ITER, (LIST)->next, MEMBER);                  \
+         &(ITER)->MEMBER != (LIST);                                     \
+         ASSIGN_CONTAINER(ITER, (ITER)->MEMBER.next, MEMBER))
+#define LIST_FOR_EACH_REVERSE(ITER, MEMBER, LIST)                       \
+    for (ASSIGN_CONTAINER(ITER, (LIST)->prev, MEMBER);                  \
+         &(ITER)->MEMBER != (LIST);                                     \
+         ASSIGN_CONTAINER(ITER, (ITER)->MEMBER.prev, MEMBER))
+#define LIST_FOR_EACH_SAFE(ITER, NEXT, MEMBER, LIST)            \
+    for (ASSIGN_CONTAINER(ITER, (LIST)->next, MEMBER);          \
+         (&(ITER)->MEMBER != (LIST)                             \
+          ? ASSIGN_CONTAINER(NEXT, (ITER)->MEMBER.next, MEMBER) \
+          : 0);                                                 \
+         (ITER) = (NEXT))
 
 #endif /* list.h */

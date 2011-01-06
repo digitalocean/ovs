@@ -17,6 +17,7 @@
 #include <config.h>
 #include "random.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -54,6 +55,13 @@ random_init(void)
 
         seed = tv.tv_sec ^ tv.tv_usec ^ entropy;
     }
+}
+
+void
+random_set_seed(uint32_t seed_)
+{
+    assert(seed_);
+    seed = seed_;
 }
 
 void
@@ -103,7 +111,7 @@ static uint32_t
 random_next(void)
 {
     seed ^= seed << 13;
-    seed >>= 17;
+    seed ^= seed >> 17;
     seed ^= seed << 5;
 
     return seed;

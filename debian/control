@@ -4,8 +4,9 @@ Priority: extra
 Maintainer: Open vSwitch developers <dev@openvswitch.org>
 Uploaders: Ben Pfaff <pfaffben@debian.org>, Simon Horman <horms@debian.org>
 Build-Depends:
- debhelper (>= 5), autoconf (>= 2.64), automake1.10, libssl-dev,
- pkg-config (>= 0.21), po-debconf, bzip2, openssl, python, procps
+ debhelper (>= 5), autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
+ libssl-dev, pkg-config (>= 0.21), po-debconf, bzip2, openssl, python,
+ python-support (>= 0.8.4), procps
 Standards-Version: 3.9.1
 Homepage: http://openvswitch.org/
 
@@ -23,7 +24,8 @@ Description: Source code for Open vSwitch datapath Linux module
 
 Package: openvswitch-common
 Architecture: linux-any
-Depends: ${shlibs:Depends}, openssl, ${misc:Depends}
+Depends: ${shlibs:Depends}, openssl, ${misc:Depends}, python
+Suggests: ethtool
 Description: Open vSwitch common components
  openvswitch-common provides components required by both openvswitch-switch
  and openvswitch-controller.
@@ -40,27 +42,30 @@ Description: Open vSwitch switch implementations
  .
  Open vSwitch is a full-featured software-based Ethernet switch.
 
+Package: openvswitch-ipsec
+Architecture: linux-any
+Depends:
+ ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, 
+ ipsec-tools (>=0.8~alpha20101208), 
+ racoon (>=0.8~alpha20101208),
+ openvswitch-common (= ${binary:Version}),
+ openvswitch-switch (= ${binary:Version}),
+ python-openvswitch (= ${binary:Version})
+Description: Open vSwitch GRE-over-IPsec support
+ The ovs-monitor-ipsec script provides support for encrypting GRE
+ tunnels with IPsec.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
 Package: openvswitch-pki
 Architecture: all
 Depends:
- ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (>= ${source:Version}),
+ ${misc:Depends}, openvswitch-common (>= ${source:Version}),
  openvswitch-common (<< ${source:Version}.1~)
 Description: A dependency package for the Open vSwitch public key infrastructure
  openvswitch-pki provides PKI (public key infrastructure) support for
  Open vSwitch switches and controllers, reducing the risk of
  man-in-the-middle attacks on the Open vSwitch network infrastructure.
- .
- Open vSwitch is a full-featured software-based Ethernet switch.
-
-Package: openvswitch-pki-server
-Architecture: all
-Depends: ${shlibs:Depends}, ${misc:Depends}, ${perl:Depends}, openvswitch-pki (= ${binary:Version}), apache2
-Description: Open vSwitch public key infrastructure (HTTP server support)
- openvswitch-pki-server provides HTTP access to the Open vSwitch PKI (public
- key infrastructure) maintained on the local machine by the
- openvswitch-pki package.  This HTTP access is needed for secure and
- convenient OpenFlow switch setup using the ovs-switch-setup program
- in the openvswitch-switch package.
  .
  Open vSwitch is a full-featured software-based Ethernet switch.
 
@@ -82,8 +87,17 @@ Depends:
  ${shlibs:Depends}, ${misc:Depends},
  openvswitch-common (= ${binary:Version}),
  openvswitch-controller (= ${binary:Version}),
+ openvswitch-ipsec (= ${binary:Version}),
  openvswitch-switch (= ${binary:Version})
 Description: Debug symbols for Open vSwitch packages
  This package contains the debug symbols for all the other openvswitch-*
  packages.  Install it to debug one of them or to examine a core dump
  produced by one of them.
+
+Package: python-openvswitch
+Architecture: all
+Section: python
+Depends: ${python:Depends}, openvswitch-switch (= ${binary:Version})
+Provides: ${python:Provides}
+Description: Python bindings for Open vSwitch
+ This package contains the full Python bindings for Open vSwitch database.

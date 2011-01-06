@@ -75,18 +75,18 @@ AC_DEFUN([OVS_CHECK_OPENSSL],
    if test "$ssl" != false; then
        dnl Make sure that pkg-config is installed.
        m4_pattern_forbid([PKG_CHECK_MODULES])
-       PKG_CHECK_MODULES([SSL], [libssl], 
+       PKG_CHECK_MODULES([SSL], [openssl], 
          [HAVE_OPENSSL=yes],
          [HAVE_OPENSSL=no
           if test "$ssl" = check; then
-            AC_MSG_WARN([Cannot find libssl:
+            AC_MSG_WARN([Cannot find openssl:
 
 $SSL_PKG_ERRORS
 
 OpenFlow connections over SSL will not be supported.
 (You may use --disable-ssl to suppress this warning.)])
           else
-            AC_MSG_ERROR([Cannot find libssl (use --disable-ssl to configure without SSL support)])
+            AC_MSG_ERROR([Cannot find openssl (use --disable-ssl to configure without SSL support)])
           fi])
    else
        HAVE_OPENSSL=no
@@ -198,25 +198,12 @@ AC_DEFUN([OVS_CHECK_DOT],
     [for dot],
     [ovs_cv_dot],
     [dnl "dot" writes -V output to stderr:
-     if (dot -V) 2>&1 | grep '^dot - [gG]raphviz version' >/dev/null 2>&1; then
+     if (dot -V) 2>&1 | grep '^dot - [[gG]]raphviz version' >/dev/null 2>&1; then
        ovs_cv_dot=yes
      else
        ovs_cv_dot=no
-     fi])])
-
-dnl Check whether to build E-R diagrams.
-AC_DEFUN([OVS_CHECK_ER_DIAGRAMS],
-  [AC_REQUIRE([OVS_CHECK_DOT])
-   AC_REQUIRE([OVS_CHECK_PYTHON])
-   AC_CACHE_CHECK(
-    [whether to build E-R diagrams for database],
-    [ovs_cv_er_diagrams],
-    [if test $ovs_cv_dot != no && test $ovs_cv_python != no; then
-       ovs_cv_er_diagrams=yes
-     else
-       ovs_cv_er_diagrams=no
      fi])
-   AM_CONDITIONAL([BUILD_ER_DIAGRAMS], [test $ovs_cv_er_diagrams = yes])])
+   AM_CONDITIONAL([HAVE_DOT], [test "$ovs_cv_dot" = yes])])
 
 dnl Checks for pyuic4.
 AC_DEFUN([OVS_CHECK_PYUIC4],
@@ -348,4 +335,6 @@ AC_DEFUN([OVS_CHECK_LINKER_SECTIONS],
                 into sections with user-defined names and the linker
                 automatically defines __start_SECNAME and __stop_SECNAME
                 symbols that designate the start and end of the section.])
-   fi])
+   fi
+   AM_CONDITIONAL(
+     [USE_LINKER_SECTIONS], [test $ovs_cv_use_linker_sections = yes])])

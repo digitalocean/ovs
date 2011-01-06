@@ -21,7 +21,6 @@
 
 struct dpif;
 struct in_band;
-struct odp_actions;
 struct ofproto;
 struct rconn;
 struct settings;
@@ -31,16 +30,18 @@ int in_band_create(struct ofproto *, struct dpif *, struct switch_status *,
                    struct in_band **);
 void in_band_destroy(struct in_band *);
 
+void in_band_set_queue(struct in_band *, int queue_id);
 void in_band_set_remotes(struct in_band *,
                          const struct sockaddr_in *, size_t n);
 
 void in_band_run(struct in_band *);
 void in_band_wait(struct in_band *);
 
-bool in_band_msg_in_hook(struct in_band *, const flow_t *,
+bool in_band_msg_in_hook(struct in_band *, const struct flow *,
                          const struct ofpbuf *packet);
-bool in_band_rule_check(struct in_band *, const flow_t *,
-                        const struct odp_actions *);
+bool in_band_rule_check(struct in_band *, const struct flow *,
+                        const struct nlattr *odp_actions,
+                        size_t actions_len);
 void in_band_flushed(struct in_band *);
 
 #endif /* in-band.h */

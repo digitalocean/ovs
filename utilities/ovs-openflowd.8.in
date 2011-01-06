@@ -16,6 +16,9 @@ The \fBovs\-openflowd\fR program implements an OpenFlow switch using a
 flow-based datapath.  \fBovs\-openflowd\fR connects to one or more
 OpenFlow controllers over TCP or SSL.
 .PP
+For a more powerful alternative to \fBovs\-openflowd\fR, see
+\fBovs\-vswitchd\fR(8).  Do not run both daemons at the same time.
+.PP
 The mandatory \fIdatapath\fR argument argument specifies the local datapath
 to relay.  It takes one of the following forms:
 .
@@ -27,6 +30,11 @@ OpenFlow controller or controllers.  Each takes one of the following
 forms:
 .
 .so lib/vconn-active.man
+.IP "\fBnone\fR"
+Run without actively maintaining a connection to a remote OpenFlow
+controller.  (See the \fB\-\-listen\fR option, under \fBNetworking
+Options\fR below, for another way to make OpenFlow connections to the
+switch.)
 .
 .PP
 When multiple controllers are configured, \fBovs\-openflowd\fR
@@ -170,7 +178,8 @@ the local port network device, and start the DHCP client afterward.
 .SS "OpenFlow Options"
 .TP
 \fB\-\-datapath\-id=\fIdpid\fR
-Sets \fIdpid\fR, which must consist of exactly 16 hexadecimal digits,
+Sets \fIdpid\fR, which must consist of exactly 16 hexadecimal digits
+and may not be all-zero,
 as the datapath ID that the switch will use to identify itself to
 OpenFlow controllers.
 .IP
@@ -425,8 +434,20 @@ switching.
 .SS "Logging Options"
 .so lib/vlog.man
 .SS "Other Options"
+.so lib/unixctl.man
 .so lib/common.man
 .so lib/leak-checker.man
+.
+.SH "RUNTIME MANAGEMENT COMMANDS"
+\fBovs\-appctl\fR(8) can send commands to a running
+\fBovs\-openflowd\fR process.  The currently supported commands are
+described below.
+.SS "OVS\-OPENFLOWD COMMANDS"
+These commands are specific to \fBovs\-openflowd\fR.
+.IP "\fBexit\fR"
+Causes \fBovs\-openflowd\fR to gracefully terminate.
+.so ofproto/ofproto-unixctl.man
+.so lib/vlog-unixctl.man
 .
 .SH "SEE ALSO"
 .

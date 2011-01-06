@@ -35,7 +35,7 @@
 #include "vconn.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(status)
+VLOG_DEFINE_THIS_MODULE(status);
 
 struct status_category {
     struct list node;
@@ -59,8 +59,9 @@ struct status_reply {
 
 int
 switch_status_handle_request(struct switch_status *ss, struct rconn *rconn,
-                             struct nicira_header *request)
+                             const struct ofp_header *oh)
 {
+    const struct nicira_header *request = (const struct nicira_header *) oh;
     struct status_category *c;
     struct nicira_header *reply;
     struct status_reply sr;
@@ -70,17 +71,15 @@ switch_status_handle_request(struct switch_status *ss, struct rconn *rconn,
     sr.request.string = (void *) (request + 1);
     sr.request.length = ntohs(request->header.length) - sizeof *request;
     ds_init(&sr.output);
-    LIST_FOR_EACH (c, struct status_category, node, &ss->categories) {
+    LIST_FOR_EACH (c, node, &ss->categories) {
         if (!memcmp(c->name, sr.request.string,
                     MIN(strlen(c->name), sr.request.length))) {
             sr.category = c;
             c->cb(&sr, c->aux);
         }
     }
-    reply = make_openflow_xid(sizeof *reply + sr.output.length,
-                              OFPT_VENDOR, request->header.xid, &b);
-    reply->vendor = htonl(NX_VENDOR_ID);
-    reply->subtype = htonl(NXT_STATUS_REPLY);
+    reply = make_nxmsg_xid(sizeof *reply + sr.output.length,
+                           NXT_STATUS_REPLY, request->header.xid, &b);
     memcpy(reply + 1, sr.output.string, sr.output.length);
     retval = rconn_send(rconn, b, NULL);
     if (retval && retval != EAGAIN) {
@@ -170,8 +169,7 @@ switch_status_destroy(struct switch_status *ss)
         /* Orphan any remaining categories, so that unregistering them later
          * won't write to bad memory. */
         struct status_category *c, *next;
-        LIST_FOR_EACH_SAFE (c, next,
-                            struct status_category, node, &ss->categories) {
+        LIST_FOR_EACH_SAFE (c, next, node, &ss->categories) {
             list_init(&c->node);
         }
         switch_status_unregister(ss->config_cat);

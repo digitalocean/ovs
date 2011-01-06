@@ -30,18 +30,14 @@
 extern "C" {
 #endif
 
-struct odp_actions;
+struct cls_rule;
+struct nlattr;
 struct ofhooks;
 struct ofproto;
 struct svec;
 
-enum {
-    DP_GROUP_FLOOD = 0,
-    DP_GROUP_ALL = 1
-};
-
 struct ofexpired {
-    flow_t flow;
+    struct flow flow;
     uint64_t packet_count;      /* Packets from subrules. */
     uint64_t byte_count;        /* Bytes from subrules. */
     long long int used;         /* Last-used time (0 if never used). */
@@ -99,6 +95,9 @@ int ofproto_run2(struct ofproto *, bool revalidate_all);
 void ofproto_wait(struct ofproto *);
 bool ofproto_is_alive(const struct ofproto *);
 
+int ofproto_port_del(struct ofproto *, uint16_t odp_port);
+bool ofproto_port_is_floodable(struct ofproto *, uint16_t odp_port);
+
 /* Configuration. */
 void ofproto_set_datapath_id(struct ofproto *, uint64_t datapath_id);
 void ofproto_set_controllers(struct ofproto *,
@@ -107,6 +106,7 @@ void ofproto_set_fail_mode(struct ofproto *, enum ofproto_fail_mode fail_mode);
 void ofproto_reconnect_controllers(struct ofproto *);
 void ofproto_set_extra_in_band_remotes(struct ofproto *,
                                        const struct sockaddr_in *, size_t n);
+void ofproto_set_in_band_queue(struct ofproto *, int queue_id);
 void ofproto_set_desc(struct ofproto *,
                       const char *mfr_desc, const char *hw_desc,
                       const char *sw_desc, const char *serial_desc,
@@ -125,26 +125,22 @@ void ofproto_get_snoops(const struct ofproto *, struct svec *);
 void ofproto_get_all_flows(struct ofproto *p, struct ds *);
 
 /* Functions for use by ofproto implementation modules, not by clients. */
-int ofproto_send_packet(struct ofproto *, const flow_t *,
+int ofproto_send_packet(struct ofproto *, const struct flow *,
                         const union ofp_action *, size_t n_actions,
                         const struct ofpbuf *);
-void ofproto_add_flow(struct ofproto *, const flow_t *, uint32_t wildcards,
-                      unsigned int priority,
-                      const union ofp_action *, size_t n_actions,
-                      int idle_timeout);
-void ofproto_delete_flow(struct ofproto *, const flow_t *, uint32_t wildcards,
-                         unsigned int priority);
+void ofproto_add_flow(struct ofproto *, const struct cls_rule *,
+                      const union ofp_action *, size_t n_actions);
+void ofproto_delete_flow(struct ofproto *, const struct cls_rule *);
 void ofproto_flush_flows(struct ofproto *);
 
 /* Hooks for ovs-vswitchd. */
 struct ofhooks {
-    void (*port_changed_cb)(enum ofp_port_reason, const struct ofp_phy_port *,
-                            void *aux);
-    bool (*normal_cb)(const flow_t *, const struct ofpbuf *packet,
-                      struct odp_actions *, tag_type *,
+    bool (*normal_cb)(const struct flow *, const struct ofpbuf *packet,
+                      struct ofpbuf *odp_actions, tag_type *,
                       uint16_t *nf_output_iface, void *aux);
-    void (*account_flow_cb)(const flow_t *, tag_type tags,
-                            const union odp_action *, size_t n_actions,
+    void (*account_flow_cb)(const struct flow *, tag_type tags,
+                            const struct nlattr *odp_actions,
+                            size_t actions_len,
                             unsigned long long int n_bytes, void *aux);
     void (*account_checkpoint_cb)(void *aux);
 };

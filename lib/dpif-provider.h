@@ -90,13 +90,14 @@ struct dpif_class {
 
     /* Attempts to open an existing dpif called 'name', if 'create' is false,
      * or to open an existing dpif or create a new one, if 'create' is true.
-     * 'type' corresponds to the 'type' field used in the dpif_class
-     * structure.
      *
-     * If successful, stores a pointer to the new dpif in '*dpifp'.  On failure
-     * there are no requirements on what is stored in '*dpifp'. */
-    int (*open)(const char *name, const char *type, bool create,
-                struct dpif **dpifp);
+     * 'dpif_class' is the class of dpif to open.
+     *
+     * If successful, stores a pointer to the new dpif in '*dpifp', which must
+     * have class 'dpif_class'.  On failure there are no requirements on what
+     * is stored in '*dpifp'. */
+    int (*open)(const struct dpif_class *dpif_class,
+                const char *name, bool create, struct dpif **dpifp);
 
     /* Closes 'dpif' and frees associated memory. */
     void (*close)(struct dpif *dpif);
@@ -137,10 +138,9 @@ struct dpif_class {
      * meaning is the same as for the get_drop_frags member function. */
     int (*set_drop_frags)(struct dpif *dpif, bool drop_frags);
 
-    /* Creates a new port in 'dpif' connected to network device 'devname'.
-     * 'flags' is a set of ODP_PORT_* flags.  If successful, sets '*port_no'
+    /* Adds 'netdev' as a new port in 'dpif'.  If successful, sets '*port_no'
      * to the new port's port number. */
-    int (*port_add)(struct dpif *dpif, const char *devname, uint16_t flags,
+    int (*port_add)(struct dpif *dpif, struct netdev *netdev,
                     uint16_t *port_no);
 
     /* Removes port numbered 'port_no' from 'dpif'. */
@@ -182,20 +182,6 @@ struct dpif_class {
     /* Arranges for the poll loop to wake up when 'port_poll' will return a
      * value other than EAGAIN. */
     void (*port_poll_wait)(const struct dpif *dpif);
-
-    /* Stores in 'ports' the port numbers of up to 'n' ports that belong to
-     * 'group' in 'dpif'.  Returns the number of ports in 'group' (not the
-     * number stored), if successful, otherwise a negative errno value. */
-    int (*port_group_get)(const struct dpif *dpif, int group,
-                          uint16_t ports[], int n);
-
-    /* Changes port group 'group' in 'dpif' to consist of the 'n' ports whose
-     * numbers are given in 'ports'.
-     *
-     * Use the get_stats member function to obtain the number of supported port
-     * groups. */
-    int (*port_group_set)(struct dpif *dpif, int group,
-                          const uint16_t ports[], int n);
 
     /* For each flow 'flow' in the 'n' flows in 'flows':
      *
@@ -261,17 +247,10 @@ struct dpif_class {
      * 'n' flows).  On failure, returns a negative errno value. */
     int (*flow_list)(const struct dpif *dpif, struct odp_flow flows[], int n);
 
-    /* Performs the 'n_actions' actions in 'actions' on the Ethernet frame
-     * specified in 'packet'.
-     *
-     * Pretends that the frame was originally received on the port numbered
-     * 'in_port'.  This affects only ODPAT_OUTPUT_GROUP actions, which will not
-     * send a packet out their input port.  Specify the number of an unused
-     * port (e.g. UINT16_MAX is currently always unused) to avoid this
-     * behavior. */
-    int (*execute)(struct dpif *dpif, uint16_t in_port,
-                   const union odp_action actions[], int n_actions,
-                   const struct ofpbuf *packet);
+    /* Performs the 'actions_len' bytes of actions in 'actions' on the Ethernet
+     * frame specified in 'packet'. */
+    int (*execute)(struct dpif *dpif, const struct nlattr *actions,
+                   size_t actions_len, const struct ofpbuf *packet);
 
     /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  Each ODPL_* bit
      * set in '*listen_mask' indicates the 'dpif' will receive messages of the

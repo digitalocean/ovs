@@ -19,18 +19,11 @@
 #include "odp-compat.h"
 
 struct vport;
-struct dp_port;
+struct vport_parms;
 
 /* The following definitions are for users of the vport subsytem: */
 
-int vport_user_add(const struct odp_vport_add __user *);
-int vport_user_mod(const struct odp_vport_mod __user *);
-int vport_user_del(const char __user *udevname);
-
-#ifdef CONFIG_COMPAT
-int compat_vport_user_add(struct compat_odp_vport_add __user *);
-int compat_vport_user_mod(struct compat_odp_vport_mod __user *);
-#endif
+int vport_user_mod(const struct odp_port __user *);
 
 int vport_user_stats_get(struct odp_vport_stats_req __user *);
 int vport_user_stats_set(struct odp_vport_stats_req __user *);
@@ -45,26 +38,22 @@ void vport_unlock(void);
 int vport_init(void);
 void vport_exit(void);
 
-struct vport *vport_add(const char *name, const char *type, const void __user *config);
-int vport_mod(struct vport *, const void __user *config);
+struct vport *vport_add(const struct vport_parms *);
+int vport_mod(struct vport *, struct odp_port *);
 int vport_del(struct vport *);
 
 struct vport *vport_locate(const char *name);
 
-int vport_attach(struct vport *, struct dp_port *);
-int vport_detach(struct vport *);
-
 int vport_set_mtu(struct vport *, int mtu);
 int vport_set_addr(struct vport *, const unsigned char *);
-int vport_set_stats(struct vport *, struct odp_vport_stats *);
+int vport_set_stats(struct vport *, struct rtnl_link_stats64 *);
 
 const char *vport_get_name(const struct vport *);
 const char *vport_get_type(const struct vport *);
 const unsigned char *vport_get_addr(const struct vport *);
 
-struct dp_port *vport_get_dp_port(const struct vport *);
 struct kobject *vport_get_kobj(const struct vport *);
-int vport_get_stats(struct vport *, struct odp_vport_stats *);
+int vport_get_stats(struct vport *, struct rtnl_link_stats64 *);
 
 unsigned vport_get_flags(const struct vport *);
 int vport_is_running(const struct vport *);
@@ -74,6 +63,7 @@ int vport_get_ifindex(const struct vport *);
 int vport_get_iflink(const struct vport *);
 
 int vport_get_mtu(const struct vport *);
+void vport_get_config(const struct vport *, void *);
 
 int vport_send(struct vport *, struct sk_buff *);
 
@@ -90,29 +80,73 @@ struct vport_percpu_stats {
 struct vport_err_stats {
 	u64 rx_dropped;
 	u64 rx_errors;
-	u64 rx_frame_err;
-	u64 rx_over_err;
-	u64 rx_crc_err;
 	u64 tx_dropped;
 	u64 tx_errors;
-	u64 collisions;
 };
 
+/**
+ * struct vport - one port within a datapath
+ * @port_no: Index into @dp's @ports array.
+ * @dp: Datapath to which this port belongs.
+ * @kobj: Represents /sys/class/net/<devname>/brport.
+ * @linkname: The name of the link from /sys/class/net/<datapath>/brif to this
+ * &struct vport.  (We keep this around so that we can delete it if the
+ * device gets renamed.)  Set to the null string when no link exists.
+ * @node: Element in @dp's @port_list.
+ * @sflow_pool: Number of packets that were candidates for sFlow sampling,
+ * regardless of whether they were actually chosen and sent down to userspace.
+ * @hash_node: Element in @dev_table hash table in vport.c.
+ * @ops: Class structure.
+ * @percpu_stats: Points to per-CPU statistics used and maintained by the vport
+ * code if %VPORT_F_GEN_STATS is set to 1 in @ops flags, otherwise unused.
+ * @stats_lock: Protects @err_stats and @offset_stats.
+ * @err_stats: Points to error statistics used and maintained by the vport code
+ * if %VPORT_F_GEN_STATS is set to 1 in @ops flags, otherwise unused.
+ * @offset_stats: Added to actual statistics as a sop to compatibility with
+ * XAPI for Citrix XenServer.  Deprecated.
+ */
 struct vport {
+	u16 port_no;
+	struct datapath	*dp;
+	struct kobject kobj;
+	char linkname[IFNAMSIZ];
+	struct list_head node;
+	atomic_t sflow_pool;
+
 	struct hlist_node hash_node;
 	const struct vport_ops *ops;
-	struct dp_port *dp_port;
 
-	struct vport_percpu_stats *percpu_stats;
+	struct vport_percpu_stats __percpu *percpu_stats;
 
 	spinlock_t stats_lock;
 	struct vport_err_stats err_stats;
-	struct odp_vport_stats offset_stats;
+	struct rtnl_link_stats64 offset_stats;
 };
 
 #define VPORT_F_REQUIRED	(1 << 0) /* If init fails, module loading fails. */
 #define VPORT_F_GEN_STATS	(1 << 1) /* Track stats at the generic layer. */
-#define VPORT_F_TUN_ID		(1 << 2) /* Sets OVS_CB(skb)->tun_id. */
+#define VPORT_F_FLOW		(1 << 2) /* Sets OVS_CB(skb)->flow. */
+#define VPORT_F_TUN_ID		(1 << 3) /* Sets OVS_CB(skb)->tun_id. */
+
+/**
+ * struct vport_parms - parameters for creating a new vport
+ *
+ * @name: New vport's name.
+ * @type: New vport's type.
+ * @config: Kernel copy of 'config' member of &struct odp_port describing
+ * configuration for new port.  Exactly %VPORT_CONFIG_SIZE bytes.
+ * @dp: New vport's datapath.
+ * @port_no: New vport's port number.
+ */
+struct vport_parms {
+	const char *name;
+	const char *type;
+	const void *config;
+
+	/* For vport_alloc(). */
+	struct datapath *dp;
+	u16 port_no;
+};
 
 /**
  * struct vport_ops - definition of a type of virtual port
@@ -125,23 +159,18 @@ struct vport {
  * failure of this function will cause the module to not load.  If the flag is
  * not set and initialzation fails then no vports of this type can be created.
  * @exit: Called at module unload.
- * @create: Create a new vport called 'name' with vport type specific
- * configuration 'config' (which must be copied from userspace before use).  On
- * success must allocate a new vport using vport_alloc().
+ * @create: Create a new vport configured as specified.  On success returns
+ * a new vport allocated with vport_alloc(), otherwise an ERR_PTR() value.
  * @modify: Modify the configuration of an existing vport.  May be null if
  * modification is not supported.
- * @destroy: Destroy and free a vport using vport_free().  Prior to destruction
- * @detach will be called followed by synchronize_rcu().
- * @attach: Attach a previously created vport to a datapath.  After attachment
- * packets may be sent and received.  Prior to attachment any packets may be
- * silently discarded.  May be null if not needed.
- * @detach: Detach a vport from a datapath.  May be null if not needed.
+ * @destroy: Detach and destroy a vport.
  * @set_mtu: Set the device's MTU.  May be null if not supported.
  * @set_addr: Set the device's MAC address.  May be null if not supported.
  * @set_stats: Provides stats as an offset to be added to the device stats.
  * May be null if not supported.
  * @get_name: Get the device's name.
  * @get_addr: Get the device's MAC address.
+ * @get_config: Get the device's configuration.
  * @get_kobj: Get the kobj associated with the device (may return null).
  * @get_stats: Fill in the transmit/receive stats.  May be null if stats are
  * not supported or if generic stats are in use.  If defined and
@@ -167,22 +196,20 @@ struct vport_ops {
 	void (*exit)(void);
 
 	/* Called with RTNL lock. */
-	struct vport *(*create)(const char *name, const void __user *config);
-	int (*modify)(struct vport *, const void __user *config);
+	struct vport *(*create)(const struct vport_parms *);
+	int (*modify)(struct vport *, struct odp_port *);
 	int (*destroy)(struct vport *);
-
-	int (*attach)(struct vport *);
-	int (*detach)(struct vport *);
 
 	int (*set_mtu)(struct vport *, int mtu);
 	int (*set_addr)(struct vport *, const unsigned char *);
-	int (*set_stats)(const struct vport *, struct odp_vport_stats *);
+	int (*set_stats)(const struct vport *, struct rtnl_link_stats64 *);
 
 	/* Called with rcu_read_lock or RTNL lock. */
 	const char *(*get_name)(const struct vport *);
 	const unsigned char *(*get_addr)(const struct vport *);
+	void (*get_config)(const struct vport *, void *);
 	struct kobject *(*get_kobj)(const struct vport *);
-	int (*get_stats)(const struct vport *, struct odp_vport_stats *);
+	int (*get_stats)(const struct vport *, struct rtnl_link_stats64 *);
 
 	unsigned (*get_dev_flags)(const struct vport *);
 	int (*is_running)(const struct vport *);
@@ -199,15 +226,11 @@ struct vport_ops {
 enum vport_err_type {
 	VPORT_E_RX_DROPPED,
 	VPORT_E_RX_ERROR,
-	VPORT_E_RX_FRAME,
-	VPORT_E_RX_OVER,
-	VPORT_E_RX_CRC,
 	VPORT_E_TX_DROPPED,
 	VPORT_E_TX_ERROR,
-	VPORT_E_COLLISION,
 };
 
-struct vport *vport_alloc(int priv_size, const struct vport_ops *);
+struct vport *vport_alloc(int priv_size, const struct vport_ops *, const struct vport_parms *);
 void vport_free(struct vport *);
 
 #define VPORT_ALIGN 8
@@ -246,10 +269,10 @@ void vport_record_error(struct vport *, enum vport_err_type err_type);
 
 /* List of statically compiled vport implementations.  Don't forget to also
  * add yours to the list at the top of vport.c. */
-extern struct vport_ops netdev_vport_ops;
-extern struct vport_ops internal_vport_ops;
-extern struct vport_ops patch_vport_ops;
-extern struct vport_ops gre_vport_ops;
-extern struct vport_ops capwap_vport_ops;
+extern const struct vport_ops netdev_vport_ops;
+extern const struct vport_ops internal_vport_ops;
+extern const struct vport_ops patch_vport_ops;
+extern const struct vport_ops gre_vport_ops;
+extern const struct vport_ops capwap_vport_ops;
 
 #endif /* vport.h */

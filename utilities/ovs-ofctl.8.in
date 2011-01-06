@@ -115,6 +115,15 @@ the statistics are aggregated across all flows in the switch's flow
 tables.  See \fBFlow Syntax\fR, below, for the syntax of \fIflows\fR.
 The output format is descrbed in \fBTable Entry Output\fR.
 .
+.IP "\fBqueue\-stats \fIswitch \fR[\fIport \fR[\fIqueue\fR]]"
+Prints to the console statistics for the specified \fIqueue\fR on
+\fIport\fR within \fIswitch\fR.  Either of \fIport\fR or \fIqueue\fR
+or both may be omitted (or equivalently specified as \fBALL\fR).  If
+both are omitted, statistics are printed for all queues on all ports.
+If only \fIqueue\fR is omitted, then statistics are printed for all
+queues on \fIport\fR; if only \fIport\fR is omitted, then statistics
+are printed for \fIqueue\fR on every port where it exists.
+.
 .TP
 \fBadd\-flow \fIswitch flow\fR
 Add the flow entry as described by \fIflow\fR to the \fIswitch\fR's 
@@ -328,6 +337,44 @@ as a decimal number between 0 and 255, inclusive.
 .IP
 When \fBdl_type\fR and \fBnw_proto\fR take other values, the values of
 these settings are ignored (see \fBFlow Syntax\fR above).
+.IP \fBtun_id=\fItunnel\-id\fR
+Matches tunnel identifier \fItunnel\-id\fR.  Only packets that arrive
+over a tunnel that carries a key (e.g. GRE with the RFC 2890 key
+extension) will have a nonzero tunnel ID.
+.IP
+\fBtun_id\fR requires use of one of two Nicira extensions to OpenFlow:
+.RS
+.IP "NXM (Nicira Extended Match)"
+This extension fully supports \fBtun_id\fR. 
+.IP "Tunnel ID from Cookie"
+This extension supports \fBtun_id\fR with two caveats: the top 32 bits
+of the \fBcookie\fR (see below) are used for \fItunnel\-id\fR and thus
+unavailable for other use, and specifying \fBtun_id\fR on
+\fBdump\-flows\fR or \fBdump\-aggregate\fR has no effect.
+.RE
+.IP
+When \fBtun_id\fR is specified, \fBovs\-ofctl\fR will automatically
+attempt to negotiate use of one of these extensions.  It will use the
+``tunnel ID from cookie'' extension if neither caveat applies and NXM
+otherwise.  If the switch does not support the needed extension, then
+\fBovs\-ofctl\fR will report a fatal error.
+.IP "\fBreg\fIidx\fB=\fIvalue\fR[\fB/\fImask\fR]"
+Matches \fIvalue\fR either exactly or with optional \fImask\fR in
+register number \fIidx\fR.  The valid range of \fIidx\fR depends on
+the switch.  \fIvalue\fR and \fImask\fR are 32-bit integers, by
+default in decimal (use a \fB0x\fR prefix to specify hexadecimal).
+Arbitrary \fImask\fR values are allowed: a 1-bit in \fImask\fR
+indicates that the corresponding bit in \fIvalue\fR must match
+exactly, and a 0-bit wildcards that bit.
+.IP
+When a packet enters an OpenFlow switch, all of the registers are set
+to 0.  Only explicit Nicira extension actions change register values.
+.IP
+Register matches require support for the NXM (Nicira Extended Match)
+extension to OpenFlow.  When a register match is specified,
+\fBovs\-ofctl\fR will automatically attempt to negotiate use of this
+extension.  If the switch does not support NXM, then \fBovs\-ofctl\fR
+will report a fatal error.
 .
 .PP
 The following shorthand notations are also available:
@@ -448,8 +495,13 @@ addition to any other actions in this flow entry.  Recursive
 \fBresubmit\fR actions are ignored.
 .
 .IP \fBset_tunnel\fB:\fIid\fR
-If outputting to a port that encapsulates the packet in a tunnel and supports
-an identifier (such as GRE), sets the identifier to \fBid\fR.
+.IQ \fBset_tunnel64\fB:\fIid\fR
+If outputting to a port that encapsulates the packet in a tunnel and
+supports an identifier (such as GRE), sets the identifier to \fBid\fR.
+If the \fBset_tunnel\fR form is used and \fIid\fR fits in 32 bits,
+then this uses an action extension that is supported by Open vSwitch
+1.0 and later.  Otherwise, if \fIid\fR is a 64-bit value, it requires
+Open vSwitch 1.1 or later.
 .
 .IP \fBdrop_spoofed_arp\fR
 Stops processing further actions, if the packet being processed is an
@@ -460,6 +512,58 @@ Ethernet header.
 This is useful because OpenFlow does not provide a way to match on the
 Ethernet addresses inside ARP packets, so there is no other way to
 drop spoofed ARPs other than sending every ARP packet to a controller.
+.
+.IP \fBset_queue\fB:\fIqueue\fR
+Sets the queue that should be used to \fIqueue\fR when packets are
+output.  The number of supported queues depends on the switch; some
+OpenFlow implementations do not support queuing at all.
+.
+.IP \fBpop_queue\fR
+Restores the queue to the value it was before any \fBset_queue\fR
+actions were applied.
+.
+.IP \fBnote:\fR[\fIhh\fR]...
+Does nothing at all.  Any number of bytes represented as hex digits
+\fIhh\fR may be included.  Pairs of hex digits may be separated by
+periods for readability.
+.
+.IP "\fBmove:\fIsrc\fB[\fIstart\fB..\fIend\fB]->\fIdst\fB[\fIstart\fB..\fIend\fB]\fR"
+Copies the named bits from field \fIsrc\fR to field \fIdst\fR.
+\fIsrc\fR and \fIdst\fR must be NXM field names as defined in
+\fBnicira\-ext.h\fR, e.g. \fBNXM_OF_UDP_SRC\fR or \fBNXM_NX_REG0\fR.
+Each \fIstart\fR and \fIend\fR pair, which are inclusive, must specify
+the same number of bits and must fit within its respective field.
+Shorthands for \fB[\fIstart\fB..\fIend\fB]\fR exist: use
+\fB[\fIbit\fB]\fR to specify a single bit or \fB[]\fR to specify an
+entire field.
+.IP
+Examples: \fBmove:NXM_NX_REG0[0..5]\->NXM_NX_REG1[26..31]\fR copies the
+six bits numbered 0 through 5, inclusive, in register 0 into bits 26
+through 31, inclusive;
+\fBmove:NXM_NX_REG0[0..15]->NXM_OF_VLAN_TCI[]\fR copies the least
+significant 16 bits of register 0 into the VLAN TCI field.
+.
+.IP "\fBload:\fIvalue\fB\->\fIdst\fB[\fIstart\fB..\fIend\fB]"
+Writes \fIvalue\fR to bits \fIstart\fR through \fIend\fR, inclusive,
+in field \fBdst\fR.
+.IP
+Example: \fBload:55\->NXM_NX_REG2[0..5]\fR loads value 55 (bit pattern
+\fB110111\fR) into bits 0 through 5, inclusive, in register 2.
+.
+.IP "\fBmultipath(\fIfields\fB, \fIbasis\fB, \fIalgorithm\fB, \fIn_links\fB, \fIarg\fB, \fIdst\fB[\fIstart\fB..\fIend\fB])\fR"
+Hashes \fIfields\fR using \fIbasis\fR as a universal hash parameter,
+then the applies multipath link selection \fIalgorithm\fR (with
+parameter \fIarg\fR) to choose one of \fIn_links\fR output links
+numbered 0 through \fIn_links\fR minus 1, and stores the link into
+\fIdst\fB[\fIstart\fB..\fIend\fB]\fR, which must be an NXM register as
+described above.
+.IP
+Currently, \fIfields\fR must be either \fBeth_src\fR or
+\fBsymmetric_l4\fR and \fIalgorithm\fR must be one of \fBmodulo_n\fR,
+\fBhash_threshold\fR, \fBhrw\fR, and \fBiter_hash\fR.  Only
+the \fBiter_hash\fR algorithm uses \fIarg\fR.
+.IP
+Refer to \fBnicira\-ext.h\fR for more details.
 .RE
 .
 .IP
@@ -477,8 +581,11 @@ A cookie is an opaque identifier that can be associated with the flow.
 flows.
 .
 .PP
-The \fBadd\-flow\fR, \fBadd\-flows\fR, and \fBdel\-flows\fR commands
-support an additional optional field:
+The following additional field sets the priority for flows added by
+the \fBadd\-flow\fR and \fBadd\-flows\fR commands.  For
+\fBmod\-flows\fR and \fBdel\-flows\fR when \fB\-\-strict\fR is
+specified, priority must match along with the rest of the flow
+specification.  Other commands ignore the priority value.
 .
 .IP \fBpriority=\fIvalue\fR
 The priority at which a wildcarded entry will match in comparison to
@@ -495,8 +602,8 @@ optional fields:
 .TP
 \fBidle_timeout=\fIseconds\fR
 Causes the flow to expire after the given number of seconds of
-inactivity.  A value of 0 prevents a flow from expiring due to
-inactivity.  The default is 60 seconds.
+inactivity.  A value of 0 (the default) prevents a flow from expiring due to
+inactivity.
 .
 .IP \fBhard_timeout=\fIseconds\fR
 Causes the flow to expire after the given number of seconds,
@@ -557,6 +664,43 @@ described in \fBFlow Syntax\fR, above.
 \fB\-\-strict\fR
 Uses strict matching when running flow modification commands.
 .
+.IP "\fB\-F \fIformat\fR"
+.IQ "\fB\-\-flow\-format=\fIformat\fR"
+\fBovs\-ofctl\fR supports the following flow formats, in order of
+increasing capability:
+.RS
+.IP "\fBopenflow10\fR"
+This is the standard OpenFlow 1.0 flow format.  It should be supported
+by all OpenFlow switches.
+.
+.IP "\fBtun_id_from_cookie\fR"
+This Nicira extension to OpenFlow adds minimal and limited support for
+\fBtun_id\fR, but it does not support any other Nicira flow
+extensions.  (This flow format is deprecated.)
+.
+.IP "\fBnxm\fR (Nicira Extended Match)"
+This Nicira extension to OpenFlow is flexible and extensible.  It
+supports all of the Nicira flow extensions, such as \fBtun_id\fR and
+registers.
+.RE
+.IP
+Usually, \fBovs\-ofctl\fR picks the correct format automatically.  For
+commands that modify the flow table, \fBovs\-ofctl\fR by default uses
+the most widely supported flow format that supports the flows being
+added.  For commands that query the flow table, \fBovs\-ofctl\fR by
+default queries and uses the most advanced format supported by the
+switch.
+.IP
+This option, where \fIformat\fR is one of the formats listed in the
+above table, overrides \fBovs\-ofctl\fR's default choice of flow
+format.  If a command cannot work as requested using the requested
+flow format, \fBovs\-ofctl\fR will report a fatal error.
+.
+.IP "\fB\-m\fR"
+.IQ "\fB\-\-more\fR"
+Increases the verbosity of OpenFlow messages printed and logged by
+\fBovs\-ofctl\fR commands.  Specify this option more than once to
+increase verbosity further.
 .SS "Public Key Infrastructure Options"
 .so lib/ssl.man
 .so lib/vlog.man

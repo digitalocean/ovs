@@ -12,8 +12,10 @@ TESTSUITE_AT = \
 	tests/check-structs.at \
 	tests/daemon.at \
 	tests/daemon-py.at \
+	tests/ovs-ofctl.at \
+	tests/multipath.at \
 	tests/vconn.at \
-	tests/dir_name.at \
+	tests/file_name.at \
 	tests/aes128.at \
 	tests/uuid.at \
 	tests/json.at \
@@ -22,6 +24,7 @@ TESTSUITE_AT = \
 	tests/timeval.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
+	tests/ofproto.at \
 	tests/ovsdb.at \
 	tests/ovsdb-log.at \
 	tests/ovsdb-types.at \
@@ -44,7 +47,7 @@ TESTSUITE_AT = \
 	tests/ovs-vsctl.at \
 	tests/interface-reconfigure.at
 TESTSUITE = $(srcdir)/tests/testsuite
-DISTCLEANFILES += tests/atconfig tests/atlocal $(TESTSUITE)
+DISTCLEANFILES += tests/atconfig tests/atlocal
 
 AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
 
@@ -60,10 +63,11 @@ lcov_wrappers = \
 	tests/lcov/ovsdb-server \
 	tests/lcov/ovsdb-tool \
 	tests/lcov/test-aes128 \
+	tests/lcov/test-byte-order \
 	tests/lcov/test-classifier \
 	tests/lcov/test-csum \
 	tests/lcov/test-dhcp-client \
-	tests/lcov/test-dir_name \
+	tests/lcov/test-file_name \
 	tests/lcov/test-flows \
 	tests/lcov/test-hash \
 	tests/lcov/test-hmap \
@@ -71,11 +75,14 @@ lcov_wrappers = \
 	tests/lcov/test-jsonrpc \
 	tests/lcov/test-list \
 	tests/lcov/test-lockfile \
+	tests/lcov/test-multipath \
 	tests/lcov/test-ovsdb \
+	tests/lcov/test-random \
 	tests/lcov/test-reconnect \
 	tests/lcov/test-sha1 \
 	tests/lcov/test-timeval \
 	tests/lcov/test-type-props \
+	tests/lcov/test-unix-socket \
 	tests/lcov/test-uuid \
 	tests/lcov/test-vconn
 
@@ -108,10 +115,11 @@ valgrind_wrappers = \
 	tests/valgrind/ovsdb-server \
 	tests/valgrind/ovsdb-tool \
 	tests/valgrind/test-aes128 \
+	tests/valgrind/test-byte-order \
 	tests/valgrind/test-classifier \
 	tests/valgrind/test-csum \
 	tests/valgrind/test-dhcp-client \
-	tests/valgrind/test-dir_name \
+	tests/valgrind/test-file_name \
 	tests/valgrind/test-flows \
 	tests/valgrind/test-hash \
 	tests/valgrind/test-hmap \
@@ -119,11 +127,14 @@ valgrind_wrappers = \
 	tests/valgrind/test-jsonrpc \
 	tests/valgrind/test-list \
 	tests/valgrind/test-lockfile \
+	tests/valgrind/test-multipath \
 	tests/valgrind/test-ovsdb \
+	tests/valgrind/test-random \
 	tests/valgrind/test-reconnect \
 	tests/valgrind/test-sha1 \
 	tests/valgrind/test-timeval \
 	tests/valgrind/test-type-props \
+	tests/valgrind/test-unix-socket \
 	tests/valgrind/test-uuid \
 	tests/valgrind/test-vconn
 
@@ -178,9 +189,9 @@ noinst_PROGRAMS += tests/test-csum
 tests_test_csum_SOURCES = tests/test-csum.c
 tests_test_csum_LDADD = lib/libopenvswitch.a
 
-noinst_PROGRAMS += tests/test-dir_name
-tests_test_dir_name_SOURCES = tests/test-dir_name.c
-tests_test_dir_name_LDADD = lib/libopenvswitch.a
+noinst_PROGRAMS += tests/test-file_name
+tests_test_file_name_SOURCES = tests/test-file_name.c
+tests_test_file_name_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-flows
 tests_test_flows_SOURCES = tests/test-flows.c
@@ -210,6 +221,18 @@ tests_test_list_LDADD = lib/libopenvswitch.a
 noinst_PROGRAMS += tests/test-lockfile
 tests_test_lockfile_SOURCES = tests/test-lockfile.c
 tests_test_lockfile_LDADD = lib/libopenvswitch.a
+
+noinst_PROGRAMS += tests/test-multipath
+tests_test_multipath_SOURCES = tests/test-multipath.c
+tests_test_multipath_LDADD = lib/libopenvswitch.a
+
+noinst_PROGRAMS += tests/test-random
+tests_test_random_SOURCES = tests/test-random.c
+tests_test_random_LDADD = lib/libopenvswitch.a
+
+noinst_PROGRAMS += tests/test-unix-socket
+tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
+tests_test_unix_socket_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-ovsdb
 tests_test_ovsdb_SOURCES = \
@@ -266,6 +289,10 @@ EXTRA_DIST += \
 	tests/testpki-privkey2.pem \
 	tests/testpki-req.pem \
 	tests/testpki-req2.pem
+
+noinst_PROGRAMS += tests/test-byte-order
+tests_test_byte_order_SOURCES = tests/test-byte-order.c
+tests_test_byte_order_LDADD = lib/libopenvswitch.a
 
 # Python tests.
 EXTRA_DIST += \

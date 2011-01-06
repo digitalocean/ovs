@@ -129,11 +129,11 @@ struct netdev_class {
      * to be called.  May be null if nothing is needed here. */
     void (*wait)(void);
 
-    /* Attempts to create a network device of 'type' with 'name'.
-     * 'type' corresponds to the 'type' field used in the netdev_class
-     * structure. On success sets 'netdev_devp' to the newly created device. */
-    int (*create)(const char *name, const char *type, const struct shash *args,
-                  struct netdev_dev **netdev_devp);
+    /* Attempts to create a network device named 'name' with initial 'args' in
+     * 'netdev_class'.  On success sets 'netdev_devp' to the newly created
+     * device. */
+    int (*create)(const struct netdev_class *netdev_class, const char *name,
+                  const struct shash *args, struct netdev_dev **netdev_devp);
 
     /* Destroys 'netdev_dev'.
      *
@@ -259,7 +259,11 @@ struct netdev_class {
     int (*get_ifindex)(const struct netdev *netdev);
 
     /* Sets 'carrier' to true if carrier is active (link light is on) on
-     * 'netdev'. */
+     * 'netdev'.
+     *
+     * May be null if device does not provide carrier status (will be always
+     * up as long as device is up).
+     */
     int (*get_carrier)(const struct netdev *netdev, bool *carrier);
 
     /* Retrieves current device stats for 'netdev' into 'stats'.
@@ -514,6 +518,17 @@ struct netdev_class {
     int (*get_next_hop)(const struct in_addr *host, struct in_addr *next_hop,
                         char **netdev_name);
 
+    /* Looks up the name of the interface out of which traffic will egress if
+     * 'netdev' is a tunnel.  If unsuccessful, or 'netdev' is not a tunnel,
+     * will return null.  This function does not necessarily return the
+     * physical interface out which traffic will egress.  Instead it returns
+     * the interface which is assigned 'netdev's remote_ip.  This may be an
+     * internal interface such as a bridge port.
+     *
+     * This function may be set to null if 'netdev' is not a tunnel or it is
+     * not supported. */
+    const char *(*get_tnl_iface)(const struct netdev *netdev);
+
     /* Looks up the ARP table entry for 'ip' on 'netdev' and stores the
      * corresponding MAC address in 'mac'.  A return value of ENXIO, in
      * particular, indicates that there is no ARP table entry for 'ip' on
@@ -546,11 +561,13 @@ struct netdev_class {
     void (*poll_remove)(struct netdev_notifier *notifier);
 };
 
+int netdev_register_provider(const struct netdev_class *);
+int netdev_unregister_provider(const char *type);
+const struct netdev_class *netdev_lookup_provider(const char *type);
+
 extern const struct netdev_class netdev_linux_class;
+extern const struct netdev_class netdev_internal_class;
 extern const struct netdev_class netdev_tap_class;
-extern const struct netdev_class netdev_patch_class;
-extern const struct netdev_class netdev_gre_class;
-extern const struct netdev_class netdev_capwap_class;
 
 #ifdef  __cplusplus
 }

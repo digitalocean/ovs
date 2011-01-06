@@ -7,6 +7,9 @@
    if this is not an official build. */
 #undef BUILDNR
 
+/* Define to 1 if you have the `getloadavg' function. */
+#undef HAVE_GETLOADAVG
+
 /* Define to 1 if net/if_packet.h is available. */
 #undef HAVE_IF_PACKET
 
@@ -26,11 +29,20 @@
 /* Define to 1 if you have the `mlockall' function. */
 #undef HAVE_MLOCKALL
 
+/* Define to 1 if you have the <mntent.h> header file. */
+#undef HAVE_MNTENT_H
+
 /* Define to 1 if Netlink protocol is available. */
 #undef HAVE_NETLINK
 
 /* Define to 1 if OpenSSL is installed. */
 #undef HAVE_OPENSSL
+
+/* Define to 1 if you have the `setmntent' function. */
+#undef HAVE_SETMNTENT
+
+/* Define to 1 if you have the `statvfs' function. */
+#undef HAVE_STATVFS
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
@@ -55,6 +67,9 @@
 
 /* Define to 1 if `st_mtim.tv_nsec' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC
+
+/* Define to 1 if you have the <sys/statvfs.h> header file. */
+#undef HAVE_SYS_STATVFS_H
 
 /* Define to 1 if you have the <sys/stat.h> header file. */
 #undef HAVE_SYS_STAT_H

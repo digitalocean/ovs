@@ -38,7 +38,7 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(ovsdb_file)
+VLOG_DEFINE_THIS_MODULE(ovsdb_file);
 
 /* Minimum number of milliseconds between database compactions. */
 #define COMPACT_MIN_MSEC        (10 * 60 * 1000) /* 10 minutes. */
@@ -427,7 +427,7 @@ ovsdb_file_save_copy__(const char *file_name, int locking,
         const struct ovsdb_table *table = node->data;
         const struct ovsdb_row *row;
 
-        HMAP_FOR_EACH (row, struct ovsdb_row, hmap_node, &table->rows) {
+        HMAP_FOR_EACH (row, hmap_node, &table->rows) {
             ovsdb_file_txn_add_row(&ftxn, NULL, row, NULL);
         }
     }

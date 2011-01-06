@@ -16,6 +16,7 @@
 
 #include <net/llc.h>
 
+#include "checksum.h"
 #include "datapath.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
@@ -88,13 +89,13 @@ static void netdev_exit(void)
 }
 #endif
 
-static struct vport *netdev_create(const char *name, const void __user *config)
+static struct vport *netdev_create(const struct vport_parms *parms)
 {
 	struct vport *vport;
 	struct netdev_vport *netdev_vport;
 	int err;
 
-	vport = vport_alloc(sizeof(struct netdev_vport), &netdev_vport_ops);
+	vport = vport_alloc(sizeof(struct netdev_vport), &netdev_vport_ops, parms);
 	if (IS_ERR(vport)) {
 		err = PTR_ERR(vport);
 		goto error;
@@ -102,7 +103,7 @@ static struct vport *netdev_create(const char *name, const void __user *config)
 
 	netdev_vport = netdev_vport_priv(vport);
 
-	netdev_vport->dev = dev_get_by_name(&init_net, name);
+	netdev_vport->dev = dev_get_by_name(&init_net, parms->name);
 	if (!netdev_vport->dev) {
 		err = -ENODEV;
 		goto error_free_vport;
@@ -118,12 +119,21 @@ static struct vport *netdev_create(const char *name, const void __user *config)
 	/* If we are using the vport stats layer initialize it to the current
 	 * values so we are roughly consistent with the device stats. */
 	if (USE_VPORT_STATS) {
-		struct odp_vport_stats stats;
+		struct rtnl_link_stats64 stats;
 
 		err = netdev_get_stats(vport, &stats);
 		if (!err)
 			vport_set_stats(vport, &stats);
 	}
+
+	err = netdev_rx_handler_register(netdev_vport->dev, netdev_frame_hook,
+					 vport);
+	if (err)
+		goto error_put;
+
+	dev_set_promiscuity(netdev_vport->dev, 1);
+	dev_disable_lro(netdev_vport->dev);
+	netdev_vport->dev->priv_flags |= IFF_OVS_DATAPATH;
 
 	return vport;
 
@@ -139,36 +149,14 @@ static int netdev_destroy(struct vport *vport)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
-	dev_put(netdev_vport->dev);
-	vport_free(vport);
-
-	return 0;
-}
-
-static int netdev_attach(struct vport *vport)
-{
-	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	int err;
-
-	err = netdev_rx_handler_register(netdev_vport->dev, netdev_frame_hook,
-					 vport);
-	if (err)
-		return err;
-
-	dev_set_promiscuity(netdev_vport->dev, 1);
-	dev_disable_lro(netdev_vport->dev);
-	netdev_vport->dev->priv_flags |= IFF_OVS_DATAPATH;
-
-	return 0;
-}
-
-static int netdev_detach(struct vport *vport)
-{
-	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-
 	netdev_vport->dev->priv_flags &= ~IFF_OVS_DATAPATH;
 	netdev_rx_handler_unregister(netdev_vport->dev);
 	dev_set_promiscuity(netdev_vport->dev, -1);
+
+	synchronize_rcu();
+
+	dev_put(netdev_vport->dev);
+	vport_free(vport);
 
 	return 0;
 }
@@ -208,32 +196,10 @@ struct kobject *netdev_get_kobj(const struct vport *vport)
 	return &netdev_vport->dev->NETDEV_DEV_MEMBER.kobj;
 }
 
-int netdev_get_stats(const struct vport *vport, struct odp_vport_stats *stats)
+int netdev_get_stats(const struct vport *vport, struct rtnl_link_stats64 *stats)
 {
 	const struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
-	struct rtnl_link_stats64 *netdev_stats, storage;
-
-	netdev_stats = dev_get_stats(netdev_vport->dev, &storage);
-#else
-	const struct net_device_stats *netdev_stats;
-
-	netdev_stats = dev_get_stats(netdev_vport->dev);
-#endif
-
-	stats->rx_bytes		= netdev_stats->rx_bytes;
-	stats->rx_packets	= netdev_stats->rx_packets;
-	stats->tx_bytes		= netdev_stats->tx_bytes;
-	stats->tx_packets	= netdev_stats->tx_packets;
-	stats->rx_dropped	= netdev_stats->rx_dropped;
-	stats->rx_errors	= netdev_stats->rx_errors;
-	stats->rx_frame_err	= netdev_stats->rx_frame_errors;
-	stats->rx_over_err	= netdev_stats->rx_over_errors;
-	stats->rx_crc_err	= netdev_stats->rx_crc_errors;
-	stats->tx_dropped	= netdev_stats->tx_dropped;
-	stats->tx_errors	= netdev_stats->tx_errors;
-	stats->collisions	= netdev_stats->collisions;
-
+	dev_get_stats(netdev_vport->dev, stats);
 	return 0;
 }
 
@@ -286,9 +252,7 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 
 	skb_warn_if_lro(skb);
 
-	/* Push the Ethernet header back on. */
 	skb_push(skb, ETH_HLEN);
-	skb_reset_mac_header(skb);
 	compute_ip_summed(skb, false);
 
 	vport_receive(vport, skb);
@@ -309,21 +273,21 @@ static int netdev_send(struct vport *vport, struct sk_buff *skb)
 /* Returns null if this device is not attached to a datapath. */
 struct vport *netdev_get_vport(struct net_device *dev)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
-	/* XXX: The bridge code may have registered the data.
-	 * So check that the handler pointer is the datapath's.
-	 * Once the merge is done and IFF_OVS_DATAPATH stops
-	 * being the same value as IFF_BRIDGE_PORT the check can
-	 * simply be netdev_vport->dev->priv_flags & IFF_OVS_DATAPATH. */
-	if (rcu_dereference(dev->rx_handler) != netdev_frame_hook)
-		return NULL;
-	return (struct vport *)rcu_dereference(dev->rx_handler_data);
+#ifdef IFF_BRIDGE_PORT
+#if IFF_BRIDGE_PORT != IFF_OVS_DATAPATH
+	if (likely(dev->priv_flags & IFF_OVS_DATAPATH))
 #else
-	return (struct vport *)rcu_dereference(dev->br_port);
+	if (likely(rcu_access_pointer(dev->rx_handler) == netdev_frame_hook))	
+#endif
+		return (struct vport *)rcu_dereference_rtnl(dev->rx_handler_data);
+	else
+		return NULL;
+#else
+	return (struct vport *)rcu_dereference_rtnl(dev->br_port);
 #endif
 }
 
-struct vport_ops netdev_vport_ops = {
+const struct vport_ops netdev_vport_ops = {
 	.type		= "netdev",
 	.flags          = (VPORT_F_REQUIRED |
 			  (USE_VPORT_STATS ? VPORT_F_GEN_STATS : 0)),
@@ -331,8 +295,6 @@ struct vport_ops netdev_vport_ops = {
 	.exit		= netdev_exit,
 	.create		= netdev_create,
 	.destroy	= netdev_destroy,
-	.attach		= netdev_attach,
-	.detach		= netdev_detach,
 	.set_mtu	= netdev_set_mtu,
 	.set_addr	= netdev_set_addr,
 	.get_name	= netdev_get_name,

@@ -29,7 +29,6 @@
 #include <linux/udp.h>
 #include <linux/version.h>
 #include <linux/ethtool.h>
-#include <linux/random.h>
 #include <linux/wait.h>
 #include <asm/system.h>
 #include <asm/div64.h>
@@ -40,21 +39,21 @@
 #include <linux/inetdevice.h>
 #include <linux/list.h>
 #include <linux/rculist.h>
-#include <linux/workqueue.h>
 #include <linux/dmi.h>
 #include <net/inet_ecn.h>
 #include <linux/compat.h>
 
 #include "openvswitch/datapath-protocol.h"
+#include "checksum.h"
 #include "datapath.h"
 #include "actions.h"
 #include "flow.h"
+#include "loop_counter.h"
 #include "odp-compat.h"
 #include "table.h"
 #include "vport-internal_dev.h"
 
 #include "compat.h"
-
 
 int (*dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
 EXPORT_SYMBOL(dp_ioctl_hook);
@@ -65,37 +64,21 @@ EXPORT_SYMBOL(dp_ioctl_hook);
  * dp_mutex nests inside the RTNL lock: if you need both you must take the RTNL
  * lock first.
  *
- * It is safe to access the datapath and dp_port structures with just
+ * It is safe to access the datapath and vport structures with just
  * dp_mutex.
  */
-static struct datapath *dps[ODP_MAX];
+static struct datapath __rcu *dps[ODP_MAX];
 static DEFINE_MUTEX(dp_mutex);
 
-/* We limit the number of times that we pass into dp_process_received_packet()
- * to avoid blowing out the stack in the event that we have a loop. */
-struct loop_counter {
-	int count;		/* Count. */
-	bool looping;		/* Loop detected? */
-};
-
-#define DP_MAX_LOOPS 5
-
-/* We use a separate counter for each CPU for both interrupt and non-interrupt
- * context in order to keep the limit deterministic for a given packet. */
-struct percpu_loop_counters {
-	struct loop_counter counters[2];
-};
-
-static DEFINE_PER_CPU(struct percpu_loop_counters, dp_loop_counters);
-
-static int new_dp_port(struct datapath *, struct odp_port *, int port_no);
+static int new_vport(struct datapath *, struct odp_port *, int port_no);
 
 /* Must be called with rcu_read_lock or dp_mutex. */
 struct datapath *get_dp(int dp_idx)
 {
 	if (dp_idx < 0 || dp_idx >= ODP_MAX)
 		return NULL;
-	return rcu_dereference(dps[dp_idx]);
+	return rcu_dereference_check(dps[dp_idx], rcu_read_lock_held() ||
+					 lockdep_is_held(&dp_mutex));
 }
 EXPORT_SYMBOL_GPL(get_dp);
 
@@ -111,10 +94,22 @@ static struct datapath *get_dp_locked(int dp_idx)
 	return dp;
 }
 
+static struct tbl *get_table_protected(struct datapath *dp)
+{
+	return rcu_dereference_protected(dp->table,
+					 lockdep_is_held(&dp->mutex));
+}
+
+static struct vport *get_vport_protected(struct datapath *dp, u16 port_no)
+{
+	return rcu_dereference_protected(dp->ports[port_no],
+					 lockdep_is_held(&dp->mutex));
+}
+
 /* Must be called with rcu_read_lock or RTNL lock. */
 const char *dp_name(const struct datapath *dp)
 {
-	return vport_get_name(dp->ports[ODPP_LOCAL]->vport);
+	return vport_get_name(rcu_dereference_rtnl(dp->ports[ODPP_LOCAL]));
 }
 
 static inline size_t br_nlmsg_size(void)
@@ -129,12 +124,12 @@ static inline size_t br_nlmsg_size(void)
 }
 
 static int dp_fill_ifinfo(struct sk_buff *skb,
-			  const struct dp_port *port,
+			  const struct vport *port,
 			  int event, unsigned int flags)
 {
-	const struct datapath *dp = port->dp;
-	int ifindex = vport_get_ifindex(port->vport);
-	int iflink = vport_get_iflink(port->vport);
+	struct datapath *dp = port->dp;
+	int ifindex = vport_get_ifindex(port);
+	int iflink = vport_get_iflink(port);
 	struct ifinfomsg *hdr;
 	struct nlmsghdr *nlh;
 
@@ -153,21 +148,21 @@ static int dp_fill_ifinfo(struct sk_buff *skb,
 	hdr->__ifi_pad = 0;
 	hdr->ifi_type = ARPHRD_ETHER;
 	hdr->ifi_index = ifindex;
-	hdr->ifi_flags = vport_get_flags(port->vport);
+	hdr->ifi_flags = vport_get_flags(port);
 	hdr->ifi_change = 0;
 
-	NLA_PUT_STRING(skb, IFLA_IFNAME, vport_get_name(port->vport));
-	NLA_PUT_U32(skb, IFLA_MASTER, vport_get_ifindex(dp->ports[ODPP_LOCAL]->vport));
-	NLA_PUT_U32(skb, IFLA_MTU, vport_get_mtu(port->vport));
+	NLA_PUT_STRING(skb, IFLA_IFNAME, vport_get_name(port));
+	NLA_PUT_U32(skb, IFLA_MASTER,
+		vport_get_ifindex(get_vport_protected(dp, ODPP_LOCAL)));
+	NLA_PUT_U32(skb, IFLA_MTU, vport_get_mtu(port));
 #ifdef IFLA_OPERSTATE
 	NLA_PUT_U8(skb, IFLA_OPERSTATE,
-		   vport_is_running(port->vport)
-			? vport_get_operstate(port->vport)
+		   vport_is_running(port)
+			? vport_get_operstate(port)
 			: IF_OPER_DOWN);
 #endif
 
-	NLA_PUT(skb, IFLA_ADDRESS, ETH_ALEN,
-					vport_get_addr(port->vport));
+	NLA_PUT(skb, IFLA_ADDRESS, ETH_ALEN, vport_get_addr(port));
 
 	if (ifindex != iflink)
 		NLA_PUT_U32(skb, IFLA_LINK,iflink);
@@ -179,7 +174,7 @@ nla_put_failure:
 	return -EMSGSIZE;
 }
 
-static void dp_ifinfo_notify(int event, struct dp_port *port)
+static void dp_ifinfo_notify(int event, struct vport *port)
 {
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
@@ -252,6 +247,7 @@ static int create_dp(int dp_idx, const char __user *devnamep)
 		goto err_put_module;
 	INIT_LIST_HEAD(&dp->port_list);
 	mutex_init(&dp->mutex);
+	mutex_lock(&dp->mutex);
 	dp->dp_idx = dp_idx;
 	for (i = 0; i < DP_N_QUEUES; i++)
 		skb_queue_head_init(&dp->queues[i]);
@@ -264,15 +260,15 @@ static int create_dp(int dp_idx, const char __user *devnamep)
 
 	/* Allocate table. */
 	err = -ENOMEM;
-	rcu_assign_pointer(dp->table, tbl_create(0));
+	rcu_assign_pointer(dp->table, tbl_create(TBL_MIN_BUCKETS));
 	if (!dp->table)
 		goto err_free_dp;
 
 	/* Set up our datapath device. */
 	BUILD_BUG_ON(sizeof(internal_dev_port.devname) != sizeof(devname));
 	strcpy(internal_dev_port.devname, devname);
-	internal_dev_port.flags = ODP_PORT_INTERNAL;
-	err = new_dp_port(dp, &internal_dev_port, ODPP_LOCAL);
+	strcpy(internal_dev_port.type, "internal");
+	err = new_vport(dp, &internal_dev_port, ODPP_LOCAL);
 	if (err) {
 		if (err == -EBUSY)
 			err = -EEXIST;
@@ -282,22 +278,26 @@ static int create_dp(int dp_idx, const char __user *devnamep)
 
 	dp->drop_frags = 0;
 	dp->stats_percpu = alloc_percpu(struct dp_stats_percpu);
-	if (!dp->stats_percpu)
+	if (!dp->stats_percpu) {
+		err = -ENOMEM;
 		goto err_destroy_local_port;
+	}
 
 	rcu_assign_pointer(dps[dp_idx], dp);
+	dp_sysfs_add_dp(dp);
+
+	mutex_unlock(&dp->mutex);
 	mutex_unlock(&dp_mutex);
 	rtnl_unlock();
-
-	dp_sysfs_add_dp(dp);
 
 	return 0;
 
 err_destroy_local_port:
-	dp_detach_port(dp->ports[ODPP_LOCAL], 1);
+	dp_detach_port(get_vport_protected(dp, ODPP_LOCAL));
 err_destroy_table:
-	tbl_destroy(dp->table, NULL);
+	tbl_destroy(get_table_protected(dp), NULL);
 err_free_dp:
+	mutex_unlock(&dp->mutex);
 	kfree(dp);
 err_put_module:
 	module_put(THIS_MODULE);
@@ -308,113 +308,77 @@ err:
 	return err;
 }
 
-static void do_destroy_dp(struct datapath *dp)
+static void destroy_dp_rcu(struct rcu_head *rcu)
 {
-	struct dp_port *p, *n;
+	struct datapath *dp = container_of(rcu, struct datapath, rcu);
 	int i;
-
-	list_for_each_entry_safe (p, n, &dp->port_list, node)
-		if (p->port_no != ODPP_LOCAL)
-			dp_detach_port(p, 1);
-
-	dp_sysfs_del_dp(dp);
-
-	rcu_assign_pointer(dps[dp->dp_idx], NULL);
-
-	dp_detach_port(dp->ports[ODPP_LOCAL], 1);
-
-	tbl_destroy(dp->table, flow_free_tbl);
 
 	for (i = 0; i < DP_N_QUEUES; i++)
 		skb_queue_purge(&dp->queues[i]);
-	for (i = 0; i < DP_MAX_GROUPS; i++)
-		kfree(dp->groups[i]);
+
+	tbl_destroy((struct tbl __force *)dp->table, flow_free_tbl);
 	free_percpu(dp->stats_percpu);
 	kobject_put(&dp->ifobj);
-	module_put(THIS_MODULE);
 }
 
 static int destroy_dp(int dp_idx)
 {
 	struct datapath *dp;
-	int err;
+	int err = 0;
+	struct vport *p, *n;
 
 	rtnl_lock();
 	mutex_lock(&dp_mutex);
 	dp = get_dp(dp_idx);
-	err = -ENODEV;
-	if (!dp)
-		goto err_unlock;
+	if (!dp) {
+		err = -ENODEV;
+		goto out;
+	}
 
-	do_destroy_dp(dp);
-	err = 0;
+	mutex_lock(&dp->mutex);
 
-err_unlock:
+	list_for_each_entry_safe (p, n, &dp->port_list, node)
+		if (p->port_no != ODPP_LOCAL)
+			dp_detach_port(p);
+
+	dp_sysfs_del_dp(dp);
+	rcu_assign_pointer(dps[dp->dp_idx], NULL);
+	dp_detach_port(get_vport_protected(dp, ODPP_LOCAL));
+
+	mutex_unlock(&dp->mutex);
+	call_rcu(&dp->rcu, destroy_dp_rcu);
+	module_put(THIS_MODULE);
+
+out:
 	mutex_unlock(&dp_mutex);
 	rtnl_unlock();
 	return err;
 }
 
-static void release_dp_port(struct kobject *kobj)
+/* Called with RTNL lock and dp->mutex. */
+static int new_vport(struct datapath *dp, struct odp_port *odp_port, int port_no)
 {
-	struct dp_port *p = container_of(kobj, struct dp_port, kobj);
-	kfree(p);
-}
-
-static struct kobj_type brport_ktype = {
-#ifdef CONFIG_SYSFS
-	.sysfs_ops = &brport_sysfs_ops,
-#endif
-	.release = release_dp_port
-};
-
-/* Called with RTNL lock and dp_mutex. */
-static int new_dp_port(struct datapath *dp, struct odp_port *odp_port, int port_no)
-{
+	struct vport_parms parms;
 	struct vport *vport;
-	struct dp_port *p;
-	int err;
 
-	vport = vport_locate(odp_port->devname);
-	if (!vport) {
-		vport_lock();
+	parms.name = odp_port->devname;
+	parms.type = odp_port->type;
+	parms.config = odp_port->config;
+	parms.dp = dp;
+	parms.port_no = port_no;
 
-		if (odp_port->flags & ODP_PORT_INTERNAL)
-			vport = vport_add(odp_port->devname, "internal", NULL);
-		else
-			vport = vport_add(odp_port->devname, "netdev", NULL);
+	vport_lock();
+	vport = vport_add(&parms);
+	vport_unlock();
 
-		vport_unlock();
+	if (IS_ERR(vport))
+		return PTR_ERR(vport);
 
-		if (IS_ERR(vport))
-			return PTR_ERR(vport);
-	}
-
-	p = kzalloc(sizeof(*p), GFP_KERNEL);
-	if (!p)
-		return -ENOMEM;
-
-	p->port_no = port_no;
-	p->dp = dp;
-	p->vport = vport;
-	atomic_set(&p->sflow_pool, 0);
-
-	err = vport_attach(vport, p);
-	if (err) {
-		kfree(p);
-		return err;
-	}
-
-	rcu_assign_pointer(dp->ports[port_no], p);
-	list_add_rcu(&p->node, &dp->port_list);
+	rcu_assign_pointer(dp->ports[port_no], vport);
+	list_add_rcu(&vport->node, &dp->port_list);
 	dp->n_ports++;
 
-	/* Initialize kobject for bridge.  This will be added as
-	 * /sys/class/net/<devname>/brport later, if sysfs is enabled. */
-	p->kobj.kset = NULL;
-	kobject_init(&p->kobj, &brport_ktype);
-
-	dp_ifinfo_notify(RTM_NEWLINK, p);
+	dp_ifinfo_notify(RTM_NEWLINK, vport);
 
 	return 0;
 }
@@ -430,6 +394,7 @@ static int attach_port(int dp_idx, struct odp_port __user *portp)
 	if (copy_from_user(&port, portp, sizeof port))
 		goto out;
 	port.devname[IFNAMSIZ - 1] = '\0';
+	port.type[VPORT_TYPE_SIZE - 1] = '\0';
 
 	rtnl_lock();
 	dp = get_dp_locked(dp_idx);
@@ -444,12 +409,12 @@ static int attach_port(int dp_idx, struct odp_port __user *portp)
 	goto out_unlock_dp;
 
 got_port_no:
-	err = new_dp_port(dp, &port, port_no);
+	err = new_vport(dp, &port, port_no);
 	if (err)
 		goto out_unlock_dp;
 
 	set_internal_devs_mtu(dp);
-	dp_sysfs_add_if(dp->ports[port_no]);
+	dp_sysfs_add_if(get_vport_protected(dp, port_no));
 
 	err = put_user(port_no, &portp->port);
 
@@ -461,9 +426,8 @@ out:
 	return err;
 }
 
-int dp_detach_port(struct dp_port *p, int may_delete)
+int dp_detach_port(struct vport *p)
 {
-	struct vport *vport = p->vport;
 	int err;
 
 	ASSERT_RTNL();
@@ -477,31 +441,17 @@ int dp_detach_port(struct dp_port *p, int may_delete)
 	list_del_rcu(&p->node);
 	rcu_assign_pointer(p->dp->ports[p->port_no], NULL);
 
-	err = vport_detach(vport);
-	if (err)
-		return err;
+	/* Then destroy it. */
+	vport_lock();
+	err = vport_del(p);
+	vport_unlock();
 
-	/* Then wait until no one is still using it, and destroy it. */
-	synchronize_rcu();
-
-	if (may_delete) {
-		const char *port_type = vport_get_type(vport);
-
-		if (!strcmp(port_type, "netdev") || !strcmp(port_type, "internal")) {
-			vport_lock();
-			vport_del(vport);
-			vport_unlock();
-		}
-	}
-
-	kobject_put(&p->kobj);
-
-	return 0;
+	return err;
 }
 
 static int detach_port(int dp_idx, int port_no)
 {
-	struct dp_port *p;
+	struct vport *p;
 	struct datapath *dp;
 	int err;
 
@@ -515,12 +465,12 @@ static int detach_port(int dp_idx, int port_no)
 	if (!dp)
 		goto out_unlock_rtnl;
 
-	p = dp->ports[port_no];
+	p = get_vport_protected(dp, port_no);
 	err = -ENOENT;
 	if (!p)
 		goto out_unlock_dp;
 
-	err = dp_detach_port(p, 1);
+	err = dp_detach_port(p);
 
 out_unlock_dp:
 	mutex_unlock(&dp->mutex);
@@ -530,77 +480,77 @@ out:
 	return err;
 }
 
-static void suppress_loop(struct datapath *dp, struct sw_flow_actions *actions)
-{
-	if (net_ratelimit())
-		pr_warn("%s: flow looped %d times, dropping\n",
-			dp_name(dp), DP_MAX_LOOPS);
-	actions->n_actions = 0;
-}
-
 /* Must be called with rcu_read_lock. */
-void dp_process_received_packet(struct dp_port *p, struct sk_buff *skb)
+void dp_process_received_packet(struct vport *p, struct sk_buff *skb)
 {
 	struct datapath *dp = p->dp;
 	struct dp_stats_percpu *stats;
 	int stats_counter_off;
-	struct odp_flow_key key;
-	struct tbl_node *flow_node;
-	struct sw_flow *flow;
 	struct sw_flow_actions *acts;
 	struct loop_counter *loop;
 	int error;
 
-	OVS_CB(skb)->dp_port = p;
+	OVS_CB(skb)->vport = p;
 
-	/* Extract flow from 'skb' into 'key'. */
-	error = flow_extract(skb, p ? p->port_no : ODPP_NONE, &key);
-	if (unlikely(error)) {
-		kfree_skb(skb);
-		return;
+	if (!OVS_CB(skb)->flow) {
+		struct odp_flow_key key;
+		struct tbl_node *flow_node;
+		bool is_frag;
+
+		/* Extract flow from 'skb' into 'key'. */
+		error = flow_extract(skb, p ? p->port_no : ODPP_NONE, &key, &is_frag);
+		if (unlikely(error)) {
+			kfree_skb(skb);
+			return;
+		}
+
+		if (is_frag && dp->drop_frags) {
+			kfree_skb(skb);
+			stats_counter_off = offsetof(struct dp_stats_percpu, n_frags);
+			goto out;
+		}
+
+		/* Look up flow. */
+		flow_node = tbl_lookup(rcu_dereference(dp->table), &key,
+					flow_hash(&key), flow_cmp);
+		if (unlikely(!flow_node)) {
+			dp_output_control(dp, skb, _ODPL_MISS_NR,
+					 (__force u64)OVS_CB(skb)->tun_id);
+			stats_counter_off = offsetof(struct dp_stats_percpu, n_missed);
+			goto out;
+		}
+
+		OVS_CB(skb)->flow = flow_cast(flow_node);
 	}
 
-	if (OVS_CB(skb)->is_frag && dp->drop_frags) {
-		kfree_skb(skb);
-		stats_counter_off = offsetof(struct dp_stats_percpu, n_frags);
-		goto out;
-	}
+	stats_counter_off = offsetof(struct dp_stats_percpu, n_hit);
+	flow_used(OVS_CB(skb)->flow, skb);
 
-	/* Look up flow. */
-	flow_node = tbl_lookup(rcu_dereference(dp->table), &key, flow_hash(&key), flow_cmp);
-	if (unlikely(!flow_node)) {
-		dp_output_control(dp, skb, _ODPL_MISS_NR, OVS_CB(skb)->tun_id);
-		stats_counter_off = offsetof(struct dp_stats_percpu, n_missed);
-		goto out;
-	}
-
-	flow = flow_cast(flow_node);
-	flow_used(flow, skb);
-
-	acts = rcu_dereference(flow->sf_acts);
+	acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
 
 	/* Check whether we've looped too much. */
-	loop = &get_cpu_var(dp_loop_counters).counters[!!in_interrupt()];
-	if (unlikely(++loop->count > DP_MAX_LOOPS))
+	loop = loop_get_counter();
+	if (unlikely(++loop->count > MAX_LOOPS))
 		loop->looping = true;
 	if (unlikely(loop->looping)) {
-		suppress_loop(dp, acts);
+		loop_suppress(dp, acts);
+		kfree_skb(skb);
 		goto out_loop;
 	}
 
 	/* Execute actions. */
-	execute_actions(dp, skb, &key, acts->actions, acts->n_actions, GFP_ATOMIC);
-	stats_counter_off = offsetof(struct dp_stats_percpu, n_hit);
+	execute_actions(dp, skb, &OVS_CB(skb)->flow->key, acts->actions,
+			acts->actions_len);
 
 	/* Check whether sub-actions looped too much. */
 	if (unlikely(loop->looping))
-		suppress_loop(dp, acts);
+		loop_suppress(dp, acts);
 
 out_loop:
 	/* Decrement loop counter. */
 	if (!--loop->count)
 		loop->looping = false;
-	put_cpu_var(dp_loop_counters);
+	loop_put_counter();
 
 out:
 	/* Update datapath statistics. */
@@ -614,182 +564,17 @@ out:
 	local_bh_enable();
 }
 
-#if defined(CONFIG_XEN) && defined(HAVE_PROTO_DATA_VALID)
-/* This code is based on skb_checksum_setup() from Xen's net/dev/core.c.  We
- * can't call this function directly because it isn't exported in all
- * versions. */
-int vswitch_skb_checksum_setup(struct sk_buff *skb)
-{
-	struct iphdr *iph;
-	unsigned char *th;
-	int err = -EPROTO;
-	__u16 csum_start, csum_offset;
-
-	if (!skb->proto_csum_blank)
-		return 0;
-
-	if (skb->protocol != htons(ETH_P_IP))
-		goto out;
-
-	if (!pskb_may_pull(skb, skb_network_header(skb) + sizeof(struct iphdr) - skb->data))
-		goto out;
-
-	iph = ip_hdr(skb);
-	th = skb_network_header(skb) + 4 * iph->ihl;
-
-	csum_start = th - skb->head;
-	switch (iph->protocol) {
-	case IPPROTO_TCP:
-		csum_offset = offsetof(struct tcphdr, check);
-		break;
-	case IPPROTO_UDP:
-		csum_offset = offsetof(struct udphdr, check);
-		break;
-	default:
-		if (net_ratelimit())
-			pr_err("Attempting to checksum a non-TCP/UDP packet, "
-			       "dropping a protocol %d packet",
-			       iph->protocol);
-		goto out;
-	}
-
-	if (!pskb_may_pull(skb, th + csum_offset + 2 - skb->data))
-		goto out;
-
-	skb->ip_summed = CHECKSUM_PARTIAL;
-	skb->proto_csum_blank = 0;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
-	skb->csum_start = csum_start;
-	skb->csum_offset = csum_offset;
-#else
-	skb_set_transport_header(skb, csum_start - skb_headroom(skb));
-	skb->csum = csum_offset;
-#endif
-
-	err = 0;
-
-out:
-	return err;
-}
-#endif /* CONFIG_XEN && HAVE_PROTO_DATA_VALID */
-
- /* Types of checksums that we can receive (these all refer to L4 checksums):
- * 1. CHECKSUM_NONE: Device that did not compute checksum, contains full
- *	(though not verified) checksum in packet but not in skb->csum.  Packets
- *	from the bridge local port will also have this type.
- * 2. CHECKSUM_COMPLETE (CHECKSUM_HW): Good device that computes checksums,
- *	also the GRE module.  This is the same as CHECKSUM_NONE, except it has
- *	a valid skb->csum.  Importantly, both contain a full checksum (not
- *	verified) in the packet itself.  The only difference is that if the
- *	packet gets to L4 processing on this machine (not in DomU) we won't
- *	have to recompute the checksum to verify.  Most hardware devices do not
- *	produce packets with this type, even if they support receive checksum
- *	offloading (they produce type #5).
- * 3. CHECKSUM_PARTIAL (CHECKSUM_HW): Packet without full checksum and needs to
- *	be computed if it is sent off box.  Unfortunately on earlier kernels,
- *	this case is impossible to distinguish from #2, despite having opposite
- *	meanings.  Xen adds an extra field on earlier kernels (see #4) in order
- *	to distinguish the different states.
- * 4. CHECKSUM_UNNECESSARY (with proto_csum_blank true): This packet was
- *	generated locally by a Xen DomU and has a partial checksum.  If it is
- *	handled on this machine (Dom0 or DomU), then the checksum will not be
- *	computed.  If it goes off box, the checksum in the packet needs to be
- *	completed.  Calling skb_checksum_setup converts this to CHECKSUM_HW
- *	(CHECKSUM_PARTIAL) so that the checksum can be completed.  In later
- *	kernels, this combination is replaced with CHECKSUM_PARTIAL.
- * 5. CHECKSUM_UNNECESSARY (with proto_csum_blank false): Packet with a correct
- *	full checksum or using a protocol without a checksum.  skb->csum is
- *	undefined.  This is common from devices with receive checksum
- *	offloading.  This is somewhat similar to CHECKSUM_NONE, except that
- *	nobody will try to verify the checksum with CHECKSUM_UNNECESSARY.
- *
- * Note that on earlier kernels, CHECKSUM_COMPLETE and CHECKSUM_PARTIAL are
- * both defined as CHECKSUM_HW.  Normally the meaning of CHECKSUM_HW is clear
- * based on whether it is on the transmit or receive path.  After the datapath
- * it will be intepreted as CHECKSUM_PARTIAL.  If the packet already has a
- * checksum, we will panic.  Since we can receive packets with checksums, we
- * assume that all CHECKSUM_HW packets have checksums and map them to
- * CHECKSUM_NONE, which has a similar meaning (the it is only different if the
- * packet is processed by the local IP stack, in which case it will need to
- * be reverified).  If we receive a packet with CHECKSUM_HW that really means
- * CHECKSUM_PARTIAL, it will be sent with the wrong checksum.  However, there
- * shouldn't be any devices that do this with bridging. */
-void compute_ip_summed(struct sk_buff *skb, bool xmit)
-{
-	/* For our convenience these defines change repeatedly between kernel
-	 * versions, so we can't just copy them over... */
-	switch (skb->ip_summed) {
-	case CHECKSUM_NONE:
-		OVS_CB(skb)->ip_summed = OVS_CSUM_NONE;
-		break;
-	case CHECKSUM_UNNECESSARY:
-		OVS_CB(skb)->ip_summed = OVS_CSUM_UNNECESSARY;
-		break;
-#ifdef CHECKSUM_HW
-	/* In theory this could be either CHECKSUM_PARTIAL or CHECKSUM_COMPLETE.
-	 * However, on the receive side we should only get CHECKSUM_PARTIAL
-	 * packets from Xen, which uses some special fields to represent this
-	 * (see below).  Since we can only make one type work, pick the one
-	 * that actually happens in practice.
-	 *
-	 * On the transmit side (basically after skb_checksum_setup()
-	 * has been run or on internal dev transmit), packets with
-	 * CHECKSUM_COMPLETE aren't generated, so assume CHECKSUM_PARTIAL. */
-	case CHECKSUM_HW:
-		if (!xmit)
-			OVS_CB(skb)->ip_summed = OVS_CSUM_COMPLETE;
-		else
-			OVS_CB(skb)->ip_summed = OVS_CSUM_PARTIAL;
-
-		break;
-#else
-	case CHECKSUM_COMPLETE:
-		OVS_CB(skb)->ip_summed = OVS_CSUM_COMPLETE;
-		break;
-	case CHECKSUM_PARTIAL:
-		OVS_CB(skb)->ip_summed = OVS_CSUM_PARTIAL;
-		break;
-#endif
-	default:
-		pr_err("unknown checksum type %d\n", skb->ip_summed);
-		/* None seems the safest... */
-		OVS_CB(skb)->ip_summed = OVS_CSUM_NONE;
-	}
-
-#if defined(CONFIG_XEN) && defined(HAVE_PROTO_DATA_VALID)
-	/* Xen has a special way of representing CHECKSUM_PARTIAL on older
-	 * kernels. It should not be set on the transmit path though. */
-	if (skb->proto_csum_blank)
-		OVS_CB(skb)->ip_summed = OVS_CSUM_PARTIAL;
-
-	WARN_ON_ONCE(skb->proto_csum_blank && xmit);
-#endif
-}
-
-/* This function closely resembles skb_forward_csum() used by the bridge.  It
- * is slightly different because we are only concerned with bridging and not
- * other types of forwarding and can get away with slightly more optimal
- * behavior.*/
-void forward_ip_summed(struct sk_buff *skb)
-{
-#ifdef CHECKSUM_HW
-	if (OVS_CB(skb)->ip_summed == OVS_CSUM_COMPLETE)
-		skb->ip_summed = CHECKSUM_NONE;
-#endif
-}
-
 /* Append each packet in 'skb' list to 'queue'.  There will be only one packet
  * unless we broke up a GSO packet. */
 static int queue_control_packets(struct sk_buff *skb, struct sk_buff_head *queue,
-				 int queue_no, u32 arg)
+				 int queue_no, u64 arg)
 {
 	struct sk_buff *nskb;
 	int port_no;
 	int err;
 
-	if (OVS_CB(skb)->dp_port)
-		port_no = OVS_CB(skb)->dp_port->port_no;
+	if (OVS_CB(skb)->vport)
+		port_no = OVS_CB(skb)->vport->port_no;
 	else
 		port_no = ODPP_LOCAL;
 
@@ -807,7 +592,6 @@ static int queue_control_packets(struct sk_buff *skb, struct sk_buff_head *queue
 		header->type = queue_no;
 		header->length = skb->len;
 		header->port = port_no;
-		header->reserved = 0;
 		header->arg = arg;
 		skb_queue_tail(queue, skb);
 
@@ -825,7 +609,7 @@ err_kfree_skbs:
 }
 
 int dp_output_control(struct datapath *dp, struct sk_buff *skb, int queue_no,
-		      u32 arg)
+		      u64 arg)
 {
 	struct dp_stats_percpu *stats;
 	struct sk_buff_head *queue;
@@ -848,16 +632,12 @@ int dp_output_control(struct datapath *dp, struct sk_buff *skb, int queue_no,
 	 * userspace may try to stuff a 64kB packet into a 1500-byte MTU. */
 	if (skb_is_gso(skb)) {
 		struct sk_buff *nskb = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
-		if (nskb) {
-			kfree_skb(skb);
-			skb = nskb;
-			if (unlikely(IS_ERR(skb))) {
-				err = PTR_ERR(skb);
-				goto err;
-			}
-		} else {
-			/* XXX This case might not be possible.  It's hard to
-			 * tell from the skb_gso_segment() code and comment. */
+		
+		kfree_skb(skb);
+		skb = nskb;
+		if (IS_ERR(skb)) {
+			err = PTR_ERR(skb);
+			goto err;
 		}
 	}
 
@@ -882,10 +662,10 @@ err:
 
 static int flush_flows(struct datapath *dp)
 {
-	struct tbl *old_table = rcu_dereference(dp->table);
+	struct tbl *old_table = get_table_protected(dp);
 	struct tbl *new_table;
 
-	new_table = tbl_create(0);
+	new_table = tbl_create(TBL_MIN_BUCKETS);
 	if (!new_table)
 		return -ENOMEM;
 
@@ -896,47 +676,76 @@ static int flush_flows(struct datapath *dp)
 	return 0;
 }
 
-static int validate_actions(const struct sw_flow_actions *actions)
+static int validate_actions(const struct nlattr *actions, u32 actions_len)
 {
-	unsigned int i;
+        const struct nlattr *a;
+        int rem;
 
-	for (i = 0; i < actions->n_actions; i++) {
-		const union odp_action *a = &actions->actions[i];
-		switch (a->type) {
-		case ODPAT_OUTPUT:
-			if (a->output.port >= DP_MAX_PORTS)
+        nla_for_each_attr(a, actions, actions_len, rem) {
+                static const u32 action_lens[ODPAT_MAX + 1] = {
+                        [ODPAT_OUTPUT] = 4,
+                        [ODPAT_CONTROLLER] = 8,
+                        [ODPAT_SET_DL_TCI] = 2,
+                        [ODPAT_STRIP_VLAN] = 0,
+                        [ODPAT_SET_DL_SRC] = ETH_ALEN,
+                        [ODPAT_SET_DL_DST] = ETH_ALEN,
+                        [ODPAT_SET_NW_SRC] = 4,
+                        [ODPAT_SET_NW_DST] = 4,
+                        [ODPAT_SET_NW_TOS] = 1,
+                        [ODPAT_SET_TP_SRC] = 2,
+                        [ODPAT_SET_TP_DST] = 2,
+                        [ODPAT_SET_TUNNEL] = 8,
+                        [ODPAT_SET_PRIORITY] = 4,
+                        [ODPAT_POP_PRIORITY] = 0,
+                        [ODPAT_DROP_SPOOFED_ARP] = 0,
+                };
+                int type = nla_type(a);
+
+                if (type > ODPAT_MAX || nla_len(a) != action_lens[type])
+                        return -EINVAL;
+
+                switch (type) {
+		case ODPAT_UNSPEC:
+			return -EINVAL;
+
+                case ODPAT_CONTROLLER:
+                case ODPAT_STRIP_VLAN:
+                case ODPAT_SET_DL_SRC:
+                case ODPAT_SET_DL_DST:
+                case ODPAT_SET_NW_SRC:
+                case ODPAT_SET_NW_DST:
+                case ODPAT_SET_TP_SRC:
+                case ODPAT_SET_TP_DST:
+                case ODPAT_SET_TUNNEL:
+                case ODPAT_SET_PRIORITY:
+                case ODPAT_POP_PRIORITY:
+                case ODPAT_DROP_SPOOFED_ARP:
+                        /* No validation needed. */
+                        break;
+
+                case ODPAT_OUTPUT:
+                        if (nla_get_u32(a) >= DP_MAX_PORTS)
+                                return -EINVAL;
+
+                case ODPAT_SET_DL_TCI:
+			if (nla_get_be16(a) & htons(VLAN_CFI_MASK))
 				return -EINVAL;
-			break;
+                        break;
 
-		case ODPAT_OUTPUT_GROUP:
-			if (a->output_group.group >= DP_MAX_GROUPS)
-				return -EINVAL;
-			break;
+                case ODPAT_SET_NW_TOS:
+                        if (nla_get_u8(a) & INET_ECN_MASK)
+                                return -EINVAL;
+                        break;
 
-		case ODPAT_SET_VLAN_VID:
-			if (a->vlan_vid.vlan_vid & htons(~VLAN_VID_MASK))
-				return -EINVAL;
-			break;
+                default:
+                        return -EOPNOTSUPP;
+                }
+        }
 
-		case ODPAT_SET_VLAN_PCP:
-			if (a->vlan_pcp.vlan_pcp
-			    & ~(VLAN_PCP_MASK >> VLAN_PCP_SHIFT))
-				return -EINVAL;
-			break;
+        if (rem > 0)
+                return -EINVAL;
 
-		case ODPAT_SET_NW_TOS:
-			if (a->nw_tos.nw_tos & INET_ECN_MASK)
-				return -EINVAL;
-			break;
-
-		default:
-			if (a->type >= ODPAT_N_ACTIONS)
-				return -EOPNOTSUPP;
-			break;
-		}
-	}
-
-	return 0;
+        return 0;
 }
 
 static struct sw_flow_actions *get_actions(const struct odp_flow *flow)
@@ -944,16 +753,17 @@ static struct sw_flow_actions *get_actions(const struct odp_flow *flow)
 	struct sw_flow_actions *actions;
 	int error;
 
-	actions = flow_actions_alloc(flow->n_actions);
+	actions = flow_actions_alloc(flow->actions_len);
 	error = PTR_ERR(actions);
 	if (IS_ERR(actions))
 		goto error;
 
 	error = -EFAULT;
-	if (copy_from_user(actions->actions, flow->actions,
-			   flow->n_actions * sizeof(union odp_action)))
+	if (copy_from_user(actions->actions,
+			   (struct nlattr __user __force *)flow->actions,
+			   flow->actions_len))
 		goto error_free_actions;
-	error = validate_actions(actions);
+	error = validate_actions(actions->actions, actions->actions_len);
 	if (error)
 		goto error_free_actions;
 
@@ -965,24 +775,15 @@ error:
 	return ERR_PTR(error);
 }
 
-static struct timespec get_time_offset(void)
-{
-	struct timespec now_mono, now_jiffies;
-
-	ktime_get_ts(&now_mono);
-	jiffies_to_timespec(jiffies, &now_jiffies);
-	return timespec_sub(now_mono, now_jiffies);
-}
-
-static void get_stats(struct sw_flow *flow, struct odp_flow_stats *stats,
-		      struct timespec time_offset)
+static void get_stats(struct sw_flow *flow, struct odp_flow_stats *stats)
 {
 	if (flow->used) {
-		struct timespec flow_ts, used;
+		struct timespec offset_ts, used, now_mono;
 
-		jiffies_to_timespec(flow->used, &flow_ts);
-		set_normalized_timespec(&used, flow_ts.tv_sec + time_offset.tv_sec,
-					flow_ts.tv_nsec + time_offset.tv_nsec);
+		ktime_get_ts(&now_mono);
+		jiffies_to_timespec(jiffies - flow->used, &offset_ts);
+		set_normalized_timespec(&used, now_mono.tv_sec - offset_ts.tv_sec,
+					now_mono.tv_nsec - offset_ts.tv_nsec);
 
 		stats->used_sec = used.tv_sec;
 		stats->used_nsec = used.tv_nsec;
@@ -1008,7 +809,7 @@ static void clear_stats(struct sw_flow *flow)
 
 static int expand_table(struct datapath *dp)
 {
-	struct tbl *old_table = rcu_dereference(dp->table);
+	struct tbl *old_table = get_table_protected(dp);
 	struct tbl *new_table;
 
 	new_table = tbl_expand(old_table);
@@ -1027,16 +828,15 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 	struct tbl_node *flow_node;
 	struct sw_flow *flow;
 	struct tbl *table;
+	struct sw_flow_actions *acts = NULL;
 	int error;
+	u32 hash;
 
-	memset(uf->flow.key.reserved, 0, sizeof uf->flow.key.reserved);
-
-	table = rcu_dereference(dp->table);
-	flow_node = tbl_lookup(table, &uf->flow.key, flow_hash(&uf->flow.key), flow_cmp);
+	hash = flow_hash(&uf->flow.key);
+	table = get_table_protected(dp);
+	flow_node = tbl_lookup(table, &uf->flow.key, hash, flow_cmp);
 	if (!flow_node) {
 		/* No such flow. */
-		struct sw_flow_actions *acts;
-
 		error = -ENOENT;
 		if (!(uf->flags & ODPPF_CREATE))
 			goto error;
@@ -1046,16 +846,16 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 			error = expand_table(dp);
 			if (error)
 				goto error;
-			table = rcu_dereference(dp->table);
+			table = get_table_protected(dp);
 		}
 
 		/* Allocate flow. */
-		error = -ENOMEM;
-		flow = kmem_cache_alloc(flow_cache, GFP_KERNEL);
-		if (flow == NULL)
+		flow = flow_alloc();
+		if (IS_ERR(flow)) {
+			error = PTR_ERR(flow);
 			goto error;
+		}
 		flow->key = uf->flow.key;
-		spin_lock_init(&flow->lock);
 		clear_stats(flow);
 
 		/* Obtain actions. */
@@ -1066,7 +866,7 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 		rcu_assign_pointer(flow->sf_acts, acts);
 
 		/* Put flow in bucket. */
-		error = tbl_insert(table, &flow->tbl_node, flow_hash(&flow->key));
+		error = tbl_insert(table, &flow->tbl_node, hash);
 		if (error)
 			goto error_free_flow_acts;
 
@@ -1087,10 +887,12 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 		error = PTR_ERR(new_acts);
 		if (IS_ERR(new_acts))
 			goto error;
-		old_acts = rcu_dereference(flow->sf_acts);
-		if (old_acts->n_actions != new_acts->n_actions ||
+
+		old_acts = rcu_dereference_protected(flow->sf_acts,
+						     lockdep_is_held(&dp->mutex));
+		if (old_acts->actions_len != new_acts->actions_len ||
 		    memcmp(old_acts->actions, new_acts->actions,
-			   sizeof(union odp_action) * old_acts->n_actions)) {
+			   old_acts->actions_len)) {
 			rcu_assign_pointer(flow->sf_acts, new_acts);
 			flow_deferred_free_acts(old_acts);
 		} else {
@@ -1099,7 +901,7 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 
 		/* Fetch stats, then clear them if necessary. */
 		spin_lock_bh(&flow->lock);
-		get_stats(flow, stats, get_time_offset());
+		get_stats(flow, stats);
 		if (uf->flags & ODPPF_ZERO_STATS)
 			clear_stats(flow);
 		spin_unlock_bh(&flow->lock);
@@ -1108,9 +910,10 @@ static int do_put_flow(struct datapath *dp, struct odp_flow_put *uf,
 	return 0;
 
 error_free_flow_acts:
-	kfree(flow->sf_acts);
+	kfree(acts);
 error_free_flow:
-	kmem_cache_free(flow_cache, flow);
+	flow->sf_acts = NULL;
+	flow_put(flow);
 error:
 	return error;
 }
@@ -1135,60 +938,58 @@ static int put_flow(struct datapath *dp, struct odp_flow_put __user *ufp)
 	return 0;
 }
 
-static int do_answer_query(struct sw_flow *flow, u32 query_flags,
-			   struct timespec time_offset,
+static int do_answer_query(struct datapath *dp, struct sw_flow *flow,
+			   u32 query_flags,
 			   struct odp_flow_stats __user *ustats,
-			   union odp_action __user *actions,
-			   u32 __user *n_actionsp)
+			   struct nlattr __user *actions,
+			   u32 __user *actions_lenp)
 {
 	struct sw_flow_actions *sf_acts;
 	struct odp_flow_stats stats;
-	u32 n_actions;
+	u32 actions_len;
 
 	spin_lock_bh(&flow->lock);
-	get_stats(flow, &stats, time_offset);
+	get_stats(flow, &stats);
 	if (query_flags & ODPFF_ZERO_TCP_FLAGS)
 		flow->tcp_flags = 0;
 
 	spin_unlock_bh(&flow->lock);
 
 	if (copy_to_user(ustats, &stats, sizeof(struct odp_flow_stats)) ||
-	    get_user(n_actions, n_actionsp))
+	    get_user(actions_len, actions_lenp))
 		return -EFAULT;
 
-	if (!n_actions)
+	if (!actions_len)
 		return 0;
 
-	sf_acts = rcu_dereference(flow->sf_acts);
-	if (put_user(sf_acts->n_actions, n_actionsp) ||
+	sf_acts = rcu_dereference_protected(flow->sf_acts,
+					    lockdep_is_held(&dp->mutex));
+	if (put_user(sf_acts->actions_len, actions_lenp) ||
 	    (actions && copy_to_user(actions, sf_acts->actions,
-				     sizeof(union odp_action) *
-				     min(sf_acts->n_actions, n_actions))))
+				     min(sf_acts->actions_len, actions_len))))
 		return -EFAULT;
 
 	return 0;
 }
 
-static int answer_query(struct sw_flow *flow, u32 query_flags,
-			struct timespec time_offset,
-			struct odp_flow __user *ufp)
+static int answer_query(struct datapath *dp, struct sw_flow *flow,
+			u32 query_flags, struct odp_flow __user *ufp)
 {
-	union odp_action *actions;
+	struct nlattr __user *actions;
 
-	if (get_user(actions, &ufp->actions))
+	if (get_user(actions, (struct nlattr __user * __user *)&ufp->actions))
 		return -EFAULT;
 
-	return do_answer_query(flow, query_flags, time_offset,
-			       &ufp->stats, actions, &ufp->n_actions);
+	return do_answer_query(dp, flow, query_flags, 
+			       &ufp->stats, actions, &ufp->actions_len);
 }
 
 static struct sw_flow *do_del_flow(struct datapath *dp, struct odp_flow_key *key)
 {
-	struct tbl *table = rcu_dereference(dp->table);
+	struct tbl *table = get_table_protected(dp);
 	struct tbl_node *flow_node;
 	int error;
 
-	memset(key->reserved, 0, sizeof key->reserved);
 	flow_node = tbl_lookup(table, key, flow_hash(key), flow_cmp);
 	if (!flow_node)
 		return ERR_PTR(-ENOENT);
@@ -1217,34 +1018,30 @@ static int del_flow(struct datapath *dp, struct odp_flow __user *ufp)
 	if (IS_ERR(flow))
 		return PTR_ERR(flow);
 
-	error = answer_query(flow, 0, get_time_offset(), ufp);
+	error = answer_query(dp, flow, 0, ufp);
 	flow_deferred_free(flow);
 	return error;
 }
 
 static int do_query_flows(struct datapath *dp, const struct odp_flowvec *flowvec)
 {
-	struct tbl *table = rcu_dereference(dp->table);
-	struct timespec time_offset;
+	struct tbl *table = get_table_protected(dp);
 	u32 i;
 
-	time_offset = get_time_offset();
-
 	for (i = 0; i < flowvec->n_flows; i++) {
-		struct odp_flow __user *ufp = &flowvec->flows[i];
+		struct odp_flow __user *ufp = (struct odp_flow __user __force *)&flowvec->flows[i];
 		struct odp_flow uf;
 		struct tbl_node *flow_node;
 		int error;
 
 		if (copy_from_user(&uf, ufp, sizeof uf))
 			return -EFAULT;
-		memset(uf.key.reserved, 0, sizeof uf.key.reserved);
 
 		flow_node = tbl_lookup(table, &uf.key, flow_hash(&uf.key), flow_cmp);
 		if (!flow_node)
 			error = put_user(ENOENT, &ufp->stats.error);
 		else
-			error = answer_query(flow_cast(flow_node), uf.flags, time_offset, ufp);
+			error = answer_query(dp, flow_cast(flow_node), uf.flags, ufp);
 		if (error)
 			return -EFAULT;
 	}
@@ -1252,10 +1049,10 @@ static int do_query_flows(struct datapath *dp, const struct odp_flowvec *flowvec
 }
 
 struct list_flows_cbdata {
+	struct datapath *dp;
 	struct odp_flow __user *uflows;
 	u32 n_flows;
 	u32 listed_flows;
-	struct timespec time_offset;
 };
 
 static int list_flow(struct tbl_node *node, void *cbdata_)
@@ -1267,7 +1064,7 @@ static int list_flow(struct tbl_node *node, void *cbdata_)
 
 	if (copy_to_user(&ufp->key, &flow->key, sizeof flow->key))
 		return -EFAULT;
-	error = answer_query(flow, 0, cbdata->time_offset, ufp);
+	error = answer_query(cbdata->dp, flow, 0, ufp);
 	if (error)
 		return error;
 
@@ -1284,12 +1081,12 @@ static int do_list_flows(struct datapath *dp, const struct odp_flowvec *flowvec)
 	if (!flowvec->n_flows)
 		return 0;
 
-	cbdata.uflows = flowvec->flows;
+	cbdata.dp = dp;
+	cbdata.uflows = (struct odp_flow __user __force*)flowvec->flows;
 	cbdata.n_flows = flowvec->n_flows;
 	cbdata.listed_flows = 0;
-	cbdata.time_offset = get_time_offset();
 
-	error = tbl_foreach(rcu_dereference(dp->table), list_flow, &cbdata);
+	error = tbl_foreach(get_table_protected(dp), list_flow, &cbdata);
 	return error ? error : cbdata.listed_flows;
 }
 
@@ -1320,23 +1117,25 @@ static int do_execute(struct datapath *dp, const struct odp_execute *execute)
 	struct sk_buff *skb;
 	struct sw_flow_actions *actions;
 	struct ethhdr *eth;
+	bool is_frag;
 	int err;
 
 	err = -EINVAL;
 	if (execute->length < ETH_HLEN || execute->length > 65535)
 		goto error;
 
-	err = -ENOMEM;
-	actions = flow_actions_alloc(execute->n_actions);
-	if (!actions)
+	actions = flow_actions_alloc(execute->actions_len);
+	if (IS_ERR(actions)) {
+		err = PTR_ERR(actions);
 		goto error;
+	}
 
 	err = -EFAULT;
-	if (copy_from_user(actions->actions, execute->actions,
-			   execute->n_actions * sizeof *execute->actions))
+	if (copy_from_user(actions->actions,
+	    (struct nlattr __user __force *)execute->actions, execute->actions_len))
 		goto error_free_actions;
 
-	err = validate_actions(actions);
+	err = validate_actions(actions->actions, execute->actions_len);
 	if (err)
 		goto error_free_actions;
 
@@ -1345,13 +1144,9 @@ static int do_execute(struct datapath *dp, const struct odp_execute *execute)
 	if (!skb)
 		goto error_free_actions;
 
-	if (execute->in_port < DP_MAX_PORTS)
-		OVS_CB(skb)->dp_port = dp->ports[execute->in_port];
-	else
-		OVS_CB(skb)->dp_port = NULL;
-
 	err = -EFAULT;
-	if (copy_from_user(skb_put(skb, execute->length), execute->data,
+	if (copy_from_user(skb_put(skb, execute->length),
+			   (const void __user __force *)execute->data,
 			   execute->length))
 		goto error_free_skb;
 
@@ -1366,13 +1161,12 @@ static int do_execute(struct datapath *dp, const struct odp_execute *execute)
 	else
 		skb->protocol = htons(ETH_P_802_2);
 
-	err = flow_extract(skb, execute->in_port, &key);
+	err = flow_extract(skb, -1, &key, &is_frag);
 	if (err)
 		goto error_free_skb;
 
 	rcu_read_lock();
-	err = execute_actions(dp, skb, &key, actions->actions,
-			      actions->n_actions, GFP_KERNEL);
+	err = execute_actions(dp, skb, &key, actions->actions, actions->actions_len);
 	rcu_read_unlock();
 
 	kfree(actions);
@@ -1398,7 +1192,7 @@ static int execute_packet(struct datapath *dp, const struct odp_execute __user *
 
 static int get_dp_stats(struct datapath *dp, struct odp_stats __user *statsp)
 {
-	struct tbl *table = rcu_dereference(dp->table);
+	struct tbl *table = get_table_protected(dp);
 	struct odp_stats stats;
 	int i;
 
@@ -1407,7 +1201,6 @@ static int get_dp_stats(struct datapath *dp, struct odp_stats __user *statsp)
 	stats.max_capacity = TBL_MAX_BUCKETS;
 	stats.n_ports = dp->n_ports;
 	stats.max_ports = DP_MAX_PORTS;
-	stats.max_groups = DP_MAX_GROUPS;
 	stats.n_frags = stats.n_hit = stats.n_missed = stats.n_lost = 0;
 	for_each_possible_cpu(i) {
 		const struct dp_stats_percpu *percpu_stats;
@@ -1434,7 +1227,7 @@ static int get_dp_stats(struct datapath *dp, struct odp_stats __user *statsp)
 /* MTU of the dp pseudo-device: ETH_DATA_LEN or the minimum of the ports */
 int dp_min_mtu(const struct datapath *dp)
 {
-	struct dp_port *p;
+	struct vport *p;
 	int mtu = 0;
 
 	ASSERT_RTNL();
@@ -1444,10 +1237,10 @@ int dp_min_mtu(const struct datapath *dp)
 
 		/* Skip any internal ports, since that's what we're trying to
 		 * set. */
-		if (is_internal_vport(p->vport))
+		if (is_internal_vport(p))
 			continue;
 
-		dev_mtu = vport_get_mtu(p->vport);
+		dev_mtu = vport_get_mtu(p);
 		if (!mtu || dev_mtu < mtu)
 			mtu = dev_mtu;
 	}
@@ -1459,7 +1252,7 @@ int dp_min_mtu(const struct datapath *dp)
  * be called with RTNL lock. */
 void set_internal_devs_mtu(const struct datapath *dp)
 {
-	struct dp_port *p;
+	struct vport *p;
 	int mtu;
 
 	ASSERT_RTNL();
@@ -1467,23 +1260,24 @@ void set_internal_devs_mtu(const struct datapath *dp)
 	mtu = dp_min_mtu(dp);
 
 	list_for_each_entry_rcu (p, &dp->port_list, node) {
-		if (is_internal_vport(p->vport))
-			vport_set_mtu(p->vport, mtu);
+		if (is_internal_vport(p))
+			vport_set_mtu(p, mtu);
 	}
 }
 
-static int put_port(const struct dp_port *p, struct odp_port __user *uop)
+static int put_port(const struct vport *p, struct odp_port __user *uop)
 {
 	struct odp_port op;
 
 	memset(&op, 0, sizeof op);
 
 	rcu_read_lock();
-	strncpy(op.devname, vport_get_name(p->vport), sizeof op.devname);
+	strncpy(op.devname, vport_get_name(p), sizeof op.devname);
+	strncpy(op.type, vport_get_type(p), sizeof op.type);
+	vport_get_config(p, op.config);
 	rcu_read_unlock();
 
 	op.port = p->port_no;
-	op.flags = is_internal_vport(p->vport) ? ODP_PORT_INTERNAL : 0;
 
 	return copy_to_user(uop, &op, sizeof op) ? -EFAULT : 0;
 }
@@ -1491,48 +1285,32 @@ static int put_port(const struct dp_port *p, struct odp_port __user *uop)
 static int query_port(struct datapath *dp, struct odp_port __user *uport)
 {
 	struct odp_port port;
+	struct vport *vport;
 
 	if (copy_from_user(&port, uport, sizeof port))
 		return -EFAULT;
 
 	if (port.devname[0]) {
-		struct vport *vport;
-		struct dp_port *dp_port;
-		int err = 0;
-
 		port.devname[IFNAMSIZ - 1] = '\0';
 
 		vport_lock();
-		rcu_read_lock();
-
 		vport = vport_locate(port.devname);
-		if (!vport) {
-			err = -ENODEV;
-			goto error_unlock;
-		}
-
-		dp_port = vport_get_dp_port(vport);
-		if (!dp_port || dp_port->dp != dp) {
-			err = -ENOENT;
-			goto error_unlock;
-		}
-
-		port.port = dp_port->port_no;
-
-error_unlock:
-		rcu_read_unlock();
 		vport_unlock();
 
-		if (err)
-			return err;
+		if (!vport)
+			return -ENODEV;
+		if (vport->dp != dp)
+			return -ENOENT;
 	} else {
 		if (port.port >= DP_MAX_PORTS)
 			return -EINVAL;
-		if (!dp->ports[port.port])
+
+		vport = get_vport_protected(dp, port.port);
+		if (!vport)
 			return -ENOENT;
 	}
 
-	return put_port(dp->ports[port.port], uport);
+	return put_port(vport, uport);
 }
 
 static int do_list_ports(struct datapath *dp, struct odp_port __user *uports,
@@ -1540,7 +1318,7 @@ static int do_list_ports(struct datapath *dp, struct odp_port __user *uports,
 {
 	int idx = 0;
 	if (n_ports) {
-		struct dp_port *p;
+		struct vport *p;
 
 		list_for_each_entry_rcu (p, &dp->port_list, node) {
 			if (put_port(p, &uports[idx]))
@@ -1560,92 +1338,12 @@ static int list_ports(struct datapath *dp, struct odp_portvec __user *upv)
 	if (copy_from_user(&pv, upv, sizeof pv))
 		return -EFAULT;
 
-	retval = do_list_ports(dp, pv.ports, pv.n_ports);
+	retval = do_list_ports(dp, (struct odp_port __user __force *)pv.ports,
+			       pv.n_ports);
 	if (retval < 0)
 		return retval;
 
 	return put_user(retval, &upv->n_ports);
-}
-
-/* RCU callback for freeing a dp_port_group */
-static void free_port_group(struct rcu_head *rcu)
-{
-	struct dp_port_group *g = container_of(rcu, struct dp_port_group, rcu);
-	kfree(g);
-}
-
-static int do_set_port_group(struct datapath *dp, u16 __user *ports,
-			     int n_ports, int group)
-{
-	struct dp_port_group *new_group, *old_group;
-	int error;
-
-	error = -EINVAL;
-	if (n_ports > DP_MAX_PORTS || group >= DP_MAX_GROUPS)
-		goto error;
-
-	error = -ENOMEM;
-	new_group = kmalloc(sizeof *new_group + sizeof(u16) * n_ports, GFP_KERNEL);
-	if (!new_group)
-		goto error;
-
-	new_group->n_ports = n_ports;
-	error = -EFAULT;
-	if (copy_from_user(new_group->ports, ports, sizeof(u16) * n_ports))
-		goto error_free;
-
-	old_group = rcu_dereference(dp->groups[group]);
-	rcu_assign_pointer(dp->groups[group], new_group);
-	if (old_group)
-		call_rcu(&old_group->rcu, free_port_group);
-	return 0;
-
-error_free:
-	kfree(new_group);
-error:
-	return error;
-}
-
-static int set_port_group(struct datapath *dp,
-			  const struct odp_port_group __user *upg)
-{
-	struct odp_port_group pg;
-
-	if (copy_from_user(&pg, upg, sizeof pg))
-		return -EFAULT;
-
-	return do_set_port_group(dp, pg.ports, pg.n_ports, pg.group);
-}
-
-static int do_get_port_group(struct datapath *dp,
-			     u16 __user *ports, int n_ports, int group,
-			     u16 __user *n_portsp)
-{
-	struct dp_port_group *g;
-	u16 n_copy;
-
-	if (group >= DP_MAX_GROUPS)
-		return -EINVAL;
-
-	g = dp->groups[group];
-	n_copy = g ? min_t(int, g->n_ports, n_ports) : 0;
-	if (n_copy && copy_to_user(ports, g->ports, n_copy * sizeof(u16)))
-		return -EFAULT;
-
-	if (put_user(g ? g->n_ports : 0, n_portsp))
-		return -EFAULT;
-
-	return 0;
-}
-
-static int get_port_group(struct datapath *dp, struct odp_port_group __user *upg)
-{
-	struct odp_port_group pg;
-
-	if (copy_from_user(&pg, upg, sizeof pg))
-		return -EFAULT;
-
-	return do_get_port_group(dp, pg.ports, pg.n_ports, pg.group, &upg->n_ports);
 }
 
 static int get_listen_mask(const struct file *f)
@@ -1677,26 +1375,18 @@ static long openvswitch_ioctl(struct file *f, unsigned int cmd,
 		err = destroy_dp(dp_idx);
 		goto exit;
 
-	case ODP_PORT_ATTACH:
+	case ODP_VPORT_ATTACH:
 		err = attach_port(dp_idx, (struct odp_port __user *)argp);
 		goto exit;
 
-	case ODP_PORT_DETACH:
+	case ODP_VPORT_DETACH:
 		err = get_user(port_no, (int __user *)argp);
 		if (!err)
 			err = detach_port(dp_idx, port_no);
 		goto exit;
 
-	case ODP_VPORT_ADD:
-		err = vport_user_add((struct odp_vport_add __user *)argp);
-		goto exit;
-
 	case ODP_VPORT_MOD:
-		err = vport_user_mod((struct odp_vport_mod __user *)argp);
-		goto exit;
-
-	case ODP_VPORT_DEL:
-		err = vport_user_del((char __user *)argp);
+		err = vport_user_mod((struct odp_port __user *)argp);
 		goto exit;
 
 	case ODP_VPORT_STATS_GET:
@@ -1774,20 +1464,12 @@ static long openvswitch_ioctl(struct file *f, unsigned int cmd,
 			dp->sflow_probability = sflow_probability;
 		break;
 
-	case ODP_PORT_QUERY:
+	case ODP_VPORT_QUERY:
 		err = query_port(dp, (struct odp_port __user *)argp);
 		break;
 
-	case ODP_PORT_LIST:
+	case ODP_VPORT_LIST:
 		err = list_ports(dp, (struct odp_portvec __user *)argp);
-		break;
-
-	case ODP_PORT_GROUP_SET:
-		err = set_port_group(dp, (struct odp_port_group __user *)argp);
-		break;
-
-	case ODP_PORT_GROUP_GET:
-		err = get_port_group(dp, (struct odp_port_group __user *)argp);
 		break;
 
 	case ODP_FLOW_FLUSH:
@@ -1849,27 +1531,6 @@ static int compat_list_ports(struct datapath *dp, struct compat_odp_portvec __us
 	return put_user(retval, &upv->n_ports);
 }
 
-static int compat_set_port_group(struct datapath *dp, const struct compat_odp_port_group __user *upg)
-{
-	struct compat_odp_port_group pg;
-
-	if (copy_from_user(&pg, upg, sizeof pg))
-		return -EFAULT;
-
-	return do_set_port_group(dp, compat_ptr(pg.ports), pg.n_ports, pg.group);
-}
-
-static int compat_get_port_group(struct datapath *dp, struct compat_odp_port_group __user *upg)
-{
-	struct compat_odp_port_group pg;
-
-	if (copy_from_user(&pg, upg, sizeof pg))
-		return -EFAULT;
-
-	return do_get_port_group(dp, compat_ptr(pg.ports), pg.n_ports,
-				 pg.group, &upg->n_ports);
-}
-
 static int compat_get_flow(struct odp_flow *flow, const struct compat_odp_flow __user *compat)
 {
 	compat_uptr_t actions;
@@ -1878,11 +1539,11 @@ static int compat_get_flow(struct odp_flow *flow, const struct compat_odp_flow _
 	    __copy_from_user(&flow->stats, &compat->stats, sizeof(struct odp_flow_stats)) ||
 	    __copy_from_user(&flow->key, &compat->key, sizeof(struct odp_flow_key)) ||
 	    __get_user(actions, &compat->actions) ||
-	    __get_user(flow->n_actions, &compat->n_actions) ||
+	    __get_user(flow->actions_len, &compat->actions_len) ||
 	    __get_user(flow->flags, &compat->flags))
 		return -EFAULT;
 
-	flow->actions = compat_ptr(actions);
+	flow->actions = (struct nlattr __force *)compat_ptr(actions);
 	return 0;
 }
 
@@ -1907,8 +1568,8 @@ static int compat_put_flow(struct datapath *dp, struct compat_odp_flow_put __use
 	return 0;
 }
 
-static int compat_answer_query(struct sw_flow *flow, u32 query_flags,
-			       struct timespec time_offset,
+static int compat_answer_query(struct datapath *dp, struct sw_flow *flow,
+			       u32 query_flags,
 			       struct compat_odp_flow __user *ufp)
 {
 	compat_uptr_t actions;
@@ -1916,8 +1577,8 @@ static int compat_answer_query(struct sw_flow *flow, u32 query_flags,
 	if (get_user(actions, &ufp->actions))
 		return -EFAULT;
 
-	return do_answer_query(flow, query_flags, time_offset, &ufp->stats,
-			       compat_ptr(actions), &ufp->n_actions);
+	return do_answer_query(dp, flow, query_flags, &ufp->stats,
+			       compat_ptr(actions), &ufp->actions_len);
 }
 
 static int compat_del_flow(struct datapath *dp, struct compat_odp_flow __user *ufp)
@@ -1933,18 +1594,17 @@ static int compat_del_flow(struct datapath *dp, struct compat_odp_flow __user *u
 	if (IS_ERR(flow))
 		return PTR_ERR(flow);
 
-	error = compat_answer_query(flow, 0, get_time_offset(), ufp);
+	error = compat_answer_query(dp, flow, 0, ufp);
 	flow_deferred_free(flow);
 	return error;
 }
 
-static int compat_query_flows(struct datapath *dp, struct compat_odp_flow *flows, u32 n_flows)
+static int compat_query_flows(struct datapath *dp,
+			      struct compat_odp_flow __user *flows,
+			      u32 n_flows)
 {
-	struct tbl *table = rcu_dereference(dp->table);
-	struct timespec time_offset;
+	struct tbl *table = get_table_protected(dp);
 	u32 i;
-
-	time_offset = get_time_offset();
 
 	for (i = 0; i < n_flows; i++) {
 		struct compat_odp_flow __user *ufp = &flows[i];
@@ -1954,13 +1614,13 @@ static int compat_query_flows(struct datapath *dp, struct compat_odp_flow *flows
 
 		if (compat_get_flow(&uf, ufp))
 			return -EFAULT;
-		memset(uf.key.reserved, 0, sizeof uf.key.reserved);
 
 		flow_node = tbl_lookup(table, &uf.key, flow_hash(&uf.key), flow_cmp);
 		if (!flow_node)
 			error = put_user(ENOENT, &ufp->stats.error);
 		else
-			error = compat_answer_query(flow_cast(flow_node), uf.flags, time_offset, ufp);
+			error = compat_answer_query(dp, flow_cast(flow_node),
+						    uf.flags, ufp);
 		if (error)
 			return -EFAULT;
 	}
@@ -1968,10 +1628,10 @@ static int compat_query_flows(struct datapath *dp, struct compat_odp_flow *flows
 }
 
 struct compat_list_flows_cbdata {
+	struct datapath *dp;
 	struct compat_odp_flow __user *uflows;
 	u32 n_flows;
 	u32 listed_flows;
-	struct timespec time_offset;
 };
 
 static int compat_list_flow(struct tbl_node *node, void *cbdata_)
@@ -1983,7 +1643,7 @@ static int compat_list_flow(struct tbl_node *node, void *cbdata_)
 
 	if (copy_to_user(&ufp->key, &flow->key, sizeof flow->key))
 		return -EFAULT;
-	error = compat_answer_query(flow, 0, cbdata->time_offset, ufp);
+	error = compat_answer_query(cbdata->dp, flow, 0, ufp);
 	if (error)
 		return error;
 
@@ -1992,7 +1652,8 @@ static int compat_list_flow(struct tbl_node *node, void *cbdata_)
 	return 0;
 }
 
-static int compat_list_flows(struct datapath *dp, struct compat_odp_flow *flows, u32 n_flows)
+static int compat_list_flows(struct datapath *dp,
+			     struct compat_odp_flow __user *flows, u32 n_flows)
 {
 	struct compat_list_flows_cbdata cbdata;
 	int error;
@@ -2000,18 +1661,18 @@ static int compat_list_flows(struct datapath *dp, struct compat_odp_flow *flows,
 	if (!n_flows)
 		return 0;
 
+	cbdata.dp = dp;
 	cbdata.uflows = flows;
 	cbdata.n_flows = n_flows;
 	cbdata.listed_flows = 0;
-	cbdata.time_offset = get_time_offset();
 
-	error = tbl_foreach(rcu_dereference(dp->table), compat_list_flow, &cbdata);
+	error = tbl_foreach(get_table_protected(dp), compat_list_flow, &cbdata);
 	return error ? error : cbdata.listed_flows;
 }
 
 static int compat_flowvec_ioctl(struct datapath *dp, unsigned long argp,
 				int (*function)(struct datapath *,
-						struct compat_odp_flow *,
+						struct compat_odp_flow __user *,
 						u32 n_flows))
 {
 	struct compat_odp_flowvec __user *uflowvec;
@@ -2045,15 +1706,14 @@ static int compat_execute(struct datapath *dp, const struct compat_odp_execute _
 	compat_uptr_t data;
 
 	if (!access_ok(VERIFY_READ, uexecute, sizeof(struct compat_odp_execute)) ||
-	    __get_user(execute.in_port, &uexecute->in_port) ||
 	    __get_user(actions, &uexecute->actions) ||
-	    __get_user(execute.n_actions, &uexecute->n_actions) ||
+	    __get_user(execute.actions_len, &uexecute->actions_len) ||
 	    __get_user(data, &uexecute->data) ||
 	    __get_user(execute.length, &uexecute->length))
 		return -EFAULT;
 
-	execute.actions = compat_ptr(actions);
-	execute.data = compat_ptr(data);
+	execute.actions = (struct nlattr __force *)compat_ptr(actions);
+	execute.data = (const void __force *)compat_ptr(data);
 
 	return do_execute(dp, &execute);
 }
@@ -2071,9 +1731,9 @@ static long openvswitch_compat_ioctl(struct file *f, unsigned int cmd, unsigned 
 		return openvswitch_ioctl(f, cmd, argp);
 
 	case ODP_DP_CREATE:
-	case ODP_PORT_ATTACH:
-	case ODP_PORT_DETACH:
-	case ODP_VPORT_DEL:
+	case ODP_VPORT_ATTACH:
+	case ODP_VPORT_DETACH:
+	case ODP_VPORT_MOD:
 	case ODP_VPORT_MTU_SET:
 	case ODP_VPORT_MTU_GET:
 	case ODP_VPORT_ETHER_SET:
@@ -2087,15 +1747,9 @@ static long openvswitch_compat_ioctl(struct file *f, unsigned int cmd, unsigned 
 	case ODP_GET_LISTEN_MASK:
 	case ODP_SET_SFLOW_PROBABILITY:
 	case ODP_GET_SFLOW_PROBABILITY:
-	case ODP_PORT_QUERY:
+	case ODP_VPORT_QUERY:
 		/* Ioctls that just need their pointer argument extended. */
 		return openvswitch_ioctl(f, cmd, (unsigned long)compat_ptr(argp));
-
-	case ODP_VPORT_ADD32:
-		return compat_vport_user_add(compat_ptr(argp));
-
-	case ODP_VPORT_MOD32:
-		return compat_vport_user_mod(compat_ptr(argp));
 	}
 
 	dp = get_dp_locked(dp_idx);
@@ -2104,16 +1758,8 @@ static long openvswitch_compat_ioctl(struct file *f, unsigned int cmd, unsigned 
 		goto exit;
 
 	switch (cmd) {
-	case ODP_PORT_LIST32:
+	case ODP_VPORT_LIST32:
 		err = compat_list_ports(dp, compat_ptr(argp));
-		break;
-
-	case ODP_PORT_GROUP_SET32:
-		err = compat_set_port_group(dp, compat_ptr(argp));
-		break;
-
-	case ODP_PORT_GROUP_GET32:
-		err = compat_get_port_group(dp, compat_ptr(argp));
 		break;
 
 	case ODP_FLOW_PUT32:
@@ -2240,13 +1886,12 @@ fault:
 	return -EFAULT;
 }
 
-ssize_t openvswitch_read(struct file *f, char __user *buf, size_t nbytes,
-		      loff_t *ppos)
+static ssize_t openvswitch_read(struct file *f, char __user *buf,
+				size_t nbytes, loff_t *ppos)
 {
-	/* XXX is there sufficient synchronization here? */
 	int listeners = get_listen_mask(f);
 	int dp_idx = iminor(f->f_dentry->d_inode);
-	struct datapath *dp = get_dp(dp_idx);
+	struct datapath *dp = get_dp_locked(dp_idx);
 	struct sk_buff *skb;
 	size_t copy_bytes, tot_copy_bytes;
 	int retval;
@@ -2283,21 +1928,19 @@ ssize_t openvswitch_read(struct file *f, char __user *buf, size_t nbytes,
 		}
 	}
 success:
+	mutex_unlock(&dp->mutex);
+
 	copy_bytes = tot_copy_bytes = min_t(size_t, skb->len, nbytes);
 
 	retval = 0;
 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
 		if (copy_bytes == skb->len) {
 			__wsum csum = 0;
-			unsigned int csum_start, csum_offset;
+			u16 csum_start, csum_offset;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
-			csum_start = skb->csum_start - skb_headroom(skb);
-			csum_offset = skb->csum_offset;
-#else
-			csum_start = skb_transport_header(skb) - skb->data;
-			csum_offset = skb->csum;
-#endif
+			get_skb_csum_pointers(skb, &csum_start, &csum_offset);
+			csum_start -= skb_headroom(skb);
+
 			BUG_ON(csum_start >= skb_headlen(skb));
 			retval = skb_copy_and_csum_datagram(skb, csum_start, buf + csum_start,
 							    copy_bytes - csum_start, &csum);
@@ -2307,7 +1950,8 @@ success:
 				copy_bytes = csum_start;
 				csump = (__sum16 __user *)(buf + csum_start + csum_offset);
 
-				BUG_ON((char *)csump + sizeof(__sum16) > buf + nbytes);
+				BUG_ON((char __user *)csump + sizeof(__sum16) >
+					buf + nbytes);
 				put_user(csum_fold(csum), csump);
 			}
 		} else
@@ -2315,7 +1959,7 @@ success:
 	}
 
 	if (!retval) {
-		struct iovec __user iov;
+		struct iovec iov;
 
 		iov.iov_base = buf;
 		iov.iov_len = copy_bytes;
@@ -2326,16 +1970,17 @@ success:
 		retval = tot_copy_bytes;
 
 	kfree_skb(skb);
+	return retval;
 
 error:
+	mutex_unlock(&dp->mutex);
 	return retval;
 }
 
 static unsigned int openvswitch_poll(struct file *file, poll_table *wait)
 {
-	/* XXX is there sufficient synchronization here? */
 	int dp_idx = iminor(file->f_dentry->d_inode);
-	struct datapath *dp = get_dp(dp_idx);
+	struct datapath *dp = get_dp_locked(dp_idx);
 	unsigned int mask;
 
 	if (dp) {
@@ -2343,21 +1988,21 @@ static unsigned int openvswitch_poll(struct file *file, poll_table *wait)
 		poll_wait(file, &dp->waitqueue, wait);
 		if (dp_has_packet_of_interest(dp, get_listen_mask(file)))
 			mask |= POLLIN | POLLRDNORM;
+		mutex_unlock(&dp->mutex);
 	} else {
 		mask = POLLIN | POLLRDNORM | POLLHUP;
 	}
 	return mask;
 }
 
-struct file_operations openvswitch_fops = {
-	/* XXX .aio_read = openvswitch_aio_read, */
+static struct file_operations openvswitch_fops = {
+	.owner = THIS_MODULE,
 	.read  = openvswitch_read,
 	.poll  = openvswitch_poll,
 	.unlocked_ioctl = openvswitch_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = openvswitch_compat_ioctl,
 #endif
-	/* XXX .fasync = openvswitch_fasync, */
 };
 
 static int major;

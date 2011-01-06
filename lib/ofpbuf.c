@@ -36,8 +36,19 @@ ofpbuf_use(struct ofpbuf *b, void *base, size_t allocated)
     b->allocated = allocated;
     b->size = 0;
     b->l2 = b->l3 = b->l4 = b->l7 = NULL;
-    b->next = NULL;
+    list_poison(&b->list_node);
     b->private_p = NULL;
+}
+
+/* Initializes 'b' as an ofpbuf whose data starts at 'data' and continues for
+ * 'size' bytes.  This is appropriate for an ofpbuf that will be used to
+ * inspect existing data, without moving it around or reallocating it, and
+ * generally without modifying it at all. */
+void
+ofpbuf_use_const(struct ofpbuf *b, const void *data, size_t size)
+{
+    ofpbuf_use(b, (void *) data, size);
+    b->size = size;
 }
 
 /* Initializes 'b' as an empty ofpbuf with an initial capacity of 'size'
@@ -231,6 +242,33 @@ ofpbuf_put(struct ofpbuf *b, const void *p, size_t size)
     return dst;
 }
 
+/* Parses as many pairs of hex digits as possible (possibly separated by
+ * spaces) from the beginning of 's', appending bytes for their values to 'b'.
+ * Returns the first character of 's' that is not the first of a pair of hex
+ * digits.  If 'n' is nonnull, stores the number of bytes added to 'b' in
+ * '*n'. */
+char *
+ofpbuf_put_hex(struct ofpbuf *b, const char *s, size_t *n)
+{
+    size_t initial_size = b->size;
+    for (;;) {
+        uint8_t byte;
+        bool ok;
+
+        s += strspn(s, " ");
+        byte = hexits_value(s, 2, &ok);
+        if (!ok) {
+            if (n) {
+                *n = b->size - initial_size;
+            }
+            return (char *) s;
+        }
+
+        ofpbuf_put(b, &byte, 1);
+        s += 2;
+    }
+}
+
 /* Reserves 'size' bytes of headroom so that they can be later allocated with
  * ofpbuf_push_uninit() without reallocating the ofpbuf. */
 void
@@ -343,4 +381,17 @@ ofpbuf_to_string(const struct ofpbuf *b, size_t maxbytes)
                   ofpbuf_headroom(b), ofpbuf_tailroom(b));
     ds_put_hex_dump(&s, b->data, MIN(b->size, maxbytes), 0, false);
     return ds_cstr(&s);
+}
+
+/* Removes each of the "struct ofpbuf"s on 'list' from the list and frees
+ * them.  */
+void
+ofpbuf_list_delete(struct list *list)
+{
+    struct ofpbuf *b, *next;
+
+    LIST_FOR_EACH_SAFE (b, next, list_node, list) {
+        list_remove(&b->list_node);
+        ofpbuf_delete(b);
+    }
 }

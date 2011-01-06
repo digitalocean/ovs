@@ -11,11 +11,13 @@ dist_modules = $(both_modules)	# Modules to distribute
 
 openvswitch_sources = \
 	actions.c \
+	checksum.c \
 	datapath.c \
 	dp_notify.c \
 	dp_sysfs_dp.c \
 	dp_sysfs_if.c \
 	flow.c \
+	loop_counter.c \
 	table.c \
 	tunnel.c \
 	vport.c \
@@ -28,10 +30,12 @@ openvswitch_sources = \
 
 openvswitch_headers = \
 	actions.h \
+	checksum.h \
 	compat.h \
 	datapath.h \
 	dp_sysfs.h \
 	flow.h \
+	loop_counter.h \
 	odp-compat.h \
 	table.h \
 	tunnel.h \

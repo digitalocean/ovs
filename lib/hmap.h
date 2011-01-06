@@ -38,6 +38,7 @@ static inline size_t hmap_node_hash(const struct hmap_node *node)
 }
 
 #define HMAP_NODE_NULL ((struct hmap_node *) 1)
+#define HMAP_NODE_NULL_INITIALIZER { 0, HMAP_NODE_NULL }
 
 /* Returns true if 'node' has been set to null by hmap_node_nullify() and has
  * not been un-nullified by being inserted into an hmap. */
@@ -69,6 +70,7 @@ struct hmap {
 /* Initialization. */
 void hmap_init(struct hmap *);
 void hmap_destroy(struct hmap *);
+void hmap_clear(struct hmap *);
 void hmap_swap(struct hmap *a, struct hmap *b);
 void hmap_moved(struct hmap *hmap);
 static inline size_t hmap_count(const struct hmap *);
@@ -95,9 +97,8 @@ struct hmap_node *hmap_random_node(const struct hmap *);
  *
  * HMAP_FOR_EACH_WITH_HASH iterates NODE over all of the nodes in HMAP that
  * have hash value equal to HASH.  HMAP_FOR_EACH_IN_BUCKET iterates NODE over
- * all of the nodes in HMAP that would fall in the same bucket as HASH.  STRUCT
- * and MEMBER must be the name of the struct that contains the 'struct
- * hmap_node' and the name of the 'struct hmap_node' member, respectively.
+ * all of the nodes in HMAP that would fall in the same bucket as HASH.  MEMBER
+ * must be the name of the 'struct hmap_node' member within NODE.
  *
  * These macros may be used interchangeably to search for a particular value in
  * an hmap, see, e.g. shash_find() for an example.  Usually, using
@@ -112,18 +113,15 @@ struct hmap_node *hmap_random_node(const struct hmap *);
  *
  * HASH is only evaluated once.
  */
-#define HMAP_FOR_EACH_WITH_HASH(NODE, STRUCT, MEMBER, HASH, HMAP)       \
-    for ((NODE) = CONTAINER_OF(hmap_first_with_hash(HMAP, HASH),        \
-                               STRUCT, MEMBER);                         \
+#define HMAP_FOR_EACH_WITH_HASH(NODE, MEMBER, HASH, HMAP)               \
+    for (ASSIGN_CONTAINER(NODE, hmap_first_with_hash(HMAP, HASH), MEMBER); \
          &(NODE)->MEMBER != NULL;                                       \
-         (NODE) = CONTAINER_OF(hmap_next_with_hash(&(NODE)->MEMBER),    \
-                               STRUCT, MEMBER))
-#define HMAP_FOR_EACH_IN_BUCKET(NODE, STRUCT, MEMBER, HASH, HMAP)       \
-    for ((NODE) = CONTAINER_OF(hmap_first_in_bucket(HMAP, HASH),        \
-                               STRUCT, MEMBER);                         \
+         ASSIGN_CONTAINER(NODE, hmap_next_with_hash(&(NODE)->MEMBER),   \
+                          MEMBER))
+#define HMAP_FOR_EACH_IN_BUCKET(NODE, MEMBER, HASH, HMAP)               \
+    for (ASSIGN_CONTAINER(NODE, hmap_first_in_bucket(HMAP, HASH), MEMBER); \
          &(NODE)->MEMBER != NULL;                                       \
-         (NODE) = CONTAINER_OF(hmap_next_in_bucket(&(NODE)->MEMBER),    \
-                               STRUCT, MEMBER))
+         ASSIGN_CONTAINER(NODE, hmap_next_in_bucket(&(NODE)->MEMBER), MEMBER))
 
 static inline struct hmap_node *hmap_first_with_hash(const struct hmap *,
                                                      size_t hash);
@@ -132,24 +130,28 @@ static inline struct hmap_node *hmap_first_in_bucket(const struct hmap *,
                                                      size_t hash);
 static inline struct hmap_node *hmap_next_in_bucket(const struct hmap_node *);
 
-/* Iteration.
- *
- * The _SAFE version is needed when NODE may be freed.  It is not needed when
- * NODE may be removed from the hash map but its members remain accessible and
- * intact. */
-#define HMAP_FOR_EACH(NODE, STRUCT, MEMBER, HMAP)                   \
-    for ((NODE) = CONTAINER_OF(hmap_first(HMAP), STRUCT, MEMBER);   \
-         &(NODE)->MEMBER != NULL;                                   \
-         (NODE) = CONTAINER_OF(hmap_next(HMAP, &(NODE)->MEMBER),    \
-                               STRUCT, MEMBER))
+/* Iteration. */
 
-#define HMAP_FOR_EACH_SAFE(NODE, NEXT, STRUCT, MEMBER, HMAP)        \
-    for ((NODE) = CONTAINER_OF(hmap_first(HMAP), STRUCT, MEMBER);   \
-         (&(NODE)->MEMBER != NULL                                   \
-          ? (NEXT) = CONTAINER_OF(hmap_next(HMAP, &(NODE)->MEMBER), \
-                                  STRUCT, MEMBER), 1                \
-          : 0);                                                     \
+/* Iterates through every node in HMAP. */
+#define HMAP_FOR_EACH(NODE, MEMBER, HMAP)                               \
+    for (ASSIGN_CONTAINER(NODE, hmap_first(HMAP), MEMBER);              \
+         &(NODE)->MEMBER != NULL;                                       \
+         ASSIGN_CONTAINER(NODE, hmap_next(HMAP, &(NODE)->MEMBER), MEMBER))
+
+/* Safe when NODE may be freed (not needed when NODE may be removed from the
+ * hash map but its members remain accessible and intact). */
+#define HMAP_FOR_EACH_SAFE(NODE, NEXT, MEMBER, HMAP)                    \
+    for (ASSIGN_CONTAINER(NODE, hmap_first(HMAP), MEMBER);              \
+         (&(NODE)->MEMBER != NULL                                       \
+          ? ASSIGN_CONTAINER(NEXT, hmap_next(HMAP, &(NODE)->MEMBER), MEMBER) \
+          : 0);                                                         \
          (NODE) = (NEXT))
+
+/* Continues an iteration from just after NODE. */
+#define HMAP_FOR_EACH_CONTINUE(NODE, MEMBER, HMAP)                      \
+    for (ASSIGN_CONTAINER(NODE, hmap_next(HMAP, &(NODE)->MEMBER), MEMBER); \
+         &(NODE)->MEMBER != NULL;                                       \
+         ASSIGN_CONTAINER(NODE, hmap_next(HMAP, &(NODE)->MEMBER), MEMBER))
 
 static inline struct hmap_node *hmap_first(const struct hmap *);
 static inline struct hmap_node *hmap_next(const struct hmap *,

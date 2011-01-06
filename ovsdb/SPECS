@@ -33,6 +33,11 @@ values.  Additional notation is presented later.
     <id>s that begin with _ are reserved to the implementation and may
     not be used by the user.
 
+<version>
+
+    A JSON string that contains a version number that matches
+    [0-9]+\.[0-9]+\.[0-9]+
+
 <boolean>
 
     A JSON true or false value.
@@ -102,12 +107,19 @@ is represented by <database-schema>, as described below.
     A JSON object with the following members:
 
         "name": <id>                            required
+        "version": <version>                    required
         "tables": {<id>: <table-schema>, ...}   required
 
     The "name" identifies the database as a whole.  It must be
     provided to most JSON-RPC requests to identify the database being
     operated on.  The value of "tables" is a JSON object whose names
     are table names and whose values are <table-schema>s.
+
+    The "version" reports the version of the database schema.  Because
+    this is a recent addition to the schema format, OVSDB permits it
+    to be omitted, but future versions of OVSDB will require it to be
+    present.  Open vSwitch semantics for "version" are described in
+    ovs-vswitchd.conf.db(5).
 
 <table-schema>
 
@@ -149,11 +161,14 @@ is represented by <database-schema>, as described below.
 
         "type": <type>                            required
         "ephemeral": <boolean>                    optional
+        "mutable": <boolean>                      optional
 
     The "type" specifies the type of data stored in this column.  If
     "ephemeral" is specified as true, then this column's values are
     not guaranteed to be durable; they may be lost when the database
-    restarts.
+    restarts.  If "mutable" is specified as false, then this column's
+    values may not be modified after they are initially set with the
+    "insert" operation.
 
 <type>
 
@@ -192,7 +207,7 @@ is represented by <database-schema>, as described below.
         "minInteger": <integer>            optional, integers only
         "maxInteger": <integer>            optional, integers only
         "minReal": <real>                  optional, reals only
-        "maxReal": <real>                  optional, reals only 
+        "maxReal": <real>                  optional, reals only
         "minLength": <integer>             optional, strings only
         "maxLength": <integer>             optional, strings only
         "refTable": <id>                   optional, uuids only
@@ -416,7 +431,7 @@ Response object members:
 
 This JSON-RPC notification instructs the database server to
 immediately complete or cancel the "transact" request whose "id" is
-the same as the notification's "params" value.  
+the same as the notification's "params" value.
 
 If the "transact" request can be completed immediately, then the
 server sends a response in the form described for "transact", above.
@@ -928,7 +943,7 @@ Semantics:
     column specified in "row".
 
     The "_uuid" and "_version" columns of a table may not be directly
-    updated with this operation.  Columns designated read-only in the 
+    updated with this operation.  Columns designated read-only in the
     schema also may not be updated.
 
     The "count" member of the result specifies the number of rows
@@ -1042,7 +1057,7 @@ Semantics:
     restarted later, after a change in the database makes it possible
     for the operation to succeed.  The client will not receive a
     response until the operation permanently succeeds or fails.
-    
+
     If "until" is "!=", the sense of the test is negated.  That is, as
     long as the query on "table" specified by "where" and "columns"
     returns "rows", the transaction will be rolled back and restarted

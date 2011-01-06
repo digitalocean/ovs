@@ -93,8 +93,6 @@ struct netdev_class;
 void netdev_run(void);
 void netdev_wait(void);
 
-int netdev_register_provider(const struct netdev_class *);
-int netdev_unregister_provider(const char *type);
 void netdev_enumerate_types(struct svec *types);
 
 /* Open and close. */
@@ -127,7 +125,7 @@ int netdev_set_etheraddr(struct netdev *, const uint8_t mac[6]);
 int netdev_get_etheraddr(const struct netdev *, uint8_t mac[6]);
 
 /* PHY interface. */
-int netdev_get_carrier(const struct netdev *, bool *carrier);
+bool netdev_get_carrier(const struct netdev *);
 int netdev_get_features(struct netdev *,
                         uint32_t *current, uint32_t *advertised,
                         uint32_t *supported, uint32_t *peer);
@@ -143,6 +141,7 @@ int netdev_get_in6(const struct netdev *, struct in6_addr *);
 int netdev_add_router(struct netdev *, struct in_addr router);
 int netdev_get_next_hop(const struct netdev *, const struct in_addr *host,
                         struct in_addr *next_hop, char **);
+const char *netdev_get_tnl_iface(const struct netdev *);
 int netdev_arp_lookup(const struct netdev *, uint32_t ip, uint8_t mac[6]);
 
 int netdev_get_flags(const struct netdev *, enum netdev_flags *);

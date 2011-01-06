@@ -1095,7 +1095,7 @@ do_query_distinct(int argc OVS_UNUSED, char *argv[])
     size_t n_classes;
     struct json *json;
     int exit_code = 0;
-    size_t i, j, k;
+    size_t i;
 
     /* Parse table schema, create table. */
     json = unbox_json(parse_json(argv[1]));
@@ -1161,6 +1161,7 @@ do_query_distinct(int argc OVS_UNUSED, char *argv[])
     for (i = 0; i < json->u.array.n; i++) {
         struct ovsdb_row_set results;
         struct ovsdb_condition cnd;
+        size_t j;
 
         check_ovsdb_error(ovsdb_condition_from_json(ts, json->u.array.elems[i],
                                                     NULL, &cnd));
@@ -1171,6 +1172,8 @@ do_query_distinct(int argc OVS_UNUSED, char *argv[])
         ovsdb_row_set_init(&results);
         ovsdb_query_distinct(table, &cnd, &columns, &results);
         for (j = 0; j < results.n_rows; j++) {
+            size_t k;
+
             for (k = 0; k < n_rows; k++) {
                 if (uuid_equals(ovsdb_row_get_uuid(results.rows[j]),
                                 &rows[k].uuid)) {
@@ -1465,8 +1468,7 @@ do_transact_print(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     n_rows = hmap_count(&do_transact_table->rows);
     rows = xmalloc(n_rows * sizeof *rows);
     i = 0;
-    HMAP_FOR_EACH (row, struct ovsdb_row, hmap_node,
-                   &do_transact_table->rows) {
+    HMAP_FOR_EACH (row, hmap_node, &do_transact_table->rows) {
         rows[i++] = row;
     }
     assert(i == n_rows);
@@ -1777,9 +1779,36 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
                           "i=%d", atoi(arg1));
             }
             idltest_simple_delete(s);
+        } else if (!strcmp(name, "verify")) {
+            const struct idltest_simple *s;
+
+            if (!arg2 || arg3) {
+                ovs_fatal(0, "\"verify\" command requires 2 arguments");
+            }
+
+            s = idltest_find_simple(idl, atoi(arg1));
+            if (!s) {
+                ovs_fatal(0, "\"verify\" command asks for nonexistent "
+                          "i=%d", atoi(arg1));
+            }
+
+            if (!strcmp(arg2, "i")) {
+                idltest_simple_verify_i(s);
+            } else if (!strcmp(arg2, "b")) {
+                idltest_simple_verify_b(s);
+            } else if (!strcmp(arg2, "s")) {
+                idltest_simple_verify_s(s);
+            } else if (!strcmp(arg2, "u")) {
+                idltest_simple_verify_s(s);
+            } else if (!strcmp(arg2, "r")) {
+                idltest_simple_verify_r(s);
+            } else {
+                ovs_fatal(0, "\"verify\" command asks for unknown column %s",
+                          arg2);
+            }
         } else if (!strcmp(name, "increment")) {
             if (!arg2 || arg3) {
-                ovs_fatal(0, "\"set\" command requires 2 arguments");
+                ovs_fatal(0, "\"increment\" command requires 2 arguments");
             }
             ovsdb_idl_txn_increment(txn, arg1, arg2, NULL);
             increment = true;
@@ -1813,7 +1842,7 @@ do_idl(int argc, char *argv[])
 
     idltest_init();
 
-    idl = ovsdb_idl_create(argv[1], &idltest_idl_class);
+    idl = ovsdb_idl_create(argv[1], &idltest_idl_class, true);
     if (argc > 2) {
         struct stream *stream;
 
@@ -1833,7 +1862,6 @@ do_idl(int argc, char *argv[])
     for (i = 2; i < argc; i++) {
         char *arg = argv[i];
         struct jsonrpc_msg *request, *reply;
-        int error;
 
         if (*arg == '+') {
             /* The previous transaction didn't change anything. */

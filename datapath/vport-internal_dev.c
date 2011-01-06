@@ -10,16 +10,17 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
-#include <linux/rcupdate.h>
 #include <linux/skbuff.h>
+#include <linux/version.h>
 
+#include "checksum.h"
 #include "datapath.h"
 #include "vport-generic.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
 
 struct internal_dev {
-	struct vport *attached_vport, *vport;
+	struct vport *vport;
 	struct net_device_stats stats;
 };
 
@@ -37,7 +38,7 @@ static struct net_device_stats *internal_dev_sys_stats(struct net_device *netdev
 	struct net_device_stats *stats = &internal_dev_priv(netdev)->stats;
 
 	if (vport) {
-		struct odp_vport_stats vport_stats;
+		struct rtnl_link_stats64 vport_stats;
 
 		vport_get_stats(vport, &vport_stats);
 
@@ -70,21 +71,10 @@ static int internal_dev_mac_addr(struct net_device *dev, void *p)
 /* Called with rcu_read_lock and bottom-halves disabled. */
 static int internal_dev_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
-	struct internal_dev *internal_dev = internal_dev_priv(netdev);
-	struct vport *vport = rcu_dereference(internal_dev->vport);
-
-	/* We need our own clone. */
-	skb = skb_share_check(skb, GFP_ATOMIC);
-	if (unlikely(!skb)) {
-		vport_record_error(vport, VPORT_E_RX_DROPPED);
-		return 0;
-	}
-
-	skb_reset_mac_header(skb);
 	compute_ip_summed(skb, true);
+	OVS_CB(skb)->flow = NULL;
 
-	vport_receive(vport, skb);
-
+	vport_receive(internal_dev_priv(netdev)->vport, skb);
 	return 0;
 }
 
@@ -104,19 +94,12 @@ static void internal_dev_getinfo(struct net_device *netdev,
 				 struct ethtool_drvinfo *info)
 {
 	struct vport *vport = internal_dev_get_vport(netdev);
-	struct dp_port *dp_port;
 
 	strcpy(info->driver, "openvswitch");
-
-	if (!vport)
-		return;
-
-	dp_port = vport_get_dp_port(vport);
-	if (dp_port)
-		sprintf(info->bus_info, "%d.%d", dp_port->dp->dp_idx, dp_port->port_no);
+	sprintf(info->bus_info, "%d.%d", vport->dp->dp_idx, vport->port_no);
 }
 
-static struct ethtool_ops internal_dev_ethtool_ops = {
+static const struct ethtool_ops internal_dev_ethtool_ops = {
 	.get_drvinfo	= internal_dev_getinfo,
 	.get_link	= ethtool_op_get_link,
 	.get_sg		= ethtool_op_get_sg,
@@ -134,22 +117,11 @@ static int internal_dev_change_mtu(struct net_device *netdev, int new_mtu)
 	if (new_mtu < 68)
 		return -EINVAL;
 
-	if (vport) {
-		struct dp_port *dp_port = vport_get_dp_port(vport);
-
-		if (dp_port) {
-			if (new_mtu > dp_min_mtu(dp_port->dp))
-				return -EINVAL;
-		}
-	}
+	if (new_mtu > dp_min_mtu(vport->dp))
+		return -EINVAL;
 
 	netdev->mtu = new_mtu;
 	return 0;
-}
-
-static void internal_dev_free(struct net_device *netdev)
-{
-	free_netdev(netdev);
 }
 
 static int internal_dev_do_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
@@ -188,26 +160,25 @@ static void do_setup(struct net_device *netdev)
 	netdev->change_mtu = internal_dev_change_mtu;
 #endif
 
-	netdev->destructor = internal_dev_free;
+	netdev->destructor = free_netdev;
 	SET_ETHTOOL_OPS(netdev, &internal_dev_ethtool_ops);
 	netdev->tx_queue_len = 0;
 
 	netdev->flags = IFF_BROADCAST | IFF_MULTICAST;
-	netdev->features = NETIF_F_LLTX | NETIF_F_SG | NETIF_F_HIGHDMA
-				| NETIF_F_HW_CSUM | NETIF_F_TSO;
+	netdev->features = NETIF_F_LLTX | NETIF_F_SG | NETIF_F_FRAGLIST |
+				NETIF_F_HIGHDMA | NETIF_F_HW_CSUM | NETIF_F_TSO;
 
 	vport_gen_rand_ether_addr(netdev->dev_addr);
 }
 
-static struct vport *internal_dev_create(const char *name,
-					 const void __user *config)
+static struct vport *internal_dev_create(const struct vport_parms *parms)
 {
 	struct vport *vport;
 	struct netdev_vport *netdev_vport;
 	struct internal_dev *internal_dev;
 	int err;
 
-	vport = vport_alloc(sizeof(struct netdev_vport), &internal_vport_ops);
+	vport = vport_alloc(sizeof(struct netdev_vport), &internal_vport_ops, parms);
 	if (IS_ERR(vport)) {
 		err = PTR_ERR(vport);
 		goto error;
@@ -215,18 +186,21 @@ static struct vport *internal_dev_create(const char *name,
 
 	netdev_vport = netdev_vport_priv(vport);
 
-	netdev_vport->dev = alloc_netdev(sizeof(struct internal_dev), name, do_setup);
+	netdev_vport->dev = alloc_netdev(sizeof(struct internal_dev), parms->name, do_setup);
 	if (!netdev_vport->dev) {
 		err = -ENOMEM;
 		goto error_free_vport;
 	}
 
 	internal_dev = internal_dev_priv(netdev_vport->dev);
-	rcu_assign_pointer(internal_dev->vport, vport);
+	internal_dev->vport = vport;
 
 	err = register_netdevice(netdev_vport->dev);
 	if (err)
 		goto error_free_netdev;
+
+	dev_set_promiscuity(netdev_vport->dev, 1);
+	netif_start_queue(netdev_vport->dev);
 
 	return vport;
 
@@ -242,32 +216,11 @@ static int internal_dev_destroy(struct vport *vport)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
-	unregister_netdevice(netdev_vport->dev);
-	vport_free(vport);
-
-	return 0;
-}
-
-static int internal_dev_attach(struct vport *vport)
-{
-	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	struct internal_dev *internal_dev = internal_dev_priv(netdev_vport->dev);
-
-	rcu_assign_pointer(internal_dev->attached_vport, internal_dev->vport);
-	dev_set_promiscuity(netdev_vport->dev, 1);
-	netif_start_queue(netdev_vport->dev);
-
-	return 0;
-}
-
-static int internal_dev_detach(struct vport *vport)
-{
-	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	struct internal_dev *internal_dev = internal_dev_priv(netdev_vport->dev);
-
 	netif_stop_queue(netdev_vport->dev);
 	dev_set_promiscuity(netdev_vport->dev, -1);
-	rcu_assign_pointer(internal_dev->attached_vport, NULL);
+
+	unregister_netdevice(netdev_vport->dev);
+	vport_free(vport);
 
 	return 0;
 }
@@ -286,18 +239,19 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 		netif_rx(skb);
 	else
 		netif_rx_ni(skb);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29)
 	netdev->last_rx = jiffies;
+#endif
 
 	return len;
 }
 
-struct vport_ops internal_vport_ops = {
+const struct vport_ops internal_vport_ops = {
 	.type		= "internal",
-	.flags		= VPORT_F_REQUIRED | VPORT_F_GEN_STATS,
+	.flags		= VPORT_F_REQUIRED | VPORT_F_GEN_STATS | VPORT_F_FLOW,
 	.create		= internal_dev_create,
 	.destroy	= internal_dev_destroy,
-	.attach		= internal_dev_attach,
-	.detach		= internal_dev_detach,
 	.set_mtu	= netdev_set_mtu,
 	.set_addr	= netdev_set_addr,
 	.get_name	= netdev_get_name,
@@ -328,6 +282,8 @@ int is_internal_vport(const struct vport *vport)
 
 struct vport *internal_dev_get_vport(struct net_device *netdev)
 {
-	struct internal_dev *internal_dev = internal_dev_priv(netdev);
-	return rcu_dereference(internal_dev->attached_vport);
+	if (!is_internal_dev(netdev))
+		return NULL;
+
+	return internal_dev_priv(netdev)->vport;
 }

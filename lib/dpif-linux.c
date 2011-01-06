@@ -35,15 +35,18 @@
 
 #include "dpif-provider.h"
 #include "netdev.h"
+#include "netdev-vport.h"
 #include "ofpbuf.h"
+#include "openvswitch/tunnel.h"
 #include "poll-loop.h"
 #include "rtnetlink.h"
+#include "rtnetlink-link.h"
 #include "shash.h"
 #include "svec.h"
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(dpif_linux)
+VLOG_DEFINE_THIS_MODULE(dpif_linux);
 
 /* Datapath interface for the openvswitch Linux kernel module. */
 struct dpif_linux {
@@ -70,7 +73,7 @@ static int get_openvswitch_major(void);
 static int create_minor(const char *name, int minor, struct dpif **dpifp);
 static int open_minor(int minor, struct dpif **dpifp);
 static int make_openvswitch_device(int minor, char **fnp);
-static void dpif_linux_port_changed(const struct rtnetlink_change *,
+static void dpif_linux_port_changed(const struct rtnetlink_link_change *,
                                     void *dpif);
 
 static struct dpif_linux *
@@ -112,8 +115,8 @@ dpif_linux_enumerate(struct svec *all_dps)
 }
 
 static int
-dpif_linux_open(const char *name, const char *type OVS_UNUSED, bool create,
-                struct dpif **dpifp)
+dpif_linux_open(const struct dpif_class *class OVS_UNUSED, const char *name,
+                bool create, struct dpif **dpifp)
 {
     int minor;
 
@@ -156,7 +159,7 @@ dpif_linux_open(const char *name, const char *type OVS_UNUSED, bool create,
          * getting the local port's name. */
         memset(&port, 0, sizeof port);
         port.port = ODPP_LOCAL;
-        if (ioctl(dpif->fd, ODP_PORT_QUERY, &port)) {
+        if (ioctl(dpif->fd, ODP_VPORT_QUERY, &port)) {
             error = errno;
             if (error != ENODEV) {
                 VLOG_WARN("%s: probe returned unexpected error: %s",
@@ -175,7 +178,7 @@ static void
 dpif_linux_close(struct dpif *dpif_)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
-    rtnetlink_notifier_unregister(&dpif->port_notifier);
+    rtnetlink_link_notifier_unregister(&dpif->port_notifier);
     shash_destroy(&dpif->changed_ports);
     free(dpif->local_ifname);
     close(dpif->fd);
@@ -195,28 +198,6 @@ dpif_linux_get_all_names(const struct dpif *dpif_, struct svec *all_names)
 static int
 dpif_linux_destroy(struct dpif *dpif_)
 {
-    struct odp_port *ports;
-    size_t n_ports;
-    int err;
-    int i;
-
-    err = dpif_port_list(dpif_, &ports, &n_ports);
-    if (err) {
-        return err;
-    }
-
-    for (i = 0; i < n_ports; i++) {
-        if (ports[i].port != ODPP_LOCAL) {
-            err = do_ioctl(dpif_, ODP_VPORT_DEL, ports[i].devname);
-            if (err) {
-                VLOG_WARN_RL(&error_rl, "%s: error deleting port %s (%s)",
-                             dpif_name(dpif_), ports[i].devname, strerror(err));
-            }
-        }
-    }
-
-    free(ports);
-
     return do_ioctl(dpif_, ODP_DP_DESTROY, NULL);
 }
 
@@ -247,66 +228,91 @@ dpif_linux_set_drop_frags(struct dpif *dpif_, bool drop_frags)
     return do_ioctl(dpif_, ODP_SET_DROP_FRAGS, &drop_frags_int);
 }
 
-static int
-dpif_linux_port_add(struct dpif *dpif_, const char *devname, uint16_t flags,
-                    uint16_t *port_no)
+static void
+translate_vport_type_to_netdev_type(struct odp_port *port)
 {
+    char *type = port->type;
+
+    if (!strcmp(type, "netdev")) {
+        ovs_strlcpy(type, "system", sizeof port->type);
+    } else if (!strcmp(type, "gre")) {
+        const struct tnl_port_config *config;
+
+        config = (struct tnl_port_config *)port->config;
+        if (config->flags & TNL_F_IPSEC) {
+            ovs_strlcpy(type, "ipsec_gre", sizeof port->type);
+        }
+    }
+}
+
+static void
+translate_netdev_type_to_vport_type(struct odp_port *port)
+{
+    char *type = port->type;
+
+    if (!strcmp(type, "system")) {
+        ovs_strlcpy(type, "netdev", sizeof port->type);
+    } else if (!strcmp(type, "ipsec_gre")) {
+        ovs_strlcpy(type, "gre", sizeof port->type);
+    }
+}
+
+static int
+dpif_linux_port_add(struct dpif *dpif, struct netdev *netdev,
+                    uint16_t *port_nop)
+{
+    const char *name = netdev_get_name(netdev);
+    const char *type = netdev_get_type(netdev);
     struct odp_port port;
     int error;
 
     memset(&port, 0, sizeof port);
-    strncpy(port.devname, devname, sizeof port.devname);
-    port.flags = flags;
-    error = do_ioctl(dpif_, ODP_PORT_ATTACH, &port);
+    strncpy(port.devname, name, sizeof port.devname);
+    strncpy(port.type, type, sizeof port.type);
+    netdev_vport_get_config(netdev, port.config);
+    translate_netdev_type_to_vport_type(&port);
+
+    error = do_ioctl(dpif, ODP_VPORT_ATTACH, &port);
     if (!error) {
-        *port_no = port.port;
+        *port_nop = port.port;
+    }
+
+    return error;
+}
+
+static int
+dpif_linux_port_del(struct dpif *dpif_, uint16_t port_no_)
+{
+    int port_no = port_no_;     /* Kernel expects an "int". */
+    return do_ioctl(dpif_, ODP_VPORT_DETACH, &port_no);
+}
+
+static int
+dpif_linux_port_query__(const struct dpif *dpif, struct odp_port *port)
+{
+    int error = do_ioctl(dpif, ODP_VPORT_QUERY, port);
+    if (!error) {
+        translate_vport_type_to_netdev_type(port);
     }
     return error;
 }
 
 static int
-dpif_linux_port_del(struct dpif *dpif_, uint16_t port_no)
-{
-    int tmp = port_no;
-    int err;
-    struct odp_port port;
-
-    err = dpif_port_query_by_number(dpif_, port_no, &port);
-    if (err) {
-        return err;
-    }
-
-    err = do_ioctl(dpif_, ODP_PORT_DETACH, &tmp);
-    if (err) {
-        return err;
-    }
-
-    if (!netdev_is_open(port.devname)) {
-        /* Try deleting the port if no one has it open.  This shouldn't
-         * actually be necessary unless the config changed while we weren't
-         * running but it won't hurt anything if the port is already gone. */
-        do_ioctl(dpif_, ODP_VPORT_DEL, port.devname);
-    }
-
-    return 0;
-}
-
-static int
-dpif_linux_port_query_by_number(const struct dpif *dpif_, uint16_t port_no,
-                          struct odp_port *port)
+dpif_linux_port_query_by_number(const struct dpif *dpif, uint16_t port_no,
+                                struct odp_port *port)
 {
     memset(port, 0, sizeof *port);
     port->port = port_no;
-    return do_ioctl(dpif_, ODP_PORT_QUERY, port);
+    return dpif_linux_port_query__(dpif, port);
 }
 
 static int
-dpif_linux_port_query_by_name(const struct dpif *dpif_, const char *devname,
+dpif_linux_port_query_by_name(const struct dpif *dpif, const char *devname,
                               struct odp_port *port)
 {
     memset(port, 0, sizeof *port);
     strncpy(port->devname, devname, sizeof port->devname);
-    return do_ioctl(dpif_, ODP_PORT_QUERY, port);
+    return dpif_linux_port_query__(dpif, port);
 }
 
 static int
@@ -319,12 +325,22 @@ static int
 dpif_linux_port_list(const struct dpif *dpif_, struct odp_port *ports, int n)
 {
     struct odp_portvec pv;
+    unsigned int i;
     int error;
 
     pv.ports = ports;
     pv.n_ports = n;
-    error = do_ioctl(dpif_, ODP_PORT_LIST, &pv);
-    return error ? -error : pv.n_ports;
+    error = do_ioctl(dpif_, ODP_VPORT_LIST, &pv);
+    if (error) {
+        return -error;
+    }
+
+    for (i = 0; i < pv.n_ports; i++) {
+        struct odp_port *port = &pv.ports[i];
+
+        translate_vport_type_to_netdev_type(port);
+    }
+    return pv.n_ports;
 }
 
 static int
@@ -338,8 +354,7 @@ dpif_linux_port_poll(const struct dpif *dpif_, char **devnamep)
         return ENOBUFS;
     } else if (!shash_is_empty(&dpif->changed_ports)) {
         struct shash_node *node = shash_first(&dpif->changed_ports);
-        *devnamep = xstrdup(node->name);
-        shash_delete(&dpif->changed_ports, node);
+        *devnamep = shash_steal(&dpif->changed_ports, node);
         return 0;
     } else {
         return EAGAIN;
@@ -353,36 +368,8 @@ dpif_linux_port_poll_wait(const struct dpif *dpif_)
     if (!shash_is_empty(&dpif->changed_ports) || dpif->change_error) {
         poll_immediate_wake();
     } else {
-        rtnetlink_notifier_wait();
+        rtnetlink_link_notifier_wait();
     }
-}
-
-static int
-dpif_linux_port_group_get(const struct dpif *dpif_, int group,
-                          uint16_t ports[], int n)
-{
-    struct odp_port_group pg;
-    int error;
-
-    assert(n <= UINT16_MAX);
-    pg.group = group;
-    pg.ports = ports;
-    pg.n_ports = n;
-    error = do_ioctl(dpif_, ODP_PORT_GROUP_GET, &pg);
-    return error ? -error : pg.n_ports;
-}
-
-static int
-dpif_linux_port_group_set(struct dpif *dpif_, int group,
-                          const uint16_t ports[], int n)
-{
-    struct odp_port_group pg;
-
-    assert(n <= UINT16_MAX);
-    pg.group = group;
-    pg.ports = (uint16_t *) ports;
-    pg.n_ports = n;
-    return do_ioctl(dpif_, ODP_PORT_GROUP_SET, &pg);
 }
 
 static int
@@ -419,15 +406,14 @@ dpif_linux_flow_list(const struct dpif *dpif_, struct odp_flow flows[], int n)
 }
 
 static int
-dpif_linux_execute(struct dpif *dpif_, uint16_t in_port,
-                   const union odp_action actions[], int n_actions,
+dpif_linux_execute(struct dpif *dpif_,
+                   const struct nlattr *actions, size_t actions_len,
                    const struct ofpbuf *buf)
 {
     struct odp_execute execute;
     memset(&execute, 0, sizeof execute);
-    execute.in_port = in_port;
-    execute.actions = (union odp_action *) actions;
-    execute.n_actions = n_actions;
+    execute.actions = (struct nlattr *) actions;
+    execute.actions_len = actions_len;
     execute.data = buf->data;
     execute.length = buf->size;
     return do_ioctl(dpif_, ODP_EXECUTE, &execute);
@@ -539,8 +525,6 @@ const struct dpif_class dpif_linux_class = {
     dpif_linux_port_list,
     dpif_linux_port_poll,
     dpif_linux_port_poll_wait,
-    dpif_linux_port_group_get,
-    dpif_linux_port_group_set,
     dpif_linux_flow_get,
     dpif_linux_flow_put,
     dpif_linux_flow_del,
@@ -731,11 +715,7 @@ get_major(const char *target)
                 return major;
             }
         } else {
-            static bool warned;
-            if (!warned) {
-                VLOG_WARN("%s:%d: syntax error", fn, ln);
-            }
-            warned = true;
+            VLOG_WARN_ONCE("%s:%d: syntax error", fn, ln);
         }
     }
 
@@ -791,8 +771,9 @@ open_minor(int minor, struct dpif **dpifp)
     fd = open(fn, O_RDONLY | O_NONBLOCK);
     if (fd >= 0) {
         struct dpif_linux *dpif = xmalloc(sizeof *dpif);
-        error = rtnetlink_notifier_register(&dpif->port_notifier,
-                                           dpif_linux_port_changed, dpif);
+        error = rtnetlink_link_notifier_register(&dpif->port_notifier,
+                                                 dpif_linux_port_changed,
+                                                 dpif);
         if (!error) {
             char *name;
 
@@ -820,7 +801,8 @@ open_minor(int minor, struct dpif **dpifp)
 }
 
 static void
-dpif_linux_port_changed(const struct rtnetlink_change *change, void *dpif_)
+dpif_linux_port_changed(const struct rtnetlink_link_change *change,
+                        void *dpif_)
 {
     struct dpif_linux *dpif = dpif_;
 

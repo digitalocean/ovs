@@ -18,6 +18,7 @@
 #define OFPBUF_H 1
 
 #include <stddef.h>
+#include "list.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -37,11 +38,12 @@ struct ofpbuf {
     void *l4;                   /* Transport-level header. */
     void *l7;                   /* Application data. */
 
-    struct ofpbuf *next;        /* Next in a list of ofpbufs. */
+    struct list list_node;      /* Private list element for use by owner. */
     void *private_p;            /* Private pointer for use by owner. */
 };
 
 void ofpbuf_use(struct ofpbuf *, void *, size_t);
+void ofpbuf_use_const(struct ofpbuf *, const void *, size_t);
 
 void ofpbuf_init(struct ofpbuf *, size_t);
 void ofpbuf_uninit(struct ofpbuf *);
@@ -63,6 +65,7 @@ void *ofpbuf_end(const struct ofpbuf *);
 void *ofpbuf_put_uninit(struct ofpbuf *, size_t);
 void *ofpbuf_put_zeros(struct ofpbuf *, size_t);
 void *ofpbuf_put(struct ofpbuf *, const void *, size_t);
+char *ofpbuf_put_hex(struct ofpbuf *, const char *s, size_t *n);
 void ofpbuf_reserve(struct ofpbuf *, size_t);
 void *ofpbuf_push_uninit(struct ofpbuf *b, size_t);
 void *ofpbuf_push_zeros(struct ofpbuf *, size_t);
@@ -79,6 +82,12 @@ void *ofpbuf_pull(struct ofpbuf *, size_t);
 void *ofpbuf_try_pull(struct ofpbuf *, size_t);
 
 char *ofpbuf_to_string(const struct ofpbuf *, size_t maxbytes);
+
+static inline struct ofpbuf *ofpbuf_from_list(const struct list *list)
+{
+    return CONTAINER_OF(list, struct ofpbuf, list_node);
+}
+void ofpbuf_list_delete(struct list *);
 
 #ifdef  __cplusplus
 }

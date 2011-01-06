@@ -18,7 +18,7 @@ ovs\-vswitchd \- Open vSwitch daemon
 \fIdatabase\fR
 .
 .SH DESCRIPTION
-A daemon that manages and controls any number of Open vSwitch switches 
+A daemon that manages and controls any number of Open vSwitch switches
 on the local machine.
 .PP
 The mandatory \fIdatabase\fR argument normally takes the form
@@ -37,7 +37,7 @@ configuration to match.
 Upon receipt of a SIGHUP signal, \fBovs\-vswitchd\fR reopens its log
 file, if one was specified on the command line.
 .PP
-\fBovs\-vswitchd\fR switches may be configured with any of the following 
+\fBovs\-vswitchd\fR switches may be configured with any of the following
 features:
 .
 .IP \(bu
@@ -66,6 +66,9 @@ Connectivity to an external OpenFlow controller, such as NOX.
 Only a single instance of \fBovs\-vswitchd\fR is intended to run at a time.
 A single \fBovs\-vswitchd\fR can manage any number of switch instances, up
 to the maximum number of supported Open vSwitch datapaths.
+.PP
+\fBovs\-vswitchd\fR provides all the features of \fBovs-openflowd\fR,
+and more.  Do not run both daemons at the same time.
 .PP
 \fBovs\-vswitchd\fR does all the necessary management of Open vSwitch datapaths
 itself.  Thus, external tools, such \fBovs\-dpctl\fR(8), are not needed for
@@ -154,9 +157,9 @@ progress, whether it is the active slave, the MAC hashes assigned to
 the slave, and the MAC learning table entries that hash to each MAC.
 .IP "\fBbond/migrate\fR \fIport\fR \fIhash\fR \fIslave\fR"
 Assigns a given MAC hash to a new slave.  \fIport\fR specifies the
-bond port, \fIhash\fR either the MAC hash to be migrated (as a decimal
-number between 0 and 255) or an Ethernet address to be hashed, and
-\fIslave\fR the new slave to be assigned.
+bond port, \fIhash\fR the MAC hash to be migrated (as a decimal
+number between 0 and 255), and \fIslave\fR the new slave to be
+assigned.
 .IP
 The reassignment is not permanent: rebalancing or fail-over will
 cause the MAC hash to be shifted to a new slave in the usual
@@ -176,10 +179,13 @@ updelay (or downdelay).
 .IP
 This setting is not permanent: it persists only until the carrier
 status of \fIslave\fR changes.
-.IP "\fBbond/hash\fR \fImac\fR"
-Returns the hash value which would be used for \fImac\fR.
+.IP "\fBbond/hash\fR \fImac\fR [\fIvlan\fR]"
+Returns the hash value which would be used for \fImac\fR with \fIvlan\fR
+if specified.
 .
+.so ofproto/ofproto-unixctl.man
 .so lib/vlog-unixctl.man
+.so lib/stress-unixctl.man
 .SH "SEE ALSO"
 .BR ovs\-appctl (8),
 .BR ovs\-brcompatd (8),

@@ -43,7 +43,7 @@ def inlineXmlToNroff(node, font):
     if node.nodeType == node.TEXT_NODE:
         return textToNroff(node.data, font)
     elif node.nodeType == node.ELEMENT_NODE:
-        if node.tagName == 'code' or node.tagName == 'em':
+        if node.tagName in ['code', 'em', 'option']:
             s = r'\fB'
             for child in node.childNodes:
                 s += inlineXmlToNroff(child, r'\fB')
@@ -76,17 +76,23 @@ def blockXmlToNroff(nodes, para='.PP'):
             s += textToNroff(node.data)
             s = s.lstrip()
         elif node.nodeType == node.ELEMENT_NODE:
-            if node.tagName == 'ul':
+            if node.tagName in ['ul', 'ol']:
                 if s != "":
                     s += "\n"
                 s += ".RS\n"
+                i = 0
                 for liNode in node.childNodes:
                     if (liNode.nodeType == node.ELEMENT_NODE
                         and liNode.tagName == 'li'):
-                        s += ".IP \\(bu\n" + blockXmlToNroff(liNode.childNodes, ".IP")
+                        i += 1
+                        if node.tagName == 'ul':
+                            s += ".IP \\bu\n"
+                        else:
+                            s += ".IP %d. .25in\n" % i
+                        s += blockXmlToNroff(liNode.childNodes, ".IP")
                     elif (liNode.nodeType != node.TEXT_NODE
                           or not liNode.data.isspace()):
-                        raise error.Error("<ul> element may only have <li> children")
+                        raise error.Error("<%s> element may only have <li> children" % node.tagName)
                 s += ".RE\n"
             elif node.tagName == 'dl':
                 if s != "":
@@ -171,7 +177,7 @@ def tableSummaryToNroff(summary, level=0):
     s = ""
     for type, name, arg in summary:
         if type == 'column':
-            
+
             s += "%s\\fB%s\\fR\tT{\n%s\nT}\n" % (
                 r'\ \ ' * level, name, typeAndConstraintsToNroff(arg))
         else:
@@ -215,11 +221,11 @@ Column	Type
 def docsToNroff(schemaFile, xmlFile, erFile, title=None):
     schema = ovs.db.schema.DbSchema.from_json(ovs.json.from_file(schemaFile))
     doc = xml.dom.minidom.parse(xmlFile).documentElement
-    
+
     schemaDate = os.stat(schemaFile).st_mtime
     xmlDate = os.stat(xmlFile).st_mtime
     d = date.fromtimestamp(max(schemaDate, xmlDate))
-    
+
     if title == None:
         title = schema.name
 
@@ -338,19 +344,19 @@ if __name__ == "__main__":
                 print "ovsdb-doc (Open vSwitch) @VERSION@"
             else:
                 sys.exit(0)
-            
+
         if len(args) != 2:
             sys.stderr.write("%s: exactly 2 non-option arguments required "
                              "(use --help for help)\n" % argv0)
             sys.exit(1)
-        
+
         # XXX we should warn about undocumented tables or columns
         s = docsToNroff(args[0], args[1], er_diagram)
         for line in s.split("\n"):
             line = line.strip()
             if len(line):
                 print line
-            
+
     except error.Error, e:
         sys.stderr.write("%s: %s\n" % (argv0, e.msg))
         sys.exit(1)

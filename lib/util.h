@@ -77,10 +77,37 @@ extern const char *program_name;
 
 #define NOT_REACHED() abort()
 
+/* Given a pointer-typed lvalue OBJECT, expands to a pointer type that may be
+ * assigned to OBJECT. */
+#ifdef __GNUC__
+#define OVS_TYPEOF(OBJECT) typeof(OBJECT)
+#else
+#define OVS_TYPEOF(OBJECT) void *
+#endif
+
 /* Given POINTER, the address of the given MEMBER in a STRUCT object, returns
    the STRUCT object. */
 #define CONTAINER_OF(POINTER, STRUCT, MEMBER)                           \
         ((STRUCT *) (void *) ((char *) (POINTER) - offsetof (STRUCT, MEMBER)))
+
+/* Given POINTER, the address of the given MEMBER within an object of the type
+ * that that OBJECT points to, returns OBJECT as an assignment-compatible
+ * pointer type (either the correct pointer type or "void *").  OBJECT must be
+ * an lvalue.
+ *
+ * This is the same as CONTAINER_OF except that it infers the structure type
+ * from the type of '*OBJECT'. */
+#define OBJECT_CONTAINING(POINTER, OBJECT, MEMBER)                      \
+    ((OVS_TYPEOF(OBJECT)) (void *)                                      \
+     ((char *) (POINTER) - ((char *) &(OBJECT)->MEMBER - (char *) (OBJECT))))
+
+/* Given POINTER, the address of the given MEMBER within an object of the type
+ * that that OBJECT points to, assigns the address of the outer object to
+ * OBJECT, which must be an lvalue.
+ *
+ * Evaluates to 1. */
+#define ASSIGN_CONTAINER(OBJECT, POINTER, MEMBER) \
+    ((OBJECT) = OBJECT_CONTAINING(POINTER, OBJECT, MEMBER), 1)
 
 #ifdef  __cplusplus
 extern "C" {
@@ -122,9 +149,11 @@ bool str_to_ullong(const char *, int base, unsigned long long *);
 bool str_to_double(const char *, double *);
 
 int hexit_value(int c);
+unsigned int hexits_value(const char *s, size_t n, bool *ok);
 
 char *get_cwd(void);
 char *dir_name(const char *file_name);
+char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
 
 void ignore(bool x OVS_UNUSED);

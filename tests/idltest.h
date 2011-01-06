@@ -71,9 +71,9 @@ const struct ovsdb_datum *idltest_link1_get_ka(const struct idltest_link1 *, enu
 const struct ovsdb_datum *idltest_link1_get_l2(const struct idltest_link1 *, enum ovsdb_atomic_type key_type);
 
 void idltest_link1_set_i(const struct idltest_link1 *, int64_t i);
-void idltest_link1_set_k(const struct idltest_link1 *, struct idltest_link1 *k);
+void idltest_link1_set_k(const struct idltest_link1 *, const struct idltest_link1 *k);
 void idltest_link1_set_ka(const struct idltest_link1 *, struct idltest_link1 **ka, size_t n_ka);
-void idltest_link1_set_l2(const struct idltest_link1 *, struct idltest_link2 *l2);
+void idltest_link1_set_l2(const struct idltest_link1 *, const struct idltest_link2 *l2);
 
 /* link2 table. */
 struct idltest_link2 {
@@ -121,7 +121,7 @@ const struct ovsdb_datum *idltest_link2_get_i(const struct idltest_link2 *, enum
 const struct ovsdb_datum *idltest_link2_get_l1(const struct idltest_link2 *, enum ovsdb_atomic_type key_type);
 
 void idltest_link2_set_i(const struct idltest_link2 *, int64_t i);
-void idltest_link2_set_l1(const struct idltest_link2 *, struct idltest_link1 *l1);
+void idltest_link2_set_l1(const struct idltest_link2 *, const struct idltest_link1 *l1);
 
 /* simple table. */
 struct idltest_simple {
@@ -230,11 +230,11 @@ const struct ovsdb_datum *idltest_simple_get_u(const struct idltest_simple *, en
 const struct ovsdb_datum *idltest_simple_get_ua(const struct idltest_simple *, enum ovsdb_atomic_type key_type);
 
 void idltest_simple_set_b(const struct idltest_simple *, bool b);
-void idltest_simple_set_ba(const struct idltest_simple *, bool *ba, size_t n_ba);
+void idltest_simple_set_ba(const struct idltest_simple *, const bool *ba, size_t n_ba);
 void idltest_simple_set_i(const struct idltest_simple *, int64_t i);
-void idltest_simple_set_ia(const struct idltest_simple *, int64_t *ia, size_t n_ia);
+void idltest_simple_set_ia(const struct idltest_simple *, const int64_t *ia, size_t n_ia);
 void idltest_simple_set_r(const struct idltest_simple *, double r);
-void idltest_simple_set_ra(const struct idltest_simple *, double *ra, size_t n_ra);
+void idltest_simple_set_ra(const struct idltest_simple *, const double *ra, size_t n_ra);
 void idltest_simple_set_s(const struct idltest_simple *, const char *s);
 void idltest_simple_set_sa(const struct idltest_simple *, char **sa, size_t n_sa);
 void idltest_simple_set_u(const struct idltest_simple *, struct uuid u);

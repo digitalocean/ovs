@@ -72,9 +72,9 @@ struct vlog_module {
 #define VLOG_DEFINE_MODULE(MODULE)                                      \
         VLOG_DEFINE_MODULE__(MODULE)                                    \
         struct vlog_module *vlog_module_ptr_##MODULE                    \
-            __attribute__((section("vlog_modules"))) = &VLM_##MODULE;
+            __attribute__((section("vlog_modules"))) = &VLM_##MODULE
 #else
-#define VLOG_DEFINE_MODULE(MODULE) extern struct vlog_module VLM_##MODULE;
+#define VLOG_DEFINE_MODULE(MODULE) extern struct vlog_module VLM_##MODULE
 #endif
 
 const char *vlog_get_module_name(const struct vlog_module *);
@@ -144,8 +144,8 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
  * defines a static variable named THIS_MODULE that points to it, for use with
  * the convenience macros below. */
 #define VLOG_DEFINE_THIS_MODULE(MODULE)                                 \
-        VLOG_DEFINE_MODULE(MODULE)                                      \
-        static struct vlog_module *const THIS_MODULE = &VLM_##MODULE;
+        VLOG_DEFINE_MODULE(MODULE);                                     \
+        static struct vlog_module *const THIS_MODULE = &VLM_##MODULE
 
 /* Convenience macros.  These assume that THIS_MODULE points to a "struct
  * vlog_module" for the current module, as set up by e.g. the
@@ -181,6 +181,12 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
 #define VLOG_DROP_INFO(RL) vlog_should_drop(THIS_MODULE, VLL_INFO, RL)
 #define VLOG_DROP_DBG(RL) vlog_should_drop(THIS_MODULE, VLL_DBG, RL)
 
+/* Macros for logging at most once per execution. */
+#define VLOG_ERR_ONCE(...) VLOG_ONCE(VLL_ERR, __VA_ARGS__)
+#define VLOG_WARN_ONCE(...) VLOG_ONCE(VLL_WARN, __VA_ARGS__)
+#define VLOG_INFO_ONCE(...) VLOG_ONCE(VLL_INFO, __VA_ARGS__)
+#define VLOG_DBG_ONCE(...) VLOG_ONCE(VLL_DBG, __VA_ARGS__)
+
 /* Command line processing. */
 #define VLOG_OPTION_ENUMS OPT_LOG_FILE
 #define VLOG_LONG_OPTIONS                                   \
@@ -208,6 +214,15 @@ void vlog_usage(void);
             vlog_rate_limit(THIS_MODULE, LEVEL, RL, __VA_ARGS__);   \
         }                                                           \
     } while (0)
+#define VLOG_ONCE(LEVEL, ...)                       \
+    do {                                            \
+        static bool already_logged;                 \
+        if (!already_logged) {                      \
+            already_logged = true;                  \
+            vlog(THIS_MODULE, LEVEL, __VA_ARGS__);  \
+        }                                           \
+    } while (0)
+
 #define VLOG_DEFINE_MODULE__(MODULE)                                    \
         struct vlog_module VLM_##MODULE =                               \
         {                                                               \

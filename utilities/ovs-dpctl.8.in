@@ -21,10 +21,8 @@ host's other network devices.  To intercept and process traffic on a
 given network device, use the \fBadd\-if\fR command to explicitly add
 that network device to the datapath.
 .PP
-Do not use \fBovs\-dpctl\fR commands to modify datapaths if
-\fBovs\-vswitchd\fR(8) is in use.  Instead, modify the
-\fBovs\-vswitchd\fR configuration file and send \fBSIGHUP\fR to the
-\fBovs\-vswitchd\fR process.
+If \fBovs\-vswitchd\fR(8) is in use, use \fBovs\-vsctl\fR(8) instead
+of \fBovs\-dpctl\fR.
 .PP
 Most \fBovs\-dpctl\fR commands that work with datapaths take an argument
 that specifies the name of the datapath, in one of the following
@@ -66,10 +64,14 @@ A \fInetdev\fR may be followed by a comma-separated list of options.
 The following options are currently supported:
 .
 .RS
-.IP "\fBinternal\fR"
-Instead of attaching an existing \fInetdev\fR, creates an internal
-port (analogous to the local port) with that name.
+.IP "\fBtype=\fItype\fR"
+Specifies the type of port to add.  The default type is \fBsystem\fR.
+.IP "\fIkey\fB=\fIvalue\fR"
+Adds an arbitrary key-value option to the port's configuration.
 .RE
+.IP
+\fBovs\-vswitchd.conf.db\fR(5) documents the available port types and
+options.
 .
 .TP
 \fBdel\-if \fIdp netdev\fR...
@@ -106,16 +108,6 @@ discussed in \fBdump\-flows\fR, these entries are
 not OpenFlow flow entries.  By deleting them, the process that set them
 up may be confused about their disappearance.
 .
-.IP "\fBdump\-groups \fIdp\fR"
-Prints to the console the sets of port groups maintained by datapath
-\fIdp\fR.  Ordinarily there are at least 2 port groups in a datapath
-that \fBovs\-openflowd\fR or \fBovs\-vswitch\fR is controlling: group
-0 contains
-all ports except those disabled by STP, and group 1 contains all
-ports.  Additional or different groups might be used in the future.
-.IP
-This command is primarily useful for debugging Open vSwitch.  OpenFlow
-does not have a concept of port groups.
 .SH OPTIONS
 .TP
 \fB\-t\fR, \fB\-\-timeout=\fIsecs\fR

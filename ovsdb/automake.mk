@@ -59,8 +59,8 @@ DISTCLEANFILES += ovsdb/ovsdb-server.1
 EXTRA_DIST += ovsdb/ovsdb-server.1.in
 
 # ovsdb-idlc
-EXTRA_DIST += ovsdb/SPECS 
-noinst_SCRIPTS += ovsdb/ovsdb-idlc 
+EXTRA_DIST += ovsdb/SPECS
+noinst_SCRIPTS += ovsdb/ovsdb-idlc
 EXTRA_DIST += \
 	ovsdb/ovsdb-idlc.in \
 	ovsdb/ovsdb-idlc.1
@@ -94,7 +94,7 @@ DISTCLEANFILES += ovsdb/ovsdb-doc
 OVSDB_DOC = $(run_python) $(srcdir)/ovsdb/ovsdb-doc.in
 
 # ovsdb-dot
-EXTRA_DIST += ovsdb/ovsdb-dot.in
+EXTRA_DIST += ovsdb/ovsdb-dot.in ovsdb/dot2pic
 noinst_SCRIPTS += ovsdb/ovsdb-dot
 DISTCLEANFILES += ovsdb/ovsdb-dot
 OVSDB_DOT = $(run_python) $(srcdir)/ovsdb/ovsdb-dot.in
