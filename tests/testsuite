@@ -8790,9 +8790,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -8833,9 +8833,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -8876,9 +8876,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -8919,9 +8919,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -8962,9 +8962,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -9005,9 +9005,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -9048,9 +9048,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -9091,9 +9091,9 @@ at_xfail=no
 (test "$HAVE_OPENSSL" = no) \
   && at_fn_check_skip 77 "$at_srcdir/vconn.at:22"
         { set +x
-$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_srcdir/tests/testpki*.pem ."
-at_fn_check_prepare_dynamic "cp $abs_top_srcdir/tests/testpki*.pem ." "vconn.at:22"
-( $at_check_trace; cp $abs_top_srcdir/tests/testpki*.pem .
+$as_echo "$at_srcdir/vconn.at:22: cp \$abs_top_builddir/tests/testpki*.pem ."
+at_fn_check_prepare_dynamic "cp $abs_top_builddir/tests/testpki*.pem ." "vconn.at:22"
+( $at_check_trace; cp $abs_top_builddir/tests/testpki*.pem .
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
@@ -52009,7 +52009,7 @@ $as_echo "ovsdb-server.at:107" >"$at_check_line_file"
 (test "x$RANDOM" = x) \
   && at_fn_check_skip 77 "$at_srcdir/ovsdb-server.at:107"
 SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-PKIDIR=$abs_top_srcdir/tests
+PKIDIR=$abs_top_builddir/tests
 $as_echo "ovsdb-server.at:110" >"$at_check_line_file"
 (expr "$PKIDIR" : ".* 	'\"
 \\") \
@@ -52639,7 +52639,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -52813,7 +52813,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -52987,7 +52987,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -53209,7 +53209,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -53381,7 +53381,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -53611,7 +53611,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -53841,7 +53841,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54015,7 +54015,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54241,7 +54241,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54469,7 +54469,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54643,7 +54643,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54803,7 +54803,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -54963,7 +54963,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -55135,7 +55135,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -55309,7 +55309,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -55479,7 +55479,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -55651,7 +55651,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -55825,7 +55825,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -56009,7 +56009,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -56271,7 +56271,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -56629,7 +56629,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"
@@ -56962,7 +56962,7 @@ at_xfail=no
 _ATEOF
 
    SSL_PORT=`expr 32767 + \( $RANDOM % 32767 \)`
-   PKIDIR=$abs_top_srcdir/tests
+   PKIDIR=$abs_top_builddir/tests
    { set +x
 $as_echo "$at_srcdir/ovsdb-server.at:315: ovsdb-tool create db schema"
 at_fn_check_prepare_trace "ovsdb-server.at:315"

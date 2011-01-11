@@ -610,6 +610,9 @@ li | s
 l | l.
 Bonding Configuration
 _
+\ \ \fBbond_type\fR	T{
+optional string, either \fBactive\-backup\fR or \fBslb\fR
+T}
 \ \ \fBbond_updelay\fR	T{
 integer
 T}
@@ -686,16 +689,22 @@ Frames arriving on trunk ports are dropped if they are not
 in one of the specified VLANs.  For this purpose, packets
 that have no VLAN header are treated as part of VLAN 0.
 .ST "Bonding Configuration:"
-A port that has more than one interface is a ``bonded port.\(cq\(cq
-Bonding allows for load balancing and fail-over.  Open vSwitch
-supports ``source load balancing\(cq\(cq (SLB) bonding, which
-assigns flows to slaves based on source MAC address and output VLAN,
-with periodic rebalancing as traffic patterns change.  This form of
-bonding does not require 802.3ad or other special support from the
-upstream switch to which the slave devices are connected.
+A port that has more than one interface is a ``bonded port.\(cq\(cq Bonding
+allows for load balancing and fail-over.  Open vSwitch supports
+``source load balancing\(cq\(cq (SLB) and \(dqactive backup\(dq bonding.  SLB
+bonding assigns flows to slaves based on source MAC address and output
+VLAN, with periodic rebalancing as traffic patterns change.  Active
+backup bonding assigns all flows to one slave, failing over to a backup
+slave when the active slave is disabled.  Neither form of bonding
+require 802.3ad or other special support from the upstream switch to
+which the slave devices are connected.
 .PP
 These columns apply only to bonded ports.  Their values are
 otherwise ignored.
+.IP "\fBbond_type\fR: optional string, either \fBactive\-backup\fR or \fBslb\fR"
+The type of bonding used for a bonded port.  Currently supported
+values are \fBslb\fR and \fBactive\-backup\fR\.  Defaults
+to SLB if unset.
 .IP "\fBbond_updelay\fR: integer"
 For a bonded port, the number of milliseconds for which carrier must
 stay up on an interface before the interface is considered to be up.
@@ -745,7 +754,7 @@ An Ethernet address in the form
 \fB\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB\fR\.
 .TP
 \fBbond\-rebalance\-interval\fR
-For a bonded port, the number of milliseconds between
+For an SLB bonded port, the number of milliseconds between
 successive attempts to rebalance the bond, that is, to
 move source MACs and their flows from one interface on
 the bond to another in an attempt to keep usage of each
@@ -815,9 +824,6 @@ optional \fBMonitor\fR
 T}
 \ \ \fBexternal_ids\fR	T{
 map of string-string pairs
-T}
-\ \ \fBtunnel_egress_iface\fR	T{
-optional string
 T}
 \ \ \fBother_config\fR	T{
 map of string-string pairs
@@ -1218,13 +1224,22 @@ Configuration options whose interpretation varies based on
 Key-value pairs that report port status.  Supported status
 values are \fBtype\fR-dependent.
 .IP
-The only currently defined key-value pair is:
+The currently defined key-value pairs are:
 .RS
 .TP
 \fBsource_ip\fR
 The source IP address used for an IPv4 tunnel end-point,
 such as \fBgre\fR or \fBcapwap\fR\.  Not
 supported by all implementations.
+.RE
+.RS
+.TP
+\fBtunnel_egress_iface\fR
+Egress interface for tunnels.  Currently only relevant for GRE
+and CAPWAP tunnels.  On Linux systems, this column will show
+the name of the interface which is responsible for routing
+traffic destined for the configured \fBremote_ip\fR\.
+This could be an internal interface such as a bridge port.
 .RE
 .ST "Ingress Policing:"
 These settings control ingress policing for packets received on this
@@ -1329,12 +1344,6 @@ The virtual network to which this interface is attached.
 \fBxs\-vm\-uuid\fR
 The VM to which this interface belongs.
 .RE
-.IP "\fBtunnel_egress_iface\fR: optional string"
-Egress interface for tunnels.  Currently only relevant for GRE and
-CAPWAP tunnels.  On Linux systems, this column will show the name of
-the interface which is responsible for routing traffic destined for the
-configured \fBremote_ip\fR\.  This could be an internal interface
-such as a bridge port.
 .IP "\fBother_config\fR: map of string-string pairs"
 Key-value pairs for rarely used interface features.  Currently,
 there are none defined.

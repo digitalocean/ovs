@@ -2487,19 +2487,6 @@ ovsrec_interface_parse_status(struct ovsdb_idl_row *row_, const struct ovsdb_dat
 }
 
 static void
-ovsrec_interface_parse_tunnel_egress_iface(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->tunnel_egress_iface = datum->keys[0].string;
-    } else {
-        row->tunnel_egress_iface = NULL;
-    }
-}
-
-static void
 ovsrec_interface_parse_type(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2599,12 +2586,6 @@ ovsrec_interface_unparse_status(struct ovsdb_idl_row *row_)
     assert(inited);
     free(row->key_status);
     free(row->value_status);
-}
-
-static void
-ovsrec_interface_unparse_tunnel_egress_iface(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
 }
 
 static void
@@ -2713,13 +2694,6 @@ ovsrec_interface_verify_status(const struct ovsrec_interface *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_STATUS]);
-}
-
-void
-ovsrec_interface_verify_tunnel_egress_iface(const struct ovsrec_interface *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_TUNNEL_EGRESS_IFACE]);
 }
 
 void
@@ -2997,29 +2971,6 @@ ovsrec_interface_get_status(const struct ovsrec_interface *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_status);
 }
 
-/* Returns the tunnel_egress_iface column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes tunnel_egress_iface's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_interface_get_tunnel_egress_iface(const struct ovsrec_interface *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_tunnel_egress_iface);
-}
-
 /* Returns the type column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -3226,24 +3177,6 @@ ovsrec_interface_set_status(const struct ovsrec_interface *row, char **key_statu
 }
 
 void
-ovsrec_interface_set_tunnel_egress_iface(const struct ovsrec_interface *row, const char *tunnel_egress_iface)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    if (tunnel_egress_iface) {
-        datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].string = xstrdup(tunnel_egress_iface);
-    } else {
-        datum.n = 0;
-        datum.keys = NULL;
-    }
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_TUNNEL_EGRESS_IFACE], &datum);
-}
-
-void
 ovsrec_interface_set_type(const struct ovsrec_interface *row, const char *type)
 {
     struct ovsdb_datum datum;
@@ -3386,17 +3319,6 @@ ovsrec_interface_columns_init(void)
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_interface_parse_status;
     c->unparse = ovsrec_interface_unparse_status;
-
-    /* Initialize ovsrec_interface_col_tunnel_egress_iface. */
-    c = &ovsrec_interface_col_tunnel_egress_iface;
-    c->name = "tunnel_egress_iface";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_interface_parse_tunnel_egress_iface;
-    c->unparse = ovsrec_interface_unparse_tunnel_egress_iface;
 
     /* Initialize ovsrec_interface_col_type. */
     c = &ovsrec_interface_col_type;
@@ -7136,6 +7058,19 @@ ovsrec_port_parse_bond_fake_iface(struct ovsdb_idl_row *row_, const struct ovsdb
 }
 
 static void
+ovsrec_port_parse_bond_type(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->bond_type = datum->keys[0].string;
+    } else {
+        row->bond_type = NULL;
+    }
+}
+
+static void
 ovsrec_port_parse_bond_updelay(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_port *row = ovsrec_port_cast(row_);
@@ -7314,6 +7249,12 @@ ovsrec_port_unparse_bond_fake_iface(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
+ovsrec_port_unparse_bond_type(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_port_unparse_bond_updelay(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -7430,6 +7371,13 @@ ovsrec_port_verify_bond_fake_iface(const struct ovsrec_port *row)
 }
 
 void
+ovsrec_port_verify_bond_type(const struct ovsrec_port *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_TYPE]);
+}
+
+void
 ovsrec_port_verify_bond_updelay(const struct ovsrec_port *row)
 {
     assert(inited);
@@ -7543,6 +7491,29 @@ ovsrec_port_get_bond_fake_iface(const struct ovsrec_port *row,
 {
     assert(key_type == OVSDB_TYPE_BOOLEAN);
     return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_fake_iface);
+}
+
+/* Returns the bond_type column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bond_type's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_bond_type(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_type);
 }
 
 /* Returns the bond_updelay column's value in 'row' as a struct ovsdb_datum.
@@ -7808,6 +7779,24 @@ ovsrec_port_set_bond_fake_iface(const struct ovsrec_port *row, bool bond_fake_if
 }
 
 void
+ovsrec_port_set_bond_type(const struct ovsrec_port *row, const char *bond_type)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (bond_type) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(bond_type);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_TYPE], &datum);
+}
+
+void
 ovsrec_port_set_bond_updelay(const struct ovsrec_port *row, int64_t bond_updelay)
 {
     struct ovsdb_datum datum;
@@ -7995,6 +7984,24 @@ ovsrec_port_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_port_parse_bond_fake_iface;
     c->unparse = ovsrec_port_unparse_bond_fake_iface;
+
+    /* Initialize ovsrec_port_col_bond_type. */
+    c = &ovsrec_port_col_bond_type;
+    c->name = "bond_type";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 2;
+    c->type.key.enum_->keys = xmalloc(2 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("active-backup");
+    c->type.key.enum_->keys[1].string = xstrdup("slb");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_port_parse_bond_type;
+    c->unparse = ovsrec_port_unparse_bond_type;
 
     /* Initialize ovsrec_port_col_bond_updelay. */
     c = &ovsrec_port_col_bond_updelay;

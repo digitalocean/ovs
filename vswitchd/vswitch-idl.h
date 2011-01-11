@@ -371,9 +371,6 @@ struct ovsrec_interface {
 	char **value_status;
 	size_t n_status;
 
-	/* tunnel_egress_iface column. */
-	char *tunnel_egress_iface;
-
 	/* type column. */
 	char *type;	/* Always nonnull. */
 };
@@ -390,7 +387,6 @@ enum {
     OVSREC_INTERFACE_COL_OTHER_CONFIG,
     OVSREC_INTERFACE_COL_STATISTICS,
     OVSREC_INTERFACE_COL_STATUS,
-    OVSREC_INTERFACE_COL_TUNNEL_EGRESS_IFACE,
     OVSREC_INTERFACE_COL_TYPE,
     OVSREC_INTERFACE_N_COLUMNS
 };
@@ -398,7 +394,6 @@ enum {
 #define ovsrec_interface_col_ofport (ovsrec_interface_columns[OVSREC_INTERFACE_COL_OFPORT])
 #define ovsrec_interface_col_status (ovsrec_interface_columns[OVSREC_INTERFACE_COL_STATUS])
 #define ovsrec_interface_col_statistics (ovsrec_interface_columns[OVSREC_INTERFACE_COL_STATISTICS])
-#define ovsrec_interface_col_tunnel_egress_iface (ovsrec_interface_columns[OVSREC_INTERFACE_COL_TUNNEL_EGRESS_IFACE])
 #define ovsrec_interface_col_name (ovsrec_interface_columns[OVSREC_INTERFACE_COL_NAME])
 #define ovsrec_interface_col_ingress_policing_burst (ovsrec_interface_columns[OVSREC_INTERFACE_COL_INGRESS_POLICING_BURST])
 #define ovsrec_interface_col_other_config (ovsrec_interface_columns[OVSREC_INTERFACE_COL_OTHER_CONFIG])
@@ -436,7 +431,6 @@ void ovsrec_interface_verify_options(const struct ovsrec_interface *);
 void ovsrec_interface_verify_other_config(const struct ovsrec_interface *);
 void ovsrec_interface_verify_statistics(const struct ovsrec_interface *);
 void ovsrec_interface_verify_status(const struct ovsrec_interface *);
-void ovsrec_interface_verify_tunnel_egress_iface(const struct ovsrec_interface *);
 void ovsrec_interface_verify_type(const struct ovsrec_interface *);
 
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
@@ -453,7 +447,6 @@ const struct ovsdb_datum *ovsrec_interface_get_options(const struct ovsrec_inter
 const struct ovsdb_datum *ovsrec_interface_get_other_config(const struct ovsrec_interface *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *ovsrec_interface_get_statistics(const struct ovsrec_interface *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *ovsrec_interface_get_status(const struct ovsrec_interface *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
-const struct ovsdb_datum *ovsrec_interface_get_tunnel_egress_iface(const struct ovsrec_interface *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_interface_get_type(const struct ovsrec_interface *, enum ovsdb_atomic_type key_type);
 
 void ovsrec_interface_set_external_ids(const struct ovsrec_interface *, char **key_external_ids, char **value_external_ids, size_t n_external_ids);
@@ -467,7 +460,6 @@ void ovsrec_interface_set_options(const struct ovsrec_interface *, char **key_op
 void ovsrec_interface_set_other_config(const struct ovsrec_interface *, char **key_other_config, char **value_other_config, size_t n_other_config);
 void ovsrec_interface_set_statistics(const struct ovsrec_interface *, char **key_statistics, const int64_t *value_statistics, size_t n_statistics);
 void ovsrec_interface_set_status(const struct ovsrec_interface *, char **key_status, char **value_status, size_t n_status);
-void ovsrec_interface_set_tunnel_egress_iface(const struct ovsrec_interface *, const char *tunnel_egress_iface);
 void ovsrec_interface_set_type(const struct ovsrec_interface *, const char *type);
 
 /* Maintenance_Point table. */
@@ -1038,6 +1030,9 @@ struct ovsrec_port {
 	/* bond_fake_iface column. */
 	bool bond_fake_iface;
 
+	/* bond_type column. */
+	char *bond_type;
+
 	/* bond_updelay column. */
 	int64_t bond_updelay;
 
@@ -1079,6 +1074,7 @@ struct ovsrec_port {
 enum {
     OVSREC_PORT_COL_BOND_DOWNDELAY,
     OVSREC_PORT_COL_BOND_FAKE_IFACE,
+    OVSREC_PORT_COL_BOND_TYPE,
     OVSREC_PORT_COL_BOND_UPDELAY,
     OVSREC_PORT_COL_EXTERNAL_IDS,
     OVSREC_PORT_COL_FAKE_BRIDGE,
@@ -1095,6 +1091,7 @@ enum {
 #define ovsrec_port_col_trunks (ovsrec_port_columns[OVSREC_PORT_COL_TRUNKS])
 #define ovsrec_port_col_qos (ovsrec_port_columns[OVSREC_PORT_COL_QOS])
 #define ovsrec_port_col_name (ovsrec_port_columns[OVSREC_PORT_COL_NAME])
+#define ovsrec_port_col_bond_type (ovsrec_port_columns[OVSREC_PORT_COL_BOND_TYPE])
 #define ovsrec_port_col_bond_downdelay (ovsrec_port_columns[OVSREC_PORT_COL_BOND_DOWNDELAY])
 #define ovsrec_port_col_interfaces (ovsrec_port_columns[OVSREC_PORT_COL_INTERFACES])
 #define ovsrec_port_col_other_config (ovsrec_port_columns[OVSREC_PORT_COL_OTHER_CONFIG])
@@ -1123,6 +1120,7 @@ struct ovsrec_port *ovsrec_port_insert(struct ovsdb_idl_txn *);
 
 void ovsrec_port_verify_bond_downdelay(const struct ovsrec_port *);
 void ovsrec_port_verify_bond_fake_iface(const struct ovsrec_port *);
+void ovsrec_port_verify_bond_type(const struct ovsrec_port *);
 void ovsrec_port_verify_bond_updelay(const struct ovsrec_port *);
 void ovsrec_port_verify_external_ids(const struct ovsrec_port *);
 void ovsrec_port_verify_fake_bridge(const struct ovsrec_port *);
@@ -1139,6 +1137,7 @@ void ovsrec_port_verify_trunks(const struct ovsrec_port *);
    the members of ovsrec_port directly.) */
 const struct ovsdb_datum *ovsrec_port_get_bond_downdelay(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_bond_fake_iface(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
+const struct ovsdb_datum *ovsrec_port_get_bond_type(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_bond_updelay(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_external_ids(const struct ovsrec_port *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *ovsrec_port_get_fake_bridge(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
@@ -1152,6 +1151,7 @@ const struct ovsdb_datum *ovsrec_port_get_trunks(const struct ovsrec_port *, enu
 
 void ovsrec_port_set_bond_downdelay(const struct ovsrec_port *, int64_t bond_downdelay);
 void ovsrec_port_set_bond_fake_iface(const struct ovsrec_port *, bool bond_fake_iface);
+void ovsrec_port_set_bond_type(const struct ovsrec_port *, const char *bond_type);
 void ovsrec_port_set_bond_updelay(const struct ovsrec_port *, int64_t bond_updelay);
 void ovsrec_port_set_external_ids(const struct ovsrec_port *, char **key_external_ids, char **value_external_ids, size_t n_external_ids);
 void ovsrec_port_set_fake_bridge(const struct ovsrec_port *, bool fake_bridge);

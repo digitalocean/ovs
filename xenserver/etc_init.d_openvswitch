@@ -5,7 +5,7 @@
 # chkconfig: 2345 09 91
 # description: Manage Open vSwitch kernel modules and user-space daemons
 
-# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,14 +18,52 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+### BEGIN INIT INFO
+# Provides:          openvswitch-switch
+# Required-Start:
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Open vSwitch switch
+### END INIT INFO
 
-. /etc/init.d/functions
+# source function library
+if [ -f /etc/init.d/functions ]; then
+    . /etc/init.d/functions
+elif [ -f /etc/rc.d/init.d/functions ]; then
+    . /etc/rc.d/init.d/functions
+elif [ -f /lib/lsb/init-functions ]; then
+    . /lib/lsb/init-functions
+else
+    echo "$0: missing LSB shell function library" >&2
+    exit 1
+fi
 
-. /etc/xensource-inventory
+if type action >/dev/null 2>&1; then
+    :
+else
+    # SUSE lacks action
+    action() {
+       STRING=$1
+       shift
+       "$@"
+       rc=$?
+       if [ $rc -eq 0 ] ; then
+	       log_success_msg $"$STRING "
+       else
+	       log_failure_msg $"$STRING "
+       fi
+       return $rc
+    }
+fi
+
+test -e /etc/xensource-inventory && . /etc/xensource-inventory
 test -e /etc/sysconfig/openvswitch && . /etc/sysconfig/openvswitch
+if test -e /etc/xensource/network.conf; then
+    NETWORK_MODE=$(cat /etc/xensource/network.conf)
+fi
 
-NETWORK_MODE=$(cat /etc/xensource/network.conf)
-case $NETWORK_MODE in
+case ${NETWORK_MODE:=openvswitch} in
     vswitch|openvswitch)
         ;;
     bridge)
@@ -38,14 +76,19 @@ case $NETWORK_MODE in
 esac
 
 # General config variables in /etc/sysconfig/openvswitch
-if test "$PRODUCT_VERSION" = "5.5.0"; then
-    # XenServer 5.5.0 needs ovs-brcompatd and /proc/net simulation.
+if [ -f /etc/xensource-inventory ]; then
+    if test "$PRODUCT_VERSION" = "5.5.0"; then
+        # XenServer 5.5.0 needs ovs-brcompatd and /proc/net simulation.
+        : ${ENABLE_BRCOMPAT:=y}
+        : ${ENABLE_FAKE_PROC_NET:=y}
+    else
+        # Later versions don't need them.
+        : ${ENABLE_BRCOMPAT:=n}
+        : ${ENABLE_FAKE_PROC_NET:=n}
+    fi
+else
     : ${ENABLE_BRCOMPAT:=y}
     : ${ENABLE_FAKE_PROC_NET:=y}
-else
-    # Later versions don't need them.
-    : ${ENABLE_BRCOMPAT:=n}
-    : ${ENABLE_FAKE_PROC_NET:=n}
 fi
 : ${ENABLE_MONITOR:=y}
 : ${FORCE_COREFILES:=y}
@@ -138,6 +181,14 @@ function remove_all_dp {
 }
 
 function insert_modules_if_required {
+    if test -e /sys/module/bridge; then
+	bridges=`echo /sys/class/net/*/bridge | sed 's,/sys/class/net/,,g;s,/bridge,,g'`
+	if test "$bridges" != "*"; then
+            log_warning_msg "not removing bridge module because bridges exist ($bridges)"
+        else
+            action "removing bridge module" rmmod bridge
+        fi
+    fi
     if ! lsmod | grep -q "openvswitch_mod"; then
         action "Inserting llc module" modprobe llc
         action "Inserting openvswitch module" modprobe openvswitch_mod
@@ -307,7 +358,17 @@ function set_system_ids {
             external-ids:system-id="$INSTALLATION_UUID" \
             external-ids:xs-system-uuid="$INSTALLATION_UUID"
     else
-        action "Configuring Open vSwitch system IDs" false
+	if test -f /etc/openvswitch/install_uuid.conf; then
+            . /etc/openvswitch/install_uuid.conf
+	elif INSTALLATION_UUID=`uuidgen`; then
+	    echo "INSTALLATION_UUID=$INSTALLATION_UUID" > /etc/openvswitch/install_uuid.conf
+	else
+	    log_failure_msg "missing uuidgen, could not generate system UUID"
+	    return
+        fi
+        $vsctl --no-wait --timeout=5 set Open_vSwitch . \
+            external-ids:system-id="$INSTALLATION_UUID"
+        action "Configuring Open vSwitch system IDs" true
     fi
 }
 
@@ -361,10 +422,12 @@ function start {
         start_brcompatd
     fi
 
-    # Start daemon to monitor external ids
-    PYTHONPATH=/usr/share/openvswitch/python \
-               /usr/share/openvswitch/scripts/ovs-external-ids \
-               --pidfile --detach $monitor_opt "$VSWITCHD_OVSDB_SERVER"
+    if [ -f /etc/xensource-inventory ]; then
+        # Start daemon to monitor external ids
+        PYTHONPATH=/usr/share/openvswitch/python \
+                   /usr/share/openvswitch/scripts/ovs-external-ids \
+                   --pidfile --detach $monitor_opt "$VSWITCHD_OVSDB_SERVER"
+    fi
 
     touch /var/lock/subsys/openvswitch
 }

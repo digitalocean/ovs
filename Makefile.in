@@ -15,7 +15,7 @@
 
 @SET_MAKE@
 
-# Copyright (C) 2007, 2008, 2009, 2010 Nicira Networks, Inc.
+# Copyright (C) 2007, 2008, 2009, 2010, 2011 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -135,13 +135,16 @@ DIST_COMMON = README $(am__configure_deps) $(dist_check_SCRIPTS) \
 @HAVE_PYTHON_TRUE@	utilities/ovs-vlan-test
 
 @HAVE_NETLINK_TRUE@am__append_10 = utilities/nlmon
-@HAVE_PYTHON_TRUE@am__append_11 = include/openflow/openflow.h.stamp \
+@HAVE_OPENSSL_TRUE@am__append_11 = $(TESTPKI_FILES)
+@HAVE_OPENSSL_TRUE@am__append_12 = $(TESTPKI_FILES) tests/ovs-pki.log
+@HAVE_OPENSSL_TRUE@am__append_13 = clean-pki
+@HAVE_PYTHON_TRUE@am__append_14 = include/openflow/openflow.h.stamp \
 @HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
-@HAVE_PYTHON_TRUE@am__append_12 = include/openflow/openflow.h.stamp \
+@HAVE_PYTHON_TRUE@am__append_15 = include/openflow/openflow.h.stamp \
 @HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
-@HAVE_NETLINK_TRUE@am__append_13 = vswitchd/ovs-brcompatd
-@BUILD_OVSDBMONITOR_TRUE@am__append_14 = ovsdb/ovsdbmonitor/ovsdbmonitor
-@BUILD_OVSDBMONITOR_TRUE@am__append_15 = \
+@HAVE_NETLINK_TRUE@am__append_16 = vswitchd/ovs-brcompatd
+@BUILD_OVSDBMONITOR_TRUE@am__append_17 = ovsdb/ovsdbmonitor/ovsdbmonitor
+@BUILD_OVSDBMONITOR_TRUE@am__append_18 = \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
 
@@ -696,13 +699,15 @@ AM_CFLAGS = -Wstrict-prototypes $(WARNING_FLAGS) $(am__append_2)
 # file that is in Git is distributed.
 
 # Version checking for vswitch.ovsschema.
-ALL_LOCAL = dist-hook-git $(am__append_11) \
+ALL_LOCAL = dist-hook-git $(am__append_14) \
 	check-debian-changelog-version \
 	vswitchd/vswitch.ovsschema.stamp
 BUILT_SOURCES = $(OVSIDL_BUILT)
 CLEANFILES = all-distfiles all-gitfiles missing-distfiles distfiles \
 	$(nodist_lib_libopenvswitch_a_SOURCES) $(am__append_8) \
-	$(lcov_wrappers) $(valgrind_wrappers)
+	$(lcov_wrappers) $(valgrind_wrappers) $(am__append_12) \
+	vswitchd/vswitch.ovsschema.stamp
+CLEAN_LOCAL = $(am__append_13)
 DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-controller.8 \
 	utilities/ovs-discover.8 utilities/ovs-dpctl.8 \
 	utilities/ovs-kill.8 utilities/ovs-ofctl.8 \
@@ -712,10 +717,10 @@ DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-controller.8 \
 	utilities/ovs-tcpundump utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-test utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8 tests/atconfig tests/atlocal \
-	$(am__append_12) debian/copyright vswitchd/ovs-vswitchd.8 \
+	$(am__append_15) debian/copyright vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-brcompatd.8 ovsdb/ovsdb-tool.1 \
 	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 ovsdb/ovsdb-idlc \
-	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_15)
+	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_18)
 
 # Python tests.
 
@@ -752,16 +757,12 @@ EXTRA_DIST = CodingStyle INSTALL.KVM INSTALL.Linux INSTALL.OpenFlow \
 	tests/lcov-wrapper.in tests/valgrind-wrapper.in \
 	tests/openssl.supp tests/uuidfilt.pl \
 	tests/ovsdb-monitor-sort.pl $(IDLTEST_IDL_FILES) \
-	tests/testpki-cacert.pem tests/testpki-cert.pem \
-	tests/testpki-cert2.pem tests/testpki-privkey.pem \
-	tests/testpki-privkey2.pem tests/testpki-req.pem \
-	tests/testpki-req2.pem tests/test-daemon.py tests/test-json.py \
-	tests/test-jsonrpc.py tests/test-ovsdb.py \
-	tests/test-reconnect.py build-aux/check-structs \
-	third-party/README third-party/ofp-tcpdump.patch \
-	debian/changelog debian/compat debian/control \
-	debian/control.modules.in debian/copyright debian/copyright.in \
-	debian/dirs debian/openvswitch-common.dirs \
+	tests/test-daemon.py tests/test-json.py tests/test-jsonrpc.py \
+	tests/test-ovsdb.py tests/test-reconnect.py \
+	build-aux/check-structs third-party/README \
+	third-party/ofp-tcpdump.patch debian/changelog debian/compat \
+	debian/control debian/control.modules.in debian/copyright \
+	debian/copyright.in debian/dirs debian/openvswitch-common.dirs \
 	debian/openvswitch-common.install \
 	debian/openvswitch-common.manpages \
 	debian/openvswitch-controller.README.Debian \
@@ -859,7 +860,7 @@ noinst_LIBRARIES = lib/libopenvswitch.a lib/libsflow.a \
 	ofproto/libofproto.a ovsdb/libovsdb.a
 noinst_SCRIPTS = utilities/ovs-pki-cgi utilities/ovs-parse-leaks \
 	ovsdb/ovsdb-idlc ovsdb/ovsdb-doc ovsdb/ovsdb-dot \
-	$(am__append_14)
+	$(am__append_17)
 
 # idltest schema and IDL
 
@@ -868,6 +869,7 @@ OVSIDL_BUILT = tests/idltest.c tests/idltest.h tests/idltest.ovsidl \
 	vswitchd/vswitch-idl.c vswitchd/vswitch-idl.h \
 	vswitchd/vswitch-idl.ovsidl
 SUFFIXES = .in .ovsidl .ui .py
+check_DATA = $(am__append_11)
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 lib_libopenvswitch_a_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/backtrace.c lib/backtrace.h lib/bitmap.c lib/bitmap.h \
@@ -1144,6 +1146,16 @@ tests_test_vconn_SOURCES = tests/test-vconn.c
 tests_test_vconn_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 tests_test_byte_order_SOURCES = tests/test-byte-order.c
 tests_test_byte_order_LDADD = lib/libopenvswitch.a
+@HAVE_OPENSSL_TRUE@TESTPKI_FILES = \
+@HAVE_OPENSSL_TRUE@	tests/testpki-cacert.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-cert.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-privkey.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-req.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-cert2.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-privkey2.pem \
+@HAVE_OPENSSL_TRUE@	tests/testpki-req2.pem
+
+@HAVE_OPENSSL_TRUE@OVS_PKI = $(SHELL) $(srcdir)/utilities/ovs-pki.in --dir=tests/pki --log=tests/ovs-pki.log
 vswitchd_ovs_vswitchd_SOURCES = \
 	vswitchd/bridge.c \
 	vswitchd/bridge.h \
@@ -2830,7 +2842,7 @@ distcleancheck: distclean
 	       $(distcleancheck_listfiles) ; \
 	       exit 1; } >&2
 check-am: all-am
-	$(MAKE) $(AM_MAKEFLAGS) $(dist_check_SCRIPTS)
+	$(MAKE) $(AM_MAKEFLAGS) $(dist_check_SCRIPTS) $(check_DATA)
 	$(MAKE) $(AM_MAKEFLAGS) check-local
 check: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) check-recursive
@@ -3045,7 +3057,8 @@ distfiles: Makefile
 
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
-.PHONY: $(DIST_HOOKS)
+clean-local: $(CLEAN_LOCAL)
+.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL)
 @HAVE_OPENSSL_TRUE@lib/dhparams.c: lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem
 @HAVE_OPENSSL_TRUE@	(echo '#include "lib/dhparams.h"' &&				\
 @HAVE_OPENSSL_TRUE@	 openssl dhparam -C -in $(srcdir)/lib/dh1024.pem -noout &&	\
@@ -3135,6 +3148,24 @@ tests/idltest.ovsidl: $(IDLTEST_IDL_FILES)
 	mv $@.tmp $@
 
 tests/idltest.c: tests/idltest.h
+
+@HAVE_OPENSSL_TRUE@tests/testpki-cacert.pem: tests/pki/stamp; cp tests/pki/switchca/cacert.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-cert.pem: tests/pki/stamp; cp tests/pki/test-cert.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-req.pem: tests/pki/stamp; cp tests/pki/test-req.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-privkey.pem: tests/pki/stamp; cp tests/pki/test-privkey.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-cert2.pem: tests/pki/stamp; cp tests/pki/test2-cert.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-req2.pem: tests/pki/stamp; cp tests/pki/test2-req.pem $@
+@HAVE_OPENSSL_TRUE@tests/testpki-privkey2.pem: tests/pki/stamp; cp tests/pki/test2-privkey.pem $@
+@HAVE_OPENSSL_TRUE@tests/pki/stamp:
+@HAVE_OPENSSL_TRUE@	rm -f tests/pki/stamp
+@HAVE_OPENSSL_TRUE@	rm -rf tests/pki
+@HAVE_OPENSSL_TRUE@	$(OVS_PKI) init
+@HAVE_OPENSSL_TRUE@	$(OVS_PKI) req+sign tests/pki/test
+@HAVE_OPENSSL_TRUE@	$(OVS_PKI) req+sign tests/pki/test2
+@HAVE_OPENSSL_TRUE@	: > tests/pki/stamp
+@HAVE_OPENSSL_TRUE@clean-pki:
+@HAVE_OPENSSL_TRUE@	rm -f tests/pki/stamp
+@HAVE_OPENSSL_TRUE@	rm -rf tests/pki
 @HAVE_PYTHON_TRUE@include/openflow/openflow.h.stamp: \
 @HAVE_PYTHON_TRUE@	include/openflow/openflow.h build-aux/check-structs
 @HAVE_PYTHON_TRUE@	$(PYTHON) $(srcdir)/build-aux/check-structs $(srcdir)/include/openflow/openflow.h
@@ -3144,12 +3175,13 @@ tests/idltest.c: tests/idltest.h
 @HAVE_PYTHON_TRUE@	touch $@
 
 check-debian-changelog-version:
-	@if $(FGREP) '($(VERSION))' $(srcdir)/debian/changelog >/dev/null; \
-	then								   \
-	  :;								   \
-	else								   \
-	  echo "Update debian/changelog to mention version $(VERSION)";	   \
-	  exit 1;							   \
+	@DEB_VERSION=`echo '$(VERSION)' | sed 's/pre/~pre/'`;		     \
+	if $(FGREP) '($(DEB_VERSION)' $(srcdir)/debian/changelog >/dev/null; \
+	then								     \
+	  :;								     \
+	else								     \
+	  echo "Update debian/changelog to mention version $(VERSION)";	     \
+	  exit 1;							     \
 	fi
 
 $(srcdir)/debian/copyright: AUTHORS debian/copyright.in
