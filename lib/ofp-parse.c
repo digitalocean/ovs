@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ str_to_u32(const char *str)
     char *tail;
     uint32_t value;
 
-    if (!str) {
+    if (!str[0]) {
         ovs_fatal(0, "missing required numeric argument");
     }
 
@@ -60,6 +60,10 @@ str_to_u64(const char *str)
 {
     char *tail;
     uint64_t value;
+
+    if (!str[0]) {
+        ovs_fatal(0, "missing required numeric argument");
+    }
 
     errno = 0;
     value = strtoull(str, &tail, 0);
@@ -121,6 +125,75 @@ str_to_ip(const char *str_, ovs_be32 *ip, ovs_be32 *maskp)
         *maskp = mask;
     } else {
         if (mask != htonl(UINT32_MAX)) {
+            ovs_fatal(0, "%s: netmask not allowed here", str_);
+        }
+    }
+
+    free(str);
+}
+
+static void
+str_to_tun_id(const char *str, ovs_be64 *tun_idp, ovs_be64 *maskp)
+{
+    uint64_t tun_id, mask;
+    char *tail;
+
+    errno = 0;
+    tun_id = strtoull(str, &tail, 0);
+    if (errno || (*tail != '\0' && *tail != '/')) {
+        goto error;
+    }
+
+    if (*tail == '/') {
+        mask = strtoull(tail + 1, &tail, 0);
+        if (errno || *tail != '\0') {
+            goto error;
+        }
+    } else {
+        mask = UINT64_MAX;
+    }
+
+    *tun_idp = htonll(tun_id);
+    *maskp = htonll(mask);
+    return;
+
+error:
+    ovs_fatal(0, "%s: bad syntax for tunnel id", str);
+}
+
+static void
+str_to_ipv6(const char *str_, struct in6_addr *addrp, struct in6_addr *maskp)
+{
+    char *str = xstrdup(str_);
+    char *save_ptr = NULL;
+    const char *name, *netmask;
+    struct in6_addr addr, mask;
+    int retval;
+
+    name = strtok_r(str, "/", &save_ptr);
+    retval = name ? lookup_ipv6(name, &addr) : EINVAL;
+    if (retval) {
+        ovs_fatal(0, "%s: could not convert to IPv6 address", str);
+    }
+
+    netmask = strtok_r(NULL, "/", &save_ptr);
+    if (netmask) {
+        int prefix = atoi(netmask);
+        if (prefix <= 0 || prefix > 128) {
+            ovs_fatal(0, "%s: network prefix bits not between 1 and 128",
+                      str);
+        } else {
+            mask = ipv6_create_mask(prefix);
+        }
+    } else {
+        mask = in6addr_exact;
+    }
+    *addrp = ipv6_addr_bitand(&addr, &mask);
+
+    if (maskp) {
+        *maskp = mask;
+    } else {
+        if (!ipv6_mask_is_exact(&mask)) {
             ovs_fatal(0, "%s: netmask not allowed here", str_);
         }
     }
@@ -202,6 +275,7 @@ str_to_action(char *str, struct ofpbuf *b)
     pos = str;
     n_actions = 0;
     for (;;) {
+        char empty_string[] = "";
         char *act, *arg;
         size_t actlen;
         uint16_t port;
@@ -251,7 +325,7 @@ str_to_action(char *str, struct ofpbuf *b)
             pos = arg + arglen;
         } else {
             /* There might be no argument at all. */
-            arg = NULL;
+            arg = empty_string;
             pos = act + actlen + (act[actlen] != '\0');
         }
         act[actlen] = '\0';
@@ -341,7 +415,7 @@ str_to_action(char *str, struct ofpbuf *b)
             nan->subtype = htons(NXAST_NOTE);
 
             b->size -= sizeof nan->note;
-            while (arg && *arg != '\0') {
+            while (*arg != '\0') {
                 uint8_t byte;
                 bool ok;
 
@@ -403,7 +477,7 @@ str_to_action(char *str, struct ofpbuf *b)
 
             /* Unless a numeric argument is specified, we send the whole
              * packet to the controller. */
-            if (arg && (strspn(arg, "0123456789") == strlen(arg))) {
+            if (arg[0] && (strspn(arg, "0123456789") == strlen(arg))) {
                oao->max_len = htons(str_to_u32(arg));
             } else {
                 oao->max_len = htons(UINT16_MAX);
@@ -431,9 +505,14 @@ parse_protocol(const char *name, const struct protocol **p_out)
     static const struct protocol protocols[] = {
         { "ip", ETH_TYPE_IP, 0 },
         { "arp", ETH_TYPE_ARP, 0 },
-        { "icmp", ETH_TYPE_IP, IP_TYPE_ICMP },
-        { "tcp", ETH_TYPE_IP, IP_TYPE_TCP },
-        { "udp", ETH_TYPE_IP, IP_TYPE_UDP },
+        { "icmp", ETH_TYPE_IP, IPPROTO_ICMP },
+        { "tcp", ETH_TYPE_IP, IPPROTO_TCP },
+        { "udp", ETH_TYPE_IP, IPPROTO_UDP },
+        { "ipv6", ETH_TYPE_IPV6, 0 },
+        { "ip6", ETH_TYPE_IPV6, 0 },
+        { "icmp6", ETH_TYPE_IPV6, IPPROTO_ICMPV6 },
+        { "tcp6", ETH_TYPE_IPV6, IPPROTO_TCP },
+        { "udp6", ETH_TYPE_IPV6, IPPROTO_UDP },
     };
     const struct protocol *p;
 
@@ -448,7 +527,7 @@ parse_protocol(const char *name, const struct protocol **p_out)
 }
 
 #define FIELDS                                              \
-    FIELD(F_TUN_ID,      "tun_id",      FWW_TUN_ID)         \
+    FIELD(F_TUN_ID,      "tun_id",      0)                  \
     FIELD(F_IN_PORT,     "in_port",     FWW_IN_PORT)        \
     FIELD(F_DL_VLAN,     "dl_vlan",     0)                  \
     FIELD(F_DL_VLAN_PCP, "dl_vlan_pcp", 0)                  \
@@ -462,7 +541,14 @@ parse_protocol(const char *name, const struct protocol **p_out)
     FIELD(F_TP_SRC,      "tp_src",      FWW_TP_SRC)         \
     FIELD(F_TP_DST,      "tp_dst",      FWW_TP_DST)         \
     FIELD(F_ICMP_TYPE,   "icmp_type",   FWW_TP_SRC)         \
-    FIELD(F_ICMP_CODE,   "icmp_code",   FWW_TP_DST)
+    FIELD(F_ICMP_CODE,   "icmp_code",   FWW_TP_DST)         \
+    FIELD(F_ARP_SHA,     "arp_sha",     FWW_ARP_SHA)        \
+    FIELD(F_ARP_THA,     "arp_tha",     FWW_ARP_THA)        \
+    FIELD(F_IPV6_SRC,    "ipv6_src",    0)                  \
+    FIELD(F_IPV6_DST,    "ipv6_dst",    0)                  \
+    FIELD(F_ND_TARGET,   "nd_target",   FWW_ND_TARGET)      \
+    FIELD(F_ND_SLL,      "nd_sll",      FWW_ARP_SHA)        \
+    FIELD(F_ND_TLL,      "nd_tll",      FWW_ARP_THA)
 
 enum field_index {
 #define FIELD(ENUM, NAME, WILDCARD) ENUM,
@@ -502,12 +588,15 @@ parse_field_value(struct cls_rule *rule, enum field_index index,
                   const char *value)
 {
     uint8_t mac[ETH_ADDR_LEN];
+    ovs_be64 tun_id, tun_mask;
     ovs_be32 ip, mask;
+    struct in6_addr ipv6, ipv6_mask;
     uint16_t port_no;
 
     switch (index) {
     case F_TUN_ID:
-        cls_rule_set_tun_id(rule, htonll(str_to_u64(value)));
+        str_to_tun_id(value, &tun_id, &tun_mask);
+        cls_rule_set_tun_id_masked(rule, tun_id, tun_mask);
         break;
 
     case F_IN_PORT:
@@ -576,6 +665,41 @@ parse_field_value(struct cls_rule *rule, enum field_index index,
         cls_rule_set_icmp_code(rule, str_to_u32(value));
         break;
 
+    case F_ARP_SHA:
+        str_to_mac(value, mac);
+        cls_rule_set_arp_sha(rule, mac);
+        break;
+
+    case F_ARP_THA:
+        str_to_mac(value, mac);
+        cls_rule_set_arp_tha(rule, mac);
+        break;
+
+    case F_IPV6_SRC:
+        str_to_ipv6(value, &ipv6, &ipv6_mask);
+        cls_rule_set_ipv6_src_masked(rule, &ipv6, &ipv6_mask);
+        break;
+
+    case F_IPV6_DST:
+        str_to_ipv6(value, &ipv6, &ipv6_mask);
+        cls_rule_set_ipv6_dst_masked(rule, &ipv6, &ipv6_mask);
+        break;
+
+    case F_ND_TARGET:
+        str_to_ipv6(value, &ipv6, NULL);
+        cls_rule_set_nd_target(rule, ipv6);
+        break;
+
+    case F_ND_SLL:
+        str_to_mac(value, mac);
+        cls_rule_set_arp_sha(rule, mac);
+        break;
+
+    case F_ND_TLL:
+        str_to_mac(value, mac);
+        cls_rule_set_arp_tha(rule, mac);
+        break;
+
     case N_FIELDS:
         NOT_REACHED();
     }
@@ -602,7 +726,7 @@ parse_reg_value(struct cls_rule *rule, int reg_idx, const char *value)
 /* Convert 'string' (as described in the Flow Syntax section of the ovs-ofctl
  * man page) into 'pf'.  If 'actions' is specified, an action must be in
  * 'string' and may be expanded or reallocated. */
-static void
+void
 parse_ofp_str(struct flow_mod *fm, uint8_t *table_idx,
               struct ofpbuf *actions, char *string)
 {
@@ -680,6 +804,12 @@ parse_ofp_str(struct flow_mod *fm, uint8_t *table_idx,
                         cls_rule_set_nw_src_masked(&fm->cr, 0, 0);
                     } else if (f->index == F_NW_DST) {
                         cls_rule_set_nw_dst_masked(&fm->cr, 0, 0);
+                    } else if (f->index == F_IPV6_SRC) {
+                        cls_rule_set_ipv6_src_masked(&fm->cr,
+                                &in6addr_any, &in6addr_any);
+                    } else if (f->index == F_IPV6_DST) {
+                        cls_rule_set_ipv6_dst_masked(&fm->cr,
+                                &in6addr_any, &in6addr_any);
                     } else if (f->index == F_DL_VLAN) {
                         cls_rule_set_any_vid(&fm->cr);
                     } else if (f->index == F_DL_VLAN_PCP) {
@@ -741,30 +871,16 @@ parse_ofp_flow_mod_str(struct list *packets, enum nx_flow_format *cur_format,
  * 'stream' and the command is always OFPFC_ADD.  Returns false if end-of-file
  * is reached before reading a flow, otherwise true. */
 bool
-parse_ofp_add_flow_file(struct list *packets, enum nx_flow_format *cur,
-                        FILE *stream)
+parse_ofp_flow_mod_file(struct list *packets, enum nx_flow_format *cur,
+                        FILE *stream, uint16_t command)
 {
-    struct ds s = DS_EMPTY_INITIALIZER;
-    bool ok = false;
+    struct ds s;
+    bool ok;
 
-    while (!ds_get_line(&s, stream)) {
-        char *line = ds_cstr(&s);
-        char *comment;
-
-        /* Delete comments. */
-        comment = strchr(line, '#');
-        if (comment) {
-            *comment = '\0';
-        }
-
-        /* Drop empty lines. */
-        if (line[strspn(line, " \t\n")] == '\0') {
-            continue;
-        }
-
-        parse_ofp_flow_mod_str(packets, cur, line, OFPFC_ADD);
-        ok = true;
-        break;
+    ds_init(&s);
+    ok = ds_get_preprocessed_line(&s, stream) == 0;
+    if (ok) {
+        parse_ofp_flow_mod_str(packets, cur, ds_cstr(&s), command);
     }
     ds_destroy(&s);
 
@@ -784,4 +900,3 @@ parse_ofp_flow_stats_request_str(struct flow_stats_request *fsr,
     fsr->out_port = fm.out_port;
     fsr->table_id = table_id;
 }
-

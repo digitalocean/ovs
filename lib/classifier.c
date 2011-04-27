@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -130,8 +130,15 @@ cls_rule_set_reg_masked(struct cls_rule *rule, unsigned int reg_idx,
 void
 cls_rule_set_tun_id(struct cls_rule *rule, ovs_be64 tun_id)
 {
-    rule->wc.wildcards &= ~FWW_TUN_ID;
-    rule->flow.tun_id = tun_id;
+    cls_rule_set_tun_id_masked(rule, tun_id, htonll(UINT64_MAX));
+}
+
+void
+cls_rule_set_tun_id_masked(struct cls_rule *rule,
+                           ovs_be64 tun_id, ovs_be64 mask)
+{
+    rule->wc.tun_id_mask = mask;
+    rule->flow.tun_id = tun_id & mask;
 }
 
 void
@@ -312,6 +319,63 @@ cls_rule_set_icmp_code(struct cls_rule *rule, uint8_t icmp_code)
     rule->flow.icmp_code = htons(icmp_code);
 }
 
+void
+cls_rule_set_arp_sha(struct cls_rule *rule, const uint8_t sha[ETH_ADDR_LEN])
+{
+    rule->wc.wildcards &= ~FWW_ARP_SHA;
+    memcpy(rule->flow.arp_sha, sha, ETH_ADDR_LEN);
+}
+
+void
+cls_rule_set_arp_tha(struct cls_rule *rule, const uint8_t tha[ETH_ADDR_LEN])
+{
+    rule->wc.wildcards &= ~FWW_ARP_THA;
+    memcpy(rule->flow.arp_tha, tha, ETH_ADDR_LEN);
+}
+
+void
+cls_rule_set_ipv6_src(struct cls_rule *rule, const struct in6_addr *src)
+{
+    cls_rule_set_ipv6_src_masked(rule, src, &in6addr_exact);
+}
+
+bool
+cls_rule_set_ipv6_src_masked(struct cls_rule *rule, const struct in6_addr *src,
+                             const struct in6_addr *mask)
+{
+    if (flow_wildcards_set_ipv6_src_mask(&rule->wc, mask)) {
+        rule->flow.ipv6_src = ipv6_addr_bitand(src, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void
+cls_rule_set_ipv6_dst(struct cls_rule *rule, const struct in6_addr *dst)
+{
+    cls_rule_set_ipv6_dst_masked(rule, dst, &in6addr_exact);
+}
+
+bool
+cls_rule_set_ipv6_dst_masked(struct cls_rule *rule, const struct in6_addr *dst,
+                             const struct in6_addr *mask)
+{
+    if (flow_wildcards_set_ipv6_dst_mask(&rule->wc, mask)) {
+        rule->flow.ipv6_dst = ipv6_addr_bitand(dst, mask);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void
+cls_rule_set_nd_target(struct cls_rule *rule, const struct in6_addr target)
+{
+    rule->wc.wildcards &= ~FWW_ND_TARGET;
+    rule->flow.nd_target = target;
+}
+
 /* Returns true if 'a' and 'b' have the same priority, wildcard the same
  * fields, and have the same values for fixed fields, otherwise false. */
 bool
@@ -340,6 +404,27 @@ format_ip_netmask(struct ds *s, const char *name, ovs_be32 ip,
     }
 }
 
+static void
+format_ipv6_netmask(struct ds *s, const char *name,
+                    const struct in6_addr *addr,
+                    const struct in6_addr *netmask)
+{
+    if (!ipv6_mask_is_any(netmask)) {
+        ds_put_format(s, "%s=", name);
+        print_ipv6_addr(s, addr);
+        if (!ipv6_mask_is_exact(netmask)) {
+            if (ipv6_is_cidr(netmask)) {
+                int cidr_bits = ipv6_count_cidr_bits(netmask);
+                ds_put_format(s, "/%d", cidr_bits);
+            } else {
+                ds_put_char(s, '/');
+                print_ipv6_addr(s, netmask);
+            }
+        }
+        ds_put_char(s, ',');
+    }
+}
+
 void
 cls_rule_format(const struct cls_rule *rule, struct ds *s)
 {
@@ -361,11 +446,11 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
         if (f->dl_type == htons(ETH_TYPE_IP)) {
             if (!(w & FWW_NW_PROTO)) {
                 skip_proto = true;
-                if (f->nw_proto == IP_TYPE_ICMP) {
+                if (f->nw_proto == IPPROTO_ICMP) {
                     ds_put_cstr(s, "icmp,");
-                } else if (f->nw_proto == IP_TYPE_TCP) {
+                } else if (f->nw_proto == IPPROTO_TCP) {
                     ds_put_cstr(s, "tcp,");
-                } else if (f->nw_proto == IP_TYPE_UDP) {
+                } else if (f->nw_proto == IPPROTO_UDP) {
                     ds_put_cstr(s, "udp,");
                 } else {
                     ds_put_cstr(s, "ip,");
@@ -373,6 +458,22 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
                 }
             } else {
                 ds_put_cstr(s, "ip,");
+            }
+        } else if (f->dl_type == htons(ETH_TYPE_IPV6)) {
+            if (!(w & FWW_NW_PROTO)) {
+                skip_proto = true;
+                if (f->nw_proto == IPPROTO_ICMPV6) {
+                    ds_put_cstr(s, "icmp6,");
+                } else if (f->nw_proto == IPPROTO_TCP) {
+                    ds_put_cstr(s, "tcp6,");
+                } else if (f->nw_proto == IPPROTO_UDP) {
+                    ds_put_cstr(s, "udp6,");
+                } else {
+                    ds_put_cstr(s, "ipv6,");
+                    skip_proto = false;
+                }
+            } else {
+                ds_put_cstr(s, "ipv6,");
             }
         } else if (f->dl_type == htons(ETH_TYPE_ARP)) {
             ds_put_cstr(s, "arp,");
@@ -393,8 +494,16 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
             break;
         }
     }
-    if (!(w & FWW_TUN_ID)) {
-        ds_put_format(s, "tun_id=0x%"PRIx64",", ntohll(f->tun_id));
+    switch (wc->tun_id_mask) {
+    case 0:
+        break;
+    case CONSTANT_HTONLL(UINT64_MAX):
+        ds_put_format(s, "tun_id=%#"PRIx64",", ntohll(f->tun_id));
+        break;
+    default:
+        ds_put_format(s, "tun_id=%#"PRIx64"/%#"PRIx64",",
+                      ntohll(f->tun_id), ntohll(wc->tun_id_mask));
+        break;
     }
     if (!(w & FWW_IN_PORT)) {
         ds_put_format(s, "in_port=%"PRIu16",",
@@ -417,6 +526,8 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
                 ds_put_format(s, "dl_vlan_pcp=%d,",
                               vlan_tci_to_pcp(f->vlan_tci));
             }
+        } else if (wc->vlan_tci_mask == htons(0xffff)) {
+            ds_put_format(s, "vlan_tci=0x%04"PRIx16",", ntohs(f->vlan_tci));
         } else {
             ds_put_format(s, "vlan_tci=0x%04"PRIx16"/0x%04"PRIx16",",
                           ntohs(f->vlan_tci), ntohs(wc->vlan_tci_mask));
@@ -443,8 +554,13 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
     if (!skip_type && !(w & FWW_DL_TYPE)) {
         ds_put_format(s, "dl_type=0x%04"PRIx16",", ntohs(f->dl_type));
     }
-    format_ip_netmask(s, "nw_src", f->nw_src, wc->nw_src_mask);
-    format_ip_netmask(s, "nw_dst", f->nw_dst, wc->nw_dst_mask);
+    if (f->dl_type == htons(ETH_TYPE_IPV6)) {
+        format_ipv6_netmask(s, "ipv6_src", &f->ipv6_src, &wc->ipv6_src_mask);
+        format_ipv6_netmask(s, "ipv6_dst", &f->ipv6_dst, &wc->ipv6_dst_mask);
+    } else {
+        format_ip_netmask(s, "nw_src", f->nw_src, wc->nw_src_mask);
+        format_ip_netmask(s, "nw_dst", f->nw_dst, wc->nw_dst_mask);
+    }
     if (!skip_proto && !(w & FWW_NW_PROTO)) {
         if (f->dl_type == htons(ETH_TYPE_ARP)) {
             ds_put_format(s, "opcode=%"PRIu8",", f->nw_proto);
@@ -452,17 +568,47 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
             ds_put_format(s, "nw_proto=%"PRIu8",", f->nw_proto);
         }
     }
+    if (f->dl_type == htons(ETH_TYPE_ARP)) {
+        if (!(w & FWW_ARP_SHA)) {
+            ds_put_format(s, "arp_sha="ETH_ADDR_FMT",",
+                    ETH_ADDR_ARGS(f->arp_sha));
+        }
+        if (!(w & FWW_ARP_THA)) {
+            ds_put_format(s, "arp_tha="ETH_ADDR_FMT",",
+                    ETH_ADDR_ARGS(f->arp_tha));
+        }
+    }
     if (!(w & FWW_NW_TOS)) {
         ds_put_format(s, "nw_tos=%"PRIu8",", f->nw_tos);
     }
-    if (f->nw_proto == IP_TYPE_ICMP) {
+    if (f->nw_proto == IPPROTO_ICMP) {
         if (!(w & FWW_TP_SRC)) {
             ds_put_format(s, "icmp_type=%"PRIu16",", ntohs(f->tp_src));
         }
         if (!(w & FWW_TP_DST)) {
             ds_put_format(s, "icmp_code=%"PRIu16",", ntohs(f->tp_dst));
         }
-    } else {
+    } else if (f->nw_proto == IPPROTO_ICMPV6) {
+        if (!(w & FWW_TP_SRC)) {
+            ds_put_format(s, "icmp_type=%"PRIu16",", ntohs(f->tp_src));
+        }
+        if (!(w & FWW_TP_DST)) {
+            ds_put_format(s, "icmp_code=%"PRIu16",", ntohs(f->tp_dst));
+        }
+        if (!(w & FWW_ND_TARGET)) {
+            ds_put_cstr(s, "nd_target=");
+            print_ipv6_addr(s, &f->nd_target);
+            ds_put_char(s, ',');
+        }
+        if (!(w & FWW_ARP_SHA)) {
+            ds_put_format(s, "nd_sll="ETH_ADDR_FMT",", 
+                    ETH_ADDR_ARGS(f->arp_sha));
+        }
+        if (!(w & FWW_ARP_THA)) {
+            ds_put_format(s, "nd_tll="ETH_ADDR_FMT",", 
+                    ETH_ADDR_ARGS(f->arp_tha));
+        }
+   } else {
         if (!(w & FWW_TP_SRC)) {
             ds_put_format(s, "tp_src=%"PRIu16",", ntohs(f->tp_src));
         }
@@ -926,13 +1072,37 @@ next_rule_in_list(struct cls_rule *rule)
 }
 
 static bool
+ipv6_equal_except(const struct in6_addr *a, const struct in6_addr *b,
+                  const struct in6_addr *mask)
+{
+    int i;
+
+#ifdef s6_addr32
+    for (i=0; i<4; i++) {
+        if ((a->s6_addr32[i] ^ b->s6_addr32[i]) & mask->s6_addr32[i]) {
+            return false;
+        }
+    }
+#else
+    for (i=0; i<16; i++) {
+        if ((a->s6_addr[i] ^ b->s6_addr[i]) & mask->s6_addr[i]) {
+            return false;
+        }
+    }
+#endif
+
+    return true;
+}
+
+
+static bool
 flow_equal_except(const struct flow *a, const struct flow *b,
                   const struct flow_wildcards *wildcards)
 {
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_SIG_SIZE == 40 + FLOW_N_REGS * 4);
+    BUILD_ASSERT_DECL(FLOW_SIG_SIZE == 100 + FLOW_N_REGS * 4);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         if ((a->regs[i] ^ b->regs[i]) & wildcards->reg_masks[i]) {
@@ -940,7 +1110,7 @@ flow_equal_except(const struct flow *a, const struct flow *b,
         }
     }
 
-    return ((wc & FWW_TUN_ID || a->tun_id == b->tun_id)
+    return (!((a->tun_id ^ b->tun_id) & wildcards->tun_id_mask)
             && !((a->nw_src ^ b->nw_src) & wildcards->nw_src_mask)
             && !((a->nw_dst ^ b->nw_dst) & wildcards->nw_dst_mask)
             && (wc & FWW_IN_PORT || a->in_port == b->in_port)
@@ -959,7 +1129,15 @@ flow_equal_except(const struct flow *a, const struct flow *b,
             && (wc & FWW_ETH_MCAST
                 || !((a->dl_dst[0] ^ b->dl_dst[0]) & 0x01))
             && (wc & FWW_NW_PROTO || a->nw_proto == b->nw_proto)
-            && (wc & FWW_NW_TOS || a->nw_tos == b->nw_tos));
+            && (wc & FWW_NW_TOS || a->nw_tos == b->nw_tos)
+            && (wc & FWW_ARP_SHA || eth_addr_equals(a->arp_sha, b->arp_sha))
+            && (wc & FWW_ARP_THA || eth_addr_equals(a->arp_tha, b->arp_tha))
+            && ipv6_equal_except(&a->ipv6_src, &b->ipv6_src,
+                    &wildcards->ipv6_src_mask)
+            && ipv6_equal_except(&a->ipv6_dst, &b->ipv6_dst,
+                    &wildcards->ipv6_dst_mask)
+            && (wc & FWW_ND_TARGET 
+                || ipv6_addr_equals(&a->nd_target, &b->nd_target)));
 }
 
 static void
@@ -968,14 +1146,12 @@ zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_SIG_SIZE == 40 + 4 * FLOW_N_REGS);
+    BUILD_ASSERT_DECL(FLOW_SIG_SIZE == 100 + 4 * FLOW_N_REGS);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         flow->regs[i] &= wildcards->reg_masks[i];
     }
-    if (wc & FWW_TUN_ID) {
-        flow->tun_id = 0;
-    }
+    flow->tun_id &= wildcards->tun_id_mask;
     flow->nw_src &= wildcards->nw_src_mask;
     flow->nw_dst &= wildcards->nw_dst_mask;
     if (wc & FWW_IN_PORT) {
@@ -1006,5 +1182,18 @@ zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     }
     if (wc & FWW_NW_TOS) {
         flow->nw_tos = 0;
+    }
+    if (wc & FWW_ARP_SHA) {
+        memset(flow->arp_sha, 0, sizeof flow->arp_sha);
+    }
+    if (wc & FWW_ARP_THA) {
+        memset(flow->arp_tha, 0, sizeof flow->arp_tha);
+    }
+    flow->ipv6_src = ipv6_addr_bitand(&flow->ipv6_src,
+            &wildcards->ipv6_src_mask);
+    flow->ipv6_dst = ipv6_addr_bitand(&flow->ipv6_dst,
+            &wildcards->ipv6_dst_mask);
+    if (wc & FWW_ND_TARGET) {
+        memset(&flow->nd_target, 0, sizeof flow->nd_target);
     }
 }

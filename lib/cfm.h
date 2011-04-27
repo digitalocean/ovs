@@ -20,9 +20,34 @@
 #include <stdint.h>
 
 #include "hmap.h"
-#include "packets.h"
+#include "openvswitch/types.h"
 
 struct flow;
+struct ofpbuf;
+struct ds;
+
+/* Ethernet destination address of CCM packets. */
+static const uint8_t eth_addr_ccm[6] OVS_UNUSED
+    = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x30 };
+
+#define ETH_TYPE_CFM 0x8902
+
+/* A 'ccm' represents a Continuity Check Message from the 802.1ag
+ * specification.  Continuity Check Messages are broadcast periodically so that
+ * hosts can determine who they have connectivity to. */
+#define CCM_LEN 74
+#define CCM_MAID_LEN 48
+struct ccm {
+    uint8_t  mdlevel_version; /* MD Level and Version */
+    uint8_t  opcode;
+    uint8_t  flags;
+    uint8_t  tlv_offset;
+    ovs_be32 seq;
+    ovs_be16 mpid;
+    uint8_t  maid[CCM_MAID_LEN];
+    uint8_t  zero[16]; /* Defined by ITU-T Y.1731 should be zero */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(CCM_LEN == sizeof(struct ccm));
 
 /* A 'cfm' represent a local Maintenance Point (MP) and its Connectivity Fault
  * Management (CFM) state machine.  Its configuration variables should be set
@@ -32,12 +57,9 @@ struct cfm {
     uint16_t mpid;              /* The MPID of this CFM. */
     uint8_t maid[CCM_MAID_LEN]; /* The MAID of this CFM. */
     int interval;               /* The requested transmission interval. */
-    uint8_t eth_src[ETH_ADDR_LEN];
 
     /* Statistics. */
     struct hmap remote_mps;     /* Expected remote MPs. */
-    struct hmap x_remote_mps;   /* Unexpected remote MPs. */
-    struct hmap x_remote_maids; /* Unexpected remote MAIDs. */
     bool fault;                 /* Indicates connectivity vaults. */
 };
 
@@ -51,20 +73,15 @@ struct remote_mp {
     bool fault;          /* Indicates a connectivity fault. */
 };
 
-/* Remote MAIDs keep track of incoming CCM messages which have a different MAID
- * than this CFM instance. */
-struct remote_maid {
-    uint8_t maid[CCM_MAID_LEN]; /* The remote MAID. */
-    struct hmap_node node;      /* In 'cfm' 'x_remote_maids'. */
-
-    long long recv_time; /* Most recent receive time for this 'remote_maid'. */
-};
-
 struct cfm *cfm_create(void);
 
 void cfm_destroy(struct cfm *);
 
-struct ofpbuf *cfm_run(struct cfm *);
+void cfm_run(struct cfm *);
+
+bool cfm_should_send_ccm(struct cfm *);
+
+void cfm_compose_ccm(struct cfm *, struct ccm *);
 
 void cfm_wait(struct cfm *);
 
@@ -80,5 +97,7 @@ bool cfm_generate_maid(const char *md_name, const char *ma_name,
 bool cfm_should_process_flow(const struct flow *);
 
 void cfm_process_heartbeat(struct cfm *, const struct ofpbuf *packet);
+
+void cfm_dump_ds(const struct cfm *, struct ds *);
 
 #endif /* cfm.h */

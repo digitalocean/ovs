@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,14 @@
 #include "transaction.h"
 
 struct ovsdb_schema *
-ovsdb_schema_create(const char *name, const char *version)
+ovsdb_schema_create(const char *name, const char *version, const char *cksum)
 {
     struct ovsdb_schema *schema;
 
     schema = xzalloc(sizeof *schema);
     schema->name = xstrdup(name);
     schema->version = xstrdup(version);
+    schema->cksum = xstrdup(cksum);
     shash_init(&schema->tables);
 
     return schema;
@@ -44,7 +45,7 @@ ovsdb_schema_clone(const struct ovsdb_schema *old)
     struct ovsdb_schema *new;
     struct shash_node *node;
 
-    new = ovsdb_schema_create(old->name, old->version);
+    new = ovsdb_schema_create(old->name, old->version, old->cksum);
     SHASH_FOR_EACH (node, &old->tables) {
         const struct ovsdb_table_schema *ts = node->data;
 
@@ -68,6 +69,7 @@ ovsdb_schema_destroy(struct ovsdb_schema *schema)
     shash_destroy(&schema->tables);
     free(schema->name);
     free(schema->version);
+    free(schema->cksum);
     free(schema);
 }
 
@@ -101,35 +103,66 @@ ovsdb_schema_from_file(const char *file_name, struct ovsdb_schema **schemap)
 }
 
 static struct ovsdb_error * WARN_UNUSED_RESULT
-ovsdb_schema_check_ref_table(const struct ovsdb_column *column,
+ovsdb_schema_check_ref_table(struct ovsdb_column *column,
                              const struct shash *tables,
                              const struct ovsdb_base_type *base,
                              const char *base_name)
 {
-    if (base->type == OVSDB_TYPE_UUID && base->u.uuid.refTableName
-        && !shash_find(tables, base->u.uuid.refTableName)) {
+    struct ovsdb_table_schema *refTable;
+
+    if (base->type != OVSDB_TYPE_UUID || !base->u.uuid.refTableName) {
+        return NULL;
+    }
+
+    refTable = shash_find_data(tables, base->u.uuid.refTableName);
+    if (!refTable) {
         return ovsdb_syntax_error(NULL, NULL,
                                   "column %s %s refers to undefined table %s",
                                   column->name, base_name,
                                   base->u.uuid.refTableName);
-    } else {
-        return NULL;
     }
+
+    if (ovsdb_base_type_is_strong_ref(base) && !refTable->is_root) {
+        /* We cannot allow a strong reference to a non-root table to be
+         * ephemeral: if it is the only reference to a row, then replaying the
+         * database log from disk will cause the referenced row to be deleted,
+         * even though it did exist in memory.  If there are references to that
+         * row later in the log (to modify it, to delete it, or just to point
+         * to it), then this will yield a transaction error. */
+        column->persistent = true;
+    }
+
+    return NULL;
 }
 
 static bool
 is_valid_version(const char *s)
 {
     int n = -1;
-    sscanf(s, "%*[0-9].%*[0-9].%*[0-9]%n", &n);
+    ignore(sscanf(s, "%*[0-9].%*[0-9].%*[0-9]%n", &n));
     return n != -1 && s[n] == '\0';
+}
+
+/* Returns the number of tables in 'schema''s root set. */
+static size_t
+root_set_size(const struct ovsdb_schema *schema)
+{
+    struct shash_node *node;
+    size_t n_root = 0;
+
+    SHASH_FOR_EACH (node, &schema->tables) {
+        struct ovsdb_table_schema *table = node->data;
+
+        n_root += table->is_root;
+    }
+    return n_root;
 }
 
 struct ovsdb_error *
 ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema;
-    const struct json *name, *tables, *version_json;
+    const struct json *name, *tables, *version_json, *cksum;
     struct ovsdb_error *error;
     struct shash_node *node;
     struct ovsdb_parser parser;
@@ -141,7 +174,7 @@ ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
     name = ovsdb_parser_member(&parser, "name", OP_ID);
     version_json = ovsdb_parser_member(&parser, "version",
                                        OP_STRING | OP_OPTIONAL);
-    ovsdb_parser_member(&parser, "cksum", OP_STRING | OP_OPTIONAL);
+    cksum = ovsdb_parser_member(&parser, "cksum", OP_STRING | OP_OPTIONAL);
     tables = ovsdb_parser_member(&parser, "tables", OP_OBJECT);
     error = ovsdb_parser_finish(&parser);
     if (error) {
@@ -159,7 +192,8 @@ ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
         version = "";
     }
 
-    schema = ovsdb_schema_create(json_string(name), version);
+    schema = ovsdb_schema_create(json_string(name), version,
+                                 cksum ? json_string(cksum) : "");
     SHASH_FOR_EACH (node, json_object(tables)) {
         struct ovsdb_table_schema *table;
 
@@ -180,7 +214,23 @@ ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
         shash_add(&schema->tables, table->name, table);
     }
 
-    /* Validate that all refTables refer to the names of tables that exist. */
+    /* "isRoot" was not part of the original schema definition.  Before it was
+     * added, there was no support for garbage collection.  So, for backward
+     * compatibility, if the root set is empty then assume that every table is
+     * in the root set. */
+    if (root_set_size(schema) == 0) {
+        SHASH_FOR_EACH (node, &schema->tables) {
+            struct ovsdb_table_schema *table = node->data;
+
+            table->is_root = true;
+        }
+    }
+
+    /* Validate that all refTables refer to the names of tables that exist.
+     *
+     * Also force certain columns to be persistent, as explained in
+     * ovsdb_schema_check_ref_table().  This requires 'is_root' to be known, so
+     * this must follow the loop updating 'is_root' above. */
     SHASH_FOR_EACH (node, &schema->tables) {
         struct ovsdb_table_schema *table = node->data;
         struct shash_node *node2;
@@ -211,23 +261,50 @@ ovsdb_schema_to_json(const struct ovsdb_schema *schema)
 {
     struct json *json, *tables;
     struct shash_node *node;
+    bool default_is_root;
 
     json = json_object_create();
     json_object_put_string(json, "name", schema->name);
     if (schema->version[0]) {
         json_object_put_string(json, "version", schema->version);
     }
+    if (schema->cksum[0]) {
+        json_object_put_string(json, "cksum", schema->cksum);
+    }
+
+    /* "isRoot" was not part of the original schema definition.  Before it was
+     * added, there was no support for garbage collection.  So, for backward
+     * compatibility, if every table is in the root set then do not output
+     * "isRoot" in table schemas. */
+    default_is_root = root_set_size(schema) == shash_count(&schema->tables);
 
     tables = json_object_create();
 
     SHASH_FOR_EACH (node, &schema->tables) {
         struct ovsdb_table_schema *table = node->data;
         json_object_put(tables, table->name,
-                        ovsdb_table_schema_to_json(table));
+                        ovsdb_table_schema_to_json(table, default_is_root));
     }
     json_object_put(json, "tables", tables);
 
     return json;
+}
+
+/* Returns true if 'a' and 'b' specify equivalent schemas, false if they
+ * differ. */
+bool
+ovsdb_schema_equal(const struct ovsdb_schema *a,
+                   const struct ovsdb_schema *b)
+{
+    /* This implementation is simple, stupid, and slow, but I doubt that it
+     * will ever require much maintenance. */
+    struct json *ja = ovsdb_schema_to_json(a);
+    struct json *jb = ovsdb_schema_to_json(b);
+    bool equals = json_equal(ja, jb);
+    json_destroy(ja);
+    json_destroy(jb);
+
+    return equals;
 }
 
 static void

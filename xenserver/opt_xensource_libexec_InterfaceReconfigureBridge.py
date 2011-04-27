@@ -274,7 +274,8 @@ def _configure_physical_interface(pif):
     f.write("TYPE=Ethernet\n")
     f.write("HWADDR=%(MAC)s\n" % pifrec)
 
-    settings,offload = ethtool_settings(pifrec['other_config'])
+    settings,offload = ethtool_settings(pifrec['other_config'],
+                                        PIF_OTHERCONFIG_DEFAULTS)
     if len(settings):
         f.write("ETHTOOL_OPTS=\"%s\"\n" % str.join(" ", settings))
     if len(offload):
@@ -338,7 +339,7 @@ def _configure_bond_interface(pif):
     if len(offload):
         f.write("ETHTOOL_OFFLOAD_OPTS=\"%s\"\n" % str.join(" ", offload))
 
-    mtu = mtu_setting(pifrec['network'], "VLAN-PIF", pifrec['other_config'])
+    mtu = mtu_setting(pifrec['network'], "Bond-PIF", pifrec['other_config'])
     if mtu:
         f.write("MTU=%s\n" % mtu)
 
@@ -349,6 +350,7 @@ def _configure_bond_interface(pif):
         "downdelay": "200",
         "updelay": "31000",
         "use_carrier": "1",
+        "hashing-algorithm": "src_mac",
         }
 
     # override defaults with values from other-config whose keys being with "bond-"
@@ -388,7 +390,7 @@ def _configure_vlan_interface(pif):
     if len(offload):
         f.write("ETHTOOL_OFFLOAD_OPTS=\"%s\"\n" % str.join(" ", offload))
 
-    mtu = mtu_setting(pifrec['network'], "Bond-PIF", pifrec['other_config'])
+    mtu = mtu_setting(pifrec['network'], "VLAN-PIF", pifrec['other_config'])
     if mtu:
         f.write("MTU=%s\n" % mtu)
 

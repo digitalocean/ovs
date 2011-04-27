@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -727,7 +727,7 @@ pstream_open_with_default_ports(const char *name_,
 /* Attempts to guess the content type of a stream whose first few bytes were
  * the 'size' bytes of 'data'. */
 static enum stream_content_type
-stream_guess_content(const uint8_t *data, size_t size)
+stream_guess_content(const uint8_t *data, ssize_t size)
 {
     if (size >= 2) {
 #define PAIR(A, B) (((A) << 8) | (B))
@@ -770,7 +770,7 @@ stream_content_type_to_string(enum stream_content_type type)
  * module 'module', naming 'stream_name' as the source, explaining what
  * content was expected and what was actually received. */
 void
-stream_report_content(const void *data, size_t size,
+stream_report_content(const void *data, ssize_t size,
                       enum stream_content_type expected_type,
                       struct vlog_module *module, const char *stream_name)
 {
@@ -782,7 +782,7 @@ stream_report_content(const void *data, size_t size,
         vlog_rate_limit(module, VLL_WARN, &rl,
                         "%s: received %s data on %s channel",
                         stream_name,
-                        stream_content_type_to_string(expected_type),
-                        stream_content_type_to_string(actual_type));
+                        stream_content_type_to_string(actual_type),
+                        stream_content_type_to_string(expected_type));
     }
 }

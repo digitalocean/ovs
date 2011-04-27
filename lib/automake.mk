@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -30,12 +30,9 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/csum.h \
 	lib/daemon.c \
 	lib/daemon.h \
+	lib/dhcp.h \
 	lib/dummy.c \
 	lib/dummy.h \
-	lib/dhcp-client.c \
-	lib/dhcp-client.h \
-	lib/dhcp.c \
-	lib/dhcp.h \
 	lib/dhparams.h \
 	lib/dirs.h \
 	lib/dpif-netdev.c \
@@ -58,6 +55,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/json.h \
 	lib/jsonrpc.c \
 	lib/jsonrpc.h \
+	lib/lacp.c \
+	lib/lacp.h \
 	lib/leak-checker.c \
 	lib/leak-checker.h \
 	lib/learning-switch.c \
@@ -81,6 +80,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/nx-match.h \
 	lib/odp-util.c \
 	lib/odp-util.h \
+	lib/ofp-errors.c \
+	lib/ofp-errors.h \
 	lib/ofp-parse.c \
 	lib/ofp-parse.h \
 	lib/ofp-print.c \
@@ -125,6 +126,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/socket-util.h \
 	lib/sort.c \
 	lib/sort.h \
+	lib/sset.c \
+	lib/sset.h \
 	lib/stream-fd.c \
 	lib/stream-fd.h \
 	lib/stream-provider.h \
@@ -135,11 +138,16 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/stream.h \
 	lib/stress.c \
 	lib/stress.h \
+	lib/string.c \
 	lib/string.h \
 	lib/svec.c \
 	lib/svec.h \
+	lib/table.c \
+	lib/table.h \
 	lib/tag.c \
 	lib/tag.h \
+	lib/timer.c \
+	lib/timer.h \
 	lib/timeval.c \
 	lib/timeval.h \
 	lib/type-props.h \
@@ -182,6 +190,7 @@ endif
 if HAVE_NETLINK
 lib_libopenvswitch_a_SOURCES += \
 	lib/dpif-linux.c \
+	lib/dpif-linux.h \
 	lib/netdev-linux.c \
 	lib/netdev-vport.c \
 	lib/netdev-vport.h \
@@ -192,8 +201,8 @@ lib_libopenvswitch_a_SOURCES += \
 	lib/rtnetlink.h \
 	lib/rtnetlink-link.c \
 	lib/rtnetlink-link.h \
-	lib/rtnetlink-route.c \
-	lib/rtnetlink-route.h
+	lib/route-table.c \
+	lib/route-table.h
 endif
 
 if HAVE_OPENSSL
@@ -219,7 +228,6 @@ EXTRA_DIST += \
 	lib/common-syn.man \
 	lib/daemon.man \
 	lib/daemon-syn.man \
-	lib/dpif.man \
 	lib/leak-checker.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl-bootstrap-syn.man \
@@ -227,6 +235,7 @@ EXTRA_DIST += \
 	lib/ssl.man \
 	lib/ssl-syn.man \
 	lib/stress-unixctl.man \
+	lib/table.man \
 	lib/unixctl.man \
 	lib/unixctl-syn.man \
 	lib/vconn-active.man \
@@ -244,6 +253,14 @@ lib/dirs.c: lib/dirs.c.in Makefile
 		-e 's,[@]pkgdatadir[@],"$(pkgdatadir)",g') \
 	     > lib/dirs.c.tmp
 	mv lib/dirs.c.tmp lib/dirs.c
+
+$(srcdir)/lib/ofp-errors.c: \
+	include/openflow/openflow.h include/openflow/nicira-ext.h \
+	build-aux/extract-ofp-errors
+	cd $(srcdir)/include && \
+	$(PYTHON) ../build-aux/extract-ofp-errors \
+		openflow/openflow.h openflow/nicira-ext.h > ../lib/ofp-errors.c
+EXTRA_DIST += build-aux/extract-ofp-errors
 
 install-data-local: lib-install-data-local
 lib-install-data-local:

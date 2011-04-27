@@ -4,26 +4,45 @@
 #include <linux/version.h>
 #include_next <net/netlink.h>
 
-#ifndef HAVE_NLA_NUL_STRING
-#define NLA_NUL_STRING NLA_STRING
-
-static inline int VERIFY_NUL_STRING(struct nlattr *attr)
-{
-	return (!attr || (nla_len(attr)
-			  && memchr(nla_data(attr), '\0', nla_len(attr)))
-		? 0 : EINVAL);
-}
-#else
-static inline int VERIFY_NUL_STRING(struct nlattr *attr)
-{
-	return 0;
-}
-#endif	/* !HAVE_NLA_NUL_STRING */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29)
+/* Before v2.6.29, a NLA_NESTED attribute, if it was present, was not allowed
+ * to be empty.  However, OVS depends on the ability to accept empty
+ * attributes.  For example, a present but empty ODP_FLOW_ATTR_ACTIONS on
+ * ODP_FLOW_CMD_SET replaces the existing set of actions by an empty "drop"
+ * action, whereas a missing ODP_FLOW_ATTR_ACTIONS leaves the existing
+ * actions, if any, unchanged.
+ *
+ * NLA_NESTED is different from NLA_UNSPEC in only two ways:
+ *
+ * - If the size of the nested attributes is zero, no further size checks
+ *   are performed.
+ *
+ * - If the size of the nested attributes is not zero and no length
+ *   parameter is specified the minimum size of nested attributes is
+ *   NLA_HDRLEN.
+ *
+ * nla_parse_nested() validates that there is at least enough space for
+ * NLA_HDRLEN, so neither of these conditions are important, and we might
+ * as well use NLA_UNSPEC with old kernels.
+ */
+#undef NLA_NESTED
+#define NLA_NESTED NLA_UNSPEC
+#endif
 
 #ifndef NLA_PUT_BE16
 #define NLA_PUT_BE16(skb, attrtype, value) \
         NLA_PUT_TYPE(skb, __be16, attrtype, value)
 #endif  /* !NLA_PUT_BE16 */
+
+#ifndef NLA_PUT_BE32
+#define NLA_PUT_BE32(skb, attrtype, value) \
+        NLA_PUT_TYPE(skb, __be32, attrtype, value)
+#endif  /* !NLA_PUT_BE32 */
+
+#ifndef NLA_PUT_BE64
+#define NLA_PUT_BE64(skb, attrtype, value) \
+        NLA_PUT_TYPE(skb, __be64, attrtype, value)
+#endif  /* !NLA_PUT_BE64 */
 
 #ifndef HAVE_NLA_GET_BE16
 /**
@@ -91,5 +110,63 @@ static inline int nla_type(const struct nlattr *nla)
         return nla->nla_type & NLA_TYPE_MASK;
 }
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,22)
+#define nla_parse_nested(tb, maxtype, nla, policy) \
+	nla_parse_nested(tb, maxtype, (struct nlattr *)(nla), (struct nla_policy *)(policy))
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29)
+#define nla_parse_nested(tb, maxtype, nla, policy) \
+	nla_parse_nested(tb, maxtype, (struct nlattr *)(nla), policy)
+#endif
+
+#ifndef nla_for_each_nested
+#define nla_for_each_nested(pos, nla, rem) \
+	nla_for_each_attr(pos, nla_data(nla), nla_len(nla), rem)
+#endif
+
+#ifndef HAVE_NLA_FIND_NESTED
+static inline struct nlattr *nla_find_nested(struct nlattr *nla, int attrtype)
+{
+	return nla_find(nla_data(nla), nla_len(nla), attrtype);
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
+/**
+ * nlmsg_report - need to report back to application?
+ * @nlh: netlink message header
+ *
+ * Returns 1 if a report back to the application is requested.
+ */
+static inline int nlmsg_report(const struct nlmsghdr *nlh)
+{
+	return !!(nlh->nlmsg_flags & NLM_F_ECHO);
+}
+
+extern int		nlmsg_notify(struct sock *sk, struct sk_buff *skb,
+				     u32 pid, unsigned int group, int report,
+				     gfp_t flags);
+#endif	/* linux kernel < 2.6.19 */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
+/* Before 2.6.19 the 'flags' parameter was missing, so replace it.  We have to
+ * #include <net/genetlink.h> first because the 2.6.18 version of that header
+ * has an inline call to nlmsg_multicast() without, of course, any 'flags'
+ * argument. */
+#define nlmsg_multicast rpl_nlmsg_multicast
+static inline int nlmsg_multicast(struct sock *sk, struct sk_buff *skb,
+				  u32 pid, unsigned int group, gfp_t flags)
+{
+	int err;
+
+	NETLINK_CB(skb).dst_group = group;
+
+	err = netlink_broadcast(sk, skb, pid, group, flags);
+	if (err > 0)
+		err = 0;
+
+	return err;
+}
+#endif	/* linux kernel < 2.6.19 */
 
 #endif /* net/netlink.h */

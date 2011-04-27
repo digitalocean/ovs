@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010 Nicira Networks
+# Copyright (c) 2009, 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,12 +27,32 @@ class DbSchema(object):
         self.version = version
         self.tables = tables
 
+        # "isRoot" was not part of the original schema definition.  Before it
+        # was added, there was no support for garbage collection.  So, for
+        # backward compatibility, if the root set is empty then assume that
+        # every table is in the root set.
+        if self.__root_set_size() == 0:
+            for table in self.tables.itervalues():
+                table.is_root = True
+
         # Validate that all ref_tables refer to the names of tables
         # that exist.
+        #
+        # Also force certain columns to be persistent, as explained in
+        # __check_ref_table().  This requires 'is_root' to be known, so this
+        # must follow the loop updating 'is_root' above.
         for table in self.tables.itervalues():
             for column in table.columns.itervalues():
                 self.__check_ref_table(column, column.type.key, "key")
                 self.__check_ref_table(column, column.type.value, "value")
+
+    def __root_set_size(self):
+        """Returns the number of tables in the schema's root set."""
+        n_root = 0
+        for table in self.tables.itervalues():
+            if table.is_root:
+                n_root += 1
+        return n_root
 
     @staticmethod
     def from_json(json):
@@ -60,20 +80,39 @@ class DbSchema(object):
         return DbSchema(name, version, tables)
 
     def to_json(self):
+        # "isRoot" was not part of the original schema definition.  Before it
+        # was added, there was no support for garbage collection.  So, for
+        # backward compatibility, if every table is in the root set then do not
+        # output "isRoot" in table schemas.
+        default_is_root = self.__root_set_size() == len(self.tables)
+
         tables = {}
         for table in self.tables.itervalues():
-            tables[table.name] = table.to_json()
+            tables[table.name] = table.to_json(default_is_root)
         json = {"name": self.name, "tables": tables}
         if self.version:
             json["version"] = self.version
         return json
 
     def __check_ref_table(self, column, base, base_name):
-        if (base and base.type == types.UuidType and base.ref_table and
-            base.ref_table not in self.tables):
+        if not base or base.type != types.UuidType or not base.ref_table:
+            return
+
+        ref_table = self.tables.get(base.ref_table)
+        if not ref_table:
             raise error.Error("column %s %s refers to undefined table %s"
                               % (column.name, base_name, base.ref_table),
                               tag="syntax error")
+
+        if base.is_strong_ref() and not ref_table.is_root:
+            # We cannot allow a strong reference to a non-root table to be
+            # ephemeral: if it is the only reference to a row, then replaying
+            # the database log from disk will cause the referenced row to be
+            # deleted, even though it did exist in memory.  If there are
+            # references to that row later in the log (to modify it, to delete
+            # it, or just to point to it), then this will yield a transaction
+            # error.
+            column.persistent = True
 
 class IdlSchema(DbSchema):
     def __init__(self, name, version, tables, idlPrefix, idlHeader):
@@ -96,11 +135,13 @@ class IdlSchema(DbSchema):
                          idlPrefix, idlHeader)
 
 class TableSchema(object):
-    def __init__(self, name, columns, mutable=True, max_rows=sys.maxint):
+    def __init__(self, name, columns, mutable=True, max_rows=sys.maxint,
+                 is_root=True):
         self.name = name
         self.columns = columns
         self.mutable = mutable
-        self.max_rows = max_rows        
+        self.max_rows = max_rows
+        self.is_root = is_root
 
     @staticmethod
     def from_json(json, name):
@@ -108,6 +149,7 @@ class TableSchema(object):
         columnsJson = parser.get("columns", [dict])
         mutable = parser.get_optional("mutable", [bool], True)
         max_rows = parser.get_optional("maxRows", [int])
+        is_root = parser.get_optional("isRoot", [bool], False)
         parser.finish()
 
         if max_rows == None:
@@ -128,12 +170,25 @@ class TableSchema(object):
             columns[columnName] = ColumnSchema.from_json(columnJson,
                                                          columnName)
 
-        return TableSchema(name, columns, mutable, max_rows)
+        return TableSchema(name, columns, mutable, max_rows, is_root)
 
-    def to_json(self):
+    def to_json(self, default_is_root=False):
+        """Returns this table schema serialized into JSON.
+
+        The "isRoot" member is included in the JSON only if its value would
+        differ from 'default_is_root'.  Ordinarily 'default_is_root' should be
+        false, because ordinarily a table would be not be part of the root set
+        if its "isRoot" member is omitted.  However, garbage collection was not
+        orginally included in OVSDB, so in older schemas that do not include
+        any "isRoot" members, every table is implicitly part of the root set.
+        To serialize such a schema in a way that can be read by older OVSDB
+        tools, specify 'default_is_root' as True.
+        """
         json = {}
         if not self.mutable:
             json["mutable"] = False
+        if default_is_root != self.is_root:
+            json["isRoot"] = self.is_root
 
         json["columns"] = columns = {}
         for column in self.columns.itervalues():

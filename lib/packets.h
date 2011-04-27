@@ -28,6 +28,7 @@
 #include "util.h"
 
 struct ofpbuf;
+struct ds;
 
 bool dpid_from_string(const char *s, uint64_t *dpidp);
 
@@ -38,6 +39,9 @@ static const uint8_t eth_addr_broadcast[ETH_ADDR_LEN] OVS_UNUSED
 
 static const uint8_t eth_addr_stp[ETH_ADDR_LEN] OVS_UNUSED
     = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x01 };
+
+static const uint8_t eth_addr_lacp[ETH_ADDR_LEN] OVS_UNUSED
+    = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x02 };
 
 static inline bool eth_addr_is_broadcast(const uint8_t ea[6])
 {
@@ -59,10 +63,15 @@ static inline bool eth_addr_is_zero(const uint8_t ea[6])
 {
     return !(ea[0] | ea[1] | ea[2] | ea[3] | ea[4] | ea[5]);
 }
+static inline int eth_addr_compare_3way(const uint8_t a[ETH_ADDR_LEN],
+                                        const uint8_t b[ETH_ADDR_LEN])
+{
+    return memcmp(a, b, ETH_ADDR_LEN);
+}
 static inline bool eth_addr_equals(const uint8_t a[ETH_ADDR_LEN],
                                    const uint8_t b[ETH_ADDR_LEN])
 {
-    return !memcmp(a, b, ETH_ADDR_LEN);
+    return !eth_addr_compare_3way(a, b);
 }
 static inline uint64_t eth_addr_to_uint64(const uint8_t ea[ETH_ADDR_LEN])
 {
@@ -153,7 +162,12 @@ void compose_benign_packet(struct ofpbuf *, const char *tag,
 #define ETH_TYPE_IP            0x0800
 #define ETH_TYPE_ARP           0x0806
 #define ETH_TYPE_VLAN          0x8100
-#define ETH_TYPE_CFM           0x8902
+#define ETH_TYPE_IPV6          0x86dd
+#define ETH_TYPE_LACP          0x8809
+
+/* Minimum value for an Ethernet type.  Values below this are IEEE 802.2 frame
+ * lengths. */
+#define ETH_TYPE_MIN           0x600
 
 #define ETH_HEADER_LEN 14
 #define ETH_PAYLOAD_MIN 46
@@ -164,7 +178,7 @@ void compose_benign_packet(struct ofpbuf *, const char *tag,
 struct eth_header {
     uint8_t eth_dst[ETH_ADDR_LEN];
     uint8_t eth_src[ETH_ADDR_LEN];
-    uint16_t eth_type;
+    ovs_be16 eth_type;
 } __attribute__((packed));
 BUILD_ASSERT_DECL(ETH_HEADER_LEN == sizeof(struct eth_header));
 
@@ -185,7 +199,7 @@ BUILD_ASSERT_DECL(LLC_HEADER_LEN == sizeof(struct llc_header));
 #define SNAP_HEADER_LEN 5
 struct snap_header {
     uint8_t snap_org[3];
-    uint16_t snap_type;
+    ovs_be16 snap_type;
 } __attribute__((packed));
 BUILD_ASSERT_DECL(SNAP_HEADER_LEN == sizeof(struct snap_header));
 
@@ -207,7 +221,7 @@ BUILD_ASSERT_DECL(LLC_SNAP_HEADER_LEN == sizeof(struct llc_snap_header));
 /* Given the vlan_tci field from an 802.1Q header, in network byte order,
  * returns the VLAN ID in host byte order. */
 static inline uint16_t
-vlan_tci_to_vid(uint16_t vlan_tci)
+vlan_tci_to_vid(ovs_be16 vlan_tci)
 {
     return (ntohs(vlan_tci) & VLAN_VID_MASK) >> VLAN_VID_SHIFT;
 }
@@ -215,15 +229,15 @@ vlan_tci_to_vid(uint16_t vlan_tci)
 /* Given the vlan_tci field from an 802.1Q header, in network byte order,
  * returns the priority code point (PCP) in host byte order. */
 static inline int
-vlan_tci_to_pcp(uint16_t vlan_tci)
+vlan_tci_to_pcp(ovs_be16 vlan_tci)
 {
     return (ntohs(vlan_tci) & VLAN_PCP_MASK) >> VLAN_PCP_SHIFT;
 }
 
 #define VLAN_HEADER_LEN 4
 struct vlan_header {
-    uint16_t vlan_tci;          /* Lowest 12 bits are VLAN ID. */
-    uint16_t vlan_next_type;
+    ovs_be16 vlan_tci;          /* Lowest 12 bits are VLAN ID. */
+    ovs_be16 vlan_next_type;
 };
 BUILD_ASSERT_DECL(VLAN_HEADER_LEN == sizeof(struct vlan_header));
 
@@ -231,28 +245,11 @@ BUILD_ASSERT_DECL(VLAN_HEADER_LEN == sizeof(struct vlan_header));
 struct vlan_eth_header {
     uint8_t veth_dst[ETH_ADDR_LEN];
     uint8_t veth_src[ETH_ADDR_LEN];
-    uint16_t veth_type;         /* Always htons(ETH_TYPE_VLAN). */
-    uint16_t veth_tci;          /* Lowest 12 bits are VLAN ID. */
-    uint16_t veth_next_type;
+    ovs_be16 veth_type;         /* Always htons(ETH_TYPE_VLAN). */
+    ovs_be16 veth_tci;          /* Lowest 12 bits are VLAN ID. */
+    ovs_be16 veth_next_type;
 } __attribute__((packed));
 BUILD_ASSERT_DECL(VLAN_ETH_HEADER_LEN == sizeof(struct vlan_eth_header));
-
-/* A 'ccm' represents a Continuity Check Message from the 802.1ag specification.
- * Continuity Check Messages are broadcast periodically so that hosts can
- * determine who they have connectivity to. */
-#define CCM_LEN 74
-#define CCM_MAID_LEN 48
-struct ccm {
-    uint8_t  mdlevel_version; /* MD Level and Version */
-    uint8_t  opcode;
-    uint8_t  flags;
-    uint8_t  tlv_offset;
-    uint32_t seq;
-    uint16_t mpid;
-    uint8_t  maid[CCM_MAID_LEN];
-    uint8_t  zero[16]; /* Defined by ITU-T Y.1731 should be zero */
-} __attribute__((packed));
-BUILD_ASSERT_DECL(CCM_LEN == sizeof(struct ccm));
 
 /* The "(void) (ip)[0]" below has no effect on the value, since it's the first
  * argument of a comma expression, but it makes sure that 'ip' is a pointer.
@@ -282,10 +279,6 @@ ip_is_cidr(ovs_be32 netmask)
 #define IP_ECN_MASK 0x03
 #define IP_DSCP_MASK 0xfc
 
-#define IP_TYPE_ICMP 1
-#define IP_TYPE_TCP 6
-#define IP_TYPE_UDP 17
-
 #define IP_VERSION 4
 
 #define IP_DONT_FRAGMENT  0x4000 /* Don't fragment. */
@@ -298,14 +291,14 @@ ip_is_cidr(ovs_be32 netmask)
 struct ip_header {
     uint8_t ip_ihl_ver;
     uint8_t ip_tos;
-    uint16_t ip_tot_len;
-    uint16_t ip_id;
-    uint16_t ip_frag_off;
+    ovs_be16 ip_tot_len;
+    ovs_be16 ip_id;
+    ovs_be16 ip_frag_off;
     uint8_t ip_ttl;
     uint8_t ip_proto;
-    uint16_t ip_csum;
-    uint32_t ip_src;
-    uint32_t ip_dst;
+    ovs_be16 ip_csum;
+    ovs_be32 ip_src;
+    ovs_be32 ip_dst;
 };
 BUILD_ASSERT_DECL(IP_HEADER_LEN == sizeof(struct ip_header));
 
@@ -313,16 +306,16 @@ BUILD_ASSERT_DECL(IP_HEADER_LEN == sizeof(struct ip_header));
 struct icmp_header {
     uint8_t icmp_type;
     uint8_t icmp_code;
-    uint16_t icmp_csum;
+    ovs_be16 icmp_csum;
 };
 BUILD_ASSERT_DECL(ICMP_HEADER_LEN == sizeof(struct icmp_header));
 
 #define UDP_HEADER_LEN 8
 struct udp_header {
-    uint16_t udp_src;
-    uint16_t udp_dst;
-    uint16_t udp_len;
-    uint16_t udp_csum;
+    ovs_be16 udp_src;
+    ovs_be16 udp_dst;
+    ovs_be16 udp_len;
+    ovs_be16 udp_csum;
 };
 BUILD_ASSERT_DECL(UDP_HEADER_LEN == sizeof(struct udp_header));
 
@@ -338,14 +331,14 @@ BUILD_ASSERT_DECL(UDP_HEADER_LEN == sizeof(struct udp_header));
 
 #define TCP_HEADER_LEN 20
 struct tcp_header {
-    uint16_t tcp_src;
-    uint16_t tcp_dst;
-    uint32_t tcp_seq;
-    uint32_t tcp_ack;
-    uint16_t tcp_ctl;
-    uint16_t tcp_winsz;
-    uint16_t tcp_csum;
-    uint16_t tcp_urg;
+    ovs_be16 tcp_src;
+    ovs_be16 tcp_dst;
+    ovs_be32 tcp_seq;
+    ovs_be32 tcp_ack;
+    ovs_be16 tcp_ctl;
+    ovs_be16 tcp_winsz;
+    ovs_be16 tcp_csum;
+    ovs_be16 tcp_urg;
 };
 BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
 
@@ -357,18 +350,106 @@ BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
 #define ARP_ETH_HEADER_LEN 28
 struct arp_eth_header {
     /* Generic members. */
-    uint16_t ar_hrd;           /* Hardware type. */
-    uint16_t ar_pro;           /* Protocol type. */
+    ovs_be16 ar_hrd;           /* Hardware type. */
+    ovs_be16 ar_pro;           /* Protocol type. */
     uint8_t ar_hln;            /* Hardware address length. */
     uint8_t ar_pln;            /* Protocol address length. */
-    uint16_t ar_op;            /* Opcode. */
+    ovs_be16 ar_op;            /* Opcode. */
 
     /* Ethernet+IPv4 specific members. */
     uint8_t ar_sha[ETH_ADDR_LEN]; /* Sender hardware address. */
-    uint32_t ar_spa;           /* Sender protocol address. */
+    ovs_be32 ar_spa;           /* Sender protocol address. */
     uint8_t ar_tha[ETH_ADDR_LEN]; /* Target hardware address. */
-    uint32_t ar_tpa;           /* Target protocol address. */
+    ovs_be32 ar_tpa;           /* Target protocol address. */
 } __attribute__((packed));
 BUILD_ASSERT_DECL(ARP_ETH_HEADER_LEN == sizeof(struct arp_eth_header));
+
+extern const struct in6_addr in6addr_exact;
+#define IN6ADDR_EXACT_INIT { { { 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff, \
+                                 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff } } }
+
+static inline bool ipv6_addr_equals(const struct in6_addr *a,
+                                    const struct in6_addr *b)
+{
+#ifdef IN6_ARE_ADDR_EQUAL
+    return IN6_ARE_ADDR_EQUAL(a, b);
+#else
+    return !memcmp(a, b, sizeof(*a));
+#endif
+}
+
+static inline bool ipv6_mask_is_any(const struct in6_addr *mask) {
+    return ipv6_addr_equals(mask, &in6addr_any);
+}
+
+static inline bool ipv6_mask_is_exact(const struct in6_addr *mask) {
+    return ipv6_addr_equals(mask, &in6addr_exact);
+}
+
+void format_ipv6_addr(char *addr_str, const struct in6_addr *addr);
+void print_ipv6_addr(struct ds *string, const struct in6_addr *addr);
+struct in6_addr ipv6_addr_bitand(const struct in6_addr *src,
+                                 const struct in6_addr *mask);
+struct in6_addr ipv6_create_mask(int mask);
+int ipv6_count_cidr_bits(const struct in6_addr *netmask);
+bool ipv6_is_cidr(const struct in6_addr *netmask);
+
+void *
+compose_packet(struct ofpbuf *, const uint8_t eth_dst[ETH_ADDR_LEN],
+               const uint8_t eth_src[ETH_ADDR_LEN], uint16_t eth_type,
+               size_t size);
+
+/* Masks for lacp_info state member. */
+#define LACP_STATE_ACT  0x01 /* Activity. Active or passive? */
+#define LACP_STATE_TIME 0x02 /* Timeout. Short or long timeout? */
+#define LACP_STATE_AGG  0x04 /* Aggregation. Is the link is bondable? */
+#define LACP_STATE_SYNC 0x08 /* Synchronization. Is the link in up to date? */
+#define LACP_STATE_COL  0x10 /* Collecting. Is the link receiving frames? */
+#define LACP_STATE_DIST 0x20 /* Distributing. Is the link sending frames? */
+#define LACP_STATE_DEF  0x40 /* Defaulted. Using default partner info? */
+#define LACP_STATE_EXP  0x80 /* Expired. Using expired partner info? */
+
+#define LACP_FAST_TIME_TX 1000  /* Fast transmission rate. */
+#define LACP_SLOW_TIME_TX 30000 /* Slow transmission rate. */
+#define LACP_FAST_TIME_RX (LACP_FAST_TIME_TX * 3) /* Fast receive rate. */
+#define LACP_SLOW_TIME_RX (LACP_SLOW_TIME_TX * 3) /* Slow receive rate. */
+
+#define LACP_INFO_LEN 15
+struct lacp_info {
+    ovs_be16 sys_priority;            /* System priority. */
+    uint8_t sys_id[ETH_ADDR_LEN];     /* System ID. */
+    ovs_be16 key;                     /* Operational key. */
+    ovs_be16 port_priority;           /* Port priority. */
+    ovs_be16 port_id;                 /* Port ID. */
+    uint8_t state;                    /* State mask.  See LACP_STATE macros. */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(LACP_INFO_LEN == sizeof(struct lacp_info));
+
+#define LACP_PDU_LEN 110
+struct lacp_pdu {
+    uint8_t subtype;          /* Always 1. */
+    uint8_t version;          /* Always 1. */
+
+    uint8_t actor_type;       /* Always 1. */
+    uint8_t actor_len;        /* Always 20. */
+    struct lacp_info actor;   /* LACP actor information. */
+    uint8_t z1[3];            /* Reserved.  Always 0. */
+
+    uint8_t partner_type;     /* Always 2. */
+    uint8_t partner_len;      /* Always 20. */
+    struct lacp_info partner; /* LACP partner information. */
+    uint8_t z2[3];            /* Reserved.  Always 0. */
+
+    uint8_t collector_type;   /* Always 3. */
+    uint8_t collector_len;    /* Always 16. */
+    ovs_be16 collector_delay; /* Maximum collector delay. Set to UINT16_MAX. */
+    uint8_t z3[64];           /* Combination of several fields.  Always 0. */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(LACP_PDU_LEN == sizeof(struct lacp_pdu));
+
+void compose_lacp_pdu(const struct lacp_info *actor,
+                      const struct lacp_info *partner, struct lacp_pdu *);
+
+const struct lacp_pdu *parse_lacp_packet(const struct ofpbuf *);
 
 #endif /* packets.h */

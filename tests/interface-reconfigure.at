@@ -41,7 +41,8 @@ EOF
         sbin/update-issue \
         sbin/vconfig \
         usr/bin/ovs-vsctl \
-        usr/sbin/brctl
+        usr/sbin/brctl \
+        usr/sbin/ovs-vlan-bug-workaround
     do
         mkdir -p `dirname $utility`
         cat > $utility <<'EOF'
@@ -56,6 +57,15 @@ EOF
         mkdir -p sys/class/net/${1}
         echo ${2} > sys/class/net/${1}/address
         echo ${3} > sys/class/net/${1}/tx_queue_len
+        if test ${1} = eth1; then
+            # No VLAN acceleration.
+            echo 0x829 > sys/class/net/${1}/features
+        else
+            # Supports VLAN acceleration.
+            echo 0x10b89 > sys/class/net/${1}/features
+        fi
+        mkdir sys/class/net/${1}/device
+        ln -s ../../../bus/pci/drivers/e1000 sys/class/net/${1}/device/driver
 
         : >> etc/sysconfig/network-scripts/ifcfg-${1}
     }
@@ -73,6 +83,7 @@ EOF
 <xenserver-network-configuration>
 	<pif ref="OpaqueRef:e0955887-571f-17fc-a971-61c1ec7d81b6">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -120,6 +131,7 @@ EOF
 	</pif>
 	<pif ref="OpaqueRef:eea8da94-a5e6-18fc-34a7-5e9b5a235806">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -167,6 +179,7 @@ EOF
 	</pif>
 	<pif ref="OpaqueRef:2956e6c8-487e-981c-85ff-c84796418768">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -214,6 +227,7 @@ EOF
 	</pif>
 	<pif ref="OpaqueRef:d2d1e51e-4da9-3163-8f57-bb683429335e">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -265,6 +279,7 @@ EOF
 				OpaqueRef:e623e1d6-cd02-be8d-820d-49d65c710297
 			</master>
 		</VLAN_slave_of>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -312,6 +327,7 @@ EOF
 	</pif>
 	<pif ref="OpaqueRef:205d1186-2cd1-d5e6-45e4-ea1698ea6e15">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			True
 		</management>
@@ -359,6 +375,7 @@ EOF
 	</pif>
 	<pif ref="OpaqueRef:8e3e37e6-ebb9-087e-0201-f6a56bf554c3">
 		<VLAN_slave_of/>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -410,6 +427,7 @@ EOF
 				OpaqueRef:4c0eb823-4d96-da1d-e75f-411b85badb0c
 			</master>
 		</VLAN_slave_of>
+                <tunnel_access_PIF_of/>
 		<management>
 			False
 		</management>
@@ -576,7 +594,11 @@ EOF
 		<bridge>
 			xenbr0
 		</bridge>
-		<other_config/>
+		<other_config>
+			<vswitch-disable-in-band>
+				true
+			</vswitch-disable-in-band>
+		</other_config>
 		<uuid>
 			c9eecb03-560d-61de-b6a8-56dfc766f67e
 		</uuid>
@@ -619,6 +641,13 @@ EOF
 			db7bdc03-074d-42ae-fc73-9b06de1d57f6
 		</uuid>
 	</network>
+        <pool ref="OpaqueRef:a765d06c-fc82-cc67-8f6c-fd8db45f6a84">
+                <other_config>
+                        <vswitch-controller-fail-mode>
+                                standalone
+                        </vswitch-controller-fail-mode>
+                </other_config>
+        </pool>
 </xenserver-network-configuration>
 EOF
 ]])
@@ -649,11 +678,15 @@ Applying changes to /etc/sysconfig/network-scripts/route-xenbr2 configuration
 Applying changes to /etc/sysconfig/network configuration
 Applying changes to /etc/sysconfig/network-scripts/ifcfg-xenbr2 configuration
 /sbin/ifconfig eth2 up mtu 1500
+/sbin/ethtool -K eth2 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth2 on
 /usr/bin/ovs-vsctl --timeout=20
     --with-iface --if-exists del-port eth2
     --may-exist add-br xenbr2
     --may-exist add-port xenbr2 eth2
     set Bridge xenbr2 other-config:hwaddr="00:15:17:a0:29:80"
+    set Bridge xenbr2 fail_mode=standalone
+    remove Bridge xenbr2 other_config disable-in-band
     br-set-external-id xenbr2 xs-network-uuids d08c8749-0c8f-9e8d-ce25-fd364661ee99
 /sbin/ifup xenbr2
 /sbin/update-issue
@@ -712,11 +745,15 @@ configure_datapath: extra bonds - []
 Applying changes to /etc/sysconfig/network-scripts/route-xapi3 configuration
 Applying changes to /etc/sysconfig/network-scripts/ifcfg-xapi3 configuration
 /sbin/ifconfig eth3 up mtu 1500
+/sbin/ethtool -K eth3 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth3 on
 /usr/bin/ovs-vsctl --timeout=20
     --with-iface --if-exists del-port eth3
     --may-exist add-br xenbr3
     --may-exist add-port xenbr3 eth3
     set Bridge xenbr3 other-config:hwaddr="00:15:17:a0:29:81"
+    set Bridge xenbr3 fail_mode=standalone
+    remove Bridge xenbr3 other_config disable-in-band
     br-set-external-id xenbr3 xs-network-uuids 2902ae1b-8013-897a-b697-0b200ea3aaa5;db7bdc03-074d-42ae-fc73-9b06de1d57f6
     --if-exists del-br xapi3
     --may-exist add-br xapi3 xenbr3 123
@@ -791,7 +828,11 @@ netdev: down: device xenbr1 does not exist, ignoring
 Applying changes to /etc/sysconfig/network-scripts/route-xapi1 configuration
 Applying changes to /etc/sysconfig/network-scripts/ifcfg-xapi1 configuration
 /sbin/ifconfig eth0 up mtu 1500
+/sbin/ethtool -K eth0 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth0 on
 /sbin/ifconfig eth1 up mtu 1500
+/sbin/ethtool -K eth1 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth1 off
 /usr/bin/ovs-vsctl --timeout=20
     --if-exists del-br xenbr0
     --if-exists del-br xenbr1
@@ -800,8 +841,10 @@ Applying changes to /etc/sysconfig/network-scripts/ifcfg-xapi1 configuration
     --may-exist add-br xapi1
     --with-iface --if-exists del-port bond0
     --fake-iface add-bond xapi1 bond0 eth0 eth1
-    set Port bond0 MAC="00:22:19:22:4b:af" bond_downdelay=200 other-config:"bond-miimon"=100 other-config:"bond-use_carrier"=1 other-config:"bond-mode"="balance-slb" bond_updelay=31000
+    set Port bond0 MAC="00:22:19:22:4b:af" other-config:bond-miimon-interval=100 bond_downdelay=200 bond_updelay=31000 other-config:bond-detect-mode=carrier lacp=off bond_mode=balance-slb
     set Bridge xapi1 other-config:hwaddr="00:22:19:22:4b:af"
+    set Bridge xapi1 fail_mode=standalone
+    remove Bridge xapi1 other_config disable-in-band
     br-set-external-id xapi1 xs-network-uuids 45cbbb43-113d-a712-3231-c6463f253cef;99be2da4-6c33-6f8e-49ea-3bc592fe3c85
 /sbin/ifup xapi1
 action_up: bring up bond0
@@ -872,7 +915,11 @@ netdev: down: device xenbr1 does not exist, ignoring
 Applying changes to /etc/sysconfig/network-scripts/route-xapi2 configuration
 Applying changes to /etc/sysconfig/network-scripts/ifcfg-xapi2 configuration
 /sbin/ifconfig eth0 up mtu 1500
+/sbin/ethtool -K eth0 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth0 on
 /sbin/ifconfig eth1 up mtu 1500
+/sbin/ethtool -K eth1 gro off lro off
+/usr/sbin/ovs-vlan-bug-workaround eth1 off
 /usr/bin/ovs-vsctl --timeout=20
     --if-exists del-br xenbr0
     --if-exists del-br xenbr1
@@ -881,8 +928,10 @@ Applying changes to /etc/sysconfig/network-scripts/ifcfg-xapi2 configuration
     --may-exist add-br xapi1
     --with-iface --if-exists del-port bond0
     --fake-iface add-bond xapi1 bond0 eth0 eth1
-    set Port bond0 MAC="00:22:19:22:4b:af" bond_downdelay=200 other-config:"bond-miimon"=100 other-config:"bond-use_carrier"=1 other-config:"bond-mode"="balance-slb" bond_updelay=31000
+    set Port bond0 MAC="00:22:19:22:4b:af" other-config:bond-miimon-interval=100 bond_downdelay=200 bond_updelay=31000 other-config:bond-detect-mode=carrier lacp=off bond_mode=balance-slb
     set Bridge xapi1 other-config:hwaddr="00:22:19:22:4b:af"
+    set Bridge xapi1 fail_mode=standalone
+    remove Bridge xapi1 other_config disable-in-band
     br-set-external-id xapi1 xs-network-uuids 45cbbb43-113d-a712-3231-c6463f253cef;99be2da4-6c33-6f8e-49ea-3bc592fe3c85
     --if-exists del-br xapi2
     --may-exist add-br xapi2 xapi1 4

@@ -108,6 +108,7 @@ is represented by <database-schema>, as described below.
 
         "name": <id>                            required
         "version": <version>                    required
+        "cksum": <string>                       optional
         "tables": {<id>: <table-schema>, ...}   required
 
     The "name" identifies the database as a whole.  It must be
@@ -121,12 +122,16 @@ is represented by <database-schema>, as described below.
     present.  Open vSwitch semantics for "version" are described in
     ovs-vswitchd.conf.db(5).
 
+    The "cksum" optionally reports an implementation-defined checksum
+    for the database schema.
+
 <table-schema>
 
     A JSON object with the following members:
 
         "columns": {<id>: <column-schema>, ...}   required
         "maxRows": <integer>                      optional
+        "isRoot": <boolean>                       optional
 
     The value of "columns" is a JSON object whose names are column
     names and whose values are <column-schema>s.
@@ -148,12 +153,28 @@ is represented by <database-schema>, as described below.
         the database process is stopped and then started again, each
         "_version" also changes to a new random value.
 
+    If "isRoot" is omitted or specified as false, then any given row
+    in the table may exist only when there is at least one reference
+    to it, with refType "strong", from a different row (in the same
+    table or a different table).  This is a "deferred" action:
+    unreferenced rows in the table are deleted just before transaction
+    commit.  If "isRoot" is specified as true, then rows in the table
+    exist independent of any references (they can be thought of as
+    part of the "root set" in a garbage collector).
+
+    For compatibility with schemas created before "isRoot" was
+    introduced, if "isRoot" is omitted or false in every
+    <table-schema> in a given <database-schema>, then every table is
+    part of the root set.
+
     If "maxRows" is specified, as a positive integer, it limits the
     maximum number of rows that may be present in the table.  This is
     a "deferred" constraint, enforced only at transaction commit time
     (see the "transact" request below).  If "maxRows" is not
     specified, the size of the table is limited only by the resources
-    available to the database server.
+    available to the database server.  "maxRows" constraints are
+    enforced after unreferenced rows are deleted from tables with a
+    false "isRoot".
 
 <column-schema>
 
@@ -163,12 +184,18 @@ is represented by <database-schema>, as described below.
         "ephemeral": <boolean>                    optional
         "mutable": <boolean>                      optional
 
-    The "type" specifies the type of data stored in this column.  If
-    "ephemeral" is specified as true, then this column's values are
+    The "type" specifies the type of data stored in this column.
+
+    If "ephemeral" is specified as true, then this column's values are
     not guaranteed to be durable; they may be lost when the database
-    restarts.  If "mutable" is specified as false, then this column's
-    values may not be modified after they are initially set with the
-    "insert" operation.
+    restarts.  A column whose type (either key or value) is a strong
+    reference to a table that is not part of the root set is always
+    durable, regardless of this value.  (Otherwise, restarting the
+    database could lose entire rows.)
+
+    If "mutable" is specified as false, then this column's values may
+    not be modified after they are initially set with the "insert"
+    operation.
 
 <type>
 
@@ -675,7 +702,7 @@ Notation for the Wire Protocol
     A 2-element JSON array that represents the UUID of a row inserted
     in an "insert" operation within the same transaction.  The first
     element of the array must be the string "named-uuid" and the
-    second element should be the string specified as the "uuid-name"
+    second element should be the <id> specified as the "uuid-name"
     for an "insert" operation within the same transaction.  For
     example, if an "insert" operation within this transaction
     specifies a "uuid-name" of "myrow", the following <named-uuid>

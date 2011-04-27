@@ -4,6 +4,7 @@ The original sources for this package can be found at:
 
 Upstream Authors (from AUTHORS):
 
+  Andrew Evans            aevans@nicira.com
   Andrew Lambeth          wal@nicira.com
   Andy Southgate          andy.southgate@citrix.com
   Ben Pfaff               blp@nicira.com
@@ -11,6 +12,7 @@ Upstream Authors (from AUTHORS):
   Dan Wendlandt           dan@nicira.com
   David Erickson          derickso@stanford.edu
   Ethan Jackson           ethan@nicira.com
+  Gaetano Catalli         gaetano.catalli@gmail.com
   Glen Gibb               grg@stanford.edu
   Ian Campbell            Ian.Campbell@citrix.com
   Jean Tourrilhes         jt@hpl.hp.com
@@ -26,12 +28,14 @@ Upstream Authors (from AUTHORS):
   Paul Fazzone            pfazzone@nicira.com
   Reid Price              reid@nicira.com
   Romain Lenglet          romain.lenglet@berabera.info
+  Sajjad Lateef           slateef@nicira.com
   Simon Horman            horms@verge.net.au
   Tetsuo NAKAGAWA         nakagawa@mxc.nes.nec.co.jp
   Thomas Lacroix          thomas.lacroix@citrix.com
   Todd Deshane            deshantm@gmail.com
   Tom Everman             teverman@google.com
   Tsvi Slonim             tsvi@toroki.com
+  Valient Gough           vgough@pobox.com
   Vivien Bernet-Rollande  vbr@soprive.net
   Wei Yongjun             yjwei@cn.fujitsu.com
   Yu Zhiguo               yuzg@cn.fujitsu.com
@@ -55,7 +59,6 @@ License:
 	xenserver/opt_xensource_libexec_InterfaceReconfigureVswitch.py
 	xenserver/opt_xensource_libexec_interface-reconfigure
 	xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py
-	xenserver/usr_sbin_xen-bugtool
 
 	* These components are only distributed in the source package.
 	  They do not appear in any binary packages.
@@ -84,10 +87,12 @@ License:
   GNU Lesser General Public Licence version 2.1.
 
 	debian/ovs-bugtool
-	xenserver/usr_sbin_xen-bugtool [*]
+	xenserver/etc_xensource_bugtool_kernel-info_openvswitch.xml [*]
+	xenserver/etc_xensource_bugtool_network-status_openvswitch.xml [*]
+	xenserver/usr_share_openvswitch_scripts_xen-bugtool-tc-class-show [*]
 
-	* This component is only distributed in the source package.
-	  It does not appear in any binary packages.
+	* These components are only distributed in the source package.
+	  They do not appear in any binary packages.
 
   On Debian systems, the complete text of the
   GNU Lesser General Public Licence version 2.1 can be found in

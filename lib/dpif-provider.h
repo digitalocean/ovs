@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -86,7 +86,7 @@ struct dpif_class {
      *
      * Some kinds of datapaths might not be practically enumerable, in which
      * case this function may be a null pointer. */
-    int (*enumerate)(struct svec *all_dps);
+    int (*enumerate)(struct sset *all_dps);
 
     /* Attempts to open an existing dpif called 'name', if 'create' is false,
      * or to open an existing dpif or create a new one, if 'create' is true.
@@ -101,23 +101,6 @@ struct dpif_class {
 
     /* Closes 'dpif' and frees associated memory. */
     void (*close)(struct dpif *dpif);
-
-    /* Enumerates all names that may be used to open 'dpif' into 'all_names'.
-     * The Linux datapath, for example, supports opening a datapath both by
-     * number, e.g. "dp0", and by the name of the datapath's local port.  For
-     * some datapaths, this might be an infinite set (e.g. in a file name,
-     * slashes may be duplicated any number of times), in which case only the
-     * names most likely to be used should be enumerated.
-     *
-     * The caller has already initialized 'all_names' and might already have
-     * added some names to it.  This function should not disturb any existing
-     * names in 'all_names'.
-     *
-     * If a datapath class does not support multiple names for a datapath, this
-     * function may be a null pointer.
-     *
-     * This is used by the vswitch at startup, */
-    int (*get_all_names)(const struct dpif *dpif, struct svec *all_names);
 
     /* Attempts to destroy the dpif underlying 'dpif'.
      *
@@ -147,17 +130,41 @@ struct dpif_class {
     int (*port_del)(struct dpif *dpif, uint16_t port_no);
 
     /* Queries 'dpif' for a port with the given 'port_no' or 'devname'.  Stores
-     * information about the port into '*port' if successful. */
+     * information about the port into '*port' if successful.
+     *
+     * The caller takes ownership of data in 'port' and must free it with
+     * dpif_port_destroy() when it is no longer needed. */
     int (*port_query_by_number)(const struct dpif *dpif, uint16_t port_no,
-                                struct odp_port *port);
+                                struct dpif_port *port);
     int (*port_query_by_name)(const struct dpif *dpif, const char *devname,
-                              struct odp_port *port);
+                              struct dpif_port *port);
 
-    /* Stores in 'ports' information about up to 'n' ports attached to 'dpif',
-     * in no particular order.  Returns the number of ports attached to 'dpif'
-     * (not the number stored), if successful, otherwise a negative errno
-     * value. */
-    int (*port_list)(const struct dpif *dpif, struct odp_port *ports, int n);
+    /* Returns one greater than the largest port number accepted in flow
+     * actions. */
+    int (*get_max_ports)(const struct dpif *dpif);
+
+    /* Attempts to begin dumping the ports in a dpif.  On success, returns 0
+     * and initializes '*statep' with any data needed for iteration.  On
+     * failure, returns a positive errno value. */
+    int (*port_dump_start)(const struct dpif *dpif, void **statep);
+
+    /* Attempts to retrieve another port from 'dpif' for 'state', which was
+     * initialized by a successful call to the 'port_dump_start' function for
+     * 'dpif'.  On success, stores a new dpif_port into 'port' and returns 0.
+     * Returns EOF if the end of the port table has been reached, or a positive
+     * errno value on error.  This function will not be called again once it
+     * returns nonzero once for a given iteration (but the 'port_dump_done'
+     * function will be called afterward).
+     *
+     * The dpif provider retains ownership of the data stored in 'port'.  It
+     * must remain valid until at least the next call to 'port_dump_next' or
+     * 'port_dump_done' for 'state'. */
+    int (*port_dump_next)(const struct dpif *dpif, void *state,
+                          struct dpif_port *port);
+
+    /* Releases resources from 'dpif' for 'state', which was initialized by a
+     * successful call to the 'port_dump_start' function for 'dpif'.  */
+    int (*port_dump_done)(const struct dpif *dpif, void *state);
 
     /* Polls for changes in the set of ports in 'dpif'.  If the set of ports in
      * 'dpif' has changed, then this function should do one of the
@@ -183,83 +190,113 @@ struct dpif_class {
      * value other than EAGAIN. */
     void (*port_poll_wait)(const struct dpif *dpif);
 
-    /* For each flow 'flow' in the 'n' flows in 'flows':
+    /* Queries 'dpif' for a flow entry.  The flow is specified by the Netlink
+     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * 'key'.
      *
-     * - If a flow matching 'flow->key' exists in 'dpif':
+     * Returns 0 if successful.  If no flow matches, returns ENOENT.  On other
+     * failure, returns a positive errno value.
      *
-     *     Stores 0 into 'flow->stats.error' and stores statistics for the flow
-     *     into 'flow->stats'.
+     * If 'actionsp' is nonnull, then on success '*actionsp' must be set to an
+     * ofpbuf owned by the caller that contains the Netlink attributes for the
+     * flow's actions.  The caller must free the ofpbuf (with ofpbuf_delete())
+     * when it is no longer needed.
      *
-     *     If 'flow->n_actions' is zero, then 'flow->actions' is ignored.  If
-     *     'flow->n_actions' is nonzero, then 'flow->actions' should point to
-     *     an array of the specified number of actions.  At most that many of
-     *     the flow's actions will be copied into that array.
-     *     'flow->n_actions' will be updated to the number of actions actually
-     *     present in the flow, which may be greater than the number stored if
-     *     the flow has more actions than space available in the array.
-     *
-     * - Flow-specific errors are indicated by a positive errno value in
-     *   'flow->stats.error'.  In particular, ENOENT indicates that no flow
-     *   matching 'flow->key' exists in 'dpif'.  When an error value is stored,
-     *   the contents of 'flow->key' are preserved but other members of 'flow'
-     *   should be treated as indeterminate.
-     *
-     * Returns 0 if all 'n' flows in 'flows' were updated (whether they were
-     * individually successful or not is indicated by 'flow->stats.error',
-     * however).  Returns a positive errno value if an error that prevented
-     * this update occurred, in which the caller must not depend on any
-     * elements in 'flows' being updated or not updated.
-     */
-    int (*flow_get)(const struct dpif *dpif, struct odp_flow flows[], int n);
+     * If 'stats' is nonnull, then on success it must be updated with the
+     * flow's statistics. */
+    int (*flow_get)(const struct dpif *dpif,
+                    const struct nlattr *key, size_t key_len,
+                    struct ofpbuf **actionsp, struct dpif_flow_stats *stats);
 
-    /* Adds or modifies a flow in 'dpif' as specified in 'put':
+    /* Adds or modifies a flow in 'dpif'.  The flow is specified by the Netlink
+     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * 'key'.  The associated actions are specified by the Netlink attributes
+     * with types ODP_ACTION_ATTR_* in the 'actions_len' bytes starting at
+     * 'actions'.
      *
-     * - If the flow specified in 'put->flow' does not exist in 'dpif', then
-     *   behavior depends on whether ODPPF_CREATE is specified in 'put->flags':
-     *   if it is, the flow will be added, otherwise the operation will fail
-     *   with ENOENT.
+     * - If the flow's key does not exist in 'dpif', then the flow will be
+     *   added if 'flags' includes DPIF_FP_CREATE.  Otherwise the operation
+     *   will fail with ENOENT.
      *
-     * - Otherwise, the flow specified in 'put->flow' does exist in 'dpif'.
-     *   Behavior in this case depends on whether ODPPF_MODIFY is specified in
-     *   'put->flags': if it is, the flow's actions will be updated, otherwise
-     *   the operation will fail with EEXIST.  If the flow's actions are
-     *   updated, then its statistics will be zeroed if ODPPF_ZERO_STATS is set
-     *   in 'put->flags', left as-is otherwise.
+     *   If the operation succeeds, then 'stats', if nonnull, must be zeroed.
+     *
+     * - If the flow's key does exist in 'dpif', then the flow's actions will
+     *   be updated if 'flags' includes DPIF_FP_MODIFY.  Otherwise the
+     *   operation will fail with EEXIST.  If the flow's actions are updated,
+     *   then its statistics will be zeroed if 'flags' includes
+     *   DPIF_FP_ZERO_STATS, and left as-is otherwise.
+     *
+     *   If the operation succeeds, then 'stats', if nonnull, must be set to
+     *   the flow's statistics before the update.
      */
-    int (*flow_put)(struct dpif *dpif, struct odp_flow_put *put);
+    int (*flow_put)(struct dpif *dpif, enum dpif_flow_put_flags flags,
+                    const struct nlattr *key, size_t key_len,
+                    const struct nlattr *actions, size_t actions_len,
+                    struct dpif_flow_stats *stats);
 
-    /* Deletes a flow matching 'flow->key' from 'dpif' or returns ENOENT if
-     * 'dpif' does not contain such a flow.
+    /* Deletes a flow from 'dpif' and returns 0, or returns ENOENT if 'dpif'
+     * does not contain such a flow.  The flow is specified by the Netlink
+     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * 'key'.
      *
-     * If successful, updates 'flow->stats', 'flow->n_actions', and
-     * 'flow->actions' as described in more detail under the flow_get member
-     * function below. */
-    int (*flow_del)(struct dpif *dpif, struct odp_flow *flow);
+     * If the operation succeeds, then 'stats', if nonnull, must be set to the
+     * flow's statistics before its deletion. */
+    int (*flow_del)(struct dpif *dpif,
+                    const struct nlattr *key, size_t key_len,
+                    struct dpif_flow_stats *stats);
 
     /* Deletes all flows from 'dpif' and clears all of its queues of received
      * packets. */
     int (*flow_flush)(struct dpif *dpif);
 
-    /* Stores up to 'n' flows in 'dpif' into 'flows', updating their statistics
-     * and actions as described under the flow_get member function.  If
-     * successful, returns the number of flows actually present in 'dpif',
-     * which might be greater than the number stored (if 'dpif' has more than
-     * 'n' flows).  On failure, returns a negative errno value. */
-    int (*flow_list)(const struct dpif *dpif, struct odp_flow flows[], int n);
+    /* Attempts to begin dumping the flows in a dpif.  On success, returns 0
+     * and initializes '*statep' with any data needed for iteration.  On
+     * failure, returns a positive errno value. */
+    int (*flow_dump_start)(const struct dpif *dpif, void **statep);
+
+    /* Attempts to retrieve another flow from 'dpif' for 'state', which was
+     * initialized by a successful call to the 'flow_dump_start' function for
+     * 'dpif'.  On success, updates the output parameters as described below
+     * and returns 0.  Returns EOF if the end of the flow table has been
+     * reached, or a positive errno value on error.  This function will not be
+     * called again once it returns nonzero within a given iteration (but the
+     * 'flow_dump_done' function will be called afterward).
+     *
+     * On success, if 'key' and 'key_len' are nonnull then '*key' and
+     * '*key_len' must be set to Netlink attributes with types ODP_KEY_ATTR_*
+     * representing the dumped flow's key.  If 'actions' and 'actions_len' are
+     * nonnull then they should be set to Netlink attributes with types
+     * ODP_ACTION_ATTR_* representing the dumped flow's actions.  If 'stats'
+     * is nonnull then it should be set to the dumped flow's statistics.
+     *
+     * All of the returned data is owned by 'dpif', not by the caller, and the
+     * caller must not modify or free it.  'dpif' must guarantee that it
+     * remains accessible and unchanging until at least the next call to
+     * 'flow_dump_next' or 'flow_dump_done' for 'state'. */
+    int (*flow_dump_next)(const struct dpif *dpif, void *state,
+                          const struct nlattr **key, size_t *key_len,
+                          const struct nlattr **actions, size_t *actions_len,
+                          const struct dpif_flow_stats **stats);
+
+    /* Releases resources from 'dpif' for 'state', which was initialized by a
+     * successful call to the 'flow_dump_start' function for 'dpif'.  */
+    int (*flow_dump_done)(const struct dpif *dpif, void *state);
 
     /* Performs the 'actions_len' bytes of actions in 'actions' on the Ethernet
      * frame specified in 'packet'. */
     int (*execute)(struct dpif *dpif, const struct nlattr *actions,
                    size_t actions_len, const struct ofpbuf *packet);
 
-    /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  Each ODPL_* bit
-     * set in '*listen_mask' indicates the 'dpif' will receive messages of the
-     * corresponding type when it calls the recv member function. */
+    /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  A 1-bit of value
+     * 2**X set in '*listen_mask' indicates that 'dpif' will receive messages
+     * of the type (from "enum dpif_upcall_type") with value X when its 'recv'
+     * function is called. */
     int (*recv_get_mask)(const struct dpif *dpif, int *listen_mask);
 
-    /* Sets 'dpif''s "listen mask" to 'listen_mask'.  Each ODPL_* bit set in
-     * 'listen_mask' indicates the 'dpif' will receive messages of the
-     * corresponding type when it calls the recv member function. */
+    /* Sets 'dpif''s "listen mask" to 'listen_mask'.  A 1-bit of value 2**X set
+     * in '*listen_mask' requests that 'dpif' will receive messages of the type
+     * (from "enum dpif_upcall_type") with value X when its 'recv' function is
+     * called. */
     int (*recv_set_mask)(struct dpif *dpif, int listen_mask);
 
     /* Retrieves 'dpif''s sFlow sampling probability into '*probability'.
@@ -282,25 +319,35 @@ struct dpif_class {
     int (*set_sflow_probability)(struct dpif *dpif, uint32_t probability);
 
     /* Translates OpenFlow queue ID 'queue_id' (in host byte order) into a
-     * priority value for use in the ODPAT_SET_PRIORITY action in
+     * priority value for use in the ODP_ACTION_ATTR_SET_PRIORITY action in
      * '*priority'. */
     int (*queue_to_priority)(const struct dpif *dpif, uint32_t queue_id,
                              uint32_t *priority);
 
-    /* Attempts to receive a message from 'dpif'.  If successful, stores the
-     * message into '*packetp'.  The message, if one is received, must begin
-     * with 'struct odp_msg' as a header, and must have at least
-     * DPIF_RECV_MSG_PADDING bytes of headroom (allocated using
-     * e.g. ofpbuf_reserve()).  Only messages of the types selected with the
-     * set_listen_mask member function should be received.
+    /* Polls for an upcall from 'dpif'.  If successful, stores the upcall into
+     * '*upcall'.  Only upcalls of the types selected with the set_listen_mask
+     * member function should be received.
      *
-     * This function must not block.  If no message is ready to be received
-     * when it is called, it should return EAGAIN without blocking. */
-    int (*recv)(struct dpif *dpif, struct ofpbuf **packetp);
+     * The caller takes ownership of the data that 'upcall' points to.
+     * 'upcall->key' and 'upcall->actions' (if nonnull) point into data owned
+     * by 'upcall->packet', so their memory cannot be freed separately.  (This
+     * is hardly a great way to do things but it works out OK for the dpif
+     * providers that exist so far.)
+     *
+     * For greatest efficiency, 'upcall->packet' should have at least
+     * offsetof(struct ofp_packet_in, data) bytes of headroom.
+     *
+     * This function must not block.  If no upcall is pending when it is
+     * called, it should return EAGAIN without blocking. */
+    int (*recv)(struct dpif *dpif, struct dpif_upcall *upcall);
 
     /* Arranges for the poll loop to wake up when 'dpif' has a message queued
      * to be received with the recv member function. */
     void (*recv_wait)(struct dpif *dpif);
+
+    /* Throws away any queued upcalls that 'dpif' currently has ready to
+     * return. */
+    void (*recv_purge)(struct dpif *dpif);
 };
 
 extern const struct dpif_class dpif_linux_class;

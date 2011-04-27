@@ -137,8 +137,6 @@ PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PERL = @PERL@
 PKG_CONFIG = @PKG_CONFIG@
-PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
-PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 PKIDIR = @PKIDIR@
 PYTHON = @PYTHON@
 PYUIC4 = @PYUIC4@
@@ -211,8 +209,8 @@ build_modules = $(both_modules)	# Modules to build
 dist_modules = $(both_modules)	# Modules to distribute
 openvswitch_sources = actions.c checksum.c datapath.c dp_notify.c \
 	dp_sysfs_dp.c dp_sysfs_if.c flow.c loop_counter.c table.c \
-	tunnel.c vport.c vport-capwap.c vport-generic.c vport-gre.c \
-	vport-internal_dev.c vport-netdev.c vport-patch.c \
+	tunnel.c vlan.c vport.c vport-capwap.c vport-generic.c \
+	vport-gre.c vport-internal_dev.c vport-netdev.c vport-patch.c \
 	linux-2.6/compat-2.6/addrconf_core-openvswitch.c \
 	linux-2.6/compat-2.6/dev-openvswitch.c \
 	linux-2.6/compat-2.6/genetlink-openvswitch.c \
@@ -222,9 +220,8 @@ openvswitch_sources = actions.c checksum.c datapath.c dp_notify.c \
 	linux-2.6/compat-2.6/skbuff-openvswitch.c \
 	linux-2.6/compat-2.6/time.c
 openvswitch_headers = actions.h checksum.h compat.h datapath.h \
-	dp_sysfs.h flow.h loop_counter.h odp-compat.h table.h tunnel.h \
+	dp_sysfs.h flow.h loop_counter.h table.h tunnel.h vlan.h \
 	vport.h vport-generic.h vport-internal_dev.h vport-netdev.h \
-	linux-2.6/compat-2.6/compat26.h \
 	linux-2.6/compat-2.6/include/asm-generic/bug.h \
 	linux-2.6/compat-2.6/include/linux/bottom_half.h \
 	linux-2.6/compat-2.6/include/linux/compiler.h \
@@ -232,7 +229,9 @@ openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	linux-2.6/compat-2.6/include/linux/cpumask.h \
 	linux-2.6/compat-2.6/include/linux/dmi.h \
 	linux-2.6/compat-2.6/include/linux/err.h \
+	linux-2.6/compat-2.6/include/linux/genetlink.h \
 	linux-2.6/compat-2.6/include/linux/icmp.h \
+	linux-2.6/compat-2.6/include/linux/icmpv6.h \
 	linux-2.6/compat-2.6/include/linux/if.h \
 	linux-2.6/compat-2.6/include/linux/if_arp.h \
 	linux-2.6/compat-2.6/include/linux/if_ether.h \
@@ -252,6 +251,7 @@ openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	linux-2.6/compat-2.6/include/linux/netfilter_ipv4.h \
 	linux-2.6/compat-2.6/include/linux/netlink.h \
 	linux-2.6/compat-2.6/include/linux/rculist.h \
+	linux-2.6/compat-2.6/include/linux/rcupdate.h \
 	linux-2.6/compat-2.6/include/linux/rtnetlink.h \
 	linux-2.6/compat-2.6/include/linux/skbuff.h \
 	linux-2.6/compat-2.6/include/linux/slab.h \
@@ -265,23 +265,19 @@ openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	linux-2.6/compat-2.6/include/net/dst.h \
 	linux-2.6/compat-2.6/include/net/genetlink.h \
 	linux-2.6/compat-2.6/include/net/ip.h \
+	linux-2.6/compat-2.6/include/net/net_namespace.h \
 	linux-2.6/compat-2.6/include/net/netlink.h \
 	linux-2.6/compat-2.6/include/net/protocol.h \
-	linux-2.6/compat-2.6/include/net/route.h
+	linux-2.6/compat-2.6/include/net/route.h \
+	linux-2.6/compat-2.6/genetlink.inc
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
 dist_headers = $(foreach module,$(dist_modules),$($(module)_headers))
 build_sources = $(foreach module,$(build_modules),$($(module)_sources))
 build_headers = $(foreach module,$(build_modules),$($(module)_headers))
 build_links = $(notdir $(build_sources))
 build_objects = $(notdir $(patsubst %.c,%.o,$(build_sources)))
-brcompat_sources = \
-	linux-2.6/compat-2.6/genetlink-brcompat.c \
-	brcompat.c \
-	brc_procfs.c
-
-brcompat_headers = \
-	brc_procfs.h
-
+brcompat_sources = linux-2.6/compat-2.6/genetlink-brcompat.c brcompat.c
+brcompat_headers = 
 CLEANFILES = distfiles
 all: all-recursive
 

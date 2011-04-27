@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,10 @@
 #include <stdlib.h>
 #include "compiler.h"
 #include "ovsdb-types.h"
+#include "shash.h"
 
 struct ds;
 struct ovsdb_symbol_table;
-struct shash;
 
 /* One value of an atomic type (given by enum ovs_atomic_type). */
 union ovsdb_atom {
@@ -94,6 +94,8 @@ char *ovsdb_atom_from_string(union ovsdb_atom *,
     WARN_UNUSED_RESULT;
 void ovsdb_atom_to_string(const union ovsdb_atom *, enum ovsdb_atomic_type,
                           struct ds *);
+void ovsdb_atom_to_bare(const union ovsdb_atom *, enum ovsdb_atomic_type,
+                        struct ds *);
 
 struct ovsdb_error *ovsdb_atom_check_constraints(
     const union ovsdb_atom *, const struct ovsdb_base_type *)
@@ -167,6 +169,8 @@ char *ovsdb_datum_from_string(struct ovsdb_datum *,
     WARN_UNUSED_RESULT;
 void ovsdb_datum_to_string(const struct ovsdb_datum *,
                            const struct ovsdb_type *, struct ds *);
+void ovsdb_datum_to_bare(const struct ovsdb_datum *,
+                         const struct ovsdb_type *, struct ds *);
 
 void ovsdb_datum_from_shash(struct ovsdb_datum *, struct shash *);
 
@@ -225,9 +229,15 @@ ovsdb_datum_conforms_to_type(const struct ovsdb_datum *datum,
 /* A table mapping from names to data items.  Currently the data items are
  * always UUIDs; perhaps this will be expanded in the future. */
 
+struct ovsdb_symbol_table {
+    struct shash sh;            /* Maps from name to struct ovsdb_symbol *. */
+};
+
 struct ovsdb_symbol {
     struct uuid uuid;           /* The UUID that the symbol represents. */
-    bool used;                  /* Already used as row UUID? */
+    bool created;               /* Already used to create row? */
+    bool strong_ref;            /* Parsed a strong reference to this row? */
+    bool weak_ref;              /* Parsed a weak reference to this row? */
 };
 
 struct ovsdb_symbol_table *ovsdb_symbol_table_create(void);
@@ -239,7 +249,6 @@ struct ovsdb_symbol *ovsdb_symbol_table_put(struct ovsdb_symbol_table *,
                                             const struct uuid *, bool used);
 struct ovsdb_symbol *ovsdb_symbol_table_insert(struct ovsdb_symbol_table *,
                                                const char *name);
-const char *ovsdb_symbol_table_find_unused(const struct ovsdb_symbol_table *);
 
 /* Tokenization
  *

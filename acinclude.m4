@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010 Nicira Networks.
+# Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -167,7 +167,12 @@ AC_DEFUN([OVS_CHECK_LINUX26_COMPAT], [
 
   OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_disable_lro])
   OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_get_stats])
+  OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_get_by_index_rcu])
 
+  OVS_GREP_IFELSE([$KSRC26/include/linux/rcupdate.h], [rcu_read_lock_held], [],
+                  [OVS_GREP_IFELSE([$KSRC26/include/linux/rtnetlink.h],
+                                   [rcu_read_lock_held])])
+  
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
   # is necessary because some versions of this header remove the
   # member but retain the kerneldoc comment that describes it (which
@@ -184,6 +189,8 @@ AC_DEFUN([OVS_CHECK_LINUX26_COMPAT], [
   OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_cow_head])
   OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_transport_header],
                   [OVS_DEFINE([HAVE_SKBUFF_HEADER_HELPERS])])
+  OVS_GREP_IFELSE([$KSRC26/include/linux/icmpv6.h], [icmp6_hdr],
+                  [OVS_DEFINE([HAVE_ICMP6_HDR])])
   OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_warn_if_lro],
                   [OVS_DEFINE([HAVE_SKB_WARN_LRO])])
 
@@ -195,10 +202,17 @@ AC_DEFUN([OVS_CHECK_LINUX26_COMPAT], [
   OVS_GREP_IFELSE([$KSRC26/include/linux/types.h], [__wsum],
                   [OVS_DEFINE([HAVE_CSUM_TYPES])])
 
+  OVS_GREP_IFELSE([$KSRC26/include/net/checksum.h], [csum_replace4])
   OVS_GREP_IFELSE([$KSRC26/include/net/checksum.h], [csum_unfold])
 
   OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [NLA_NUL_STRING])
   OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [nla_get_be16])
+  OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [nla_find_nested])
+
+  OVS_GREP_IFELSE([$KSRC26/include/linux/if_link.h], [rtnl_link_stats64])
+
+  OVS_GREP_IFELSE([$KSRC26/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
+                  [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
 
   OVS_CHECK_LOG2_H
 
@@ -296,3 +310,29 @@ AC_DEFUN([OVS_CONDITIONAL_CC_OPTION],
     [$1], [ovs_have_cc_option=yes], [ovs_have_cc_option=no])
    AM_CONDITIONAL([$2], [test $ovs_have_cc_option = yes])])
 dnl ----------------------------------------------------------------------
+
+dnl Check for too-old XenServer.
+AC_DEFUN([OVS_CHECK_XENSERVER_VERSION],
+  [AC_CACHE_CHECK([XenServer release], [ovs_cv_xsversion],
+    [if test -e /etc/redhat-release; then
+       ovs_cv_xsversion=`sed -n 's/^XenServer DDK release \([[^-]]*\)-.*/\1/p' /etc/redhat-release`
+     fi
+     if test -z "$ovs_cv_xsversion"; then
+       ovs_cv_xsversion=none
+     fi])
+  case $ovs_cv_xsversion in
+    none)
+      ;;
+
+    [[1-9]][[0-9]]* |                    dnl XenServer 10 or later
+    [[6-9]]* |                           dnl XenServer 6 or later
+    5.[[7-9]]* |                         dnl XenServer 5.7 or later
+    5.6.[[1-9]][[0-9]][[0-9]][[0-9]]* |  dnl XenServer 5.6.1000 or later
+    5.6.[[2-9]][[0-9]][[0-9]]* |         dnl XenServer 5.6.200 or later
+    5.6.1[[0-9]][[0-9]])                 dnl Xenserver 5.6.100 or later
+      ;;
+
+    *)
+      AC_MSG_ERROR([This appears to be XenServer $ovs_cv_xsversion, but only XenServer 5.6.100 or later is supported.  (If you are really using a supported version of XenServer, you may override this error message by specifying 'ovs_cv_xsversion=5.6.100' on the "configure" command line.)])
+      ;;
+  esac])

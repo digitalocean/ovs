@@ -28,7 +28,7 @@ VLOG_DEFINE_THIS_MODULE(reconnect);
 #define STATES                                  \
     STATE(VOID, 1 << 0)                         \
     STATE(BACKOFF, 1 << 1)                      \
-    STATE(CONNECT_IN_PROGRESS, 1 << 3)          \
+    STATE(CONNECTING, 1 << 3)          \
     STATE(ACTIVE, 1 << 4)                       \
     STATE(IDLE, 1 << 5)                         \
     STATE(RECONNECT, 1 << 6)                    \
@@ -60,6 +60,7 @@ struct reconnect {
     int backoff;
     long long int last_received;
     long long int last_connected;
+    long long int last_disconnected;
     unsigned int max_tries;
 
     /* These values are simply for statistics reporting, not otherwise used
@@ -105,7 +106,8 @@ reconnect_create(long long int now)
     fsm->state_entered = now;
     fsm->backoff = 0;
     fsm->last_received = now;
-    fsm->last_connected = now;
+    fsm->last_connected = LLONG_MAX;
+    fsm->last_disconnected = LLONG_MAX;
     fsm->max_tries = UINT_MAX;
     fsm->creation_time = now;
 
@@ -261,7 +263,7 @@ reconnect_set_passive(struct reconnect *fsm, bool passive, long long int now)
         fsm->passive = passive;
 
         if (passive
-            ? fsm->state & (S_CONNECT_IN_PROGRESS | S_RECONNECT)
+            ? fsm->state & (S_CONNECTING | S_RECONNECT)
             : fsm->state == S_LISTENING && reconnect_may_retry(fsm)) {
             reconnect_transition__(fsm, now, S_BACKOFF);
             fsm->backoff = 0;
@@ -310,7 +312,7 @@ reconnect_disable(struct reconnect *fsm, long long int now)
 void
 reconnect_force_reconnect(struct reconnect *fsm, long long int now)
 {
-    if (fsm->state & (S_CONNECT_IN_PROGRESS | S_ACTIVE | S_IDLE)) {
+    if (fsm->state & (S_CONNECTING | S_ACTIVE | S_IDLE)) {
         reconnect_transition__(fsm, now, S_RECONNECT);
     }
 }
@@ -353,6 +355,9 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
             }
         }
 
+        if (fsm->state & (S_ACTIVE | S_IDLE)) {
+            fsm->last_disconnected = now;
+        }
         /* Back off. */
         if (fsm->state & (S_ACTIVE | S_IDLE)
              && (fsm->last_received - fsm->last_connected >= fsm->backoff
@@ -388,13 +393,13 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
 void
 reconnect_connecting(struct reconnect *fsm, long long int now)
 {
-    if (fsm->state != S_CONNECT_IN_PROGRESS) {
+    if (fsm->state != S_CONNECTING) {
         if (fsm->passive) {
             VLOG(fsm->info, "%s: listening...", fsm->name);
         } else {
             VLOG(fsm->info, "%s: connecting...", fsm->name);
         }
-        reconnect_transition__(fsm, now, S_CONNECT_IN_PROGRESS);
+        reconnect_transition__(fsm, now, S_CONNECTING);
     }
 }
 
@@ -477,7 +482,7 @@ static void
 reconnect_transition__(struct reconnect *fsm, long long int now,
                        enum state state)
 {
-    if (fsm->state == S_CONNECT_IN_PROGRESS) {
+    if (fsm->state == S_CONNECTING) {
         fsm->n_attempted_connections++;
         if (state == S_ACTIVE) {
             fsm->n_successful_connections++;
@@ -507,7 +512,7 @@ reconnect_deadline__(const struct reconnect *fsm)
     case S_BACKOFF:
         return fsm->state_entered + fsm->backoff;
 
-    case S_CONNECT_IN_PROGRESS:
+    case S_CONNECTING:
         return fsm->state_entered + MAX(1000, fsm->backoff);
 
     case S_ACTIVE:
@@ -574,7 +579,7 @@ reconnect_run(struct reconnect *fsm, long long int now)
         case S_BACKOFF:
             return RECONNECT_CONNECT;
 
-        case S_CONNECT_IN_PROGRESS:
+        case S_CONNECTING:
             return RECONNECT_DISCONNECT;
 
         case S_ACTIVE:
@@ -637,13 +642,26 @@ reconnect_is_connected(const struct reconnect *fsm)
     return is_connected_state(fsm->state);
 }
 
-/* Returns the number of milliseconds for which 'fsm' has been continuously
- * connected to its peer.  (If 'fsm' is not currently connected, this is 0.) */
+/* Returns the number of milliseconds since 'fsm' last successfully connected
+ * to its peer (even if it has since disconnected). Returns UINT_MAX if never
+ * connected. */
 unsigned int
-reconnect_get_connection_duration(const struct reconnect *fsm,
-                                  long long int now)
+reconnect_get_last_connect_elapsed(const struct reconnect *fsm,
+                                   long long int now)
 {
-    return reconnect_is_connected(fsm) ? now - fsm->last_connected : 0;
+    return fsm->last_connected == LLONG_MAX ? UINT_MAX
+        : now - fsm->last_connected;
+}
+
+/* Returns the number of milliseconds since 'fsm' last disconnected
+ * from its peer (even if it has since reconnected). Returns UINT_MAX if never
+ * disconnected. */
+unsigned int
+reconnect_get_last_disconnect_elapsed(const struct reconnect *fsm,
+                                      long long int now)
+{
+    return fsm->last_disconnected == LLONG_MAX ? UINT_MAX
+        : now - fsm->last_disconnected;
 }
 
 /* Copies various statistics for 'fsm' into '*stats'. */
@@ -654,13 +672,17 @@ reconnect_get_stats(const struct reconnect *fsm, long long int now,
     stats->creation_time = fsm->creation_time;
     stats->last_received = fsm->last_received;
     stats->last_connected = fsm->last_connected;
+    stats->last_disconnected = fsm->last_disconnected;
     stats->backoff = fsm->backoff;
     stats->seqno = fsm->seqno;
     stats->is_connected = reconnect_is_connected(fsm);
-    stats->current_connection_duration
-        = reconnect_get_connection_duration(fsm, now);
-    stats->total_connected_duration = (stats->current_connection_duration
-                                       + fsm->total_connected_duration);
+    stats->msec_since_connect
+        = reconnect_get_last_connect_elapsed(fsm, now);
+    stats->msec_since_disconnect
+        = reconnect_get_last_disconnect_elapsed(fsm, now);
+    stats->total_connected_duration = fsm->total_connected_duration
+        + (is_connected_state(fsm->state)
+           ? reconnect_get_last_connect_elapsed(fsm, now) : 0);
     stats->n_attempted_connections = fsm->n_attempted_connections;
     stats->n_successful_connections = fsm->n_successful_connections;
     stats->state = reconnect_state_name__(fsm->state);

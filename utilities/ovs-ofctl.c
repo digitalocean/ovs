@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/socket.h>
 #include <net/if.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -158,7 +159,6 @@ usage(void)
            "usage: %s [OPTIONS] COMMAND [ARG...]\n"
            "\nFor OpenFlow switches:\n"
            "  show SWITCH                 show OpenFlow information\n"
-           "  status SWITCH [KEY]         report statistics (about KEY)\n"
            "  dump-desc SWITCH            print switch description\n"
            "  dump-tables SWITCH          print table stats\n"
            "  mod-port SWITCH IFACE ACT   modify port behavior\n"
@@ -330,7 +330,7 @@ dump_stats_transaction(const char *vconn_name, struct ofpbuf *request)
     open_vconn(vconn_name, &vconn);
     send_openflow_buffer(vconn, request);
     while (!done) {
-        uint32_t recv_xid;
+        ovs_be32 recv_xid;
         struct ofpbuf *reply;
 
         run(vconn_recv_block(vconn, &reply), "OpenFlow packet receive failed");
@@ -398,36 +398,6 @@ do_show(int argc OVS_UNUSED, char *argv[])
 {
     dump_trivial_transaction(argv[1], OFPT_FEATURES_REQUEST);
     dump_trivial_transaction(argv[1], OFPT_GET_CONFIG_REQUEST);
-}
-
-static void
-do_status(int argc, char *argv[])
-{
-    struct nicira_header *request, *reply;
-    struct vconn *vconn;
-    struct ofpbuf *b;
-
-    request = make_nxmsg(sizeof *request, NXT_STATUS_REQUEST, &b);
-    if (argc > 2) {
-        ofpbuf_put(b, argv[2], strlen(argv[2]));
-        update_openflow_length(b);
-    }
-    open_vconn(argv[1], &vconn);
-    run(vconn_transact(vconn, b, &b), "talking to %s", argv[1]);
-    vconn_close(vconn);
-
-    if (b->size < sizeof *reply) {
-        ovs_fatal(0, "short reply (%zu bytes)", b->size);
-    }
-    reply = b->data;
-    if (reply->header.type != OFPT_VENDOR
-        || reply->vendor != ntohl(NX_VENDOR_ID)
-        || reply->subtype != ntohl(NXT_STATUS_REPLY)) {
-        ofp_print(stderr, b->data, b->size, verbosity + 2);
-        ovs_fatal(0, "bad reply");
-    }
-
-    fwrite(reply + 1, b->size - sizeof *reply, 1, stdout);
 }
 
 static void
@@ -537,42 +507,45 @@ set_flow_format(struct vconn *vconn, enum nx_flow_format flow_format)
 }
 
 static enum nx_flow_format
-negotiate_highest_flow_format(struct vconn *vconn, const struct cls_rule *rule,
-                              bool cookie_support, ovs_be64 cookie)
+negotiate_highest_flow_format(struct vconn *vconn,
+                              enum nx_flow_format min_format)
 {
-    int flow_format;
-
     if (preferred_flow_format != -1) {
-        enum nx_flow_format min_format;
-
-        min_format = ofputil_min_flow_format(rule, cookie_support, cookie);
-        if (preferred_flow_format >= min_format) {
-            set_flow_format(vconn, preferred_flow_format);
-            return preferred_flow_format;
+        if (preferred_flow_format < min_format) {
+            ovs_fatal(0, "%s: cannot use requested flow format %s for "
+                      "specified flow", vconn_get_name(vconn),
+                      ofputil_flow_format_to_string(min_format));
         }
 
-        VLOG_WARN("%s: cannot use requested flow format %s for "
-                  "specified flow", vconn_get_name(vconn),
-                  ofputil_flow_format_to_string(min_format));
-    }
-
-    if (try_set_flow_format(vconn, NXFF_NXM)) {
-        flow_format = NXFF_NXM;
-    } else if (try_set_flow_format(vconn, NXFF_TUN_ID_FROM_COOKIE)) {
-        flow_format = NXFF_TUN_ID_FROM_COOKIE;
+        set_flow_format(vconn, preferred_flow_format);
+        return preferred_flow_format;
     } else {
-        flow_format = NXFF_OPENFLOW10;
-    }
+        enum nx_flow_format flow_format;
 
-    VLOG_DBG("%s: negotiated flow format %s", vconn_get_name(vconn),
-             ofputil_flow_format_to_string(flow_format));
-    return flow_format;
+        if (try_set_flow_format(vconn, NXFF_NXM)) {
+            flow_format = NXFF_NXM;
+        } else if (try_set_flow_format(vconn, NXFF_TUN_ID_FROM_COOKIE)) {
+            flow_format = NXFF_TUN_ID_FROM_COOKIE;
+        } else {
+            flow_format = NXFF_OPENFLOW10;
+        }
+
+        if (flow_format < min_format) {
+            ovs_fatal(0, "%s: cannot use switch's most advanced flow format "
+                      "%s for specified flow", vconn_get_name(vconn),
+                      ofputil_flow_format_to_string(min_format));
+        }
+
+        VLOG_DBG("%s: negotiated flow format %s", vconn_get_name(vconn),
+                 ofputil_flow_format_to_string(flow_format));
+        return flow_format;
+    }
 }
 
 static void
 do_dump_flows__(int argc, char *argv[], bool aggregate)
 {
-    enum nx_flow_format flow_format;
+    enum nx_flow_format min_flow_format, flow_format;
     struct flow_stats_request fsr;
     struct ofpbuf *request;
     struct vconn *vconn;
@@ -580,7 +553,8 @@ do_dump_flows__(int argc, char *argv[], bool aggregate)
     parse_ofp_flow_stats_request_str(&fsr, aggregate, argc > 2 ? argv[2] : "");
 
     open_vconn(argv[1], &vconn);
-    flow_format = negotiate_highest_flow_format(vconn, &fsr.match, false, 0);
+    min_flow_format = ofputil_min_flow_format(&fsr.match, false, 0);
+    flow_format = negotiate_highest_flow_format(vconn, min_flow_format);
     request = ofputil_encode_flow_stats_request(&fsr, flow_format);
     dump_stats_transaction(argv[1], request);
     vconn_close(vconn);
@@ -622,17 +596,89 @@ do_queue_stats(int argc, char *argv[])
     dump_stats_transaction(argv[1], request);
 }
 
+/* Sets up the flow format for a vconn that will be used to modify the flow
+ * table.  Returns the flow format used, after possibly adding an OpenFlow
+ * request to 'requests'.
+ *
+ * If 'preferred_flow_format' is -1, returns NXFF_OPENFLOW10 without modifying
+ * 'requests', since NXFF_OPENFLOW10 is the default flow format for any
+ * OpenFlow connection.
+ *
+ * If 'preferred_flow_format' is a specific format, adds a request to set that
+ * format to 'requests' and returns the format. */
+static enum nx_flow_format
+set_initial_format_for_flow_mod(struct list *requests)
+{
+    if (preferred_flow_format < 0) {
+        return NXFF_OPENFLOW10;
+    } else {
+        struct ofpbuf *sff;
+
+        sff = ofputil_make_set_flow_format(preferred_flow_format);
+        list_push_back(requests, &sff->list_node);
+        return preferred_flow_format;
+    }
+}
+
+/* Checks that 'flow_format' is acceptable as a flow format after a flow_mod
+ * operation, given the global 'preferred_flow_format'. */
 static void
-do_flow_mod__(int argc OVS_UNUSED, char *argv[], uint16_t command)
+check_final_format_for_flow_mod(enum nx_flow_format flow_format)
+{
+    if (preferred_flow_format >= 0 && flow_format > preferred_flow_format) {
+        ovs_fatal(0, "flow cannot be expressed in flow format %s "
+                  "(flow format %s or better is required)",
+                  ofputil_flow_format_to_string(preferred_flow_format),
+                  ofputil_flow_format_to_string(flow_format));
+    }
+}
+
+static void
+do_flow_mod_file__(int argc OVS_UNUSED, char *argv[], uint16_t command)
+{
+    enum nx_flow_format flow_format;
+    struct list requests;
+    struct vconn *vconn;
+    FILE *file;
+
+    file = !strcmp(argv[2], "-") ? stdin : fopen(argv[2], "r");
+    if (file == NULL) {
+        ovs_fatal(errno, "%s: open", argv[2]);
+    }
+
+    list_init(&requests);
+    flow_format = set_initial_format_for_flow_mod(&requests);
+
+    open_vconn(argv[1], &vconn);
+    while (parse_ofp_flow_mod_file(&requests, &flow_format, file, command)) {
+        check_final_format_for_flow_mod(flow_format);
+        transact_multiple_noreply(vconn, &requests);
+    }
+    vconn_close(vconn);
+
+    if (file != stdin) {
+        fclose(file);
+    }
+}
+
+static void
+do_flow_mod__(int argc, char *argv[], uint16_t command)
 {
     enum nx_flow_format flow_format;
     struct list requests;
     struct vconn *vconn;
 
+    if (argc > 2 && !strcmp(argv[2], "-")) {
+        do_flow_mod_file__(argc, argv, command);
+        return;
+    }
+
     list_init(&requests);
-    flow_format = NXFF_OPENFLOW10;
+    flow_format = set_initial_format_for_flow_mod(&requests);
+
     parse_ofp_flow_mod_str(&requests, &flow_format, argc > 2 ? argv[2] : "",
                            command);
+    check_final_format_for_flow_mod(flow_format);
 
     open_vconn(argv[1], &vconn);
     transact_multiple_noreply(vconn, &requests);
@@ -646,28 +692,9 @@ do_add_flow(int argc, char *argv[])
 }
 
 static void
-do_add_flows(int argc OVS_UNUSED, char *argv[])
+do_add_flows(int argc, char *argv[])
 {
-    enum nx_flow_format flow_format;
-    struct list requests;
-    struct vconn *vconn;
-    FILE *file;
-
-    file = fopen(argv[2], "r");
-    if (file == NULL) {
-        ovs_fatal(errno, "%s: open", argv[2]);
-    }
-
-    list_init(&requests);
-    flow_format = NXFF_OPENFLOW10;
-
-    open_vconn(argv[1], &vconn);
-    while (parse_ofp_add_flow_file(&requests, &flow_format, file)) {
-        transact_multiple_noreply(vconn, &requests);
-    }
-    vconn_close(vconn);
-
-    fclose(file);
+    do_flow_mod_file__(argc, argv, OFPFC_ADD);
 }
 
 static void
@@ -882,8 +909,428 @@ do_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     usage();
 }
 
+/* replace-flows and diff-flows commands. */
+
+/* A flow table entry, possibly with two different versions. */
+struct fte {
+    struct cls_rule rule;       /* Within a "struct classifier". */
+    struct fte_version *versions[2];
+};
+
+/* One version of a Flow Table Entry. */
+struct fte_version {
+    ovs_be64 cookie;
+    uint16_t idle_timeout;
+    uint16_t hard_timeout;
+    uint16_t flags;
+    union ofp_action *actions;
+    size_t n_actions;
+};
+
+/* Frees 'version' and the data that it owns. */
+static void
+fte_version_free(struct fte_version *version)
+{
+    if (version) {
+        free(version->actions);
+        free(version);
+    }
+}
+
+/* Returns true if 'a' and 'b' are the same, false if they differ.
+ *
+ * Ignores differences in 'flags' because there's no way to retrieve flags from
+ * an OpenFlow switch.  We have to assume that they are the same. */
+static bool
+fte_version_equals(const struct fte_version *a, const struct fte_version *b)
+{
+    return (a->cookie == b->cookie
+            && a->idle_timeout == b->idle_timeout
+            && a->hard_timeout == b->hard_timeout
+            && a->n_actions == b->n_actions
+            && !memcmp(a->actions, b->actions,
+                       a->n_actions * sizeof *a->actions));
+}
+
+/* Prints 'version' on stdout.  Expects the caller to have printed the rule
+ * associated with the version. */
+static void
+fte_version_print(const struct fte_version *version)
+{
+    struct ds s;
+
+    if (version->cookie != htonll(0)) {
+        printf(" cookie=0x%"PRIx64, ntohll(version->cookie));
+    }
+    if (version->idle_timeout != OFP_FLOW_PERMANENT) {
+        printf(" idle_timeout=%"PRIu16, version->idle_timeout);
+    }
+    if (version->hard_timeout != OFP_FLOW_PERMANENT) {
+        printf(" hard_timeout=%"PRIu16, version->hard_timeout);
+    }
+
+    ds_init(&s);
+    ofp_print_actions(&s, (const struct ofp_action_header *) version->actions,
+                      version->n_actions * sizeof *version->actions);
+    printf(" %s\n", ds_cstr(&s));
+    ds_destroy(&s);
+}
+
+static struct fte *
+fte_from_cls_rule(const struct cls_rule *cls_rule)
+{
+    return cls_rule ? CONTAINER_OF(cls_rule, struct fte, rule) : NULL;
+}
+
+/* Frees 'fte' and its versions. */
+static void
+fte_free(struct fte *fte)
+{
+    if (fte) {
+        fte_version_free(fte->versions[0]);
+        fte_version_free(fte->versions[1]);
+        free(fte);
+    }
+}
+
+/* Frees all of the FTEs within 'cls'. */
+static void
+fte_free_all(struct classifier *cls)
+{
+    struct cls_cursor cursor;
+    struct fte *fte, *next;
+
+    cls_cursor_init(&cursor, cls, NULL);
+    CLS_CURSOR_FOR_EACH_SAFE (fte, next, rule, &cursor) {
+        classifier_remove(cls, &fte->rule);
+        fte_free(fte);
+    }
+}
+
+/* Searches 'cls' for an FTE matching 'rule', inserting a new one if
+ * necessary.  Sets 'version' as the version of that rule with the given
+ * 'index', replacing any existing version, if any.
+ *
+ * Takes ownership of 'version'. */
+static void
+fte_insert(struct classifier *cls, const struct cls_rule *rule,
+           struct fte_version *version, int index)
+{
+    struct fte *old, *fte;
+
+    fte = xzalloc(sizeof *fte);
+    fte->rule = *rule;
+    fte->versions[index] = version;
+
+    old = fte_from_cls_rule(classifier_insert(cls, &fte->rule));
+    if (old) {
+        fte_version_free(old->versions[index]);
+        fte->versions[!index] = old->versions[!index];
+        free(old);
+    }
+}
+
+/* Reads the flows in 'filename' as flow table entries in 'cls' for the version
+ * with the specified 'index'.  Returns the minimum flow format required to
+ * represent the flows that were read. */
+static enum nx_flow_format
+read_flows_from_file(const char *filename, struct classifier *cls, int index)
+{
+    enum nx_flow_format min_flow_format;
+    struct ds s;
+    FILE *file;
+
+    file = !strcmp(filename, "-") ? stdin : fopen(filename, "r");
+    if (file == NULL) {
+        ovs_fatal(errno, "%s: open", filename);
+    }
+
+    ds_init(&s);
+    min_flow_format = NXFF_OPENFLOW10;
+    while (!ds_get_preprocessed_line(&s, file)) {
+        struct fte_version *version;
+        enum nx_flow_format min_ff;
+        struct ofpbuf actions;
+        struct flow_mod fm;
+        uint8_t table_idx;
+
+        ofpbuf_init(&actions, 64);
+        parse_ofp_str(&fm, &table_idx, &actions, ds_cstr(&s));
+
+        version = xmalloc(sizeof *version);
+        version->cookie = fm.cookie;
+        version->idle_timeout = fm.idle_timeout;
+        version->hard_timeout = fm.hard_timeout;
+        version->flags = fm.flags & (OFPFF_SEND_FLOW_REM | OFPFF_EMERG);
+        version->n_actions = actions.size / sizeof *version->actions;
+        version->actions = ofpbuf_steal_data(&actions);
+
+        min_ff = ofputil_min_flow_format(&fm.cr, true, fm.cookie);
+        min_flow_format = MAX(min_flow_format, min_ff);
+        check_final_format_for_flow_mod(min_flow_format);
+
+        fte_insert(cls, &fm.cr, version, index);
+    }
+    ds_destroy(&s);
+
+    if (file != stdin) {
+        fclose(file);
+    }
+
+    return min_flow_format;
+}
+
+/* Reads the OpenFlow flow table from 'vconn', which has currently active flow
+ * format 'flow_format', and adds them as flow table entries in 'cls' for the
+ * version with the specified 'index'. */
+static void
+read_flows_from_switch(struct vconn *vconn, enum nx_flow_format flow_format,
+                       struct classifier *cls, int index)
+{
+    struct flow_stats_request fsr;
+    struct ofpbuf *request;
+    ovs_be32 send_xid;
+    bool done;
+
+    fsr.aggregate = false;
+    cls_rule_init_catchall(&fsr.match, 0);
+    fsr.out_port = OFPP_NONE;
+    fsr.table_id = 0xff;
+    request = ofputil_encode_flow_stats_request(&fsr, flow_format);
+    send_xid = ((struct ofp_header *) request->data)->xid;
+    send_openflow_buffer(vconn, request);
+
+    done = false;
+    while (!done) {
+        ovs_be32 recv_xid;
+        struct ofpbuf *reply;
+
+        run(vconn_recv_block(vconn, &reply), "OpenFlow packet receive failed");
+        recv_xid = ((struct ofp_header *) reply->data)->xid;
+        if (send_xid == recv_xid) {
+            const struct ofputil_msg_type *type;
+            const struct ofp_stats_reply *osr;
+            enum ofputil_msg_code code;
+
+            ofputil_decode_msg_type(reply->data, &type);
+            code = ofputil_msg_type_code(type);
+            if (code != OFPUTIL_OFPST_FLOW_REPLY &&
+                code != OFPUTIL_NXST_FLOW_REPLY) {
+                ovs_fatal(0, "received bad reply: %s",
+                          ofp_to_string(reply->data, reply->size,
+                                        verbosity + 1));
+            }
+
+            osr = reply->data;
+            if (!(osr->flags & htons(OFPSF_REPLY_MORE))) {
+                done = true;
+            }
+
+            for (;;) {
+                struct fte_version *version;
+                struct ofputil_flow_stats fs;
+                int retval;
+
+                retval = ofputil_decode_flow_stats_reply(&fs, reply,
+                                                         flow_format);
+                if (retval) {
+                    if (retval != EOF) {
+                        ovs_fatal(0, "parse error in reply");
+                    }
+                    break;
+                }
+
+                version = xmalloc(sizeof *version);
+                version->cookie = fs.cookie;
+                version->idle_timeout = fs.idle_timeout;
+                version->hard_timeout = fs.hard_timeout;
+                version->flags = 0;
+                version->n_actions = fs.n_actions;
+                version->actions = xmemdup(fs.actions,
+                                           fs.n_actions * sizeof *fs.actions);
+
+                fte_insert(cls, &fs.rule, version, index);
+            }
+        } else {
+            VLOG_DBG("received reply with xid %08"PRIx32" "
+                     "!= expected %08"PRIx32, recv_xid, send_xid);
+        }
+        ofpbuf_delete(reply);
+    }
+}
+
+static void
+fte_make_flow_mod(const struct fte *fte, int index, uint16_t command,
+                  enum nx_flow_format flow_format, struct list *packets)
+{
+    const struct fte_version *version = fte->versions[index];
+    struct flow_mod fm;
+    struct ofpbuf *ofm;
+
+    fm.cr = fte->rule;
+    fm.cookie = version->cookie;
+    fm.command = command;
+    fm.idle_timeout = version->idle_timeout;
+    fm.hard_timeout = version->hard_timeout;
+    fm.buffer_id = UINT32_MAX;
+    fm.out_port = OFPP_NONE;
+    fm.flags = version->flags;
+    if (command == OFPFC_ADD || command == OFPFC_MODIFY ||
+        command == OFPFC_MODIFY_STRICT) {
+        fm.actions = version->actions;
+        fm.n_actions = version->n_actions;
+    } else {
+        fm.actions = NULL;
+        fm.n_actions = 0;
+    }
+
+    ofm = ofputil_encode_flow_mod(&fm, flow_format);
+    list_push_back(packets, &ofm->list_node);
+}
+
+static void
+do_replace_flows(int argc OVS_UNUSED, char *argv[])
+{
+    enum { FILE_IDX = 0, SWITCH_IDX = 1 };
+    enum nx_flow_format min_flow_format, flow_format;
+    struct cls_cursor cursor;
+    struct classifier cls;
+    struct list requests;
+    struct vconn *vconn;
+    struct fte *fte;
+
+    classifier_init(&cls);
+    min_flow_format = read_flows_from_file(argv[2], &cls, FILE_IDX);
+
+    open_vconn(argv[1], &vconn);
+    flow_format = negotiate_highest_flow_format(vconn, min_flow_format);
+    read_flows_from_switch(vconn, flow_format, &cls, SWITCH_IDX);
+
+    list_init(&requests);
+
+    /* Delete flows that exist on the switch but not in the file. */
+    cls_cursor_init(&cursor, &cls, NULL);
+    CLS_CURSOR_FOR_EACH (fte, rule, &cursor) {
+        struct fte_version *file_ver = fte->versions[FILE_IDX];
+        struct fte_version *sw_ver = fte->versions[SWITCH_IDX];
+
+        if (sw_ver && !file_ver) {
+            fte_make_flow_mod(fte, SWITCH_IDX, OFPFC_DELETE_STRICT,
+                              flow_format, &requests);
+        }
+    }
+
+    /* Add flows that exist in the file but not on the switch.
+     * Update flows that exist in both places but differ. */
+    cls_cursor_init(&cursor, &cls, NULL);
+    CLS_CURSOR_FOR_EACH (fte, rule, &cursor) {
+        struct fte_version *file_ver = fte->versions[FILE_IDX];
+        struct fte_version *sw_ver = fte->versions[SWITCH_IDX];
+
+        if (file_ver && (!sw_ver || !fte_version_equals(sw_ver, file_ver))) {
+            fte_make_flow_mod(fte, FILE_IDX, OFPFC_ADD, flow_format,
+                              &requests);
+        }
+    }
+    transact_multiple_noreply(vconn, &requests);
+    vconn_close(vconn);
+
+    fte_free_all(&cls);
+}
+
+static void
+read_flows_from_source(const char *source, struct classifier *cls, int index)
+{
+    struct stat s;
+
+    if (source[0] == '/' || source[0] == '.'
+        || (!strchr(source, ':') && !stat(source, &s))) {
+        read_flows_from_file(source, cls, index);
+    } else {
+        enum nx_flow_format flow_format;
+        struct vconn *vconn;
+
+        open_vconn(source, &vconn);
+        flow_format = negotiate_highest_flow_format(vconn, NXFF_OPENFLOW10);
+        read_flows_from_switch(vconn, flow_format, cls, index);
+        vconn_close(vconn);
+    }
+}
+
+static void
+do_diff_flows(int argc OVS_UNUSED, char *argv[])
+{
+    bool differences = false;
+    struct cls_cursor cursor;
+    struct classifier cls;
+    struct fte *fte;
+
+    classifier_init(&cls);
+    read_flows_from_source(argv[1], &cls, 0);
+    read_flows_from_source(argv[2], &cls, 1);
+
+    cls_cursor_init(&cursor, &cls, NULL);
+    CLS_CURSOR_FOR_EACH (fte, rule, &cursor) {
+        struct fte_version *a = fte->versions[0];
+        struct fte_version *b = fte->versions[1];
+
+        if (!a || !b || !fte_version_equals(a, b)) {
+            char *rule_s = cls_rule_to_string(&fte->rule);
+            if (a) {
+                printf("-%s", rule_s);
+                fte_version_print(a);
+            }
+            if (b) {
+                printf("+%s", rule_s);
+                fte_version_print(b);
+            }
+            free(rule_s);
+
+            differences = true;
+        }
+    }
+
+    fte_free_all(&cls);
+
+    if (differences) {
+        exit(2);
+    }
+}
+
 /* Undocumented commands for unit testing. */
 
+static void
+print_packet_list(struct list *packets)
+{
+    struct ofpbuf *packet, *next;
+
+    LIST_FOR_EACH_SAFE (packet, next, list_node, packets) {
+        ofp_print(stdout, packet->data, packet->size, verbosity);
+        list_remove(&packet->list_node);
+        ofpbuf_delete(packet);
+    }
+}
+
+/* "parse-flow FLOW": parses the argument as a flow (like add-flow) and prints
+ * it back to stdout.  */
+static void
+do_parse_flow(int argc OVS_UNUSED, char *argv[])
+{
+    enum nx_flow_format flow_format;
+    struct list packets;
+
+    flow_format = NXFF_OPENFLOW10;
+    if (preferred_flow_format > 0) {
+        flow_format = preferred_flow_format;
+    }
+
+    list_init(&packets);
+    parse_ofp_flow_mod_str(&packets, &flow_format, argv[1], OFPFC_ADD);
+    print_packet_list(&packets);
+}
+
+/* "parse-flows FILENAME": reads the named file as a sequence of flows (like
+ * add-flows) and prints each of the flows back to stdout.  */
 static void
 do_parse_flows(int argc OVS_UNUSED, char *argv[])
 {
@@ -896,24 +1343,21 @@ do_parse_flows(int argc OVS_UNUSED, char *argv[])
         ovs_fatal(errno, "%s: open", argv[2]);
     }
 
-    list_init(&packets);
     flow_format = NXFF_OPENFLOW10;
     if (preferred_flow_format > 0) {
         flow_format = preferred_flow_format;
     }
 
-    while (parse_ofp_add_flow_file(&packets, &flow_format, file)) {
-        struct ofpbuf *packet, *next;
-
-        LIST_FOR_EACH_SAFE (packet, next, list_node, &packets) {
-            ofp_print(stdout, packet->data, packet->size, verbosity);
-            list_remove(&packet->list_node);
-            ofpbuf_delete(packet);
-        }
+    list_init(&packets);
+    while (parse_ofp_flow_mod_file(&packets, &flow_format, file, OFPFC_ADD)) {
+        print_packet_list(&packets);
     }
     fclose(file);
 }
 
+/* "parse-nx-match": reads a series of nx_match specifications as strings from
+ * stdin, does some internal fussing with them, and then prints them back as
+ * strings on stdout. */
 static void
 do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
@@ -968,9 +1412,24 @@ do_parse_nx_match(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     ds_destroy(&in);
 }
 
+/* "ofp-print HEXSTRING [VERBOSITY]": Converts the hex digits in HEXSTRING into
+ * binary data, interpreting them as an OpenFlow message, and prints the
+ * OpenFlow message on stdout, at VERBOSITY (level 2 by default).  */
+static void
+do_ofp_print(int argc, char *argv[])
+{
+    struct ofpbuf packet;
+
+    ofpbuf_init(&packet, strlen(argv[1]) / 2);
+    if (ofpbuf_put_hex(&packet, argv[1], NULL)[0] != '\0') {
+        ovs_fatal(0, "trailing garbage following hex bytes");
+    }
+    ofp_print(stdout, packet.data, packet.size, argc > 2 ? atoi(argv[2]) : 2);
+    ofpbuf_uninit(&packet);
+}
+
 static const struct command all_commands[] = {
     { "show", 1, 1, do_show },
-    { "status", 1, 2, do_status },
     { "monitor", 1, 2, do_monitor },
     { "snoop", 1, 1, do_snoop },
     { "dump-desc", 1, 1, do_dump_desc },
@@ -982,6 +1441,8 @@ static const struct command all_commands[] = {
     { "add-flows", 2, 2, do_add_flows },
     { "mod-flows", 2, 2, do_mod_flows },
     { "del-flows", 1, 2, do_del_flows },
+    { "replace-flows", 2, 2, do_replace_flows },
+    { "diff-flows", 2, 2, do_diff_flows },
     { "dump-ports", 1, 2, do_dump_ports },
     { "mod-port", 3, 3, do_mod_port },
     { "probe", 1, 1, do_probe },
@@ -990,8 +1451,10 @@ static const struct command all_commands[] = {
     { "help", 0, INT_MAX, do_help },
 
     /* Undocumented commands for testing. */
+    { "parse-flow", 1, 1, do_parse_flow },
     { "parse-flows", 1, 1, do_parse_flows },
     { "parse-nx-match", 0, 0, do_parse_nx_match },
+    { "ofp-print", 1, 2, do_ofp_print },
 
     { NULL, 0, 0, NULL },
 };

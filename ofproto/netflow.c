@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@
 #include "ofproto.h"
 #include "packets.h"
 #include "socket-util.h"
-#include "svec.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
@@ -148,7 +147,7 @@ gen_netflow_rec(struct netflow *nf, struct netflow_flow *nf_flow,
     nf_rec->init_time = htonl(nf_flow->created - nf->boot_time);
     nf_rec->used_time = htonl(MAX(nf_flow->created, expired->used)
                              - nf->boot_time);
-    if (expired->flow.nw_proto == IP_TYPE_ICMP) {
+    if (expired->flow.nw_proto == IPPROTO_ICMP) {
         /* In NetFlow, the ICMP type and code are concatenated and
          * placed in the 'dst_port' field. */
         uint8_t type = ntohs(expired->flow.tp_src);

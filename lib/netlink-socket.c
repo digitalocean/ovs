@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,10 +24,13 @@
 #include <unistd.h>
 #include "coverage.h"
 #include "dynamic-string.h"
+#include "hash.h"
+#include "hmap.h"
 #include "netlink.h"
 #include "netlink-protocol.h"
 #include "ofpbuf.h"
 #include "poll-loop.h"
+#include "socket-util.h"
 #include "stress.h"
 #include "vlog.h"
 
@@ -50,7 +53,7 @@ COVERAGE_DEFINE(netlink_sent);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(60, 600);
 
 static void log_nlmsg(const char *function, int error,
-                      const void *message, size_t size);
+                      const void *message, size_t size, int protocol);
 
 /* Netlink sockets. */
 
@@ -58,25 +61,20 @@ struct nl_sock
 {
     int fd;
     uint32_t pid;
+    int protocol;
+    bool any_groups;
+    struct nl_dump *dump;
 };
 
 static int alloc_pid(uint32_t *);
 static void free_pid(uint32_t);
+static int nl_sock_cow__(struct nl_sock *);
 
 /* Creates a new netlink socket for the given netlink 'protocol'
  * (NETLINK_ROUTE, NETLINK_GENERIC, ...).  Returns 0 and sets '*sockp' to the
- * new socket if successful, otherwise returns a positive errno value.
- *
- * If 'multicast_group' is nonzero, the new socket subscribes to the specified
- * netlink multicast group.  (A netlink socket may listen to an arbitrary
- * number of multicast groups, but so far we only need one at a time.)
- *
- * Nonzero 'so_sndbuf' or 'so_rcvbuf' override the kernel default send or
- * receive buffer size, respectively.
- */
+ * new socket if successful, otherwise returns a positive errno value.  */
 int
-nl_sock_create(int protocol, int multicast_group,
-               size_t so_sndbuf, size_t so_rcvbuf, struct nl_sock **sockp)
+nl_sock_create(int protocol, struct nl_sock **sockp)
 {
     struct nl_sock *sock;
     struct sockaddr_nl local, remote;
@@ -93,35 +91,19 @@ nl_sock_create(int protocol, int multicast_group,
         VLOG_ERR("fcntl: %s", strerror(errno));
         goto error;
     }
+    sock->protocol = protocol;
+    sock->any_groups = false;
+    sock->dump = NULL;
 
     retval = alloc_pid(&sock->pid);
     if (retval) {
         goto error;
     }
 
-    if (so_sndbuf != 0
-        && setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF,
-                      &so_sndbuf, sizeof so_sndbuf) < 0) {
-        VLOG_ERR("setsockopt(SO_SNDBUF,%zu): %s", so_sndbuf, strerror(errno));
-        goto error_free_pid;
-    }
-
-    if (so_rcvbuf != 0
-        && setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF,
-                      &so_rcvbuf, sizeof so_rcvbuf) < 0) {
-        VLOG_ERR("setsockopt(SO_RCVBUF,%zu): %s", so_rcvbuf, strerror(errno));
-        goto error_free_pid;
-    }
-
     /* Bind local address as our selected pid. */
     memset(&local, 0, sizeof local);
     local.nl_family = AF_NETLINK;
     local.nl_pid = sock->pid;
-    if (multicast_group > 0 && multicast_group <= 32) {
-        /* This method of joining multicast groups is supported by old kernels,
-         * but it only allows 32 multicast groups per protocol. */
-        local.nl_groups |= 1ul << (multicast_group - 1);
-    }
     if (bind(sock->fd, (struct sockaddr *) &local, sizeof local) < 0) {
         VLOG_ERR("bind(%"PRIu32"): %s", sock->pid, strerror(errno));
         goto error_free_pid;
@@ -133,23 +115,6 @@ nl_sock_create(int protocol, int multicast_group,
     remote.nl_pid = 0;
     if (connect(sock->fd, (struct sockaddr *) &remote, sizeof remote) < 0) {
         VLOG_ERR("connect(0): %s", strerror(errno));
-        goto error_free_pid;
-    }
-
-    /* Older kernel headers failed to define this macro.  We want our programs
-     * to support the newer kernel features even if compiled with older
-     * headers, so define it ourselves in such a case. */
-#ifndef NETLINK_ADD_MEMBERSHIP
-#define NETLINK_ADD_MEMBERSHIP 1
-#endif
-
-    /* This method of joining multicast groups is only supported by newish
-     * kernels, but it allows for an arbitrary number of multicast groups. */
-    if (multicast_group > 32
-        && setsockopt(sock->fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
-                      &multicast_group, sizeof multicast_group) < 0) {
-        VLOG_ERR("setsockopt(NETLINK_ADD_MEMBERSHIP,%d): %s",
-                 multicast_group, strerror(errno));
         goto error_free_pid;
     }
 
@@ -172,15 +137,95 @@ error:
     return retval;
 }
 
+/* Creates a new netlink socket for the same protocol as 'src'.  Returns 0 and
+ * sets '*sockp' to the new socket if successful, otherwise returns a positive
+ * errno value.  */
+int
+nl_sock_clone(const struct nl_sock *src, struct nl_sock **sockp)
+{
+    return nl_sock_create(src->protocol, sockp);
+}
+
 /* Destroys netlink socket 'sock'. */
 void
 nl_sock_destroy(struct nl_sock *sock)
 {
     if (sock) {
-        close(sock->fd);
-        free_pid(sock->pid);
-        free(sock);
+        if (sock->dump) {
+            sock->dump = NULL;
+        } else {
+            close(sock->fd);
+            free_pid(sock->pid);
+            free(sock);
+        }
     }
+}
+
+/* Tries to add 'sock' as a listener for 'multicast_group'.  Returns 0 if
+ * successful, otherwise a positive errno value.
+ *
+ * Multicast group numbers are always positive.
+ *
+ * It is not an error to attempt to join a multicast group to which a socket
+ * already belongs. */
+int
+nl_sock_join_mcgroup(struct nl_sock *sock, unsigned int multicast_group)
+{
+    int error = nl_sock_cow__(sock);
+    if (error) {
+        return error;
+    }
+    if (setsockopt(sock->fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
+                   &multicast_group, sizeof multicast_group) < 0) {
+        VLOG_WARN("could not join multicast group %u (%s)",
+                  multicast_group, strerror(errno));
+        return errno;
+    }
+    sock->any_groups = true;
+    return 0;
+}
+
+/* Tries to make 'sock' stop listening to 'multicast_group'.  Returns 0 if
+ * successful, otherwise a positive errno value.
+ *
+ * Multicast group numbers are always positive.
+ *
+ * It is not an error to attempt to leave a multicast group to which a socket
+ * does not belong.
+ *
+ * On success, reading from 'sock' will still return any messages that were
+ * received on 'multicast_group' before the group was left. */
+int
+nl_sock_leave_mcgroup(struct nl_sock *sock, unsigned int multicast_group)
+{
+    assert(!sock->dump);
+    if (setsockopt(sock->fd, SOL_NETLINK, NETLINK_DROP_MEMBERSHIP,
+                   &multicast_group, sizeof multicast_group) < 0) {
+        VLOG_WARN("could not leave multicast group %u (%s)",
+                  multicast_group, strerror(errno));
+        return errno;
+    }
+    return 0;
+}
+
+static int
+nl_sock_send__(struct nl_sock *sock, const struct ofpbuf *msg, bool wait)
+{
+    struct nlmsghdr *nlmsg = nl_msg_nlmsghdr(msg);
+    int error;
+
+    nlmsg->nlmsg_len = msg->size;
+    nlmsg->nlmsg_pid = sock->pid;
+    do {
+        int retval;
+        retval = send(sock->fd, msg->data, msg->size, wait ? 0 : MSG_DONTWAIT);
+        error = retval < 0 ? errno : 0;
+    } while (error == EINTR);
+    log_nlmsg(__func__, error, msg->data, msg->size, sock->protocol);
+    if (!error) {
+        COVERAGE_INC(netlink_sent);
+    }
+    return error;
 }
 
 /* Tries to send 'msg', which must contain a Netlink message, to the kernel on
@@ -193,21 +238,11 @@ nl_sock_destroy(struct nl_sock *sock)
 int
 nl_sock_send(struct nl_sock *sock, const struct ofpbuf *msg, bool wait)
 {
-    struct nlmsghdr *nlmsg = nl_msg_nlmsghdr(msg);
-    int error;
-
-    nlmsg->nlmsg_len = msg->size;
-    nlmsg->nlmsg_pid = sock->pid;
-    do {
-        int retval;
-        retval = send(sock->fd, msg->data, msg->size, wait ? 0 : MSG_DONTWAIT);
-        error = retval < 0 ? errno : 0;
-    } while (error == EINTR);
-    log_nlmsg(__func__, error, msg->data, msg->size);
-    if (!error) {
-        COVERAGE_INC(netlink_sent);
+    int error = nl_sock_cow__(sock);
+    if (error) {
+        return error;
     }
-    return error;
+    return nl_sock_send__(sock, msg, wait);
 }
 
 /* Tries to send the 'n_iov' chunks of data in 'iov' to the kernel on 'sock' as
@@ -234,7 +269,8 @@ nl_sock_sendv(struct nl_sock *sock, const struct iovec iov[], size_t n_iov,
         error = retval < 0 ? errno : 0;
     } while (error == EINTR);
     if (error != EAGAIN) {
-        log_nlmsg(__func__, error, iov[0].iov_base, iov[0].iov_len);
+        log_nlmsg(__func__, error, iov[0].iov_base, iov[0].iov_len,
+                  sock->protocol);
         if (!error) {
             COVERAGE_INC(netlink_sent);
         }
@@ -251,16 +287,8 @@ STRESS_OPTION(
     netlink_overflow, "simulate netlink socket receive buffer overflow",
     5, 1, -1, 100);
 
-/* Tries to receive a netlink message from the kernel on 'sock'.  If
- * successful, stores the received message into '*bufp' and returns 0.  The
- * caller is responsible for destroying the message with ofpbuf_delete().  On
- * failure, returns a positive errno value and stores a null pointer into
- * '*bufp'.
- *
- * If 'wait' is true, nl_sock_recv waits for a message to be ready; otherwise,
- * returns EAGAIN if the 'sock' receive buffer is empty. */
-int
-nl_sock_recv(struct nl_sock *sock, struct ofpbuf **bufp, bool wait)
+static int
+nl_sock_recv__(struct nl_sock *sock, struct ofpbuf **bufp, bool wait)
 {
     uint8_t tmp;
     ssize_t bufsize = 2048;
@@ -339,10 +367,28 @@ try_again:
     }
 
     *bufp = buf;
-    log_nlmsg(__func__, 0, buf->data, buf->size);
+    log_nlmsg(__func__, 0, buf->data, buf->size, sock->protocol);
     COVERAGE_INC(netlink_received);
 
     return 0;
+}
+
+/* Tries to receive a netlink message from the kernel on 'sock'.  If
+ * successful, stores the received message into '*bufp' and returns 0.  The
+ * caller is responsible for destroying the message with ofpbuf_delete().  On
+ * failure, returns a positive errno value and stores a null pointer into
+ * '*bufp'.
+ *
+ * If 'wait' is true, nl_sock_recv waits for a message to be ready; otherwise,
+ * returns EAGAIN if the 'sock' receive buffer is empty. */
+int
+nl_sock_recv(struct nl_sock *sock, struct ofpbuf **bufp, bool wait)
+{
+    int error = nl_sock_cow__(sock);
+    if (error) {
+        return error;
+    }
+    return nl_sock_recv__(sock, bufp, wait);
 }
 
 /* Sends 'request' to the kernel via 'sock' and waits for a response.  If
@@ -421,7 +467,7 @@ recv:
     }
     nlmsghdr = nl_msg_nlmsghdr(reply);
     if (seq != nlmsghdr->nlmsg_seq) {
-        VLOG_DBG_RL(&rl, "ignoring seq %"PRIu32" != expected %"PRIu32,
+        VLOG_DBG_RL(&rl, "ignoring seq %#"PRIx32" != expected %#"PRIx32,
                     nl_msg_nlmsghdr(reply)->nlmsg_seq, seq);
         ofpbuf_delete(reply);
         goto recv;
@@ -450,6 +496,51 @@ recv:
     return 0;
 }
 
+/* Drain all the messages currently in 'sock''s receive queue. */
+int
+nl_sock_drain(struct nl_sock *sock)
+{
+    int error = nl_sock_cow__(sock);
+    if (error) {
+        return error;
+    }
+    return drain_rcvbuf(sock->fd);
+}
+
+/* The client is attempting some operation on 'sock'.  If 'sock' has an ongoing
+ * dump operation, then replace 'sock''s fd with a new socket and hand 'sock''s
+ * old fd over to the dump. */
+static int
+nl_sock_cow__(struct nl_sock *sock)
+{
+    struct nl_sock *copy;
+    uint32_t tmp_pid;
+    int tmp_fd;
+    int error;
+
+    if (!sock->dump) {
+        return 0;
+    }
+
+    error = nl_sock_clone(sock, &copy);
+    if (error) {
+        return error;
+    }
+
+    tmp_fd = sock->fd;
+    sock->fd = copy->fd;
+    copy->fd = tmp_fd;
+
+    tmp_pid = sock->pid;
+    sock->pid = copy->pid;
+    copy->pid = tmp_pid;
+
+    sock->dump->sock = copy;
+    sock->dump = NULL;
+
+    return 0;
+}
+
 /* Starts a Netlink "dump" operation, by sending 'request' to the kernel via
  * 'sock', and initializes 'dump' to reflect the state of the operation.
  *
@@ -457,22 +548,23 @@ recv:
  * be set to 'sock''s pid, before the message is sent.  NLM_F_DUMP and
  * NLM_F_ACK will be set in nlmsg_flags.
  *
- * The properties of Netlink make dump operations reliable as long as all of
- * the following are true:
+ * This Netlink socket library is designed to ensure that the dump is reliable
+ * and that it will not interfere with other operations on 'sock', including
+ * destroying or sending and receiving messages on 'sock'.  One corner case is
+ * not handled:
  *
- *   - At most a single dump is in progress at a time on a given nl_sock.
- *
- *   - The nl_sock is not subscribed to any multicast groups.
- *
- *   - The nl_sock is not used to send any other messages before the dump
- *     operation is complete.
+ *   - If 'sock' has been used to send a request (e.g. with nl_sock_send())
+ *     whose response has not yet been received (e.g. with nl_sock_recv()).
+ *     This is unusual: usually nl_sock_transact() is used to send a message
+ *     and receive its reply all in one go.
  *
  * This function provides no status indication.  An error status for the entire
  * dump operation is provided when it is completed by calling nl_dump_done().
  *
- * The caller is responsible for destroying 'request'.  The caller must not
- * close 'sock' before it completes the dump operation (by calling
- * nl_dump_done()).
+ * The caller is responsible for destroying 'request'.
+ *
+ * The new 'dump' is independent of 'sock'.  'sock' and 'dump' may be destroyed
+ * in either order.
  */
 void
 nl_dump_start(struct nl_dump *dump,
@@ -481,9 +573,21 @@ nl_dump_start(struct nl_dump *dump,
     struct nlmsghdr *nlmsghdr = nl_msg_nlmsghdr(request);
     nlmsghdr->nlmsg_flags |= NLM_F_DUMP | NLM_F_ACK;
     dump->seq = nlmsghdr->nlmsg_seq;
-    dump->sock = sock;
-    dump->status = nl_sock_send(sock, request, true);
     dump->buffer = NULL;
+    if (sock->any_groups || sock->dump) {
+        /* 'sock' might belong to some multicast group, or it already has an
+         * onoging dump.  Clone the socket to avoid possibly intermixing
+         * multicast messages or previous dump results with our results. */
+        dump->status = nl_sock_clone(sock, &dump->sock);
+        if (dump->status) {
+            return;
+        }
+    } else {
+        sock->dump = dump;
+        dump->sock = sock;
+        dump->status = 0;
+    }
+    dump->status = nl_sock_send__(sock, request, true);
 }
 
 /* Helper function for nl_dump_next(). */
@@ -494,7 +598,7 @@ nl_dump_recv(struct nl_dump *dump, struct ofpbuf **bufferp)
     struct ofpbuf *buffer;
     int retval;
 
-    retval = nl_sock_recv(dump->sock, bufferp, true);
+    retval = nl_sock_recv__(dump->sock, bufferp, true);
     if (retval) {
         return retval == EINTR ? EAGAIN : retval;
     }
@@ -502,7 +606,7 @@ nl_dump_recv(struct nl_dump *dump, struct ofpbuf **bufferp)
 
     nlmsghdr = nl_msg_nlmsghdr(buffer);
     if (dump->seq != nlmsghdr->nlmsg_seq) {
-        VLOG_DBG_RL(&rl, "ignoring seq %"PRIu32" != expected %"PRIu32,
+        VLOG_DBG_RL(&rl, "ignoring seq %#"PRIx32" != expected %#"PRIx32,
                     nlmsghdr->nlmsg_seq, dump->seq);
         return EAGAIN;
     }
@@ -583,6 +687,13 @@ nl_dump_done(struct nl_dump *dump)
         }
     }
 
+    if (dump->sock) {
+        if (dump->sock->dump) {
+            dump->sock->dump = NULL;
+        } else {
+            nl_sock_destroy(dump->sock);
+        }
+    }
     ofpbuf_delete(dump->buffer);
     return dump->status == EOF ? 0 : dump->status;
 }
@@ -597,9 +708,60 @@ nl_sock_wait(const struct nl_sock *sock, short int events)
 
 /* Miscellaneous.  */
 
+struct genl_family {
+    struct hmap_node hmap_node;
+    uint16_t id;
+    char *name;
+};
+
+static struct hmap genl_families = HMAP_INITIALIZER(&genl_families);
+
 static const struct nl_policy family_policy[CTRL_ATTR_MAX + 1] = {
     [CTRL_ATTR_FAMILY_ID] = {.type = NL_A_U16},
 };
+
+static struct genl_family *
+find_genl_family_by_id(uint16_t id)
+{
+    struct genl_family *family;
+
+    HMAP_FOR_EACH_IN_BUCKET (family, hmap_node, hash_int(id, 0),
+                             &genl_families) {
+        if (family->id == id) {
+            return family;
+        }
+    }
+    return NULL;
+}
+
+static void
+define_genl_family(uint16_t id, const char *name)
+{
+    struct genl_family *family = find_genl_family_by_id(id);
+
+    if (family) {
+        if (!strcmp(family->name, name)) {
+            return;
+        }
+        free(family->name);
+    } else {
+        family = xmalloc(sizeof *family);
+        family->id = id;
+        hmap_insert(&genl_families, &family->hmap_node, hash_int(id, 0));
+    }
+    family->name = xstrdup(name);
+}
+
+static const char *
+genl_family_to_name(uint16_t id)
+{
+    if (id == GENL_ID_CTRL) {
+        return "control";
+    } else {
+        struct genl_family *family = find_genl_family_by_id(id);
+        return family ? family->name : "unknown";
+    }
+}
 
 static int do_lookup_genl_family(const char *name)
 {
@@ -608,7 +770,7 @@ static int do_lookup_genl_family(const char *name)
     struct nlattr *attrs[ARRAY_SIZE(family_policy)];
     int retval;
 
-    retval = nl_sock_create(NETLINK_GENERIC, 0, 0, 0, &sock);
+    retval = nl_sock_create(NETLINK_GENERIC, &sock);
     if (retval) {
         return -retval;
     }
@@ -634,9 +796,12 @@ static int do_lookup_genl_family(const char *name)
     retval = nl_attr_get_u16(attrs[CTRL_ATTR_FAMILY_ID]);
     if (retval == 0) {
         retval = -EPROTO;
+    } else {
+        define_genl_family(retval, name);
     }
     nl_sock_destroy(sock);
     ofpbuf_delete(reply);
+
     return retval;
 }
 
@@ -703,7 +868,7 @@ free_pid(uint32_t pid)
 }
 
 static void
-nlmsghdr_to_string(const struct nlmsghdr *h, struct ds *ds)
+nlmsghdr_to_string(const struct nlmsghdr *h, int protocol, struct ds *ds)
 {
     struct nlmsg_flag {
         unsigned int bits;
@@ -734,6 +899,8 @@ nlmsghdr_to_string(const struct nlmsghdr *h, struct ds *ds)
         ds_put_cstr(ds, "(overrun)");
     } else if (h->nlmsg_type < NLMSG_MIN_TYPE) {
         ds_put_cstr(ds, "(reserved)");
+    } else if (protocol == NETLINK_GENERIC) {
+        ds_put_format(ds, "(%s)", genl_family_to_name(h->nlmsg_type));
     } else {
         ds_put_cstr(ds, "(family-defined)");
     }
@@ -755,12 +922,12 @@ nlmsghdr_to_string(const struct nlmsghdr *h, struct ds *ds)
 }
 
 static char *
-nlmsg_to_string(const struct ofpbuf *buffer)
+nlmsg_to_string(const struct ofpbuf *buffer, int protocol)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     const struct nlmsghdr *h = ofpbuf_at(buffer, 0, NLMSG_HDRLEN);
     if (h) {
-        nlmsghdr_to_string(h, &ds);
+        nlmsghdr_to_string(h, protocol, &ds);
         if (h->nlmsg_type == NLMSG_ERROR) {
             const struct nlmsgerr *e;
             e = ofpbuf_at(buffer, NLMSG_HDRLEN,
@@ -771,7 +938,7 @@ nlmsg_to_string(const struct ofpbuf *buffer)
                     ds_put_format(&ds, "(%s)", strerror(-e->error));
                 }
                 ds_put_cstr(&ds, ", in-reply-to(");
-                nlmsghdr_to_string(&e->msg, &ds);
+                nlmsghdr_to_string(&e->msg, protocol, &ds);
                 ds_put_cstr(&ds, "))");
             } else {
                 ds_put_cstr(&ds, " error(truncated)");
@@ -787,6 +954,12 @@ nlmsg_to_string(const struct ofpbuf *buffer)
             } else {
                 ds_put_cstr(&ds, " done(truncated)");
             }
+        } else if (protocol == NETLINK_GENERIC) {
+            struct genlmsghdr *genl = nl_msg_genlmsghdr(buffer);
+            if (genl) {
+                ds_put_format(&ds, ",genl(cmd=%"PRIu8",version=%"PRIu8")",
+                              genl->cmd, genl->version);
+            }
         }
     } else {
         ds_put_cstr(&ds, "nl(truncated)");
@@ -796,7 +969,7 @@ nlmsg_to_string(const struct ofpbuf *buffer)
 
 static void
 log_nlmsg(const char *function, int error,
-          const void *message, size_t size)
+          const void *message, size_t size, int protocol)
 {
     struct ofpbuf buffer;
     char *nlmsg;
@@ -806,7 +979,7 @@ log_nlmsg(const char *function, int error,
     }
 
     ofpbuf_use_const(&buffer, message, size);
-    nlmsg = nlmsg_to_string(&buffer);
+    nlmsg = nlmsg_to_string(&buffer, protocol);
     VLOG_DBG_RL(&rl, "%s (%s): %s", function, strerror(error), nlmsg);
     free(nlmsg);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -81,6 +81,7 @@ struct rconn {
     time_t backoff_deadline;
     time_t last_received;
     time_t last_connected;
+    time_t last_disconnected;
     unsigned int packets_sent;
     unsigned int seqno;
     int last_error;
@@ -102,16 +103,6 @@ struct rconn {
     unsigned int n_attempted_connections, n_successful_connections;
     time_t creation_time;
     unsigned long int total_time_connected;
-
-    /* If we can't connect to the peer, it could be for any number of reasons.
-     * Usually, one would assume it is because the peer is not running or
-     * because the network is partitioned.  But it could also be because the
-     * network topology has changed, in which case the upper layer will need to
-     * reassess it (in particular, obtain a new IP address via DHCP and find
-     * the new location of the controller).  We set this flag when we suspect
-     * that this could be the case. */
-    bool questionable_connectivity;
-    time_t last_questioned;
 
     /* Throughout this file, "probe" is shorthand for "inactivity probe".
      * When nothing has been received from the peer for a while, we send out
@@ -148,7 +139,6 @@ static void reconnect(struct rconn *);
 static void report_error(struct rconn *, int error);
 static void disconnect(struct rconn *, int error);
 static void flush_queue(struct rconn *);
-static void question_connectivity(struct rconn *);
 static void copy_to_monitor(struct rconn *, const struct ofpbuf *);
 static bool is_connected_state(enum state);
 static bool is_admitted_msg(const struct ofpbuf *);
@@ -188,7 +178,8 @@ rconn_create(int probe_interval, int max_backoff)
     rc->max_backoff = max_backoff ? max_backoff : 8;
     rc->backoff_deadline = TIME_MIN;
     rc->last_received = time_now();
-    rc->last_connected = time_now();
+    rc->last_connected = TIME_MIN;
+    rc->last_disconnected = TIME_MIN;
     rc->seqno = 0;
 
     rc->packets_sent = 0;
@@ -201,9 +192,6 @@ rconn_create(int probe_interval, int max_backoff)
     rc->n_successful_connections = 0;
     rc->creation_time = time_now();
     rc->total_time_connected = 0;
-
-    rc->questionable_connectivity = false;
-    rc->last_questioned = time_now();
 
     rconn_set_probe_interval(rc, probe_interval);
 
@@ -462,7 +450,6 @@ static void
 run_IDLE(struct rconn *rc)
 {
     if (timed_out(rc)) {
-        question_connectivity(rc);
         VLOG_ERR("%s: no response to inactivity probe after %u "
                  "seconds, disconnecting",
                  rc->name, elapsed_in_this_state(rc));
@@ -510,6 +497,9 @@ rconn_run_wait(struct rconn *rc)
 
     if (rc->vconn) {
         vconn_run_wait(rc->vconn);
+        if ((rc->state & (S_ACTIVE | S_IDLE)) && !list_is_empty(&rc->txq)) {
+            vconn_wait(rc->vconn, WAIT_SEND);
+        }
     }
     for (i = 0; i < rc->n_monitors; i++) {
         vconn_run_wait(rc->monitors[i]);
@@ -519,10 +509,6 @@ rconn_run_wait(struct rconn *rc)
     if (timeo != UINT_MAX) {
         long long int expires = sat_add(rc->state_entered, timeo);
         poll_timer_wait_until(expires * 1000);
-    }
-
-    if ((rc->state & (S_ACTIVE | S_IDLE)) && !list_is_empty(&rc->txq)) {
-        vconn_wait(rc->vconn, WAIT_SEND);
     }
 }
 
@@ -745,22 +731,6 @@ rconn_get_local_port(const struct rconn *rconn)
     return rconn->vconn ? vconn_get_local_port(rconn->vconn) : 0;
 }
 
-/* If 'rconn' can't connect to the peer, it could be for any number of reasons.
- * Usually, one would assume it is because the peer is not running or because
- * the network is partitioned.  But it could also be because the network
- * topology has changed, in which case the upper layer will need to reassess it
- * (in particular, obtain a new IP address via DHCP and find the new location
- * of the controller).  When this appears that this might be the case, this
- * function returns true.  It also clears the questionability flag and prevents
- * it from being set again for some time. */
-bool
-rconn_is_connectivity_questionable(struct rconn *rconn)
-{
-    bool questionable = rconn->questionable_connectivity;
-    rconn->questionable_connectivity = false;
-    return questionable;
-}
-
 /* Returns the total number of packets successfully received by the underlying
  * vconn.  */
 unsigned int
@@ -793,11 +763,19 @@ rconn_get_successful_connections(const struct rconn *rc)
 }
 
 /* Returns the time at which the last successful connection was made by
- * 'rc'. */
+ * 'rc'. Returns TIME_MIN if never connected. */
 time_t
 rconn_get_last_connection(const struct rconn *rc)
 {
     return rc->last_connected;
+}
+
+/* Returns the time at which 'rc' was last disconnected. Returns TIME_MIN
+ * if never disconnected. */
+time_t
+rconn_get_last_disconnect(const struct rconn *rc)
+{
+    return rc->last_disconnected;
 }
 
 /* Returns the time at which the last OpenFlow message was received by 'rc'.
@@ -981,6 +959,7 @@ disconnect(struct rconn *rc, int error)
         time_t now = time_now();
 
         if (rc->state & (S_CONNECTING | S_ACTIVE | S_IDLE)) {
+            rc->last_disconnected = now;
             vconn_close(rc->vconn);
             rc->vconn = NULL;
             flush_queue(rc);
@@ -1002,10 +981,8 @@ disconnect(struct rconn *rc, int error)
         }
         rc->backoff_deadline = now + rc->backoff;
         state_transition(rc, S_BACKOFF);
-        if (now - rc->last_connected > 60) {
-            question_connectivity(rc);
-        }
     } else {
+        rc->last_disconnected = time_now();
         rconn_disconnect(rc);
     }
 }
@@ -1067,16 +1044,6 @@ state_transition(struct rconn *rc, enum state state)
     VLOG_DBG("%s: entering %s", rc->name, state_name(state));
     rc->state = state;
     rc->state_entered = time_now();
-}
-
-static void
-question_connectivity(struct rconn *rc)
-{
-    time_t now = time_now();
-    if (now - rc->last_questioned > 60) {
-        rc->questionable_connectivity = true;
-        rc->last_questioned = now;
-    }
 }
 
 static void

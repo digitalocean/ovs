@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@
 #include "packets.h"
 #include "poll-loop.h"
 #include "shash.h"
+#include "sset.h"
 #include "svec.h"
 #include "vlog.h"
 
@@ -176,88 +177,26 @@ netdev_lookup_provider(const char *type)
 }
 
 /* Clears 'types' and enumerates the types of all currently registered netdev
- * providers into it.  The caller must first initialize the svec. */
+ * providers into it.  The caller must first initialize the sset. */
 void
-netdev_enumerate_types(struct svec *types)
+netdev_enumerate_types(struct sset *types)
 {
     struct shash_node *node;
 
     netdev_initialize();
-    svec_clear(types);
+    sset_clear(types);
 
     SHASH_FOR_EACH(node, &netdev_classes) {
         const struct netdev_class *netdev_class = node->data;
-        svec_add(types, netdev_class->type);
+        sset_add(types, netdev_class->type);
     }
-}
-
-/* Compares 'args' to those used to those used by 'dev'.  Returns true
- * if the arguments are the same, false otherwise.  Does not update the
- * values stored in 'dev'. */
-static bool
-compare_device_args(const struct netdev_dev *dev, const struct shash *args)
-{
-    const struct shash_node **new_args;
-    bool result = true;
-    int i;
-
-    if (shash_count(args) != dev->n_args) {
-        return false;
-    }
-
-    new_args = shash_sort(args);
-    for (i = 0; i < dev->n_args; i++) {
-        if (strcmp(dev->args[i].key, new_args[i]->name) ||
-            strcmp(dev->args[i].value, new_args[i]->data)) {
-            result = false;
-            goto finish;
-        }
-    }
-
-finish:
-    free(new_args);
-    return result;
-}
-
-static int
-compare_args(const void *a_, const void *b_)
-{
-    const struct arg *a = a_;
-    const struct arg *b = b_;
-    return strcmp(a->key, b->key);
 }
 
 void
 update_device_args(struct netdev_dev *dev, const struct shash *args)
 {
-    struct shash_node *node;
-    int i;
-
-    if (dev->n_args) {
-        for (i = 0; i < dev->n_args; i++) {
-            free(dev->args[i].key);
-            free(dev->args[i].value);
-        }
-
-        free(dev->args);
-        dev->n_args = 0;
-    }
-
-    if (!args || shash_is_empty(args)) {
-        return;
-    }
-
-    dev->n_args = shash_count(args);
-    dev->args = xmalloc(dev->n_args * sizeof *dev->args);
-
-    i = 0;
-    SHASH_FOR_EACH(node, args) {
-        dev->args[i].key = xstrdup(node->name);
-        dev->args[i].value = xstrdup(node->data);
-        i++;
-    }
-
-    qsort(dev->args, dev->n_args, sizeof *dev->args, compare_args);
+    smap_destroy(&dev->args);
+    smap_clone(&dev->args, args);
 }
 
 /* Opens the network device named 'name' (e.g. "eth0") and returns zero if
@@ -302,10 +241,9 @@ netdev_open(struct netdev_options *options, struct netdev **netdevp)
             return error;
         }
         assert(netdev_dev->netdev_class == class);
-        update_device_args(netdev_dev, options->args);
 
     } else if (!shash_is_empty(options->args) &&
-               !compare_device_args(netdev_dev, options->args)) {
+               !smap_equal(&netdev_dev->args, options->args)) {
 
         VLOG_WARN("%s: attempted to open already open netdev with "
                   "different arguments", options->name);
@@ -341,7 +279,7 @@ netdev_open_default(const char *name, struct netdev **netdevp)
 /* Reconfigures the device 'netdev' with 'args'.  'args' may be empty
  * or NULL if none are needed. */
 int
-netdev_reconfigure(struct netdev *netdev, const struct shash *args)
+netdev_set_config(struct netdev *netdev, const struct shash *args)
 {
     struct shash empty_args = SHASH_INITIALIZER(&empty_args);
     struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
@@ -350,17 +288,29 @@ netdev_reconfigure(struct netdev *netdev, const struct shash *args)
         args = &empty_args;
     }
 
-    if (netdev_dev->netdev_class->reconfigure) {
-        if (!compare_device_args(netdev_dev, args)) {
+    if (netdev_dev->netdev_class->set_config) {
+        if (!smap_equal(&netdev_dev->args, args)) {
             update_device_args(netdev_dev, args);
-            return netdev_dev->netdev_class->reconfigure(netdev_dev, args);
+            return netdev_dev->netdev_class->set_config(netdev_dev, args);
         }
     } else if (!shash_is_empty(args)) {
-        VLOG_WARN("%s: arguments provided to device that does not have a "
-                  "reconfigure function", netdev_get_name(netdev));
+        VLOG_WARN("%s: arguments provided to device whose configuration "
+                  "cannot be changed", netdev_get_name(netdev));
     }
 
     return 0;
+}
+
+/* Returns the current configuration for 'netdev'.  This is either the
+ * configuration passed to netdev_open() or netdev_set_config(), or it is a
+ * configuration retrieved from the device itself if no configuration was
+ * passed to those functions.
+ *
+ * 'netdev' retains ownership of the returned configuration. */
+const struct shash *
+netdev_get_config(const struct netdev *netdev)
+{
+    return &netdev_get_dev(netdev)->args;
 }
 
 /* Closes and destroys 'netdev'. */
@@ -410,20 +360,20 @@ netdev_is_open(const char *name)
     return !!shash_find_data(&netdev_dev_shash, name);
 }
 
-/*  Clears 'svec' and enumerates the names of all known network devices. */
+/*  Clears 'sset' and enumerates the names of all known network devices. */
 int
-netdev_enumerate(struct svec *svec)
+netdev_enumerate(struct sset *sset)
 {
     struct shash_node *node;
     int error = 0;
 
     netdev_initialize();
-    svec_clear(svec);
+    sset_clear(sset);
 
     SHASH_FOR_EACH(node, &netdev_classes) {
         const struct netdev_class *netdev_class = node->data;
         if (netdev_class->enumerate) {
-            int retval = netdev_class->enumerate(svec);
+            int retval = netdev_class->enumerate(sset);
             if (retval) {
                 VLOG_WARN("failed to enumerate %s network devices: %s",
                           netdev_class->type, strerror(retval));
@@ -572,8 +522,9 @@ netdev_get_name(const struct netdev *netdev)
  * (and received) packets, in bytes, not including the hardware header; thus,
  * this is typically 1500 bytes for Ethernet devices.
  *
- * If successful, returns 0 and stores the MTU size in '*mtup'.  On failure,
- * returns a positive errno value and stores ETH_PAYLOAD_MAX (1500) in
+ * If successful, returns 0 and stores the MTU size in '*mtup'.  Stores INT_MAX
+ * in '*mtup' if 'netdev' does not have an MTU (as e.g. some tunnels do not).On
+ * failure, returns a positive errno value and stores ETH_PAYLOAD_MAX (1500) in
  * '*mtup'. */
 int
 netdev_get_mtu(const struct netdev *netdev, int *mtup)
@@ -618,11 +569,11 @@ netdev_get_ifindex(const struct netdev *netdev)
  * Some network devices may not implement support for this function.  In such
  * cases this function will always return EOPNOTSUPP. */
 int
-netdev_get_features(struct netdev *netdev,
+netdev_get_features(const struct netdev *netdev,
                     uint32_t *current, uint32_t *advertised,
                     uint32_t *supported, uint32_t *peer)
 {
-    int (*get_features)(struct netdev *netdev,
+    int (*get_features)(const struct netdev *netdev,
                         uint32_t *current, uint32_t *advertised,
                         uint32_t *supported, uint32_t *peer);
     uint32_t dummy[4];
@@ -935,6 +886,34 @@ netdev_get_carrier(const struct netdev *netdev)
     return carrier;
 }
 
+/* Returns true if 'netdev' is up according to its MII. */
+bool
+netdev_get_miimon(const struct netdev *netdev)
+{
+    int error;
+    enum netdev_flags flags;
+    bool miimon;
+
+    netdev_get_flags(netdev, &flags);
+    if (!(flags & NETDEV_UP)) {
+        return false;
+    }
+
+    if (!netdev_get_dev(netdev)->netdev_class->get_miimon) {
+        return true;
+    }
+
+    error = netdev_get_dev(netdev)->netdev_class->get_miimon(netdev, &miimon);
+
+    if (error) {
+        VLOG_DBG("%s: failed to get network device MII status, assuming "
+                 "down: %s", netdev_get_name(netdev), strerror(error));
+        miimon = false;
+    }
+
+    return miimon;
+}
+
 /* Retrieves current device stats for 'netdev'. */
 int
 netdev_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
@@ -985,13 +964,13 @@ netdev_set_policing(struct netdev *netdev, uint32_t kbits_rate,
  * Every network device supports disabling QoS with a type of "", but this type
  * will not be added to 'types'.
  *
- * The caller must initialize 'types' (e.g. with svec_init()) before calling
+ * The caller must initialize 'types' (e.g. with sset_init()) before calling
  * this function.  The caller is responsible for destroying 'types' (e.g. with
- * svec_destroy()) when it is no longer needed.
+ * sset_destroy()) when it is no longer needed.
  *
  * Returns 0 if successful, otherwise a positive errno value. */
 int
-netdev_get_qos_types(const struct netdev *netdev, struct svec *types)
+netdev_get_qos_types(const struct netdev *netdev, struct sset *types)
 {
     const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
     return (class->get_qos_types
@@ -1279,12 +1258,11 @@ struct netdev *
 netdev_find_dev_by_in4(const struct in_addr *in4)
 {
     struct netdev *netdev;
-    struct svec dev_list = SVEC_EMPTY_INITIALIZER;
-    size_t i;
+    struct sset dev_list = SSET_INITIALIZER(&dev_list);
+    const char *name;
 
     netdev_enumerate(&dev_list);
-    for (i = 0; i < dev_list.n; i++) {
-        const char *name = dev_list.names[i];
+    SSET_FOR_EACH (name, &dev_list) {
         struct in_addr dev_in4;
 
         if (!netdev_open_default(name, &netdev)
@@ -1297,18 +1275,25 @@ netdev_find_dev_by_in4(const struct in_addr *in4)
     netdev = NULL;
 
 exit:
-    svec_destroy(&dev_list);
+    sset_destroy(&dev_list);
     return netdev;
 }
 
-/* Initializes 'netdev_dev' as a netdev device named 'name' of the
- * specified 'netdev_class'.
+/* Initializes 'netdev_dev' as a netdev device named 'name' of the specified
+ * 'netdev_class'.  This function is ordinarily called from a netdev provider's
+ * 'create' function.
+ *
+ * 'args' should be the arguments that were passed to the netdev provider's
+ * 'create'.  If an empty set of arguments was passed, and 'name' is the name
+ * of a network device that existed before the 'create' call, then 'args' may
+ * instead be the configuration for that existing device.
  *
  * This function adds 'netdev_dev' to a netdev-owned shash, so it is
  * very important that 'netdev_dev' only be freed after calling
  * the refcount drops to zero.  */
 void
 netdev_dev_init(struct netdev_dev *netdev_dev, const char *name,
+                const struct shash *args,
                 const struct netdev_class *netdev_class)
 {
     assert(!shash_find(&netdev_dev_shash, name));
@@ -1317,6 +1302,7 @@ netdev_dev_init(struct netdev_dev *netdev_dev, const char *name,
     netdev_dev->netdev_class = netdev_class;
     netdev_dev->name = xstrdup(name);
     netdev_dev->node = shash_add(&netdev_dev_shash, name, netdev_dev);
+    smap_clone(&netdev_dev->args, args);
 }
 
 /* Undoes the results of initialization.
@@ -1334,7 +1320,7 @@ netdev_dev_uninit(struct netdev_dev *netdev_dev, bool destroy)
     assert(!netdev_dev->ref_cnt);
 
     shash_delete(&netdev_dev_shash, netdev_dev->node);
-    update_device_args(netdev_dev, NULL);
+    smap_destroy(&netdev_dev->args);
 
     if (destroy) {
         netdev_dev->netdev_class->destroy(netdev_dev);
@@ -1458,7 +1444,7 @@ netdev_notifier_init(struct netdev_notifier *notifier, struct netdev *netdev,
 /* Tracks changes in the status of a set of network devices. */
 struct netdev_monitor {
     struct shash polled_netdevs;
-    struct shash changed_netdevs;
+    struct sset changed_netdevs;
 };
 
 /* Creates and returns a new structure for monitor changes in the status of
@@ -1468,7 +1454,7 @@ netdev_monitor_create(void)
 {
     struct netdev_monitor *monitor = xmalloc(sizeof *monitor);
     shash_init(&monitor->polled_netdevs);
-    shash_init(&monitor->changed_netdevs);
+    sset_init(&monitor->changed_netdevs);
     return monitor;
 }
 
@@ -1486,7 +1472,7 @@ netdev_monitor_destroy(struct netdev_monitor *monitor)
         }
 
         shash_destroy(&monitor->polled_netdevs);
-        shash_destroy(&monitor->changed_netdevs);
+        sset_destroy(&monitor->changed_netdevs);
         free(monitor);
     }
 }
@@ -1496,7 +1482,7 @@ netdev_monitor_cb(struct netdev_notifier *notifier)
 {
     struct netdev_monitor *monitor = notifier->aux;
     const char *name = netdev_get_name(notifier->netdev);
-    shash_add_once(&monitor->changed_netdevs, name, NULL);
+    sset_add(&monitor->changed_netdevs, name);
 }
 
 /* Attempts to add 'netdev' as a netdev monitored by 'monitor'.  Returns 0 if
@@ -1540,10 +1526,7 @@ netdev_monitor_remove(struct netdev_monitor *monitor, struct netdev *netdev)
         shash_delete(&monitor->polled_netdevs, node);
 
         /* Drop any pending notification. */
-        node = shash_find(&monitor->changed_netdevs, netdev_name);
-        if (node) {
-            shash_delete(&monitor->changed_netdevs, node);
-        }
+        sset_find_and_delete(&monitor->changed_netdevs, netdev_name);
     }
 }
 
@@ -1557,12 +1540,11 @@ netdev_monitor_remove(struct netdev_monitor *monitor, struct netdev *netdev)
 int
 netdev_monitor_poll(struct netdev_monitor *monitor, char **devnamep)
 {
-    struct shash_node *node = shash_first(&monitor->changed_netdevs);
-    if (!node) {
+    if (sset_is_empty(&monitor->changed_netdevs)) {
         *devnamep = NULL;
         return EAGAIN;
     } else {
-        *devnamep = shash_steal(&monitor->changed_netdevs, node);
+        *devnamep = sset_pop(&monitor->changed_netdevs);
         return 0;
     }
 }
@@ -1573,7 +1555,7 @@ netdev_monitor_poll(struct netdev_monitor *monitor, char **devnamep)
 void
 netdev_monitor_poll_wait(const struct netdev_monitor *monitor)
 {
-    if (!shash_is_empty(&monitor->changed_netdevs)) {
+    if (!sset_is_empty(&monitor->changed_netdevs)) {
         poll_immediate_wake();
     } else {
         /* XXX Nothing needed here for netdev_linux, but maybe other netdev

@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "1.0.3",
- "cksum": "2654345387 14137",
+ "version": "3.1.0",
+ "cksum": "2572059147 15155",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -8,8 +8,6 @@
          "type": {"key": {"type": "uuid",
                           "refTable": "Bridge"},
                   "min": 0, "max": "unlimited"}},
-       "managers": {
-         "type": {"key": "string", "min": 0, "max": "unlimited"}},
        "manager_options": {
          "type": {"key": {"type": "uuid",
                           "refTable": "Manager"},
@@ -45,6 +43,7 @@
        "system_version": {
          "type": {"key": {"type": "string"},
                   "min": 0, "max": 1}}},
+     "isRoot": true,
      "maxRows": 1},
    "Capability": {
      "columns": {
@@ -120,9 +119,13 @@
        "mac": {
          "type": {"key": {"type": "string"},
                   "min": 0, "max": 1}},
-       "bond_type": {
+       "bond_mode": {
          "type": {"key": {"type": "string",
-           "enum": ["set", ["slb", "active-backup"]]},
+           "enum": ["set", ["balance-tcp", "balance-slb", "active-backup"]]},
+         "min": 0, "max": 1}},
+       "lacp": {
+         "type": {"key": {"type": "string",
+           "enum": ["set", ["active", "passive", "off"]]},
          "min": 0, "max": 1}},
        "bond_updelay": {
          "type": "integer"},
@@ -171,6 +174,27 @@
          "ephemeral": true},
        "status": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"},
+         "ephemeral": true},
+       "admin_state": {
+         "type": {"key": {"type": "string",
+                          "enum": ["set", ["up", "down"]]},
+                  "min": 0, "max": 1},
+         "ephemeral": true},
+       "link_state": {
+         "type": {"key": {"type": "string",
+                          "enum": ["set", ["up", "down"]]},
+                  "min": 0, "max": 1},
+         "ephemeral": true},
+       "link_speed": {
+         "type": {"key": "integer", "min": 0, "max": 1},
+         "ephemeral": true},
+       "duplex": {
+         "type": {"key": {"type": "string",
+                          "enum": ["set", ["half", "full"]]},
+                  "min": 0, "max": 1},
+         "ephemeral": true},
+       "mtu": {
+         "type": {"key": "integer", "min": 0, "max": 1},
          "ephemeral": true}}},
    "Monitor": {
      "columns": {
@@ -196,20 +220,7 @@
          "type": {
            "key": { "type": "uuid", "refTable": "Maintenance_Point"},
            "min": 0,
-           "max": "unlimited"},
-         "ephemeral": true},
-       "unexpected_remote_mpids": {
-         "type": {
-           "key": { "type": "integer"},
-           "min": 0,
-           "max": "unlimited"},
-         "ephemeral": true},
-       "unexpected_remote_maids": {
-         "type": {
-           "key": "string",
-           "min": 0,
-           "max": "unlimited"},
-         "ephemeral": true},
+           "max": "unlimited"}},
        "fault": {
          "type": {
            "key": { "type": "boolean"},
@@ -244,7 +255,8 @@
                   "min": 0, "max": "unlimited"}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
-                  "min": 0, "max": "unlimited"}}}},
+                  "min": 0, "max": "unlimited"}}},
+     "isRoot": true},
    "Queue": {
      "columns": {
        "other_config": {
@@ -252,7 +264,8 @@
                   "min": 0, "max": "unlimited"}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
-                  "min": 0, "max": "unlimited"}}}},
+                  "min": 0, "max": "unlimited"}}},
+     "isRoot": true},
    "Mirror": {
      "columns": {
        "name": {
@@ -336,10 +349,6 @@
                   "min": 0, "max": 1}},
        "inactivity_probe": {
          "type": {"key": "integer", "min": 0, "max": 1}},
-       "discover_accept_regex": {
-         "type": {"key": "string", "min": 0, "max": 1}},
-       "discover_update_resolv_conf": {
-         "type": {"key": "boolean", "min": 0, "max": 1}},
        "connection_mode": {
          "type": {"key": {"type": "string",
                   "enum": ["set", ["in-band", "out-of-band"]]},
@@ -363,7 +372,18 @@
                   "min": 0, "max": 1}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
-                  "min": 0, "max": "unlimited"}}}},
+                  "min": 0, "max": "unlimited"}},
+       "is_connected": {
+         "type": "boolean",
+         "ephemeral": true},
+       "role": {
+         "type": {"key": {"type": "string",
+                          "enum": ["set", ["other", "master", "slave"]]},
+                  "min": 0, "max": 1},
+         "ephemeral": true},
+       "status": {
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"},
+         "ephemeral": true}}},
    "Manager": {
      "columns": {
        "target": {
@@ -380,7 +400,13 @@
                   "min": 0, "max": 1}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
-                  "min": 0, "max": "unlimited"}}}},
+                  "min": 0, "max": "unlimited"}},
+       "is_connected": {
+         "type": "boolean",
+         "ephemeral": true},
+       "status": {
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"},
+         "ephemeral": true}}},
    "SSL": {
      "columns": {
        "private_key": {

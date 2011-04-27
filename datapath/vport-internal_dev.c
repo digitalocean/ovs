@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
  * kernel, by Linus Torvalds and others.
  */
 
+#include <linux/if_vlan.h>
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -15,6 +16,7 @@
 
 #include "checksum.h"
 #include "datapath.h"
+#include "vlan.h"
 #include "vport-generic.h"
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
@@ -72,6 +74,7 @@ static int internal_dev_mac_addr(struct net_device *dev, void *p)
 static int internal_dev_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
 	compute_ip_summed(skb, true);
+	vlan_copy_skb_tci(skb);
 	OVS_CB(skb)->flow = NULL;
 
 	vport_receive(internal_dev_priv(netdev)->vport, skb);
@@ -93,10 +96,7 @@ static int internal_dev_stop(struct net_device *netdev)
 static void internal_dev_getinfo(struct net_device *netdev,
 				 struct ethtool_drvinfo *info)
 {
-	struct vport *vport = internal_dev_get_vport(netdev);
-
 	strcpy(info->driver, "openvswitch");
-	sprintf(info->bus_info, "%d.%d", vport->dp->dp_idx, vport->port_no);
 }
 
 static const struct ethtool_ops internal_dev_ethtool_ops = {
@@ -132,6 +132,14 @@ static int internal_dev_do_ioctl(struct net_device *dev, struct ifreq *ifr, int 
 	return -EOPNOTSUPP;
 }
 
+static void internal_dev_destructor(struct net_device *dev)
+{
+	struct vport *vport = internal_dev_get_vport(dev);
+
+	vport_free(vport);
+	free_netdev(dev);
+}
+
 #ifdef HAVE_NET_DEVICE_OPS
 static const struct net_device_ops internal_dev_netdev_ops = {
 	.ndo_open = internal_dev_open,
@@ -160,13 +168,18 @@ static void do_setup(struct net_device *netdev)
 	netdev->change_mtu = internal_dev_change_mtu;
 #endif
 
-	netdev->destructor = free_netdev;
+	netdev->destructor = internal_dev_destructor;
 	SET_ETHTOOL_OPS(netdev, &internal_dev_ethtool_ops);
 	netdev->tx_queue_len = 0;
 
 	netdev->flags = IFF_BROADCAST | IFF_MULTICAST;
 	netdev->features = NETIF_F_LLTX | NETIF_F_SG | NETIF_F_FRAGLIST |
 				NETIF_F_HIGHDMA | NETIF_F_HW_CSUM | NETIF_F_TSO;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+	netdev->vlan_features = netdev->features;
+	netdev->features |= NETIF_F_HW_VLAN_TX;
+#endif
 
 	vport_gen_rand_ether_addr(netdev->dev_addr);
 }
@@ -219,8 +232,8 @@ static int internal_dev_destroy(struct vport *vport)
 	netif_stop_queue(netdev_vport->dev);
 	dev_set_promiscuity(netdev_vport->dev, -1);
 
+	/* unregister_netdevice() waits for an RCU grace period. */
 	unregister_netdevice(netdev_vport->dev);
-	vport_free(vport);
 
 	return 0;
 }
@@ -230,8 +243,13 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 	struct net_device *netdev = netdev_vport_priv(vport)->dev;
 	int len;
 
-	skb->dev = netdev;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
+	if (unlikely(vlan_deaccel_tag(skb)))
+		return 0;
+#endif
+
 	len = skb->len;
+	skb->dev = netdev;
 	skb->pkt_type = PACKET_HOST;
 	skb->protocol = eth_type_trans(skb, netdev);
 
@@ -248,7 +266,7 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 }
 
 const struct vport_ops internal_vport_ops = {
-	.type		= "internal",
+	.type		= ODP_VPORT_TYPE_INTERNAL,
 	.flags		= VPORT_F_REQUIRED | VPORT_F_GEN_STATS | VPORT_F_FLOW,
 	.create		= internal_dev_create,
 	.destroy	= internal_dev_destroy,

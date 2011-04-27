@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,7 +111,9 @@ usage(void)
            "  compact DB [DST]   compact DB in-place (or to DST)\n"
            "  convert DB SCHEMA [DST]   convert DB to SCHEMA (to DST)\n"
            "  db-version DB      report version of schema used by DB\n"
+           "  db-cksum DB        report checksum of schema used by DB\n"
            "  schema-version SCHEMA  report SCHEMA's schema version\n"
+           "  schema-cksum SCHEMA  report SCHEMA's checksum\n"
            "  query DB TRNS      execute read-only transaction on DB\n"
            "  transact DB TRNS   execute read/write transaction on DB\n"
            "  show-log DB        prints information about DB's log entries\n",
@@ -242,14 +244,39 @@ do_convert(int argc OVS_UNUSED, char *argv[])
 }
 
 static void
+do_needs_conversion(int argc OVS_UNUSED, char *argv[])
+{
+    const char *db_file_name = argv[1];
+    const char *schema_file_name = argv[2];
+    struct ovsdb_schema *schema1, *schema2;
+
+    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema1));
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema2));
+    puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
+    ovsdb_schema_destroy(schema1);
+    ovsdb_schema_destroy(schema2);
+}
+
+static void
 do_db_version(int argc OVS_UNUSED, char *argv[])
 {
     const char *db_file_name = argv[1];
-    struct ovsdb *db;
+    struct ovsdb_schema *schema;
 
-    check_ovsdb_error(ovsdb_file_open(db_file_name, true, &db, NULL));
-    puts(db->schema->version);
-    ovsdb_destroy(db);
+    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    puts(schema->version);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
+do_db_cksum(int argc OVS_UNUSED, char *argv[])
+{
+    const char *db_file_name = argv[1];
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    puts(schema->cksum);
+    ovsdb_schema_destroy(schema);
 }
 
 static void
@@ -260,6 +287,17 @@ do_schema_version(int argc OVS_UNUSED, char *argv[])
 
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
     puts(schema->version);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
+do_schema_cksum(int argc OVS_UNUSED, char *argv[])
+{
+    const char *schema_file_name = argv[1];
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    puts(schema->cksum);
     ovsdb_schema_destroy(schema);
 }
 
@@ -421,6 +459,7 @@ do_show_log(int argc OVS_UNUSED, char *argv[])
         putchar('\n');
     }
 
+    ovsdb_log_close(log);
     /* XXX free 'names'. */
 }
 
@@ -434,8 +473,11 @@ static const struct command all_commands[] = {
     { "create", 2, 2, do_create },
     { "compact", 1, 2, do_compact },
     { "convert", 2, 3, do_convert },
+    { "needs-conversion", 2, 2, do_needs_conversion },
     { "db-version", 1, 1, do_db_version },
+    { "db-cksum", 1, 1, do_db_cksum },
     { "schema-version", 1, 1, do_schema_version },
+    { "schema-cksum", 1, 1, do_schema_cksum },
     { "query", 2, 2, do_query },
     { "transact", 2, 2, do_transact },
     { "show-log", 1, 1, do_show_log },

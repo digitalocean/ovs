@@ -33,6 +33,9 @@
 # or func_output().
 #
 
+import warnings
+warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+
 import getopt
 import re
 import os
@@ -64,7 +67,7 @@ OS_RELEASE = platform.release()
 # Files & directories
 #
 
-BUG_DIR = "/var/log/openvswitch"
+BUG_DIR = "/var/log/ovs-bugtool"
 PLUGIN_DIR = "/etc/openvswitch/bugtool"
 GRUB_CONFIG = '/boot/grub/menu.lst'
 BOOT_KERNEL = '/boot/vmlinuz-' + OS_RELEASE
@@ -93,12 +96,14 @@ HOSTS = '/etc/hosts'
 HOSTS_ALLOW = '/etc/hosts.allow'
 HOSTS_DENY = '/etc/hosts.deny'
 DHCP_LEASE_DIR = '/var/lib/dhcp3'
-OPENVSWITCH_CORE_DIR = '/var/log/openvswitch/cores'
+OPENVSWITCH_LOG_DIR = '/var/log/openvswitch'
 OPENVSWITCH_DEFAULT_SWITCH = '/etc/default/openvswitch-switch'
 OPENVSWITCH_DEFAULT_CONTROLLER = '/etc/default/openvswitch-controller'
 OPENVSWITCH_CONF_DB = '/etc/openvswitch/conf.db'
 OPENVSWITCH_VSWITCHD_PID = '/var/run/openvswitch/ovs-vswitchd.pid'
+COLLECTD_LOGS_DIR = '/var/lib/collectd/rrd'
 VAR_LOG_DIR = '/var/log/'
+VAR_LOG_CORE_DIR = '/var/log/core'
 X11_LOGS_DIR = VAR_LOG_DIR
 X11_LOGS_RE = re.compile(r'.*/Xorg\..*$')
 X11_AUTH_DIR = '/root/'
@@ -181,6 +186,7 @@ CAP_XML_ELEMENT = 'capability'
 
 CAP_BLOBS                = 'blobs'
 CAP_BOOT_LOADER          = 'boot-loader'
+CAP_COLLECTD_LOGS        = 'collectd-logs'
 CAP_DISK_INFO            = 'disk-info'
 CAP_FIRSTBOOT            = 'firstboot'
 CAP_HARDWARE_INFO        = 'hardware-info'
@@ -219,6 +225,8 @@ def cap(key, pii=PII_MAYBE, min_size=-1, max_size=-1, min_time=-1,
 
 cap(CAP_BLOBS,               PII_NO,                    max_size=5*MB)
 cap(CAP_BOOT_LOADER,         PII_NO,                    max_size=3*KB,
+    max_time=5)
+cap(CAP_COLLECTD_LOGS,       PII_MAYBE,                 max_size=50*MB,
     max_time=5)
 cap(CAP_DISK_INFO,           PII_MAYBE,                 max_size=25*KB,
     max_time=20)
@@ -448,6 +456,7 @@ exclude those logs from the archive.
     cmd_output(CAP_BOOT_LOADER, [LS, '-lR', '/boot'])
     cmd_output(CAP_BOOT_LOADER, [MD5SUM, BOOT_KERNEL, BOOT_INITRD], label='vmlinuz-initrd.md5sum')
 
+    tree_output(CAP_COLLECTD_LOGS, COLLECTD_LOGS_DIR)
     cmd_output(CAP_DISK_INFO, [FDISK, '-l'])
     file_output(CAP_DISK_INFO, [PROC_PARTITIONS, PROC_MOUNTS])
     file_output(CAP_DISK_INFO, [FSTAB])
@@ -504,7 +513,7 @@ exclude those logs from the archive.
             pass
     cmd_output(CAP_NETWORK_STATUS, [TC, '-s', 'qdisc'])
     file_output(CAP_NETWORK_STATUS, [PROC_NET_SOFTNET_STAT])
-    tree_output(CAP_NETWORK_STATUS, OPENVSWITCH_CORE_DIR)
+    tree_output(CAP_NETWORK_STATUS, OPENVSWITCH_LOG_DIR)
     if os.path.exists(OPENVSWITCH_VSWITCHD_PID):
         cmd_output(CAP_NETWORK_STATUS, [OVS_DPCTL, 'show'])
         for d in dp_list():
@@ -543,6 +552,7 @@ exclude those logs from the archive.
 
     tree_output(CAP_X11_LOGS, X11_LOGS_DIR, X11_LOGS_RE)
     tree_output(CAP_X11_AUTH, X11_AUTH_DIR, X11_AUTH_RE)
+    tree_output(CAP_SYSTEM_LOGS, VAR_LOG_CORE_DIR)
 
 
     try:

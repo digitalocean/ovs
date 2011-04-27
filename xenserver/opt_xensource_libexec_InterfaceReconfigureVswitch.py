@@ -1,5 +1,5 @@
-# Copyright (c) 2008,2009 Citrix Systems, Inc.
-# Copyright (c) 2009,2010 Nicira Networks.
+# Copyright (c) 2008,2009,2011 Citrix Systems, Inc.
+# Copyright (c) 2009,2010,2011 Nicira Networks.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published
@@ -37,6 +37,49 @@ def netdev_up(netdev, mtu=None):
         mtu = []
 
     run_command(["/sbin/ifconfig", netdev, 'up'] + mtu)
+
+# This is a list of drivers that do support VLAN tx or rx acceleration, but
+# to which the VLAN bug workaround should not be applied.  This could be
+# because these are known-good drivers (that is, they do not have any of
+# the bugs that the workaround avoids) or because the VLAN bug workaround
+# will not work for them and may cause other problems.
+#
+# This is a very short list because few drivers have been tested.
+NO_VLAN_WORKAROUND_DRIVERS = (
+    "bonding",
+)
+def netdev_get_driver_name(netdev):
+    """Returns the name of the driver for network device 'netdev'"""
+    symlink = '%s/sys/class/net/%s/device/driver' % (root_prefix(), netdev)
+    try:
+        target = os.readlink(symlink)
+    except OSError, e:
+        log("%s: could not read netdev's driver name (%s)" % (netdev, e))
+        return None
+
+    slash = target.rfind('/')
+    if slash < 0:
+        log("target %s of symbolic link %s does not contain slash"
+            % (target, symlink))
+        return None
+
+    return target[slash + 1:]
+
+def netdev_get_features(netdev):
+    """Returns the features bitmap for the driver for 'netdev'.
+    The features bitmap is a set of NETIF_F_ flags supported by its driver."""
+    try:
+        features = open("%s/sys/class/net/%s/features" % (root_prefix(), netdev)).read().strip()
+        return int(features, 0)
+    except:
+        return 0 # interface prolly doesn't exist
+
+def netdev_has_vlan_accel(netdev):
+    """Returns True if 'netdev' supports VLAN acceleration, False otherwise."""
+    NETIF_F_HW_VLAN_TX = 128
+    NETIF_F_HW_VLAN_RX = 256
+    NETIF_F_VLAN = NETIF_F_HW_VLAN_TX | NETIF_F_HW_VLAN_RX
+    return (netdev_get_features(netdev) & NETIF_F_VLAN) != 0
 
 #
 # PIF miscellanea
@@ -147,6 +190,7 @@ def datapath_configure_bond(pif,slaves):
         "downdelay": "200",
         "updelay": "31000",
         "use_carrier": "1",
+        "hashing-algorithm": "src_mac",
         }
     # override defaults with values from other-config whose keys
     # being with "bond-"
@@ -155,6 +199,8 @@ def datapath_configure_bond(pif,slaves):
                            key.startswith("bond-"), oc.items())
     overrides = map(lambda (key,val): (key[5:], val), overrides)
     bond_options.update(overrides)
+    mode = None
+    halgo = None
 
     argv += ['--', 'set', 'Port', interface]
     if pifrec['MAC'] != "":
@@ -171,10 +217,47 @@ def datapath_configure_bond(pif,slaves):
                 argv += ['bond_%s=%d' % (name, value)]
             except ValueError:
                 log("bridge %s has invalid %s '%s'" % (bridge, name, value))
+        elif name in ['miimon', 'use_carrier']:
+            try:
+                value = int(val)
+                if value < 0:
+                    raise ValueError
+
+                if name == 'use_carrier':
+                    if value:
+                        value = "carrier"
+                    else:
+                        value = "miimon"
+                    argv += ["other-config:bond-detect-mode=%s" % value]
+                else:
+                    argv += ["other-config:bond-miimon-interval=%d" % value]
+            except ValueError:
+                log("bridge %s has invalid %s '%s'" % (bridge, name, value))
+        elif name == "mode":
+            mode = val
+        elif name == "hashing-algorithm":
+            halgo = val
         else:
             # Pass other bond options into other_config.
             argv += ["other-config:%s=%s" % (vsctl_escape("bond-%s" % name),
                                              vsctl_escape(val))]
+
+    if mode == 'lacp':
+        argv += ['lacp=active']
+
+        if halgo == 'src_mac':
+            argv += ['bond_mode=balance-slb']
+        elif halgo == "tcpudp_ports":
+            argv += ['bond_mode=balance-tcp']
+        else:
+            log("bridge %s has invalid bond-hashing-algorithm '%s'" % (bridge, halgo))
+            argv += ['bond_mode=balance-slb']
+    elif mode in ['balance-slb', 'active-backup']:
+        argv += ['lacp=off', 'bond_mode=%s' % mode]
+    else:
+        log("bridge %s has invalid bond-mode '%s'" % (bridge, mode))
+        argv += ['lacp=off', 'bond_mode=balance-slb']
+
     return argv
 
 def datapath_deconfigure_bond(netdev):
@@ -309,6 +392,33 @@ def configure_datapath(pif):
     vsctl_argv += ['--', 'set', 'Bridge', bridge,
                    'other-config:hwaddr=%s' % vsctl_escape(db().get_pif_record(pif)['MAC'])]
 
+    pool = db().get_pool_record()
+    network = db().get_network_by_bridge(bridge)
+    network_rec = None
+    fail_mode = None
+    valid_fail_modes = ['standalone', 'secure']
+
+    if network:
+        network_rec = db().get_network_record(network)
+        fail_mode = network_rec['other_config'].get('vswitch-controller-fail-mode')
+
+    if (fail_mode not in valid_fail_modes) and pool:
+        fail_mode = pool['other_config'].get('vswitch-controller-fail-mode')
+
+    if fail_mode not in valid_fail_modes:
+        fail_mode = 'standalone'
+
+    vsctl_argv += ['--', 'set', 'Bridge', bridge, 'fail_mode=%s' % fail_mode]
+
+    if network_rec:
+        dib = network_rec['other_config'].get('vswitch-disable-in-band')
+        if not dib:
+            vsctl_argv += ['--', 'remove', 'Bridge', bridge, 'other_config', 'disable-in-band']
+        elif dib in ['true', 'false']:
+            vsctl_argv += ['--', 'set', 'Bridge', bridge, 'other_config:disable-in-band=' + dib]
+        else:
+            log('"' + dib + '"' "isn't a valid setting for other_config:disable-in-band on " + bridge)
+
     vsctl_argv += set_br_external_ids(pif)
     vsctl_argv += ['## done configuring datapath %s' % bridge]
 
@@ -408,8 +518,8 @@ class DatapathVswitch(Datapath):
         dpname = pif_bridge_name(self._dp)
         
         if pif_is_vlan(self._pif):
-            # XXX this is only needed on XS5.5, because XAPI misguidedly
-            # creates the fake bridge (via bridge ioctl) before it calls us.
+            # In some cases XAPI may misguidedly leave an instance of
+            # 'bridge' which should be deleted.
             vsctl_argv += ['--', '--if-exists', 'del-br', bridge]
 
             # configure_datapath() set up the underlying datapath bridge.
@@ -472,11 +582,25 @@ class DatapathVswitch(Datapath):
 
             netdev_up(dev, mtu)
 
-            settings, offload = ethtool_settings(oc)
+            settings, offload = ethtool_settings(oc, PIF_OTHERCONFIG_DEFAULTS)
             if len(settings):
                 run_command(['/sbin/ethtool', '-s', dev] + settings)
             if len(offload):
                 run_command(['/sbin/ethtool', '-K', dev] + offload)
+
+            driver = netdev_get_driver_name(dev)
+            if 'vlan-bug-workaround' in oc:
+                vlan_bug_workaround = oc['vlan-bug-workaround'] == 'true'
+            elif driver in NO_VLAN_WORKAROUND_DRIVERS:
+                vlan_bug_workaround = False
+            else:
+                vlan_bug_workaround = netdev_has_vlan_accel(dev)
+
+            if vlan_bug_workaround:
+                setting = 'on'
+            else:
+                setting = 'off'
+            run_command(['/usr/sbin/ovs-vlan-bug-workaround', dev, setting])
 
         datapath_modify_config(self._vsctl_argv)
 
@@ -492,11 +616,6 @@ class DatapathVswitch(Datapath):
         ipdev = self._ipdev
         
         bridge = pif_bridge_name(dp)
-
-        #nw = db().get_pif_record(self._pif)['network']
-        #nwrec = db().get_network_record(nw)
-        #vsctl_argv += ['# deconfigure network-uuids']
-        #vsctl_argv += ['--del-entry=bridge.%s.network-uuids=%s' % (bridge,nwrec['uuid'])]
 
         log("deconfigure ipdev %s on %s" % (ipdev,bridge))
         vsctl_argv += ["# deconfigure ipdev %s" % ipdev]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@
 #include "dpif.h"
 #include "dpif-provider.h"
 #include "dummy.h"
+#include "dynamic-string.h"
 #include "flow.h"
 #include "hmap.h"
 #include "list.h"
@@ -54,14 +55,23 @@
 VLOG_DEFINE_THIS_MODULE(dpif_netdev);
 
 /* Configuration parameters. */
-enum { N_QUEUES = 2 };          /* Number of queues for dpif_recv(). */
-enum { MAX_QUEUE_LEN = 100 };   /* Maximum number of packets per queue. */
 enum { MAX_PORTS = 256 };       /* Maximum number of ports. */
 enum { MAX_FLOWS = 65536 };     /* Maximum number of flows in flow table. */
 
 /* Enough headroom to add a vlan tag, plus an extra 2 bytes to allow IP
  * headers to be aligned on a 4-byte boundary.  */
 enum { DP_NETDEV_HEADROOM = 2 + VLAN_HEADER_LEN };
+
+/* Queues. */
+enum { N_QUEUES = 2 };          /* Number of queues for dpif_recv(). */
+enum { MAX_QUEUE_LEN = 128 };   /* Maximum number of packets per queue. */
+enum { QUEUE_MASK = MAX_QUEUE_LEN - 1 };
+BUILD_ASSERT_DECL(IS_POW2(MAX_QUEUE_LEN));
+
+struct dp_netdev_queue {
+    struct dpif_upcall *upcalls[MAX_QUEUE_LEN];
+    unsigned int head, tail;
+};
 
 /* Datapath based on the network device interface from netdev.h. */
 struct dp_netdev {
@@ -71,8 +81,7 @@ struct dp_netdev {
     bool destroyed;
 
     bool drop_frags;            /* Drop all IP fragments, if true. */
-    struct list queues[N_QUEUES]; /* Contain ofpbufs queued for dpif_recv(). */
-    size_t queue_len[N_QUEUES]; /* Number of packets in each queue. */
+    struct dp_netdev_queue queues[N_QUEUES];
     struct hmap flow_table;     /* Flow table. */
 
     /* Statistics. */
@@ -102,7 +111,7 @@ struct dp_netdev_flow {
     struct flow key;
 
     /* Statistics. */
-    struct timespec used;       /* Last used time. */
+    long long int used;         /* Last used time, in monotonic msecs. */
     long long int packet_count; /* Number of packets matched. */
     long long int byte_count;   /* Number of bytes matched. */
     uint16_t tcp_ctl;           /* Bitwise-OR of seen tcp_ctl values. */
@@ -138,7 +147,8 @@ static int do_del_port(struct dp_netdev *, uint16_t port_no);
 static int dpif_netdev_open(const struct dpif_class *, const char *name,
                             bool create, struct dpif **);
 static int dp_netdev_output_control(struct dp_netdev *, const struct ofpbuf *,
-                                    int queue_no, int port_no, uint64_t arg);
+                                    int queue_no, const struct flow *,
+                                    uint64_t arg);
 static int dp_netdev_execute_actions(struct dp_netdev *,
                                      struct ofpbuf *, struct flow *,
                                      const struct nlattr *actions,
@@ -190,7 +200,7 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     dp->open_cnt = 0;
     dp->drop_frags = false;
     for (i = 0; i < N_QUEUES; i++) {
-        list_init(&dp->queues[i]);
+        dp->queues[i].head = dp->queues[i].tail = 0;
     }
     hmap_init(&dp->flow_table);
     list_init(&dp->port_list);
@@ -236,19 +246,32 @@ dpif_netdev_open(const struct dpif_class *class, const char *name,
 }
 
 static void
-dp_netdev_free(struct dp_netdev *dp)
+dp_netdev_purge_queues(struct dp_netdev *dp)
 {
     int i;
 
+    for (i = 0; i < N_QUEUES; i++) {
+        struct dp_netdev_queue *q = &dp->queues[i];
+
+        while (q->tail != q->head) {
+            struct dpif_upcall *upcall = q->upcalls[q->tail++ & QUEUE_MASK];
+
+            ofpbuf_delete(upcall->packet);
+            free(upcall);
+        }
+    }
+}
+
+static void
+dp_netdev_free(struct dp_netdev *dp)
+{
     dp_netdev_flow_flush(dp);
     while (dp->n_ports > 0) {
         struct dp_netdev_port *port = CONTAINER_OF(
             dp->port_list.next, struct dp_netdev_port, node);
         do_del_port(dp, port->port_no);
     }
-    for (i = 0; i < N_QUEUES; i++) {
-        ofpbuf_list_delete(&dp->queues[i]);
-    }
+    dp_netdev_purge_queues(dp);
     hmap_destroy(&dp->flow_table);
     free(dp->name);
     free(dp);
@@ -279,17 +302,10 @@ dpif_netdev_get_stats(const struct dpif *dpif, struct odp_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     memset(stats, 0, sizeof *stats);
-    stats->n_flows = hmap_count(&dp->flow_table);
-    stats->cur_capacity = hmap_capacity(&dp->flow_table);
-    stats->max_capacity = MAX_FLOWS;
-    stats->n_ports = dp->n_ports;
-    stats->max_ports = MAX_PORTS;
     stats->n_frags = dp->n_frags;
     stats->n_hit = dp->n_hit;
     stats->n_missed = dp->n_missed;
     stats->n_lost = dp->n_lost;
-    stats->max_miss_queue = MAX_QUEUE_LEN;
-    stats->max_action_queue = MAX_QUEUE_LEN;
     return 0;
 }
 
@@ -359,7 +375,7 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     port->internal = internal;
 
     netdev_get_mtu(netdev, &mtu);
-    if (mtu > max_mtu) {
+    if (mtu != INT_MAX && mtu > max_mtu) {
         max_mtu = mtu;
     }
 
@@ -456,18 +472,17 @@ do_del_port(struct dp_netdev *dp, uint16_t port_no)
 }
 
 static void
-answer_port_query(const struct dp_netdev_port *port, struct odp_port *odp_port)
+answer_port_query(const struct dp_netdev_port *port,
+                  struct dpif_port *dpif_port)
 {
-    memset(odp_port, 0, sizeof *odp_port);
-    ovs_strlcpy(odp_port->devname, netdev_get_name(port->netdev),
-                sizeof odp_port->devname);
-    odp_port->port = port->port_no;
-    strcpy(odp_port->type, port->internal ? "internal" : "system");
+    dpif_port->name = xstrdup(netdev_get_name(port->netdev));
+    dpif_port->type = xstrdup(port->internal ? "internal" : "system");
+    dpif_port->port_no = port->port_no;
 }
 
 static int
 dpif_netdev_port_query_by_number(const struct dpif *dpif, uint16_t port_no,
-                                 struct odp_port *odp_port)
+                                 struct dpif_port *dpif_port)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_port *port;
@@ -475,14 +490,14 @@ dpif_netdev_port_query_by_number(const struct dpif *dpif, uint16_t port_no,
 
     error = get_port_by_number(dp, port_no, &port);
     if (!error) {
-        answer_port_query(port, odp_port);
+        answer_port_query(port, dpif_port);
     }
     return error;
 }
 
 static int
 dpif_netdev_port_query_by_name(const struct dpif *dpif, const char *devname,
-                               struct odp_port *odp_port)
+                               struct dpif_port *dpif_port)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_port *port;
@@ -490,9 +505,15 @@ dpif_netdev_port_query_by_name(const struct dpif *dpif, const char *devname,
 
     error = get_port_by_name(dp, devname, &port);
     if (!error) {
-        answer_port_query(port, odp_port);
+        answer_port_query(port, dpif_port);
     }
     return error;
+}
+
+static int
+dpif_netdev_get_max_ports(const struct dpif *dpif OVS_UNUSED)
+{
+    return MAX_PORTS;
 }
 
 static void
@@ -521,23 +542,48 @@ dpif_netdev_flow_flush(struct dpif *dpif)
     return 0;
 }
 
-static int
-dpif_netdev_port_list(const struct dpif *dpif, struct odp_port *ports, int n)
-{
-    struct dp_netdev *dp = get_dp_netdev(dpif);
-    struct dp_netdev_port *port;
-    int i;
+struct dp_netdev_port_state {
+    uint32_t port_no;
+    char *name;
+};
 
-    i = 0;
-    LIST_FOR_EACH (port, node, &dp->port_list) {
-        struct odp_port *odp_port = &ports[i];
-        if (i >= n) {
-            break;
+static int
+dpif_netdev_port_dump_start(const struct dpif *dpif OVS_UNUSED, void **statep)
+{
+    *statep = xzalloc(sizeof(struct dp_netdev_port_state));
+    return 0;
+}
+
+static int
+dpif_netdev_port_dump_next(const struct dpif *dpif, void *state_,
+                           struct dpif_port *dpif_port)
+{
+    struct dp_netdev_port_state *state = state_;
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+    uint32_t port_no;
+
+    for (port_no = state->port_no; port_no < MAX_PORTS; port_no++) {
+        struct dp_netdev_port *port = dp->ports[port_no];
+        if (port) {
+            free(state->name);
+            state->name = xstrdup(netdev_get_name(port->netdev));
+            dpif_port->name = state->name;
+            dpif_port->type = port->internal ? "internal" : "system";
+            dpif_port->port_no = port->port_no;
+            state->port_no = port_no + 1;
+            return 0;
         }
-        answer_port_query(port, odp_port);
-        i++;
     }
-    return dp->n_ports;
+    return EOF;
+}
+
+static int
+dpif_netdev_port_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
+{
+    struct dp_netdev_port_state *state = state_;
+    free(state->name);
+    free(state);
+    return 0;
 }
 
 static int
@@ -574,47 +620,66 @@ dp_netdev_lookup_flow(const struct dp_netdev *dp, const struct flow *key)
     return NULL;
 }
 
-/* The caller must fill in odp_flow->key itself. */
 static void
-answer_flow_query(struct dp_netdev_flow *flow, uint32_t query_flags,
-                  struct odp_flow *odp_flow)
+get_dpif_flow_stats(struct dp_netdev_flow *flow, struct dpif_flow_stats *stats)
 {
-    if (flow) {
-        odp_flow->stats.n_packets = flow->packet_count;
-        odp_flow->stats.n_bytes = flow->byte_count;
-        odp_flow->stats.used_sec = flow->used.tv_sec;
-        odp_flow->stats.used_nsec = flow->used.tv_nsec;
-        odp_flow->stats.tcp_flags = TCP_FLAGS(flow->tcp_ctl);
-        odp_flow->stats.reserved = 0;
-        odp_flow->stats.error = 0;
-        if (odp_flow->actions_len > 0) {
-            memcpy(odp_flow->actions, flow->actions,
-                   MIN(odp_flow->actions_len, flow->actions_len));
-            odp_flow->actions_len = flow->actions_len;
-        }
-
-        if (query_flags & ODPFF_ZERO_TCP_FLAGS) {
-            flow->tcp_ctl = 0;
-        }
-
-    } else {
-        odp_flow->stats.error = ENOENT;
-    }
+    stats->n_packets = flow->packet_count;
+    stats->n_bytes = flow->byte_count;
+    stats->used = flow->used;
+    stats->tcp_flags = TCP_FLAGS(flow->tcp_ctl);
 }
 
 static int
-dpif_netdev_flow_get(const struct dpif *dpif, struct odp_flow flows[], int n)
+dpif_netdev_flow_from_nlattrs(const struct nlattr *key, uint32_t key_len,
+                              struct flow *flow)
+{
+    if (odp_flow_key_to_flow(key, key_len, flow)) {
+        /* This should not happen: it indicates that odp_flow_key_from_flow()
+         * and odp_flow_key_to_flow() disagree on the acceptable form of a
+         * flow.  Log the problem as an error, with enough details to enable
+         * debugging. */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+        if (!VLOG_DROP_ERR(&rl)) {
+            struct ds s;
+
+            ds_init(&s);
+            odp_flow_key_format(key, key_len, &s);
+            VLOG_ERR("internal error parsing flow key %s", ds_cstr(&s));
+            ds_destroy(&s);
+        }
+
+        return EINVAL;
+    }
+
+    return 0;
+}
+
+static int
+dpif_netdev_flow_get(const struct dpif *dpif,
+                     const struct nlattr *nl_key, size_t nl_key_len,
+                     struct ofpbuf **actionsp, struct dpif_flow_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    int i;
+    struct dp_netdev_flow *flow;
+    struct flow key;
+    int error;
 
-    for (i = 0; i < n; i++) {
-        struct odp_flow *odp_flow = &flows[i];
-        struct flow key;
+    error = dpif_netdev_flow_from_nlattrs(nl_key, nl_key_len, &key);
+    if (error) {
+        return error;
+    }
 
-        odp_flow_key_to_flow(&odp_flow->key, &key);
-        answer_flow_query(dp_netdev_lookup_flow(dp, &key),
-                          odp_flow->flags, odp_flow);
+    flow = dp_netdev_lookup_flow(dp, &key);
+    if (!flow) {
+        return ENOENT;
+    }
+
+    if (stats) {
+        get_dpif_flow_stats(flow, stats);
+    }
+    if (actionsp) {
+        *actionsp = ofpbuf_clone_data(flow->actions, flow->actions_len);
     }
     return 0;
 }
@@ -636,43 +701,43 @@ dpif_netdev_validate_actions(const struct nlattr *actions,
         }
 
         switch (type) {
-        case ODPAT_OUTPUT:
+        case ODP_ACTION_ATTR_OUTPUT:
             if (nl_attr_get_u32(a) >= MAX_PORTS) {
                 return EINVAL;
             }
             break;
 
-        case ODPAT_CONTROLLER:
-        case ODPAT_DROP_SPOOFED_ARP:
+        case ODP_ACTION_ATTR_CONTROLLER:
+        case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
             break;
 
-        case ODPAT_SET_DL_TCI:
+        case ODP_ACTION_ATTR_SET_DL_TCI:
             *mutates = true;
             if (nl_attr_get_be16(a) & htons(VLAN_CFI)) {
                 return EINVAL;
             }
             break;
 
-        case ODPAT_SET_NW_TOS:
+        case ODP_ACTION_ATTR_SET_NW_TOS:
             *mutates = true;
             if (nl_attr_get_u8(a) & IP_ECN_MASK) {
                 return EINVAL;
             }
             break;
 
-        case ODPAT_STRIP_VLAN:
-        case ODPAT_SET_DL_SRC:
-        case ODPAT_SET_DL_DST:
-        case ODPAT_SET_NW_SRC:
-        case ODPAT_SET_NW_DST:
-        case ODPAT_SET_TP_SRC:
-        case ODPAT_SET_TP_DST:
+        case ODP_ACTION_ATTR_STRIP_VLAN:
+        case ODP_ACTION_ATTR_SET_DL_SRC:
+        case ODP_ACTION_ATTR_SET_DL_DST:
+        case ODP_ACTION_ATTR_SET_NW_SRC:
+        case ODP_ACTION_ATTR_SET_NW_DST:
+        case ODP_ACTION_ATTR_SET_TP_SRC:
+        case ODP_ACTION_ATTR_SET_TP_DST:
             *mutates = true;
             break;
 
-        case ODPAT_SET_TUNNEL:
-        case ODPAT_SET_PRIORITY:
-        case ODPAT_POP_PRIORITY:
+        case ODP_ACTION_ATTR_SET_TUNNEL:
+        case ODP_ACTION_ATTR_SET_PRIORITY:
+        case ODP_ACTION_ATTR_POP_PRIORITY:
         default:
             return EOPNOTSUPP;
         }
@@ -681,34 +746,35 @@ dpif_netdev_validate_actions(const struct nlattr *actions,
 }
 
 static int
-set_flow_actions(struct dp_netdev_flow *flow, struct odp_flow *odp_flow)
+set_flow_actions(struct dp_netdev_flow *flow,
+                 const struct nlattr *actions, size_t actions_len)
 {
     bool mutates;
     int error;
 
-    error = dpif_netdev_validate_actions(odp_flow->actions,
-                                         odp_flow->actions_len, &mutates);
+    error = dpif_netdev_validate_actions(actions, actions_len, &mutates);
     if (error) {
         return error;
     }
 
-    flow->actions = xrealloc(flow->actions, odp_flow->actions_len);
-    flow->actions_len = odp_flow->actions_len;
-    memcpy(flow->actions, odp_flow->actions, odp_flow->actions_len);
+    flow->actions = xrealloc(flow->actions, actions_len);
+    flow->actions_len = actions_len;
+    memcpy(flow->actions, actions, actions_len);
     return 0;
 }
 
 static int
-add_flow(struct dpif *dpif, struct odp_flow *odp_flow)
+add_flow(struct dpif *dpif, const struct flow *key,
+         const struct nlattr *actions, size_t actions_len)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_flow *flow;
     int error;
 
     flow = xzalloc(sizeof *flow);
-    odp_flow_key_to_flow(&odp_flow->key, &flow->key);
+    flow->key = *key;
 
-    error = set_flow_actions(flow, odp_flow);
+    error = set_flow_actions(flow, actions, actions_len);
     if (error) {
         free(flow);
         return error;
@@ -721,26 +787,36 @@ add_flow(struct dpif *dpif, struct odp_flow *odp_flow)
 static void
 clear_stats(struct dp_netdev_flow *flow)
 {
-    flow->used.tv_sec = 0;
-    flow->used.tv_nsec = 0;
+    flow->used = 0;
     flow->packet_count = 0;
     flow->byte_count = 0;
     flow->tcp_ctl = 0;
 }
 
 static int
-dpif_netdev_flow_put(struct dpif *dpif, struct odp_flow_put *put)
+dpif_netdev_flow_put(struct dpif *dpif, enum dpif_flow_put_flags flags,
+                    const struct nlattr *nl_key, size_t nl_key_len,
+                    const struct nlattr *actions, size_t actions_len,
+                    struct dpif_flow_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_flow *flow;
     struct flow key;
+    int error;
 
-    odp_flow_key_to_flow(&put->flow.key, &key);
+    error = dpif_netdev_flow_from_nlattrs(nl_key, nl_key_len, &key);
+    if (error) {
+        return error;
+    }
+
     flow = dp_netdev_lookup_flow(dp, &key);
     if (!flow) {
-        if (put->flags & ODPPF_CREATE) {
+        if (flags & DPIF_FP_CREATE) {
             if (hmap_count(&dp->flow_table) < MAX_FLOWS) {
-                return add_flow(dpif, &put->flow);
+                if (stats) {
+                    memset(stats, 0, sizeof *stats);
+                }
+                return add_flow(dpif, &key, actions, actions_len);
             } else {
                 return EFBIG;
             }
@@ -748,10 +824,15 @@ dpif_netdev_flow_put(struct dpif *dpif, struct odp_flow_put *put)
             return ENOENT;
         }
     } else {
-        if (put->flags & ODPPF_MODIFY) {
-            int error = set_flow_actions(flow, &put->flow);
-            if (!error && put->flags & ODPPF_ZERO_STATS) {
-                clear_stats(flow);
+        if (flags & DPIF_FP_MODIFY) {
+            int error = set_flow_actions(flow, actions, actions_len);
+            if (!error) {
+                if (stats) {
+                    get_dpif_flow_stats(flow, stats);
+                }
+                if (flags & DPIF_FP_ZERO_STATS) {
+                    clear_stats(flow);
+                }
             }
             return error;
         } else {
@@ -760,18 +841,26 @@ dpif_netdev_flow_put(struct dpif *dpif, struct odp_flow_put *put)
     }
 }
 
-
 static int
-dpif_netdev_flow_del(struct dpif *dpif, struct odp_flow *odp_flow)
+dpif_netdev_flow_del(struct dpif *dpif,
+                     const struct nlattr *nl_key, size_t nl_key_len,
+                     struct dpif_flow_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_flow *flow;
     struct flow key;
+    int error;
 
-    odp_flow_key_to_flow(&odp_flow->key, &key);
+    error = dpif_netdev_flow_from_nlattrs(nl_key, nl_key_len, &key);
+    if (error) {
+        return error;
+    }
+
     flow = dp_netdev_lookup_flow(dp, &key);
     if (flow) {
-        answer_flow_query(flow, 0, odp_flow);
+        if (stats) {
+            get_dpif_flow_stats(flow, stats);
+        }
         dp_netdev_free_flow(dp, flow);
         return 0;
     } else {
@@ -779,24 +868,78 @@ dpif_netdev_flow_del(struct dpif *dpif, struct odp_flow *odp_flow)
     }
 }
 
+struct dp_netdev_flow_state {
+    uint32_t bucket;
+    uint32_t offset;
+    struct nlattr *actions;
+    struct odputil_keybuf keybuf;
+    struct dpif_flow_stats stats;
+};
+
 static int
-dpif_netdev_flow_list(const struct dpif *dpif, struct odp_flow flows[], int n)
+dpif_netdev_flow_dump_start(const struct dpif *dpif OVS_UNUSED, void **statep)
 {
+    struct dp_netdev_flow_state *state;
+
+    *statep = state = xmalloc(sizeof *state);
+    state->bucket = 0;
+    state->offset = 0;
+    state->actions = NULL;
+    return 0;
+}
+
+static int
+dpif_netdev_flow_dump_next(const struct dpif *dpif, void *state_,
+                           const struct nlattr **key, size_t *key_len,
+                           const struct nlattr **actions, size_t *actions_len,
+                           const struct dpif_flow_stats **stats)
+{
+    struct dp_netdev_flow_state *state = state_;
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_flow *flow;
-    int i;
+    struct hmap_node *node;
 
-    i = 0;
-    HMAP_FOR_EACH (flow, node, &dp->flow_table) {
-        if (i >= n) {
-            break;
-        }
-
-        odp_flow_key_from_flow(&flows[i].key, &flow->key);
-        answer_flow_query(flow, 0, &flows[i]);
-        i++;
+    node = hmap_at_position(&dp->flow_table, &state->bucket, &state->offset);
+    if (!node) {
+        return EOF;
     }
-    return hmap_count(&dp->flow_table);
+
+    flow = CONTAINER_OF(node, struct dp_netdev_flow, node);
+
+    if (key) {
+        struct ofpbuf buf;
+
+        ofpbuf_use_stack(&buf, &state->keybuf, sizeof state->keybuf);
+        odp_flow_key_from_flow(&buf, &flow->key);
+
+        *key = buf.data;
+        *key_len = buf.size;
+    }
+
+    if (actions) {
+        free(state->actions);
+        state->actions = xmemdup(flow->actions, flow->actions_len);
+
+        *actions = state->actions;
+        *actions_len = flow->actions_len;
+    }
+
+    if (stats) {
+        get_dpif_flow_stats(flow, &state->stats);
+        *stats = &state->stats;
+    }
+
+    return 0;
+}
+
+static int
+dpif_netdev_flow_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
+{
+    struct dp_netdev_flow_state *state = state_;
+
+    free(state->actions);
+    free(state);
+    return 0;
 }
 
 static int
@@ -852,15 +995,11 @@ static int
 dpif_netdev_recv_set_mask(struct dpif *dpif, int listen_mask)
 {
     struct dpif_netdev *dpif_netdev = dpif_netdev_cast(dpif);
-    if (!(listen_mask & ~ODPL_ALL)) {
-        dpif_netdev->listen_mask = listen_mask;
-        return 0;
-    } else {
-        return EINVAL;
-    }
+    dpif_netdev->listen_mask = listen_mask;
+    return 0;
 }
 
-static int
+static struct dp_netdev_queue *
 find_nonempty_queue(struct dpif *dpif)
 {
     struct dpif_netdev *dpif_netdev = dpif_netdev_cast(dpif);
@@ -869,23 +1008,22 @@ find_nonempty_queue(struct dpif *dpif)
     int i;
 
     for (i = 0; i < N_QUEUES; i++) {
-        struct list *queue = &dp->queues[i];
-        if (!list_is_empty(queue) && mask & (1u << i)) {
-            return i;
+        struct dp_netdev_queue *q = &dp->queues[i];
+        if (q->head != q->tail && mask & (1u << i)) {
+            return q;
         }
     }
-    return -1;
+    return NULL;
 }
 
 static int
-dpif_netdev_recv(struct dpif *dpif, struct ofpbuf **bufp)
+dpif_netdev_recv(struct dpif *dpif, struct dpif_upcall *upcall)
 {
-    int queue_idx = find_nonempty_queue(dpif);
-    if (queue_idx >= 0) {
-        struct dp_netdev *dp = get_dp_netdev(dpif);
-
-        *bufp = ofpbuf_from_list(list_pop_front(&dp->queues[queue_idx]));
-        dp->queue_len[queue_idx]--;
+    struct dp_netdev_queue *q = find_nonempty_queue(dpif);
+    if (q) {
+        struct dpif_upcall *u = q->upcalls[q->tail++ & QUEUE_MASK];
+        *upcall = *u;
+        free(u);
 
         return 0;
     } else {
@@ -896,19 +1034,26 @@ dpif_netdev_recv(struct dpif *dpif, struct ofpbuf **bufp)
 static void
 dpif_netdev_recv_wait(struct dpif *dpif)
 {
-    if (find_nonempty_queue(dpif) >= 0) {
+    if (find_nonempty_queue(dpif)) {
         poll_immediate_wake();
     } else {
         /* No messages ready to be received, and dp_wait() will ensure that we
          * wake up to queue new messages, so there is nothing to do. */
     }
 }
+
+static void
+dpif_netdev_recv_purge(struct dpif *dpif)
+{
+    struct dpif_netdev *dpif_netdev = dpif_netdev_cast(dpif);
+    dp_netdev_purge_queues(dpif_netdev->dp);
+}
 
 static void
 dp_netdev_flow_used(struct dp_netdev_flow *flow, struct flow *key,
                     const struct ofpbuf *packet)
 {
-    time_timespec(&flow->used);
+    flow->used = time_msec();
     flow->packet_count++;
     flow->byte_count += packet->size;
     if (key->dl_type == htons(ETH_TYPE_IP) && key->nw_proto == IPPROTO_TCP) {
@@ -940,7 +1085,7 @@ dp_netdev_port_input(struct dp_netdev *dp, struct dp_netdev_port *port,
         dp->n_hit++;
     } else {
         dp->n_missed++;
-        dp_netdev_output_control(dp, packet, _ODPL_MISS_NR, port->port_no, 0);
+        dp_netdev_output_control(dp, packet, DPIF_UC_MISS, &key, 0);
     }
 }
 
@@ -950,7 +1095,7 @@ dp_netdev_run(void)
     struct shash_node *node;
     struct ofpbuf packet;
 
-    ofpbuf_init(&packet, DP_NETDEV_HEADROOM + max_mtu);
+    ofpbuf_init(&packet, DP_NETDEV_HEADROOM + VLAN_ETH_HEADER_LEN + max_mtu);
     SHASH_FOR_EACH (node, &dp_netdevs) {
         struct dp_netdev *dp = node->data;
         struct dp_netdev_port *port;
@@ -966,7 +1111,7 @@ dp_netdev_run(void)
             if (!error) {
                 dp_netdev_port_input(dp, port, &packet);
             } else if (error != EAGAIN && error != EOPNOTSUPP) {
-                struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
                 VLOG_ERR_RL(&rl, "error receiving data from %s: %s",
                             netdev_get_name(port->netdev), strerror(error));
             }
@@ -1069,11 +1214,11 @@ dp_netdev_set_nw_addr(struct ofpbuf *packet, const struct flow *key,
         uint16_t type = nl_attr_type(a);
         uint32_t *field;
 
-        field = type == ODPAT_SET_NW_SRC ? &nh->ip_src : &nh->ip_dst;
-        if (key->nw_proto == IP_TYPE_TCP && packet->l7) {
+        field = type == ODP_ACTION_ATTR_SET_NW_SRC ? &nh->ip_src : &nh->ip_dst;
+        if (key->nw_proto == IPPROTO_TCP && packet->l7) {
             struct tcp_header *th = packet->l4;
             th->tcp_csum = recalc_csum32(th->tcp_csum, *field, ip);
-        } else if (key->nw_proto == IP_TYPE_UDP && packet->l7) {
+        } else if (key->nw_proto == IPPROTO_UDP && packet->l7) {
             struct udp_header *uh = packet->l4;
             if (uh->udp_csum) {
                 uh->udp_csum = recalc_csum32(uh->udp_csum, *field, ip);
@@ -1115,12 +1260,14 @@ dp_netdev_set_tp_port(struct ofpbuf *packet, const struct flow *key,
 
         if (key->nw_proto == IPPROTO_TCP && packet->l7) {
             struct tcp_header *th = packet->l4;
-            field = type == ODPAT_SET_TP_SRC ? &th->tcp_src : &th->tcp_dst;
+            field = (type == ODP_ACTION_ATTR_SET_TP_SRC
+                     ? &th->tcp_src : &th->tcp_dst);
             th->tcp_csum = recalc_csum16(th->tcp_csum, *field, port);
             *field = port;
         } else if (key->nw_proto == IPPROTO_UDP && packet->l7) {
             struct udp_header *uh = packet->l4;
-            field = type == ODPAT_SET_TP_SRC ? &uh->udp_src : &uh->udp_dst;
+            field = (type == ODP_ACTION_ATTR_SET_TP_SRC
+                     ? &uh->udp_src : &uh->udp_dst);
             uh->udp_csum = recalc_csum16(uh->udp_csum, *field, port);
             *field = port;
         } else {
@@ -1141,27 +1288,33 @@ dp_netdev_output_port(struct dp_netdev *dp, struct ofpbuf *packet,
 
 static int
 dp_netdev_output_control(struct dp_netdev *dp, const struct ofpbuf *packet,
-                         int queue_no, int port_no, uint64_t arg)
+                         int queue_no, const struct flow *flow, uint64_t arg)
 {
-    struct odp_msg *header;
-    struct ofpbuf *msg;
-    size_t msg_size;
+    struct dp_netdev_queue *q = &dp->queues[queue_no];
+    struct dpif_upcall *upcall;
+    struct ofpbuf *buf;
+    size_t key_len;
 
-    if (dp->queue_len[queue_no] >= MAX_QUEUE_LEN) {
+    if (q->head - q->tail >= MAX_QUEUE_LEN) {
         dp->n_lost++;
         return ENOBUFS;
     }
 
-    msg_size = sizeof *header + packet->size;
-    msg = ofpbuf_new_with_headroom(msg_size, DPIF_RECV_MSG_PADDING);
-    header = ofpbuf_put_uninit(msg, sizeof *header);
-    header->type = queue_no;
-    header->length = msg_size;
-    header->port = port_no;
-    header->arg = arg;
-    ofpbuf_put(msg, packet->data, packet->size);
-    list_push_back(&dp->queues[queue_no], &msg->list_node);
-    dp->queue_len[queue_no]++;
+    buf = ofpbuf_new(ODPUTIL_FLOW_KEY_BYTES + 2 + packet->size);
+    odp_flow_key_from_flow(buf, flow);
+    key_len = buf->size;
+    ofpbuf_pull(buf, key_len);
+    ofpbuf_reserve(buf, 2);
+    ofpbuf_put(buf, packet->data, packet->size);
+
+    upcall = xzalloc(sizeof *upcall);
+    upcall->type = queue_no;
+    upcall->packet = buf;
+    upcall->key = buf->base;
+    upcall->key_len = key_len;
+    upcall->userdata = arg;
+
+    q->upcalls[q->head++ & QUEUE_MASK] = upcall;
 
     return 0;
 }
@@ -1205,46 +1358,46 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
 
     NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
         switch (nl_attr_type(a)) {
-        case ODPAT_OUTPUT:
+        case ODP_ACTION_ATTR_OUTPUT:
             dp_netdev_output_port(dp, packet, nl_attr_get_u32(a));
             break;
 
-        case ODPAT_CONTROLLER:
-            dp_netdev_output_control(dp, packet, _ODPL_ACTION_NR,
-                                     key->in_port, nl_attr_get_u64(a));
+        case ODP_ACTION_ATTR_CONTROLLER:
+            dp_netdev_output_control(dp, packet, DPIF_UC_ACTION,
+                                     key, nl_attr_get_u64(a));
             break;
 
-        case ODPAT_SET_DL_TCI:
+        case ODP_ACTION_ATTR_SET_DL_TCI:
             dp_netdev_set_dl_tci(packet, nl_attr_get_be16(a));
             break;
 
-        case ODPAT_STRIP_VLAN:
+        case ODP_ACTION_ATTR_STRIP_VLAN:
             dp_netdev_strip_vlan(packet);
             break;
 
-        case ODPAT_SET_DL_SRC:
+        case ODP_ACTION_ATTR_SET_DL_SRC:
             dp_netdev_set_dl_src(packet, nl_attr_get_unspec(a, ETH_ADDR_LEN));
             break;
 
-        case ODPAT_SET_DL_DST:
+        case ODP_ACTION_ATTR_SET_DL_DST:
             dp_netdev_set_dl_dst(packet, nl_attr_get_unspec(a, ETH_ADDR_LEN));
             break;
 
-        case ODPAT_SET_NW_SRC:
-        case ODPAT_SET_NW_DST:
+        case ODP_ACTION_ATTR_SET_NW_SRC:
+        case ODP_ACTION_ATTR_SET_NW_DST:
             dp_netdev_set_nw_addr(packet, key, a);
             break;
 
-        case ODPAT_SET_NW_TOS:
+        case ODP_ACTION_ATTR_SET_NW_TOS:
             dp_netdev_set_nw_tos(packet, key, nl_attr_get_u8(a));
             break;
 
-        case ODPAT_SET_TP_SRC:
-        case ODPAT_SET_TP_DST:
+        case ODP_ACTION_ATTR_SET_TP_SRC:
+        case ODP_ACTION_ATTR_SET_TP_DST:
             dp_netdev_set_tp_port(packet, key, a);
             break;
 
-        case ODPAT_DROP_SPOOFED_ARP:
+        case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
             if (dp_netdev_is_spoofed_arp(packet, key)) {
                 return 0;
             }
@@ -1260,7 +1413,6 @@ const struct dpif_class dpif_netdev_class = {
     NULL,                       /* enumerate */
     dpif_netdev_open,
     dpif_netdev_close,
-    NULL,                       /* get_all_names */
     dpif_netdev_destroy,
     dpif_netdev_get_stats,
     dpif_netdev_get_drop_frags,
@@ -1269,14 +1421,19 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_port_del,
     dpif_netdev_port_query_by_number,
     dpif_netdev_port_query_by_name,
-    dpif_netdev_port_list,
+    dpif_netdev_get_max_ports,
+    dpif_netdev_port_dump_start,
+    dpif_netdev_port_dump_next,
+    dpif_netdev_port_dump_done,
     dpif_netdev_port_poll,
     dpif_netdev_port_poll_wait,
     dpif_netdev_flow_get,
     dpif_netdev_flow_put,
     dpif_netdev_flow_del,
     dpif_netdev_flow_flush,
-    dpif_netdev_flow_list,
+    dpif_netdev_flow_dump_start,
+    dpif_netdev_flow_dump_next,
+    dpif_netdev_flow_dump_done,
     dpif_netdev_execute,
     dpif_netdev_recv_get_mask,
     dpif_netdev_recv_set_mask,
@@ -1285,6 +1442,7 @@ const struct dpif_class dpif_netdev_class = {
     NULL,                       /* queue_to_priority */
     dpif_netdev_recv,
     dpif_netdev_recv_wait,
+    dpif_netdev_recv_purge,
 };
 
 void

@@ -33,6 +33,7 @@
 #include "datapath.h"
 #include "table.h"
 #include "tunnel.h"
+#include "vlan.h"
 #include "vport.h"
 #include "vport-generic.h"
 #include "vport-internal_dev.h"
@@ -160,13 +161,13 @@ static void assign_cache_rcu(struct vport *vport, struct tnl_cache *new_cache)
 
 static unsigned int *find_port_pool(const struct tnl_mutable_config *mutable)
 {
-	if (mutable->port_config.flags & TNL_F_IN_KEY_MATCH) {
-		if (mutable->port_config.saddr)
+	if (mutable->flags & TNL_F_IN_KEY_MATCH) {
+		if (mutable->saddr)
 			return &local_remote_ports;
 		else
 			return &remote_ports;
 	} else {
-		if (mutable->port_config.saddr)
+		if (mutable->saddr)
 			return &key_local_remote_ports;
 		else
 			return &key_remote_ports;
@@ -193,9 +194,9 @@ static int port_cmp(const struct tbl_node *node, void *target)
 	lookup->mutable = rcu_dereference_rtnl(tnl_vport->mutable);
 
 	return (lookup->mutable->tunnel_type == lookup->tunnel_type &&
-		lookup->mutable->port_config.daddr == lookup->daddr &&
-		lookup->mutable->port_config.in_key == lookup->key &&
-		lookup->mutable->port_config.saddr == lookup->saddr);
+		lookup->mutable->daddr == lookup->daddr &&
+		lookup->mutable->in_key == lookup->key &&
+		lookup->mutable->saddr == lookup->saddr);
 }
 
 static u32 port_hash(struct port_lookup_key *k)
@@ -209,9 +210,9 @@ static u32 mutable_hash(const struct tnl_mutable_config *mutable)
 {
 	struct port_lookup_key lookup;
 
-	lookup.saddr = mutable->port_config.saddr;
-	lookup.daddr = mutable->port_config.daddr;
-	lookup.key = mutable->port_config.in_key;
+	lookup.saddr = mutable->saddr;
+	lookup.daddr = mutable->daddr;
+	lookup.key = mutable->in_key;
 	lookup.tunnel_type = mutable->tunnel_type;
 
 	return port_hash(&lookup);
@@ -378,18 +379,14 @@ found:
 	return tnl_vport_to_vport(tnl_vport_table_cast(tbl_node));
 }
 
-static inline void ecn_decapsulate(struct sk_buff *skb)
+static void ecn_decapsulate(struct sk_buff *skb, u8 tos)
 {
-	/* This is accessing the outer IP header of the tunnel, which we've
-	 * already validated to be OK.  skb->data is currently set to the start
-	 * of the inner Ethernet header, and we've validated ETH_HLEN.
-	 */
-	if (unlikely(INET_ECN_is_ce(ip_hdr(skb)->tos))) {
+	if (unlikely(INET_ECN_is_ce(tos))) {
 		__be16 protocol = skb->protocol;
 
 		skb_set_network_header(skb, ETH_HLEN);
 
-		if (skb->protocol == htons(ETH_P_8021Q)) {
+		if (protocol == htons(ETH_P_8021Q)) {
 			if (unlikely(!pskb_may_pull(skb, VLAN_ETH_HLEN)))
 				return;
 
@@ -416,17 +413,27 @@ static inline void ecn_decapsulate(struct sk_buff *skb)
 	}
 }
 
-/* Called with rcu_read_lock. */
-void tnl_rcv(struct vport *vport, struct sk_buff *skb)
+/**
+ *	tnl_rcv - ingress point for generic tunnel code
+ *
+ * @vport: port this packet was received on
+ * @skb: received packet
+ * @tos: ToS from encapsulating IP packet, used to copy ECN bits
+ *
+ * Must be called with rcu_read_lock.
+ *
+ * Packets received by this function are in the following state:
+ * - skb->data points to the inner Ethernet header.
+ * - The inner Ethernet header is in the linear data area.
+ * - skb->csum does not include the inner Ethernet header.
+ * - The layer pointers are undefined.
+ */
+void tnl_rcv(struct vport *vport, struct sk_buff *skb, u8 tos)
 {
-	/* Packets received by this function are in the following state:
-	 * - skb->data points to the inner Ethernet header.
-	 * - The inner Ethernet header is in the linear data area.
-	 * - skb->csum does not include the inner Ethernet header.
-	 * - The layer pointers point at the outer headers.
-	 */
+	struct ethhdr *eh;
 
-	struct ethhdr *eh = (struct ethhdr *)skb->data;
+	skb_reset_mac_header(skb);
+	eh = eth_hdr(skb);
 
 	if (likely(ntohs(eh->h_proto) >= 1536))
 		skb->protocol = eh->h_proto;
@@ -435,10 +442,12 @@ void tnl_rcv(struct vport *vport, struct sk_buff *skb)
 
 	skb_dst_drop(skb);
 	nf_reset(skb);
+	skb_clear_rxhash(skb);
 	secpath_reset(skb);
 
-	ecn_decapsulate(skb);
+	ecn_decapsulate(skb, tos);
 	compute_ip_summed(skb, false);
+	vlan_set_tci(skb, 0);
 
 	vport_receive(vport, skb);
 }
@@ -663,7 +672,6 @@ bool tnl_frag_needed(struct vport *vport, const struct tnl_mutable_config *mutab
 	}
 #endif
 
-	total_length = min(total_length, mutable->mtu);
 	payload_length = total_length - header_length;
 
 	nskb = dev_alloc_skb(NET_IP_ALIGN + eth_hdr_len + header_length +
@@ -683,7 +691,8 @@ bool tnl_frag_needed(struct vport *vport, const struct tnl_mutable_config *mutab
 
 		vh->h_vlan_TCI = vlan_eth_hdr(skb)->h_vlan_TCI;
 		vh->h_vlan_encapsulated_proto = skb->protocol;
-	}
+	} else
+		vlan_set_tci(nskb, vlan_get_tci(skb));
 	skb_reset_mac_header(nskb);
 
 	/* Protocol */
@@ -701,7 +710,7 @@ bool tnl_frag_needed(struct vport *vport, const struct tnl_mutable_config *mutab
 	 * not symmetric then PMTUD needs to be disabled since we won't have
 	 * any way of synthesizing packets.
 	 */
-	if ((mutable->port_config.flags & (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION)) ==
+	if ((mutable->flags & (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION)) ==
 	    (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION))
 		OVS_CB(nskb)->tun_id = flow_key;
 
@@ -716,54 +725,67 @@ static bool check_mtu(struct sk_buff *skb,
 		      const struct tnl_mutable_config *mutable,
 		      const struct rtable *rt, __be16 *frag_offp)
 {
-	int mtu;
-	__be16 frag_off;
+	bool pmtud = mutable->flags & TNL_F_PMTUD;
+	__be16 frag_off = 0;
+	int mtu = 0;
+	unsigned int packet_length = skb->len - ETH_HLEN;
 
-	frag_off = (mutable->port_config.flags & TNL_F_PMTUD) ? htons(IP_DF) : 0;
-	if (frag_off)
+	/* Allow for one level of tagging in the packet length. */
+	if (!vlan_tx_tag_present(skb) &&
+	    eth_hdr(skb)->h_proto == htons(ETH_P_8021Q))
+		packet_length -= VLAN_HLEN;
+
+	if (pmtud) {
+		int vlan_header = 0;
+
+		frag_off = htons(IP_DF);
+
+		/* The tag needs to go in packet regardless of where it
+		 * currently is, so subtract it from the MTU.
+		 */
+		if (vlan_tx_tag_present(skb) ||
+		    eth_hdr(skb)->h_proto == htons(ETH_P_8021Q))
+			vlan_header = VLAN_HLEN;
+
 		mtu = dst_mtu(&rt_dst(rt))
 			- ETH_HLEN
 			- mutable->tunnel_hlen
-			- (eth_hdr(skb)->h_proto == htons(ETH_P_8021Q) ? VLAN_HLEN : 0);
-	else
-		mtu = mutable->mtu;
+			- vlan_header;
+	}
 
 	if (skb->protocol == htons(ETH_P_IP)) {
-		struct iphdr *old_iph = ip_hdr(skb);
+		struct iphdr *iph = ip_hdr(skb);
 
-		frag_off |= old_iph->frag_off & htons(IP_DF);
-		mtu = max(mtu, IP_MIN_MTU);
+		frag_off |= iph->frag_off & htons(IP_DF);
 
-		if ((old_iph->frag_off & htons(IP_DF)) &&
-		    mtu < ntohs(old_iph->tot_len)) {
-			if (tnl_frag_needed(vport, mutable, skb, mtu, OVS_CB(skb)->tun_id))
-				goto drop;
+		if (pmtud && iph->frag_off & htons(IP_DF)) {
+			mtu = max(mtu, IP_MIN_MTU);
+
+			if (packet_length > mtu &&
+			    tnl_frag_needed(vport, mutable, skb, mtu,
+					    OVS_CB(skb)->tun_id))
+				return false;
 		}
 	}
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	else if (skb->protocol == htons(ETH_P_IPV6)) {
-		unsigned int packet_length = skb->len - ETH_HLEN
-			- (eth_hdr(skb)->h_proto == htons(ETH_P_8021Q) ? VLAN_HLEN : 0);
-
-		mtu = max(mtu, IPV6_MIN_MTU);
-
 		/* IPv6 requires PMTUD if the packet is above the minimum MTU. */
 		if (packet_length > IPV6_MIN_MTU)
 			frag_off = htons(IP_DF);
 
-		if (mtu < packet_length) {
-			if (tnl_frag_needed(vport, mutable, skb, mtu, OVS_CB(skb)->tun_id))
-				goto drop;
+		if (pmtud) {
+			mtu = max(mtu, IPV6_MIN_MTU);
+
+			if (packet_length > mtu &&
+			    tnl_frag_needed(vport, mutable, skb, mtu,
+					    OVS_CB(skb)->tun_id))
+				return false;
 		}
 	}
 #endif
 
 	*frag_offp = frag_off;
 	return true;
-
-drop:
-	*frag_offp = 0;
-	return false;
 }
 
 static void create_tunnel_header(const struct vport *vport,
@@ -777,12 +799,12 @@ static void create_tunnel_header(const struct vport *vport,
 	iph->ihl	= sizeof(struct iphdr) >> 2;
 	iph->frag_off	= htons(IP_DF);
 	iph->protocol	= tnl_vport->tnl_ops->ipproto;
-	iph->tos	= mutable->port_config.tos;
+	iph->tos	= mutable->tos;
 	iph->daddr	= rt->rt_dst;
 	iph->saddr	= rt->rt_src;
-	iph->ttl	= mutable->port_config.ttl;
+	iph->ttl	= mutable->ttl;
 	if (!iph->ttl)
-		iph->ttl = dst_metric(&rt_dst(rt), RTAX_HOPLIMIT);
+		iph->ttl = ip4_dst_hoplimit(&rt_dst(rt));
 
 	tnl_vport->tnl_ops->build_header(vport, mutable, iph + 1);
 }
@@ -866,7 +888,7 @@ static struct tnl_cache *build_cache(struct vport *vport,
 	void *cache_data;
 	int cache_len;
 
-	if (!(mutable->port_config.flags & TNL_F_HDR_CACHE))
+	if (!(mutable->flags & TNL_F_HDR_CACHE))
 		return NULL;
 
 	/*
@@ -910,7 +932,7 @@ static struct tnl_cache *build_cache(struct vport *vport,
 #endif
 
 	if (is_internal_dev(rt_dst(rt).dev)) {
-		struct odp_flow_key flow_key;
+		struct sw_flow_key flow_key;
 		struct tbl_node *flow_node;
 		struct vport *dst_vport;
 		struct sk_buff *skb;
@@ -964,22 +986,32 @@ static struct rtable *find_route(struct vport *vport,
 	*cache = NULL;
 	tos = RT_TOS(tos);
 
-	if (likely(tos == mutable->port_config.tos &&
-		   check_cache_valid(cur_cache, mutable))) {
+	if (likely(tos == mutable->tos && check_cache_valid(cur_cache, mutable))) {
 		*cache = cur_cache;
 		return cur_cache->rt;
 	} else {
 		struct rtable *rt;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
 		struct flowi fl = { .nl_u = { .ip4_u =
-					      { .daddr = mutable->port_config.daddr,
-						.saddr = mutable->port_config.saddr,
+					      { .daddr = mutable->daddr,
+						.saddr = mutable->saddr,
 						.tos = tos } },
 				    .proto = tnl_vport->tnl_ops->ipproto };
 
 		if (unlikely(ip_route_output_key(&init_net, &rt, &fl)))
 			return NULL;
+#else
+		struct flowi4 fl = { .daddr = mutable->daddr,
+				     .saddr = mutable->saddr,
+				     .flowi4_tos = tos,
+				     .flowi4_proto = tnl_vport->tnl_ops->ipproto };
 
-		if (likely(tos == mutable->port_config.tos))
+		rt = ip_route_output_key(&init_net, &fl);
+		if (IS_ERR(rt))
+			return NULL;
+#endif
+
+		if (likely(tos == mutable->tos))
 			*cache = build_cache(vport, mutable, rt);
 
 		return rt;
@@ -1020,7 +1052,7 @@ static inline bool need_linearize(const struct sk_buff *skb)
 	 * change them from underneath us and we can skip the linearization.
 	 */
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++)
-		if (unlikely(page_count(skb_shinfo(skb)->frags[0].page) > 1))
+		if (unlikely(page_count(skb_shinfo(skb)->frags[i].page) > 1))
 			return true;
 
 	return false;
@@ -1040,27 +1072,17 @@ static struct sk_buff *handle_offloads(struct sk_buff *skb,
 		goto error_free;
 
 	min_headroom = LL_RESERVED_SPACE(rt_dst(rt).dev) + rt_dst(rt).header_len
-			+ mutable->tunnel_hlen;
+			+ mutable->tunnel_hlen
+			+ (vlan_tx_tag_present(skb) ? VLAN_HLEN : 0);
+
+	skb = check_headroom(skb, min_headroom);
+	if (IS_ERR(skb)) {
+		err = PTR_ERR(skb);
+		goto error;
+	}
 
 	if (skb_is_gso(skb)) {
 		struct sk_buff *nskb;
-
-		/*
-		 * If we are doing GSO on a pskb it is better to make sure that
-		 * the headroom is correct now.  We will only have to copy the
-		 * portion in the linear data area and GSO will preserve
-		 * headroom when it creates the segments.  This is particularly
-		 * beneficial on Xen where we get a lot of GSO pskbs.
-		 * Conversely, we avoid copying if it is just to get our own
-		 * writable clone because GSO will do the copy for us.
-		 */
-		if (skb_headroom(skb) < min_headroom) {
-			skb = check_headroom(skb, min_headroom);
-			if (IS_ERR(skb)) {
-				err = PTR_ERR(skb);
-				goto error;
-			}
-		}
 
 		nskb = skb_gso_segment(skb, 0);
 		kfree_skb(skb);
@@ -1070,32 +1092,23 @@ static struct sk_buff *handle_offloads(struct sk_buff *skb,
 		}
 
 		skb = nskb;
-	} else {
-		skb = check_headroom(skb, min_headroom);
-		if (IS_ERR(skb)) {
-			err = PTR_ERR(skb);
-			goto error;
-		}
-
-		if (skb->ip_summed == CHECKSUM_PARTIAL) {
-			/*
-			 * Pages aren't locked and could change at any time.
-			 * If this happens after we compute the checksum, the
-			 * checksum will be wrong.  We linearize now to avoid
-			 * this problem.
-			 */
-			if (unlikely(need_linearize(skb))) {
-				err = __skb_linearize(skb);
-				if (unlikely(err))
-					goto error_free;
-			}
-
-			err = skb_checksum_help(skb);
+	} else if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		/* Pages aren't locked and could change at any time.
+		 * If this happens after we compute the checksum, the
+		 * checksum will be wrong.  We linearize now to avoid
+		 * this problem.
+		 */
+		if (unlikely(need_linearize(skb))) {
+			err = __skb_linearize(skb);
 			if (unlikely(err))
 				goto error_free;
-		} else if (skb->ip_summed == CHECKSUM_COMPLETE)
-			skb->ip_summed = CHECKSUM_NONE;
-	}
+		}
+
+		err = skb_checksum_help(skb);
+		if (unlikely(err))
+			goto error_free;
+	} else if (skb->ip_summed == CHECKSUM_COMPLETE)
+		skb->ip_summed = CHECKSUM_NONE;
 
 	return skb;
 
@@ -1109,25 +1122,21 @@ static int send_frags(struct sk_buff *skb,
 		      const struct tnl_mutable_config *mutable)
 {
 	int sent_len;
-	int err;
 
 	sent_len = 0;
 	while (skb) {
 		struct sk_buff *next = skb->next;
 		int frag_len = skb->len - mutable->tunnel_hlen;
+		int err;
 
 		skb->next = NULL;
 		memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
 
 		err = ip_local_out(skb);
-		if (likely(net_xmit_eval(err) == 0))
-			sent_len += frag_len;
-		else {
-			skb = next;
-			goto free_frags;
-		}
-
 		skb = next;
+		if (unlikely(net_xmit_eval(err)))
+			goto free_frags;
+		sent_len += frag_len;
 	}
 
 	return sent_len;
@@ -1152,13 +1161,14 @@ int tnl_send(struct vport *vport, struct sk_buff *skb)
 	struct dst_entry *unattached_dst = NULL;
 	struct tnl_cache *cache;
 	int sent_len = 0;
-	__be16 frag_off;
+	__be16 frag_off = 0;
 	u8 ttl;
 	u8 inner_tos;
 	u8 tos;
 
 	/* Validate the protocol headers before we try to use them. */
-	if (skb->protocol == htons(ETH_P_8021Q)) {
+	if (skb->protocol == htons(ETH_P_8021Q) &&
+	    !vlan_tx_tag_present(skb)) {
 		if (unlikely(!pskb_may_pull(skb, VLAN_ETH_HLEN)))
 			goto error_free;
 
@@ -1189,10 +1199,10 @@ int tnl_send(struct vport *vport, struct sk_buff *skb)
 	else
 		inner_tos = 0;
 
-	if (mutable->port_config.flags & TNL_F_TOS_INHERIT)
+	if (mutable->flags & TNL_F_TOS_INHERIT)
 		tos = inner_tos;
 	else
-		tos = mutable->port_config.tos;
+		tos = mutable->tos;
 
 	tos = INET_ECN_encapsulate(tos, inner_tos);
 
@@ -1207,6 +1217,7 @@ int tnl_send(struct vport *vport, struct sk_buff *skb)
 	nf_reset(skb);
 	secpath_reset(skb);
 	skb_dst_drop(skb);
+	skb_clear_rxhash(skb);
 
 	/* Offloading */
 	skb = handle_offloads(skb, mutable, rt);
@@ -1231,11 +1242,11 @@ int tnl_send(struct vport *vport, struct sk_buff *skb)
 	}
 
 	/* TTL */
-	ttl = mutable->port_config.ttl;
+	ttl = mutable->ttl;
 	if (!ttl)
-		ttl = dst_metric(&rt_dst(rt), RTAX_HOPLIMIT);
+		ttl = ip4_dst_hoplimit(&rt_dst(rt));
 
-	if (mutable->port_config.flags & TNL_F_TTL_INHERIT) {
+	if (mutable->flags & TNL_F_TTL_INHERIT) {
 		if (skb->protocol == htons(ETH_P_IP))
 			ttl = ip_hdr(skb)->ttl;
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
@@ -1248,6 +1259,9 @@ int tnl_send(struct vport *vport, struct sk_buff *skb)
 		struct iphdr *iph;
 		struct sk_buff *next_skb = skb->next;
 		skb->next = NULL;
+
+		if (unlikely(vlan_deaccel_tag(skb)))
+			goto next;
 
 		if (likely(cache)) {
 			skb_push(skb, cache->len);
@@ -1317,51 +1331,83 @@ next:
 error_free:
 	tnl_free_linked_skbs(skb);
 error:
-	dst_release(unattached_dst);
 	vport_record_error(vport, err);
 out:
+	dst_release(unattached_dst);
 	return sent_len;
 }
 
-static int tnl_set_config(const void *config, const struct tnl_ops *tnl_ops,
+static const struct nla_policy tnl_policy[ODP_TUNNEL_ATTR_MAX + 1] = {
+	[ODP_TUNNEL_ATTR_FLAGS]    = { .type = NLA_U32 },
+	[ODP_TUNNEL_ATTR_DST_IPV4] = { .type = NLA_U32 },
+	[ODP_TUNNEL_ATTR_SRC_IPV4] = { .type = NLA_U32 },
+	[ODP_TUNNEL_ATTR_OUT_KEY]  = { .type = NLA_U64 },
+	[ODP_TUNNEL_ATTR_IN_KEY]   = { .type = NLA_U64 },
+	[ODP_TUNNEL_ATTR_TOS]      = { .type = NLA_U8 },
+	[ODP_TUNNEL_ATTR_TTL]      = { .type = NLA_U8 },
+};
+
+/* Sets ODP_TUNNEL_ATTR_* fields in 'mutable', which must initially be zeroed. */
+static int tnl_set_config(struct nlattr *options, const struct tnl_ops *tnl_ops,
 			  const struct vport *cur_vport,
 			  struct tnl_mutable_config *mutable)
 {
 	const struct vport *old_vport;
 	const struct tnl_mutable_config *old_mutable;
+	struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1];
+	int err;
 
-	mutable->port_config = *(struct tnl_port_config *)config;
-
-	if (mutable->port_config.daddr == 0)
+	if (!options)
 		return -EINVAL;
 
-	if (mutable->port_config.tos != RT_TOS(mutable->port_config.tos))
+	err = nla_parse_nested(a, ODP_TUNNEL_ATTR_MAX, options, tnl_policy);
+	if (err)
+		return err;
+
+	if (!a[ODP_TUNNEL_ATTR_FLAGS] || !a[ODP_TUNNEL_ATTR_DST_IPV4])
 		return -EINVAL;
 
-	mutable->tunnel_hlen = tnl_ops->hdr_len(&mutable->port_config);
+	mutable->flags = nla_get_u32(a[ODP_TUNNEL_ATTR_FLAGS]) & TNL_F_PUBLIC;
+
+	if (a[ODP_TUNNEL_ATTR_SRC_IPV4])
+		mutable->saddr = nla_get_be32(a[ODP_TUNNEL_ATTR_SRC_IPV4]);
+	mutable->daddr = nla_get_be32(a[ODP_TUNNEL_ATTR_DST_IPV4]);
+
+	if (a[ODP_TUNNEL_ATTR_TOS]) {
+		mutable->tos = nla_get_u8(a[ODP_TUNNEL_ATTR_TOS]);
+		if (mutable->tos != RT_TOS(mutable->tos))
+			return -EINVAL;
+	}
+
+	if (a[ODP_TUNNEL_ATTR_TTL])
+		mutable->ttl = nla_get_u8(a[ODP_TUNNEL_ATTR_TTL]);
+
+	mutable->tunnel_type = tnl_ops->tunnel_type;
+	if (!a[ODP_TUNNEL_ATTR_IN_KEY]) {
+		mutable->tunnel_type |= TNL_T_KEY_MATCH;
+		mutable->flags |= TNL_F_IN_KEY_MATCH;
+	} else {
+		mutable->tunnel_type |= TNL_T_KEY_EXACT;
+		mutable->in_key = nla_get_be64(a[ODP_TUNNEL_ATTR_IN_KEY]);
+	}
+
+	if (!a[ODP_TUNNEL_ATTR_OUT_KEY])
+		mutable->flags |= TNL_F_OUT_KEY_ACTION;
+	else
+		mutable->out_key = nla_get_be64(a[ODP_TUNNEL_ATTR_OUT_KEY]);
+
+	mutable->tunnel_hlen = tnl_ops->hdr_len(mutable);
 	if (mutable->tunnel_hlen < 0)
 		return mutable->tunnel_hlen;
 
 	mutable->tunnel_hlen += sizeof(struct iphdr);
 
-	mutable->tunnel_type = tnl_ops->tunnel_type;
-	if (mutable->port_config.flags & TNL_F_IN_KEY_MATCH) {
-		mutable->tunnel_type |= TNL_T_KEY_MATCH;
-		mutable->port_config.in_key = 0;
-	} else
-		mutable->tunnel_type |= TNL_T_KEY_EXACT;
-
-	old_vport = tnl_find_port(mutable->port_config.saddr,
-				  mutable->port_config.daddr,
-				  mutable->port_config.in_key,
-				  mutable->tunnel_type,
+	old_vport = tnl_find_port(mutable->saddr, mutable->daddr,
+				  mutable->in_key, mutable->tunnel_type,
 				  &old_mutable);
 
 	if (old_vport && old_vport != cur_vport)
 		return -EEXIST;
-
-	if (mutable->port_config.flags & TNL_F_OUT_KEY_ACTION)
-		mutable->port_config.out_key = 0;
 
 	return 0;
 }
@@ -1394,12 +1440,11 @@ struct vport *tnl_create(const struct vport_parms *parms,
 	}
 
 	vport_gen_rand_ether_addr(mutable->eth_addr);
-	mutable->mtu = ETH_DATA_LEN;
 
 	get_random_bytes(&initial_frag_id, sizeof(int));
 	atomic_set(&tnl_vport->frag_id, initial_frag_id);
 
-	err = tnl_set_config(parms->config, tnl_ops, NULL, mutable);
+	err = tnl_set_config(parms->options, tnl_ops, NULL, mutable);
 	if (err)
 		goto error_free_mutable;
 
@@ -1426,24 +1471,28 @@ error:
 	return ERR_PTR(err);
 }
 
-int tnl_modify(struct vport *vport, struct odp_port *port)
+int tnl_set_options(struct vport *vport, struct nlattr *options)
 {
 	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
+	const struct tnl_mutable_config *old_mutable;
 	struct tnl_mutable_config *mutable;
 	int err;
 
-	mutable = kmemdup(rtnl_dereference(tnl_vport->mutable),
-			  sizeof(struct tnl_mutable_config), GFP_KERNEL);
+	mutable = kzalloc(sizeof(struct tnl_mutable_config), GFP_KERNEL);
 	if (!mutable) {
 		err = -ENOMEM;
 		goto error;
 	}
 
-	err = tnl_set_config(port->config, tnl_vport->tnl_ops, vport, mutable);
+	/* Copy fields whose values should be retained. */
+	old_mutable = rtnl_dereference(tnl_vport->mutable);
+	mutable->seq = old_mutable->seq + 1;
+	memcpy(mutable->eth_addr, old_mutable->eth_addr, ETH_ALEN);
+
+	/* Parse the others configured by userspace. */
+	err = tnl_set_config(options, tnl_vport->tnl_ops, vport, mutable);
 	if (err)
 		goto error_free;
-
-	mutable->seq++;
 
 	err = move_port(vport, mutable);
 	if (err)
@@ -1455,6 +1504,31 @@ error_free:
 	kfree(mutable);
 error:
 	return err;
+}
+
+int tnl_get_options(const struct vport *vport, struct sk_buff *skb)
+{
+	const struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
+	const struct tnl_mutable_config *mutable = rcu_dereference_rtnl(tnl_vport->mutable);
+
+	NLA_PUT_U32(skb, ODP_TUNNEL_ATTR_FLAGS, mutable->flags & TNL_F_PUBLIC);
+	NLA_PUT_BE32(skb, ODP_TUNNEL_ATTR_DST_IPV4, mutable->daddr);
+
+	if (!(mutable->flags & TNL_F_IN_KEY_MATCH))
+		NLA_PUT_BE64(skb, ODP_TUNNEL_ATTR_IN_KEY, mutable->in_key);
+	if (!(mutable->flags & TNL_F_OUT_KEY_ACTION))
+		NLA_PUT_BE64(skb, ODP_TUNNEL_ATTR_OUT_KEY, mutable->out_key);
+	if (mutable->saddr)
+		NLA_PUT_BE32(skb, ODP_TUNNEL_ATTR_SRC_IPV4, mutable->saddr);
+	if (mutable->tos)
+		NLA_PUT_U8(skb, ODP_TUNNEL_ATTR_TOS, mutable->tos);
+	if (mutable->ttl)
+		NLA_PUT_U8(skb, ODP_TUNNEL_ATTR_TTL, mutable->ttl);
+
+	return 0;
+
+nla_put_failure:
+	return -EMSGSIZE;
 }
 
 static void free_port_rcu(struct rcu_head *rcu)
@@ -1474,28 +1548,12 @@ int tnl_destroy(struct vport *vport)
 
 	mutable = rtnl_dereference(tnl_vport->mutable);
 
-	if (vport == tnl_find_port(mutable->port_config.saddr,
-	    mutable->port_config.daddr, mutable->port_config.in_key,
-	    mutable->tunnel_type, &old_mutable))
+	if (vport == tnl_find_port(mutable->saddr, mutable->daddr,
+				   mutable->in_key, mutable->tunnel_type,
+				   &old_mutable))
 		del_port(vport);
 
 	call_rcu(&tnl_vport->rcu, free_port_rcu);
-
-	return 0;
-}
-
-int tnl_set_mtu(struct vport *vport, int mtu)
-{
-	struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
-	struct tnl_mutable_config *mutable;
-
-	mutable = kmemdup(rtnl_dereference(tnl_vport->mutable),
-			  sizeof(struct tnl_mutable_config), GFP_KERNEL);
-	if (!mutable)
-		return -ENOMEM;
-
-	mutable->mtu = mtu;
-	assign_config_rcu(vport, mutable);
 
 	return 0;
 }
@@ -1528,26 +1586,8 @@ const unsigned char *tnl_get_addr(const struct vport *vport)
 	return rcu_dereference_rtnl(tnl_vport->mutable)->eth_addr;
 }
 
-void tnl_get_config(const struct vport *vport, void *config)
-{
-	const struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
-	struct tnl_port_config *port_config;
-	
-	port_config = &rcu_dereference_rtnl(tnl_vport->mutable)->port_config;
-	memcpy(config, port_config, sizeof(*port_config));
-}
-
-int tnl_get_mtu(const struct vport *vport)
-{
-	const struct tnl_vport *tnl_vport = tnl_vport_priv(vport);
-	return rcu_dereference_rtnl(tnl_vport->mutable)->mtu;
-}
-
 void tnl_free_linked_skbs(struct sk_buff *skb)
 {
-	if (unlikely(!skb))
-		return;
-
 	while (skb) {
 		struct sk_buff *next = skb->next;
 		kfree_skb(skb);

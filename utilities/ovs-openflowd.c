@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,6 @@
 #include "poll-loop.h"
 #include "rconn.h"
 #include "stream-ssl.h"
-#include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
@@ -63,7 +62,7 @@ struct ofsettings {
     uint64_t datapath_id;       /* Datapath ID. */
     char *dp_name;              /* Name of local datapath. */
     char *dp_type;              /* Type of local datapath. */
-    struct svec ports;          /* Set of ports to add to datapath (if any). */
+    struct sset ports;          /* Set of ports to add to datapath (if any). */
 
     /* Description strings. */
     const char *mfr_desc;       /* Manufacturer. */
@@ -73,13 +72,13 @@ struct ofsettings {
     const char *dp_desc;        /* Datapath description. */
 
     /* Related vconns and network devices. */
-    struct svec snoops;          /* Listen for controller snooping conns. */
+    struct sset snoops;          /* Listen for controller snooping conns. */
 
     /* Failure behavior. */
     int max_idle;             /* Idle time for flows in fail-open mode. */
 
     /* NetFlow. */
-    struct svec netflow;        /* NetFlow targets. */
+    struct sset netflow;        /* NetFlow targets. */
 };
 
 static unixctl_cb_func ovs_openflowd_exit;
@@ -96,6 +95,7 @@ main(int argc, char *argv[])
     int error;
     struct dpif *dpif;
     struct netflow_options nf_options;
+    const char *port;
     bool exiting;
 
     proctitle_init(argc, argv);
@@ -123,25 +123,20 @@ main(int argc, char *argv[])
     }
 
     /* Add ports to the datapath if requested by the user. */
-    if (s.ports.n) {
-        const char *port;
-        size_t i;
+    SSET_FOR_EACH (port, &s.ports) {
+        struct netdev *netdev;
 
-        SVEC_FOR_EACH (i, port, &s.ports) {
-            struct netdev *netdev;
-
-            error = netdev_open_default(port, &netdev);
-            if (error) {
-                ovs_fatal(error, "%s: failed to open network device", port);
-            }
-
-            error = dpif_port_add(dpif, netdev, NULL);
-            if (error) {
-                ovs_fatal(error, "failed to add %s as a port", port);
-            }
-
-            netdev_close(netdev);
+        error = netdev_open_default(port, &netdev);
+        if (error) {
+            ovs_fatal(error, "%s: failed to open network device", port);
         }
+
+        error = dpif_port_add(dpif, netdev, NULL);
+        if (error) {
+            ovs_fatal(error, "failed to add %s as a port", port);
+        }
+
+        netdev_close(netdev);
     }
 
     /* Start OpenFlow processing. */
@@ -206,6 +201,21 @@ ovs_openflowd_exit(struct unixctl_conn *conn, const char *args OVS_UNUSED,
 
 /* User interface. */
 
+/* Breaks 'ports' apart at commas and adds each resulting word to 'ports'. */
+static void
+parse_ports(const char *s_, struct sset *ports)
+{
+    char *s = xstrdup(s_);
+    char *save_ptr = NULL;
+    char *token;
+
+    for (token = strtok_r(s, ",", &save_ptr); token != NULL;
+         token = strtok_r(NULL, ",", &save_ptr)) {
+        sset_add(ports, token);
+    }
+    free(s);
+}
+
 static void
 parse_options(int argc, char *argv[], struct ofsettings *s)
 {
@@ -216,8 +226,6 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
         OPT_SW_DESC,
         OPT_SERIAL_DESC,
         OPT_DP_DESC,
-        OPT_ACCEPT_VCONN,
-        OPT_NO_RESOLV_CONF,
         OPT_BR_NAME,
         OPT_FAIL_MODE,
         OPT_INACTIVITY_PROBE,
@@ -234,7 +242,8 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
         OPT_UNIXCTL,
         OPT_ENABLE_DUMMY,
         VLOG_OPTION_ENUMS,
-        LEAK_CHECKER_OPTION_ENUMS
+        LEAK_CHECKER_OPTION_ENUMS,
+        DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
         {"datapath-id", required_argument, 0, OPT_DATAPATH_ID},
@@ -243,8 +252,6 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
         {"sw-desc", required_argument, 0, OPT_SW_DESC},
         {"serial-desc", required_argument, 0, OPT_SERIAL_DESC},
         {"dp-desc", required_argument, 0, OPT_DP_DESC},
-        {"accept-vconn", required_argument, 0, OPT_ACCEPT_VCONN},
-        {"no-resolv-conf", no_argument, 0, OPT_NO_RESOLV_CONF},
         {"config",      required_argument, 0, 'F'},
         {"br-name",     required_argument, 0, OPT_BR_NAME},
         {"fail",        required_argument, 0, OPT_FAIL_MODE},
@@ -275,7 +282,8 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     };
     char *short_options = long_options_to_short_options(long_options);
     struct ofproto_controller controller_opts;
-    struct svec controllers;
+    struct sset controllers;
+    const char *name;
     int i;
 
     /* Set defaults that we can figure out before parsing options. */
@@ -283,8 +291,6 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     controller_opts.max_backoff = 8;
     controller_opts.probe_interval = 5;
     controller_opts.band = OFPROTO_IN_BAND;
-    controller_opts.accept_re = NULL;
-    controller_opts.update_resolv_conf = true;
     controller_opts.rate_limit = 0;
     controller_opts.burst_limit = 0;
     s->unixctl_path = NULL;
@@ -295,11 +301,11 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
     s->sw_desc = NULL;
     s->serial_desc = NULL;
     s->dp_desc = NULL;
-    svec_init(&controllers);
-    svec_init(&s->snoops);
+    sset_init(&controllers);
+    sset_init(&s->snoops);
     s->max_idle = 0;
-    svec_init(&s->netflow);
-    svec_init(&s->ports);
+    sset_init(&s->netflow);
+    sset_init(&s->ports);
     for (;;) {
         int c;
 
@@ -334,14 +340,6 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
 
         case OPT_DP_DESC:
             s->dp_desc = optarg;
-            break;
-
-        case OPT_ACCEPT_VCONN:
-            controller_opts.accept_re = optarg;
-            break;
-
-        case OPT_NO_RESOLV_CONF:
-            controller_opts.update_resolv_conf = false;
             break;
 
         case OPT_FAIL_MODE:
@@ -411,19 +409,19 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
             break;
 
         case OPT_NETFLOW:
-            svec_add(&s->netflow, optarg);
+            sset_add(&s->netflow, optarg);
             break;
 
         case 'l':
-            svec_add(&controllers, optarg);
+            sset_add(&controllers, optarg);
             break;
 
         case OPT_SNOOP:
-            svec_add(&s->snoops, optarg);
+            sset_add(&s->snoops, optarg);
             break;
 
         case OPT_PORTS:
-            svec_split(&s->ports, optarg, ",");
+            parse_ports(optarg, &s->ports);
             break;
 
         case OPT_UNIXCTL:
@@ -466,15 +464,9 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
 
     argc -= optind;
     argv += optind;
-    if (argc < 1) {
-        ovs_fatal(0, "need at least one non-option arguments; "
+    if (argc < 2) {
+        ovs_fatal(0, "need at least two non-option arguments; "
                   "use --help for usage");
-    }
-
-    /* Set accept_controller_regex. */
-    if (!controller_opts.accept_re) {
-        controller_opts.accept_re
-            = stream_ssl_is_configured() ? "^ssl:.*" : "^tcp:.*";
     }
 
     /* Rate limiting. */
@@ -488,49 +480,38 @@ parse_options(int argc, char *argv[], struct ofsettings *s)
 
     /* Figure out controller names. */
     s->run_forever = false;
-    if (!controllers.n) {
-        svec_add_nocopy(&controllers, xasprintf("punix:%s/%s.mgmt",
-                                                ovs_rundir(), s->dp_name));
+    if (sset_is_empty(&controllers)) {
+        sset_add_and_free(&controllers, xasprintf("punix:%s/%s.mgmt",
+                                                  ovs_rundir(), s->dp_name));
     }
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "none")) {
             s->run_forever = true;
         } else {
-            svec_add(&controllers, argv[i]);
+            sset_add(&controllers, argv[i]);
         }
-    }
-    if (argc < 2) {
-        svec_add(&controllers, "discover");
     }
 
     /* Set up controllers. */
-    s->n_controllers = controllers.n;
+    s->n_controllers = sset_count(&controllers);
     s->controllers = xmalloc(s->n_controllers * sizeof *s->controllers);
-    for (i = 0; i < s->n_controllers; i++) {
+    i = 0;
+    SSET_FOR_EACH (name, &controllers) {
         s->controllers[i] = controller_opts;
-        s->controllers[i].target = controllers.names[i];
+        s->controllers[i].target = xstrdup(name);
+        i++;
     }
-
-    /* Sanity check. */
-    if (controller_opts.band == OFPROTO_OUT_OF_BAND) {
-        for (i = 0; i < s->n_controllers; i++) {
-            if (!strcmp(s->controllers[i].target, "discover")) {
-                ovs_fatal(0, "Cannot perform discovery with out-of-band "
-                          "control");
-            }
-        }
-    }
+    sset_destroy(&controllers);
 }
 
 static void
 usage(void)
 {
     printf("%s: an OpenFlow switch implementation.\n"
-           "usage: %s [OPTIONS] [TYPE@]DATAPATH [CONTROLLER...]\n"
+           "usage: %s [OPTIONS] [TYPE@]DATAPATH CONTROLLER...\n"
            "where DATAPATH is a local datapath (e.g. \"dp0\")\n"
            "optionally with an explicit TYPE (default: \"system\").\n"
-           "Each CONTROLLER is an active OpenFlow connection method.  If\n"
-           "none is given, ovs-openflowd performs controller discovery.\n",
+           "Each CONTROLLER is an active OpenFlow connection method.\n",
            program_name, program_name);
     vconn_usage(true, true, true);
     printf("\nOpenFlow options:\n"
@@ -541,9 +522,6 @@ usage(void)
            "  --sw-desc=SW            Identify software as SW\n"
            "  --serial-desc=SERIAL    Identify serial number as SERIAL\n"
            "  --dp-desc=DP_DESC       Identify dp description as DP_DESC\n"
-           "\nController discovery options:\n"
-           "  --accept-vconn=REGEX    accept matching discovered controllers\n"
-           "  --no-resolv-conf        do not update /etc/resolv.conf\n"
            "\nNetworking options:\n"
            "  --fail=open|closed      when controller connection fails:\n"
            "                            closed: drop all packets\n"

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 #include <config.h>
 
 #include "nx-match.h"
+
+#include <netinet/icmp6.h>
 
 #include "classifier.h"
 #include "dynamic-string.h"
@@ -46,26 +48,30 @@ enum {
 /* For each NXM_* field, define NFI_NXM_* as consecutive integers starting from
  * zero. */
 enum nxm_field_index {
-#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPE, NW_PROTO) NFI_NXM_##HEADER,
+#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPES, NW_PROTO, WRITABLE) \
+        NFI_NXM_##HEADER,
 #include "nx-match.def"
     N_NXM_FIELDS
 };
 
 struct nxm_field {
     struct hmap_node hmap_node;
-    enum nxm_field_index index; /* NFI_* value. */
-    uint32_t header;            /* NXM_* value. */
-    flow_wildcards_t wildcard;  /* FWW_* bit, if exactly one. */
-    ovs_be16 dl_type;           /* dl_type prerequisite, if nonzero. */
-    uint8_t nw_proto;           /* nw_proto prerequisite, if nonzero. */
-    const char *name;           /* "NXM_*" string. */
+    enum nxm_field_index index;       /* NFI_* value. */
+    uint32_t header;                  /* NXM_* value. */
+    flow_wildcards_t wildcard;        /* FWW_* bit, if exactly one. */
+    ovs_be16 dl_type[N_NXM_DL_TYPES]; /* dl_type prerequisites. */
+    uint8_t nw_proto;                 /* nw_proto prerequisite, if nonzero. */
+    const char *name;                 /* "NXM_*" string. */
+    bool writable;                    /* Writable with NXAST_REG_{MOVE,LOAD}? */
 };
+
 
 /* All the known fields. */
 static struct nxm_field nxm_fields[N_NXM_FIELDS] = {
-#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPE, NW_PROTO) \
+#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPES, NW_PROTO, WRITABLE)     \
     { HMAP_NODE_NULL_INITIALIZER, NFI_NXM_##HEADER, NXM_##HEADER, WILDCARD, \
-      CONSTANT_HTONS(DL_TYPE), NW_PROTO, "NXM_" #HEADER },
+        DL_CONVERT DL_TYPES, NW_PROTO, "NXM_" #HEADER, WRITABLE },
+#define DL_CONVERT(T1, T2) { CONSTANT_HTONS(T1), CONSTANT_HTONS(T2) }
 #include "nx-match.def"
 };
 
@@ -97,7 +103,7 @@ nxm_init(void)
         /* Verify that the header values are unique (duplicate "case" values
          * cause a compile error). */
         switch (0) {
-#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPE, NW_PROTO) \
+#define DEFINE_FIELD(HEADER, WILDCARD, DL_TYPE, NW_PROTO, WRITABLE)  \
         case NXM_##HEADER: break;
 #include "nx-match.def"
         }
@@ -192,10 +198,12 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         } else if (eth_addr_equals(mask, eth_mcast_1)) {
             wc->wildcards &= ~FWW_ETH_MCAST;
             flow->dl_dst[0] = *(uint8_t *) value & 0x01;
+            return 0;
         } else if (eth_addr_equals(mask, eth_mcast_0)) {
             wc->wildcards &= ~FWW_DL_DST;
             memcpy(flow->dl_dst, value, ETH_ADDR_LEN);
             flow->dl_dst[0] &= 0xfe;
+            return 0;
         } else if (eth_addr_equals(mask, eth_all_0s)) {
             return 0;
         } else if (eth_addr_equals(mask, eth_all_1s)) {
@@ -209,7 +217,7 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         memcpy(flow->dl_src, value, ETH_ADDR_LEN);
         return 0;
     case NFI_NXM_OF_ETH_TYPE:
-        flow->dl_type = get_unaligned_be16(value);
+        flow->dl_type = ofputil_dl_type_from_openflow(get_unaligned_be16(value));
         return 0;
 
         /* 802.1Q header. */
@@ -283,6 +291,50 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
             return 0;
         }
 
+        /* IPv6 addresses. */
+    case NFI_NXM_NX_IPV6_SRC:
+        if (!ipv6_mask_is_any(&wc->ipv6_src_mask)) {
+            return NXM_DUP_TYPE;
+        } else {
+            struct in6_addr ipv6;
+            memcpy(&ipv6, value, sizeof ipv6);
+            cls_rule_set_ipv6_src(rule, &ipv6);
+            return 0;
+        }
+    case NFI_NXM_NX_IPV6_SRC_W:
+        if (!ipv6_mask_is_any(&wc->ipv6_src_mask)) {
+            return NXM_DUP_TYPE;
+        } else {
+            struct in6_addr ipv6, netmask;
+            memcpy(&ipv6, value, sizeof ipv6);
+            memcpy(&netmask, mask, sizeof netmask);
+            if (!cls_rule_set_ipv6_src_masked(rule, &ipv6, &netmask)) {
+                return NXM_BAD_MASK;
+            }
+            return 0;
+        }
+    case NFI_NXM_NX_IPV6_DST:
+        if (!ipv6_mask_is_any(&wc->ipv6_dst_mask)) {
+            return NXM_DUP_TYPE;
+        } else {
+            struct in6_addr ipv6;
+            memcpy(&ipv6, value, sizeof ipv6);
+            cls_rule_set_ipv6_dst(rule, &ipv6);
+            return 0;
+        }
+    case NFI_NXM_NX_IPV6_DST_W:
+        if (!ipv6_mask_is_any(&wc->ipv6_dst_mask)) {
+            return NXM_DUP_TYPE;
+        } else {
+            struct in6_addr ipv6, netmask;
+            memcpy(&ipv6, value, sizeof ipv6);
+            memcpy(&netmask, mask, sizeof netmask);
+            if (!cls_rule_set_ipv6_dst_masked(rule, &ipv6, &netmask)) {
+                return NXM_BAD_MASK;
+            }
+            return 0;
+        }
+
         /* TCP header. */
     case NFI_NXM_OF_TCP_SRC:
         flow->tp_src = get_unaligned_be16(value);
@@ -307,6 +359,38 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         flow->tp_dst = htons(*(uint8_t *) value);
         return 0;
 
+        /* ICMPv6 header. */
+    case NFI_NXM_NX_ICMPV6_TYPE:
+        flow->tp_src = htons(*(uint8_t *) value);
+        return 0;
+    case NFI_NXM_NX_ICMPV6_CODE:
+        flow->tp_dst = htons(*(uint8_t *) value);
+        return 0;
+
+        /* IPv6 Neighbor Discovery. */
+    case NFI_NXM_NX_ND_TARGET:
+        /* We've already verified that it's an ICMPv6 message. */
+        if ((flow->tp_src != htons(ND_NEIGHBOR_SOLICIT)) 
+                    && (flow->tp_src != htons(ND_NEIGHBOR_ADVERT))) {
+            return NXM_BAD_PREREQ;
+        }
+        memcpy(&flow->nd_target, value, sizeof flow->nd_target);
+        return 0;
+    case NFI_NXM_NX_ND_SLL:
+        /* We've already verified that it's an ICMPv6 message. */
+        if (flow->tp_src != htons(ND_NEIGHBOR_SOLICIT)) {
+            return NXM_BAD_PREREQ;
+        }
+        memcpy(flow->arp_sha, value, ETH_ADDR_LEN);
+        return 0;
+    case NFI_NXM_NX_ND_TLL:
+        /* We've already verified that it's an ICMPv6 message. */
+        if (flow->tp_src != htons(ND_NEIGHBOR_ADVERT)) {
+            return NXM_BAD_PREREQ;
+        }
+        memcpy(flow->arp_tha, value, ETH_ADDR_LEN);
+        return 0;
+
         /* ARP header. */
     case NFI_NXM_OF_ARP_OP:
         if (ntohs(get_unaligned_be16(value)) > 255) {
@@ -316,10 +400,30 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
             return 0;
         }
 
+    case NFI_NXM_NX_ARP_SHA:
+        memcpy(flow->arp_sha, value, ETH_ADDR_LEN);
+        return 0;
+    case NFI_NXM_NX_ARP_THA:
+        memcpy(flow->arp_tha, value, ETH_ADDR_LEN);
+        return 0;
+
         /* Tunnel ID. */
     case NFI_NXM_NX_TUN_ID:
-        flow->tun_id = get_unaligned_be64(value);
-        return 0;
+        if (wc->tun_id_mask) {
+            return NXM_DUP_TYPE;
+        } else {
+            cls_rule_set_tun_id(rule, get_unaligned_be64(value));
+            return 0;
+        }
+    case NFI_NXM_NX_TUN_ID_W:
+        if (wc->tun_id_mask) {
+            return NXM_DUP_TYPE;
+        } else {
+            ovs_be64 tun_id = get_unaligned_be64(value);
+            ovs_be64 tun_mask = get_unaligned_be64(mask);
+            cls_rule_set_tun_id_masked(rule, tun_id, tun_mask);
+            return 0;
+        }
 
         /* Registers. */
     case NFI_NXM_NX_REG0:
@@ -350,9 +454,19 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
 static bool
 nxm_prereqs_ok(const struct nxm_field *field, const struct flow *flow)
 {
-    return (!field->dl_type
-            || (field->dl_type == flow->dl_type
-                && (!field->nw_proto || field->nw_proto == flow->nw_proto)));
+    if (field->nw_proto && field->nw_proto != flow->nw_proto) {
+        return false;
+    }
+
+    if (!field->dl_type[0]) {
+        return true;
+    } else if (field->dl_type[0] == flow->dl_type) {
+        return true;
+    } else if (field->dl_type[1] && field->dl_type[1] == flow->dl_type) {
+        return true;
+    }
+
+    return false;
 }
 
 static uint32_t
@@ -532,6 +646,31 @@ nxm_put_64(struct ofpbuf *b, uint32_t header, ovs_be64 value)
 }
 
 static void
+nxm_put_64w(struct ofpbuf *b, uint32_t header, ovs_be64 value, ovs_be64 mask)
+{
+    nxm_put_header(b, header);
+    ofpbuf_put(b, &value, sizeof value);
+    ofpbuf_put(b, &mask, sizeof mask);
+}
+
+static void
+nxm_put_64m(struct ofpbuf *b, uint32_t header, ovs_be64 value, ovs_be64 mask)
+{
+    switch (mask) {
+    case 0:
+        break;
+
+    case CONSTANT_HTONLL(UINT64_MAX):
+        nxm_put_64(b, header, value);
+        break;
+
+    default:
+        nxm_put_64w(b, NXM_MAKE_WILD_HEADER(header), value, mask);
+        break;
+    }
+}
+
+static void
 nxm_put_eth(struct ofpbuf *b, uint32_t header,
             const uint8_t value[ETH_ADDR_LEN])
 {
@@ -559,6 +698,22 @@ nxm_put_eth_dst(struct ofpbuf *b,
     case 0:
         nxm_put_eth(b, NXM_OF_ETH_DST, value);
         break;
+    }
+}
+
+static void
+nxm_put_ipv6(struct ofpbuf *b, uint32_t header,
+             const struct in6_addr *value, const struct in6_addr *mask)
+{
+    if (ipv6_mask_is_any(mask)) {
+        return;
+    } else if (ipv6_mask_is_exact(mask)) {
+        nxm_put_header(b, header);
+        ofpbuf_put(b, value, sizeof *value);
+    } else {
+        nxm_put_header(b, NXM_MAKE_WILD_HEADER(header));
+        ofpbuf_put(b, value, sizeof *value);
+        ofpbuf_put(b, mask, sizeof *mask);
     }
 }
 
@@ -596,7 +751,8 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
         nxm_put_eth(b, NXM_OF_ETH_SRC, flow->dl_src);
     }
     if (!(wc & FWW_DL_TYPE)) {
-        nxm_put_16(b, NXM_OF_ETH_TYPE, flow->dl_type);
+        nxm_put_16(b, NXM_OF_ETH_TYPE,
+                   ofputil_dl_type_to_openflow(flow->dl_type));
     }
 
     /* 802.1Q. */
@@ -615,7 +771,7 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
             nxm_put_8(b, NXM_OF_IP_PROTO, flow->nw_proto);
             switch (flow->nw_proto) {
                 /* TCP. */
-            case IP_TYPE_TCP:
+            case IPPROTO_TCP:
                 if (!(wc & FWW_TP_SRC)) {
                     nxm_put_16(b, NXM_OF_TCP_SRC, flow->tp_src);
                 }
@@ -625,7 +781,7 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
                 break;
 
                 /* UDP. */
-            case IP_TYPE_UDP:
+            case IPPROTO_UDP:
                 if (!(wc & FWW_TP_SRC)) {
                     nxm_put_16(b, NXM_OF_UDP_SRC, flow->tp_src);
                 }
@@ -635,12 +791,67 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
                 break;
 
                 /* ICMP. */
-            case IP_TYPE_ICMP:
+            case IPPROTO_ICMP:
                 if (!(wc & FWW_TP_SRC)) {
                     nxm_put_8(b, NXM_OF_ICMP_TYPE, ntohs(flow->tp_src));
                 }
                 if (!(wc & FWW_TP_DST)) {
                     nxm_put_8(b, NXM_OF_ICMP_CODE, ntohs(flow->tp_dst));
+                }
+                break;
+            }
+        }
+    } else if (!(wc & FWW_DL_TYPE) && flow->dl_type == htons(ETH_TYPE_IPV6)) {
+        /* IPv6. */
+
+        if (!(wc & FWW_NW_TOS)) {
+            nxm_put_8(b, NXM_OF_IP_TOS, flow->nw_tos & 0xfc);
+        }
+        nxm_put_ipv6(b, NXM_NX_IPV6_SRC, &flow->ipv6_src,
+                &cr->wc.ipv6_src_mask);
+        nxm_put_ipv6(b, NXM_NX_IPV6_DST, &flow->ipv6_dst,
+                &cr->wc.ipv6_dst_mask);
+
+        if (!(wc & FWW_NW_PROTO)) {
+            nxm_put_8(b, NXM_OF_IP_PROTO, flow->nw_proto);
+            switch (flow->nw_proto) {
+                /* TCP. */
+            case IPPROTO_TCP:
+                if (!(wc & FWW_TP_SRC)) {
+                    nxm_put_16(b, NXM_OF_TCP_SRC, flow->tp_src);
+                }
+                if (!(wc & FWW_TP_DST)) {
+                    nxm_put_16(b, NXM_OF_TCP_DST, flow->tp_dst);
+                }
+                break;
+
+                /* UDP. */
+            case IPPROTO_UDP:
+                if (!(wc & FWW_TP_SRC)) {
+                    nxm_put_16(b, NXM_OF_UDP_SRC, flow->tp_src);
+                }
+                if (!(wc & FWW_TP_DST)) {
+                    nxm_put_16(b, NXM_OF_UDP_DST, flow->tp_dst);
+                }
+                break;
+
+                /* ICMPv6. */
+            case IPPROTO_ICMPV6:
+                if (!(wc & FWW_TP_SRC)) {
+                    nxm_put_8(b, NXM_NX_ICMPV6_TYPE, ntohs(flow->tp_src));
+                }
+                if (!(wc & FWW_TP_DST)) {
+                    nxm_put_8(b, NXM_NX_ICMPV6_CODE, ntohs(flow->tp_dst));
+                }
+                if (!(wc & FWW_ND_TARGET)) {
+                    nxm_put_ipv6(b, NXM_NX_ND_TARGET, &flow->nd_target,
+                            &in6addr_exact);
+                }
+                if (!(wc & FWW_ARP_SHA)) {
+                    nxm_put_eth(b, NXM_NX_ND_SLL, flow->arp_sha);
+                }
+                if (!(wc & FWW_ARP_THA)) {
+                    nxm_put_eth(b, NXM_NX_ND_TLL, flow->arp_tha);
                 }
                 break;
             }
@@ -652,12 +863,16 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
         }
         nxm_put_32m(b, NXM_OF_ARP_SPA, flow->nw_src, cr->wc.nw_src_mask);
         nxm_put_32m(b, NXM_OF_ARP_TPA, flow->nw_dst, cr->wc.nw_dst_mask);
+        if (!(wc & FWW_ARP_SHA)) {
+            nxm_put_eth(b, NXM_NX_ARP_SHA, flow->arp_sha);
+        }
+        if (!(wc & FWW_ARP_THA)) {
+            nxm_put_eth(b, NXM_NX_ARP_THA, flow->arp_tha);
+        }
     }
 
     /* Tunnel ID. */
-    if (!(wc & FWW_TUN_ID)) {
-        nxm_put_64(b, NXM_NX_TUN_ID, flow->tun_id);
-    }
+    nxm_put_64m(b, NXM_NX_TUN_ID, flow->tun_id, cr->wc.tun_id_mask);
 
     /* Registers. */
     for (i = 0; i < FLOW_N_REGS; i++) {
@@ -982,7 +1197,7 @@ nxm_format_reg_load(const struct nx_action_reg_load *load, struct ds *s)
     uint32_t dst = ntohl(load->dst);
     uint64_t value = ntohll(load->value);
 
-    ds_put_format(s, "load:%"PRIu64"->", value);
+    ds_put_format(s, "load:%#"PRIx64"->", value);
     nxm_format_field_bits(s, dst, ofs, n_bits);
 }
 
@@ -1016,9 +1231,7 @@ nxm_check_reg_move(const struct nx_action_reg_move *action,
         return BAD_ARGUMENT;
     }
 
-    if (!NXM_IS_NX_REG(dst->header)
-        && dst->header != NXM_OF_VLAN_TCI
-        && dst->header != NXM_NX_TUN_ID) {
+    if (!dst->writable) {
         return BAD_ARGUMENT;
     }
 
@@ -1045,7 +1258,7 @@ nxm_check_reg_load(const struct nx_action_reg_load *action,
         return BAD_ARGUMENT;
     }
 
-    if (!NXM_IS_NX_REG(dst->header)) {
+    if (!dst->writable) {
         return BAD_ARGUMENT;
     }
 
@@ -1068,7 +1281,7 @@ nxm_read_field(const struct nxm_field *src, const struct flow *flow)
         return eth_addr_to_uint64(flow->dl_src);
 
     case NFI_NXM_OF_ETH_TYPE:
-        return ntohs(flow->dl_type);
+        return ntohs(ofputil_dl_type_to_openflow(flow->dl_type));
 
     case NFI_NXM_OF_VLAN_TCI:
         return ntohs(flow->vlan_tci);
@@ -1097,9 +1310,11 @@ nxm_read_field(const struct nxm_field *src, const struct flow *flow)
         return ntohs(flow->tp_dst);
 
     case NFI_NXM_OF_ICMP_TYPE:
+    case NFI_NXM_NX_ICMPV6_TYPE:
         return ntohs(flow->tp_src) & 0xff;
 
     case NFI_NXM_OF_ICMP_CODE:
+    case NFI_NXM_NX_ICMPV6_CODE:
         return ntohs(flow->tp_dst) & 0xff;
 
     case NFI_NXM_NX_TUN_ID:
@@ -1125,17 +1340,105 @@ nxm_read_field(const struct nxm_field *src, const struct flow *flow)
 #error
 #endif
 
+    case NFI_NXM_NX_ARP_SHA:
+    case NFI_NXM_NX_ND_SLL:
+        return eth_addr_to_uint64(flow->arp_sha);
+
+    case NFI_NXM_NX_ARP_THA:
+    case NFI_NXM_NX_ND_TLL:
+        return eth_addr_to_uint64(flow->arp_tha);
+
+    case NFI_NXM_NX_TUN_ID_W:
     case NFI_NXM_OF_ETH_DST_W:
     case NFI_NXM_OF_VLAN_TCI_W:
     case NFI_NXM_OF_IP_SRC_W:
     case NFI_NXM_OF_IP_DST_W:
     case NFI_NXM_OF_ARP_SPA_W:
     case NFI_NXM_OF_ARP_TPA_W:
+    case NFI_NXM_NX_IPV6_SRC:
+    case NFI_NXM_NX_IPV6_SRC_W:
+    case NFI_NXM_NX_IPV6_DST:
+    case NFI_NXM_NX_IPV6_DST_W:
+    case NFI_NXM_NX_ND_TARGET:
     case N_NXM_FIELDS:
         NOT_REACHED();
     }
 
     NOT_REACHED();
+}
+
+static void
+nxm_write_field(const struct nxm_field *dst, struct flow *flow,
+                uint64_t new_value)
+{
+    switch (dst->index) {
+    case NFI_NXM_OF_VLAN_TCI:
+        flow->vlan_tci = htons(new_value);
+        break;
+
+    case NFI_NXM_NX_TUN_ID:
+        flow->tun_id = htonll(new_value);
+        break;
+
+#define NXM_WRITE_REGISTER(IDX)                 \
+    case NFI_NXM_NX_REG##IDX:                   \
+        flow->regs[IDX] = new_value;            \
+        break;                                  \
+    case NFI_NXM_NX_REG##IDX##_W:               \
+        NOT_REACHED();
+
+    NXM_WRITE_REGISTER(0);
+#if FLOW_N_REGS >= 2
+    NXM_WRITE_REGISTER(1);
+#endif
+#if FLOW_N_REGS >= 3
+    NXM_WRITE_REGISTER(2);
+#endif
+#if FLOW_N_REGS >= 4
+    NXM_WRITE_REGISTER(3);
+#endif
+#if FLOW_N_REGS > 4
+#error
+#endif
+
+    case NFI_NXM_OF_IN_PORT:
+    case NFI_NXM_OF_ETH_DST:
+    case NFI_NXM_OF_ETH_SRC:
+    case NFI_NXM_OF_ETH_TYPE:
+    case NFI_NXM_OF_IP_TOS:
+    case NFI_NXM_OF_IP_PROTO:
+    case NFI_NXM_OF_ARP_OP:
+    case NFI_NXM_OF_IP_SRC:
+    case NFI_NXM_OF_ARP_SPA:
+    case NFI_NXM_OF_IP_DST:
+    case NFI_NXM_OF_ARP_TPA:
+    case NFI_NXM_OF_TCP_SRC:
+    case NFI_NXM_OF_UDP_SRC:
+    case NFI_NXM_OF_TCP_DST:
+    case NFI_NXM_OF_UDP_DST:
+    case NFI_NXM_OF_ICMP_TYPE:
+    case NFI_NXM_OF_ICMP_CODE:
+    case NFI_NXM_NX_TUN_ID_W:
+    case NFI_NXM_OF_ETH_DST_W:
+    case NFI_NXM_OF_VLAN_TCI_W:
+    case NFI_NXM_OF_IP_SRC_W:
+    case NFI_NXM_OF_IP_DST_W:
+    case NFI_NXM_OF_ARP_SPA_W:
+    case NFI_NXM_OF_ARP_TPA_W:
+    case NFI_NXM_NX_ARP_SHA:
+    case NFI_NXM_NX_ARP_THA:
+    case NFI_NXM_NX_IPV6_SRC:
+    case NFI_NXM_NX_IPV6_SRC_W:
+    case NFI_NXM_NX_IPV6_DST:
+    case NFI_NXM_NX_IPV6_DST_W:
+    case NFI_NXM_NX_ICMPV6_TYPE:
+    case NFI_NXM_NX_ICMPV6_CODE:
+    case NFI_NXM_NX_ND_TARGET:
+    case NFI_NXM_NX_ND_SLL:
+    case NFI_NXM_NX_ND_TLL:
+    case N_NXM_FIELDS:
+        NOT_REACHED();
+    }
 }
 
 void
@@ -1159,16 +1462,7 @@ nxm_execute_reg_move(const struct nx_action_reg_move *action,
     /* Get the final value. */
     uint64_t new_data = dst_data | ((src_data >> src_ofs) << dst_ofs);
 
-    /* Store the result. */
-    if (NXM_IS_NX_REG(dst->header)) {
-        flow->regs[NXM_NX_REG_IDX(dst->header)] = new_data;
-    } else if (dst->header == NXM_OF_VLAN_TCI) {
-        flow->vlan_tci = htons(new_data);
-    } else if (dst->header == NXM_NX_TUN_ID) {
-        flow->tun_id = htonll(new_data);
-    } else {
-        NOT_REACHED();
-    }
+    nxm_write_field(dst, flow, new_data);
 }
 
 void
@@ -1177,15 +1471,18 @@ nxm_execute_reg_load(const struct nx_action_reg_load *action,
 {
     /* Preparation. */
     int n_bits = nxm_decode_n_bits(action->ofs_nbits);
-    uint32_t mask = n_bits == 32 ? UINT32_MAX : (UINT32_C(1) << n_bits) - 1;
-    uint32_t *reg = &flow->regs[NXM_NX_REG_IDX(ntohl(action->dst))];
+    uint64_t mask = n_bits == 64 ? UINT64_MAX : (UINT64_C(1) << n_bits) - 1;
 
     /* Get source data. */
-    uint32_t src_data = ntohll(action->value);
+    uint64_t src_data = ntohll(action->value);
 
     /* Get remaining bits of the destination field. */
+    const struct nxm_field *dst = nxm_field_lookup(ntohl(action->dst));
     int dst_ofs = nxm_decode_ofs(action->ofs_nbits);
-    uint32_t dst_data = *reg & ~(mask << dst_ofs);
+    uint64_t dst_data = nxm_read_field(dst, flow) & ~(mask << dst_ofs);
 
-    *reg = dst_data | (src_data << dst_ofs);
+    /* Get the final value. */
+    uint64_t new_data = dst_data | (src_data << dst_ofs);
+
+    nxm_write_field(dst, flow, new_data);
 }

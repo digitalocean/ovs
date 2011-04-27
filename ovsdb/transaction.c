@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,9 +57,11 @@ struct ovsdb_txn_table {
  *
  *      - A row modified by a transaction will have non-null 'old' and 'new'.
  *
- *      - 'old' and 'new' both null is invalid.  It would indicate that a row
- *        was added then deleted within a single transaction, but we instead
- *        handle that case by deleting the txn_row entirely.
+ *      - 'old' and 'new' both null indicates that a row was added then deleted
+ *        within a single transaction.  Most of the time we instead delete the
+ *        ovsdb_txn_row entirely, but inside a for_each_txn_row() callback
+ *        there are restrictions that sometimes mean we have to leave the
+ *        ovsdb_txn_row in place.
  */
 struct ovsdb_txn_row {
     struct hmap_node hmap_node; /* In ovsdb_txn_table's txn_rows hmap. */
@@ -67,12 +69,20 @@ struct ovsdb_txn_row {
     struct ovsdb_row *new;      /* The new row. */
     size_t n_refs;              /* Number of remaining references. */
 
+    /* These members are the same as the corresponding members of 'old' or
+     * 'new'.  They are present here for convenience and because occasionally
+     * there can be an ovsdb_txn_row where both 'old' and 'new' are NULL. */
+    struct uuid uuid;
+    struct ovsdb_table *table;
+
     /* Used by for_each_txn_row(). */
     unsigned int serial;        /* Serial number of in-progress commit. */
 
     unsigned long changed[];    /* Bits set to 1 for columns that changed. */
 };
 
+static struct ovsdb_error * WARN_UNUSED_RESULT
+delete_garbage_row(struct ovsdb_txn *txn, struct ovsdb_txn_row *r);
 static void ovsdb_txn_row_prefree(struct ovsdb_txn_row *);
 static struct ovsdb_error * WARN_UNUSED_RESULT
 for_each_txn_row(struct ovsdb_txn *txn,
@@ -110,7 +120,9 @@ ovsdb_txn_row_abort(struct ovsdb_txn *txn OVS_UNUSED,
 
     ovsdb_txn_row_prefree(txn_row);
     if (!old) {
-        hmap_remove(&new->table->rows, &new->hmap_node);
+        if (new) {
+            hmap_remove(&new->table->rows, &new->hmap_node);
+        }
     } else if (!new) {
         hmap_insert(&old->table->rows, &old->hmap_node, ovsdb_row_hash(old));
     } else {
@@ -140,15 +152,26 @@ find_txn_row(const struct ovsdb_table *table, const struct uuid *uuid)
 
     HMAP_FOR_EACH_WITH_HASH (txn_row, hmap_node,
                              uuid_hash(uuid), &table->txn_table->txn_rows) {
-        const struct ovsdb_row *row;
-
-        row = txn_row->old ? txn_row->old : txn_row->new;
-        if (uuid_equals(uuid, ovsdb_row_get_uuid(row))) {
+        if (uuid_equals(uuid, &txn_row->uuid)) {
             return txn_row;
         }
     }
 
     return NULL;
+}
+
+static struct ovsdb_txn_row *
+find_or_make_txn_row(struct ovsdb_txn *txn, const struct ovsdb_table *table,
+                     const struct uuid *uuid)
+{
+    struct ovsdb_txn_row *txn_row = find_txn_row(table, uuid);
+    if (!txn_row) {
+        const struct ovsdb_row *row = ovsdb_table_get_row(table, uuid);
+        if (row) {
+            txn_row = ovsdb_txn_row_modify(txn, row)->txn_row;
+        }
+    }
+    return txn_row;
 }
 
 static struct ovsdb_error * WARN_UNUSED_RESULT
@@ -168,20 +191,22 @@ ovsdb_txn_adjust_atom_refs(struct ovsdb_txn *txn, const struct ovsdb_row *r,
     table = base->u.uuid.refTable;
     for (i = 0; i < n; i++) {
         const struct uuid *uuid = &atoms[i].uuid;
-        struct ovsdb_txn_row *txn_row = find_txn_row(table, uuid);
+        struct ovsdb_txn_row *txn_row;
+
+        if (uuid_equals(uuid, ovsdb_row_get_uuid(r))) {
+            /* Self-references don't count. */
+            continue;
+        }
+
+        txn_row = find_or_make_txn_row(txn, table, uuid);
         if (!txn_row) {
-            const struct ovsdb_row *row = ovsdb_table_get_row(table, uuid);
-            if (row) {
-                txn_row = ovsdb_txn_row_modify(txn, row)->txn_row;
-            } else {
-                return ovsdb_error("referential integrity violation",
-                                   "Table %s column %s row "UUID_FMT" "
-                                   "references nonexistent row "UUID_FMT" in "
-                                   "table %s.",
-                                   r->table->schema->name, c->name,
-                                   UUID_ARGS(ovsdb_row_get_uuid(r)),
-                                   UUID_ARGS(uuid), table->schema->name);
-            }
+            return ovsdb_error("referential integrity violation",
+                               "Table %s column %s row "UUID_FMT" "
+                               "references nonexistent row "UUID_FMT" in "
+                               "table %s.",
+                               r->table->schema->name, c->name,
+                               UUID_ARGS(ovsdb_row_get_uuid(r)),
+                               UUID_ARGS(uuid), table->schema->name);
         }
         txn_row->n_refs += delta;
     }
@@ -208,7 +233,7 @@ ovsdb_txn_adjust_row_refs(struct ovsdb_txn *txn, const struct ovsdb_row *r,
 static struct ovsdb_error * WARN_UNUSED_RESULT
 update_row_ref_count(struct ovsdb_txn *txn, struct ovsdb_txn_row *r)
 {
-    struct ovsdb_table *table = r->old ? r->old->table : r->new->table;
+    struct ovsdb_table *table = r->table;
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &table->schema->columns) {
@@ -218,8 +243,7 @@ update_row_ref_count(struct ovsdb_txn *txn, struct ovsdb_txn_row *r)
         if (r->old) {
             error = ovsdb_txn_adjust_row_refs(txn, r->old, column, -1);
             if (error) {
-                ovsdb_error_destroy(error);
-                return OVSDB_BUG("error decreasing refcount");
+                return OVSDB_WRAP_BUG("error decreasing refcount", error);
             }
         }
         if (r->new) {
@@ -242,10 +266,95 @@ check_ref_count(struct ovsdb_txn *txn OVS_UNUSED, struct ovsdb_txn_row *r)
         return ovsdb_error("referential integrity violation",
                            "cannot delete %s row "UUID_FMT" because "
                            "of %zu remaining reference(s)",
-                           r->old->table->schema->name,
-                           UUID_ARGS(ovsdb_row_get_uuid(r->old)),
+                           r->table->schema->name, UUID_ARGS(&r->uuid),
                            r->n_refs);
     }
+}
+
+static struct ovsdb_error * WARN_UNUSED_RESULT
+delete_row_refs(struct ovsdb_txn *txn, const struct ovsdb_row *row,
+                const struct ovsdb_base_type *base,
+                const union ovsdb_atom *atoms, unsigned int n)
+{
+    const struct ovsdb_table *table;
+    unsigned int i;
+
+    if (!ovsdb_base_type_is_strong_ref(base)) {
+        return NULL;
+    }
+
+    table = base->u.uuid.refTable;
+    for (i = 0; i < n; i++) {
+        const struct uuid *uuid = &atoms[i].uuid;
+        struct ovsdb_txn_row *txn_row;
+
+        if (uuid_equals(uuid, ovsdb_row_get_uuid(row))) {
+            /* Self-references don't count. */
+            continue;
+        }
+
+        txn_row = find_or_make_txn_row(txn, table, uuid);
+        if (!txn_row) {
+            return OVSDB_BUG("strong ref target missing");
+        } else if (!txn_row->n_refs) {
+            return OVSDB_BUG("strong ref target has zero n_refs");
+        } else if (!txn_row->new) {
+            return OVSDB_BUG("deleted strong ref target");
+        }
+
+        if (--txn_row->n_refs == 0) {
+            struct ovsdb_error *error = delete_garbage_row(txn, txn_row);
+            if (error) {
+                return error;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static struct ovsdb_error * WARN_UNUSED_RESULT
+delete_garbage_row(struct ovsdb_txn *txn, struct ovsdb_txn_row *txn_row)
+{
+    struct shash_node *node;
+    struct ovsdb_row *row;
+
+    if (txn_row->table->schema->is_root) {
+        return NULL;
+    }
+
+    row = txn_row->new;
+    txn_row->new = NULL;
+    hmap_remove(&txn_row->table->rows, &row->hmap_node);
+    SHASH_FOR_EACH (node, &txn_row->table->schema->columns) {
+        const struct ovsdb_column *column = node->data;
+        const struct ovsdb_datum *field = &row->fields[column->index];
+        struct ovsdb_error *error;
+
+        error = delete_row_refs(txn, row,
+                                &column->type.key, field->keys, field->n);
+        if (error) {
+            return error;
+        }
+
+        error = delete_row_refs(txn, row,
+                                &column->type.value, field->values, field->n);
+        if (error) {
+            return error;
+        }
+    }
+    ovsdb_row_destroy(row);
+
+    return NULL;
+}
+
+static struct ovsdb_error * WARN_UNUSED_RESULT
+collect_garbage(struct ovsdb_txn *txn, struct ovsdb_txn_row *txn_row)
+{
+    if (txn_row->new && !txn_row->n_refs) {
+        return delete_garbage_row(txn, txn_row);
+    }
+    return NULL;
 }
 
 static struct ovsdb_error * WARN_UNUSED_RESULT
@@ -329,7 +438,7 @@ assess_weak_refs(struct ovsdb_txn *txn, struct ovsdb_txn_row *txn_row)
         return NULL;
     }
 
-    table = txn_row->new->table;
+    table = txn_row->table;
     SHASH_FOR_EACH (node, &table->schema->columns) {
         const struct ovsdb_column *column = node->data;
         struct ovsdb_datum *datum = &txn_row->new->fields[column->index];
@@ -413,9 +522,8 @@ assess_weak_refs(struct ovsdb_txn *txn, struct ovsdb_txn_row *txn_row)
 static struct ovsdb_error * WARN_UNUSED_RESULT
 determine_changes(struct ovsdb_txn *txn, struct ovsdb_txn_row *txn_row)
 {
-    struct ovsdb_table *table;
+    struct ovsdb_table *table = txn_row->table;
 
-    table = (txn_row->old ? txn_row->old : txn_row->new)->table;
     if (txn_row->old && txn_row->new) {
         struct shash_node *node;
         bool changed = false;
@@ -476,23 +584,29 @@ ovsdb_txn_commit(struct ovsdb_txn *txn, bool durable)
      * was really a no-op. */
     error = for_each_txn_row(txn, determine_changes);
     if (error) {
-        ovsdb_error_destroy(error);
-        return OVSDB_BUG("can't happen");
+        return OVSDB_WRAP_BUG("can't happen", error);
     }
     if (list_is_empty(&txn->txn_tables)) {
         ovsdb_txn_abort(txn);
         return NULL;
     }
 
-    /* Check maximum rows table constraints. */
-    error = check_max_rows(txn);
+    /* Update reference counts and check referential integrity. */
+    error = update_ref_counts(txn);
     if (error) {
         ovsdb_txn_abort(txn);
         return error;
     }
 
-    /* Update reference counts and check referential integrity. */
-    error = update_ref_counts(txn);
+    /* Delete unreferenced, non-root rows. */
+    error = for_each_txn_row(txn, collect_garbage);
+    if (error) {
+        ovsdb_txn_abort(txn);
+        return OVSDB_WRAP_BUG("can't happen", error);
+    }
+
+    /* Check maximum rows table constraints. */
+    error = check_max_rows(txn);
     if (error) {
         ovsdb_txn_abort(txn);
         return error;
@@ -536,7 +650,7 @@ ovsdb_txn_for_each_change(const struct ovsdb_txn *txn,
 
     LIST_FOR_EACH (t, node, &txn->txn_tables) {
         HMAP_FOR_EACH (r, hmap_node, &t->txn_rows) {
-            if (!cb(r->old, r->new, r->changed, aux)) {
+            if ((r->old || r->new) && !cb(r->old, r->new, r->changed, aux)) {
                 break;
             }
         }
@@ -562,6 +676,7 @@ static struct ovsdb_txn_row *
 ovsdb_txn_row_create(struct ovsdb_txn *txn, struct ovsdb_table *table,
                      const struct ovsdb_row *old_, struct ovsdb_row *new)
 {
+    const struct ovsdb_row *row = old_ ? old_ : new;
     struct ovsdb_row *old = (struct ovsdb_row *) old_;
     size_t n_columns = shash_count(&table->schema->columns);
     struct ovsdb_txn_table *txn_table;
@@ -569,7 +684,9 @@ ovsdb_txn_row_create(struct ovsdb_txn *txn, struct ovsdb_table *table,
 
     txn_row = xzalloc(offsetof(struct ovsdb_txn_row, changed)
                       + bitmap_n_bytes(n_columns));
-    txn_row->old = (struct ovsdb_row *) old;
+    txn_row->uuid = *ovsdb_row_get_uuid(row);
+    txn_row->table = row->table;
+    txn_row->old = old;
     txn_row->new = new;
     txn_row->n_refs = old ? old->n_refs : 0;
     txn_row->serial = serial - 1;
@@ -665,8 +782,7 @@ ovsdb_txn_get_comment(const struct ovsdb_txn *txn)
 static void
 ovsdb_txn_row_prefree(struct ovsdb_txn_row *txn_row)
 {
-    struct ovsdb_row *row = txn_row->old ? txn_row->old : txn_row->new;
-    struct ovsdb_txn_table *txn_table = row->table->txn_table;
+    struct ovsdb_txn_table *txn_table = txn_row->table->txn_table;
 
     txn_table->n_processed--;
     hmap_remove(&txn_table->txn_rows, &txn_row->hmap_node);
@@ -699,6 +815,9 @@ ovsdb_txn_table_destroy(struct ovsdb_txn_table *txn_table)
  * in within the same txn_table.  It may *not* delete any txn_tables.  As long
  * as these rules are followed, 'cb' will be called exactly once for each
  * txn_row in 'txn', even those added by 'cb'.
+ *
+ * (Even though 'cb' is not allowed to delete some txn_rows, it can still
+ * delete any actual row by clearing a txn_row's 'new' member.)
  */
 static struct ovsdb_error * WARN_UNUSED_RESULT
 for_each_txn_row(struct ovsdb_txn *txn,

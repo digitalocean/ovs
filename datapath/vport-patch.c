@@ -11,6 +11,7 @@
 #include <linux/list.h>
 #include <linux/rtnetlink.h>
 
+#include "compat.h"
 #include "datapath.h"
 #include "vport.h"
 #include "vport-generic.h"
@@ -20,7 +21,6 @@ struct patch_config {
 
 	char peer_name[IFNAMSIZ];
 	unsigned char eth_addr[ETH_ALEN];
-	unsigned int mtu;
 };
 
 struct patch_vport {
@@ -85,14 +85,32 @@ static void patch_exit(void)
 	kfree(peer_table);
 }
 
-static int patch_set_config(struct vport *vport, const void *config, 
+static const struct nla_policy patch_policy[ODP_PATCH_ATTR_MAX + 1] = {
+#ifdef HAVE_NLA_NUL_STRING
+	[ODP_PATCH_ATTR_PEER] = { .type = NLA_NUL_STRING, .len = IFNAMSIZ - 1 },
+#endif
+};
+
+static int patch_set_config(struct vport *vport, const struct nlattr *options,
 			    struct patch_config *patchconf)
 {
 	struct patch_vport *patch_vport = patch_vport_priv(vport);
-	char peer_name[IFNAMSIZ];
+	struct nlattr *a[ODP_PATCH_ATTR_MAX + 1];
+	const char *peer_name;
+	int err;
 
-	strlcpy(peer_name, config, IFNAMSIZ);
+	if (!options)
+		return -EINVAL;
 
+	err = nla_parse_nested(a, ODP_PATCH_ATTR_MAX, options, patch_policy);
+	if (err)
+		return err;
+
+	if (!a[ODP_PATCH_ATTR_PEER] ||
+	    CHECK_NUL_STRING(a[ODP_PATCH_ATTR_PEER], IFNAMSIZ - 1))
+		return -EINVAL;
+
+	peer_name = nla_data(a[ODP_PATCH_ATTR_PEER]);
 	if (!strcmp(patch_vport->name, peer_name))
 		return -EINVAL;
 
@@ -125,15 +143,11 @@ static struct vport *patch_create(const struct vport_parms *parms)
 		goto error_free_vport;
 	}
 
-	err = patch_set_config(vport, parms->config, patchconf);
+	err = patch_set_config(vport, parms->options, patchconf);
 	if (err)
 		goto error_free_patchconf;
 
 	vport_gen_rand_ether_addr(patchconf->eth_addr);
-
-	/* Make the default MTU fairly large so that it doesn't become the
-	 * bottleneck on systems using jumbo frames. */
-	patchconf->mtu = 65535;
 
 	rcu_assign_pointer(patch_vport->patchconf, patchconf);
 
@@ -150,38 +164,6 @@ error_free_vport:
 	vport_free(vport);
 error:
 	return ERR_PTR(err);
-}
-
-static int patch_modify(struct vport *vport, struct odp_port *port)
-{
-	struct patch_vport *patch_vport = patch_vport_priv(vport);
-	struct patch_config *patchconf;
-	int err;
-
-	patchconf = kmemdup(rtnl_dereference(patch_vport->patchconf),
-			  sizeof(struct patch_config), GFP_KERNEL);
-	if (!patchconf) {
-		err = -ENOMEM;
-		goto error;
-	}
-
-	err = patch_set_config(vport, port->config, patchconf);
-	if (err)
-		goto error_free;
-
-	assign_config_rcu(vport, patchconf);
-	
-	hlist_del(&patch_vport->hash_node);
-
-	rcu_assign_pointer(patch_vport->peer, vport_locate(patchconf->peer_name));
-	hlist_add_head(&patch_vport->hash_node, hash_bucket(patchconf->peer_name));
-
-	return 0;
-
-error_free:
-	kfree(patchconf);
-error:
-	return err;
 }
 
 static void free_port_rcu(struct rcu_head *rcu)
@@ -204,6 +186,38 @@ static int patch_destroy(struct vport *vport)
 	return 0;
 }
 
+static int patch_set_options(struct vport *vport, struct nlattr *options)
+{
+	struct patch_vport *patch_vport = patch_vport_priv(vport);
+	struct patch_config *patchconf;
+	int err;
+
+	patchconf = kmemdup(rtnl_dereference(patch_vport->patchconf),
+			  sizeof(struct patch_config), GFP_KERNEL);
+	if (!patchconf) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+	err = patch_set_config(vport, options, patchconf);
+	if (err)
+		goto error_free;
+
+	assign_config_rcu(vport, patchconf);
+
+	hlist_del(&patch_vport->hash_node);
+
+	rcu_assign_pointer(patch_vport->peer, vport_locate(patchconf->peer_name));
+	hlist_add_head(&patch_vport->hash_node, hash_bucket(patchconf->peer_name));
+
+	return 0;
+
+error_free:
+	kfree(patchconf);
+error:
+	return err;
+}
+
 static void update_peers(const char *name, struct vport *vport)
 {
 	struct hlist_head *bucket = hash_bucket(name);
@@ -217,22 +231,6 @@ static void update_peers(const char *name, struct vport *vport)
 		if (!strcmp(peer_name, name))
 			rcu_assign_pointer(peer_vport->peer, vport);
 	}
-}
-
-static int patch_set_mtu(struct vport *vport, int mtu)
-{
-	struct patch_vport *patch_vport = patch_vport_priv(vport);
-	struct patch_config *patchconf;
-
-	patchconf = kmemdup(rtnl_dereference(patch_vport->patchconf),
-			  sizeof(struct patch_config), GFP_KERNEL);
-	if (!patchconf)
-		return -ENOMEM;
-
-	patchconf->mtu = mtu;
-	assign_config_rcu(vport, patchconf);
-
-	return 0;
 }
 
 static int patch_set_addr(struct vport *vport, const unsigned char *addr)
@@ -264,19 +262,12 @@ static const unsigned char *patch_get_addr(const struct vport *vport)
 	return rcu_dereference_rtnl(patch_vport->patchconf)->eth_addr;
 }
 
-static void patch_get_config(const struct vport *vport, void *config)
+static int patch_get_options(const struct vport *vport, struct sk_buff *skb)
 {
-	const struct patch_vport *patch_vport = patch_vport_priv(vport);
-	const char *peer_name;
+	struct patch_vport *patch_vport = patch_vport_priv(vport);
+	struct patch_config *patchconf = rcu_dereference_rtnl(patch_vport->patchconf);
 
-	peer_name = rcu_dereference_rtnl(patch_vport->patchconf)->peer_name;
-	strlcpy(config, peer_name, VPORT_CONFIG_SIZE);
-}
-
-static int patch_get_mtu(const struct vport *vport)
-{
-	const struct patch_vport *patch_vport = patch_vport_priv(vport);
-	return rcu_dereference_rtnl(patch_vport->patchconf)->mtu;
+	return nla_put_string(skb, ODP_PATCH_ATTR_PEER, patchconf->peer_name);
 }
 
 static int patch_send(struct vport *vport, struct sk_buff *skb)
@@ -297,21 +288,19 @@ static int patch_send(struct vport *vport, struct sk_buff *skb)
 }
 
 const struct vport_ops patch_vport_ops = {
-	.type		= "patch",
+	.type		= ODP_VPORT_TYPE_PATCH,
 	.flags		= VPORT_F_GEN_STATS,
 	.init		= patch_init,
 	.exit		= patch_exit,
 	.create		= patch_create,
-	.modify		= patch_modify,
 	.destroy	= patch_destroy,
-	.set_mtu	= patch_set_mtu,
 	.set_addr	= patch_set_addr,
 	.get_name	= patch_get_name,
 	.get_addr	= patch_get_addr,
-	.get_config	= patch_get_config,
+	.get_options	= patch_get_options,
+	.set_options	= patch_set_options,
 	.get_dev_flags	= vport_gen_get_dev_flags,
 	.is_running	= vport_gen_is_running,
 	.get_operstate	= vport_gen_get_operstate,
-	.get_mtu	= patch_get_mtu,
 	.send		= patch_send,
 };

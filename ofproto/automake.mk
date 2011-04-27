@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -9,8 +9,8 @@ noinst_LIBRARIES += ofproto/libofproto.a
 ofproto_libofproto_a_SOURCES = \
 	ofproto/collectors.c \
 	ofproto/collectors.h \
-	ofproto/discovery.c \
-	ofproto/discovery.h \
+	ofproto/connmgr.c \
+	ofproto/connmgr.h \
 	ofproto/fail-open.c \
 	ofproto/fail-open.h \
 	ofproto/in-band.c \
@@ -24,8 +24,6 @@ ofproto_libofproto_a_SOURCES = \
 	ofproto/pktbuf.c \
 	ofproto/pktbuf.h \
 	ofproto/pinsched.c \
-	ofproto/pinsched.h \
-	ofproto/status.c \
-	ofproto/status.h
+	ofproto/pinsched.h
 
 EXTRA_DIST += ofproto/ofproto-unixctl.man

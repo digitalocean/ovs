@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,17 +18,25 @@
 #define OFPBUF_H 1
 
 #include <stddef.h>
+#include <stdint.h>
 #include "list.h"
+#include "util.h"
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
 
+enum ofpbuf_source {
+    OFPBUF_MALLOC,              /* Obtained via malloc(). */
+    OFPBUF_STACK                /* Stack space or static buffer. */
+};
+
 /* Buffer for holding arbitrary data.  An ofpbuf is automatically reallocated
  * as necessary if it grows too large for the available memory. */
 struct ofpbuf {
-    void *base;                 /* First byte of area malloc()'d area. */
+    void *base;                 /* First byte of allocated space. */
     size_t allocated;           /* Number of bytes allocated. */
+    enum ofpbuf_source source;  /* Source of memory allocated as 'base'. */
 
     void *data;                 /* First byte actually in use. */
     size_t size;                /* Number of bytes in use. */
@@ -42,7 +50,12 @@ struct ofpbuf {
     void *private_p;            /* Private pointer for use by owner. */
 };
 
+/* Declares NAME as a SIZE-byte array aligned properly for storing any kind of
+ * data.  For use with ofpbuf_use_stack(). */
+#define OFPBUF_STACK_BUFFER(NAME, SIZE) uint64_t NAME[DIV_ROUND_UP(SIZE, 8)]
+
 void ofpbuf_use(struct ofpbuf *, void *, size_t);
+void ofpbuf_use_stack(struct ofpbuf *, void *, size_t);
 void ofpbuf_use_const(struct ofpbuf *, const void *, size_t);
 
 void ofpbuf_init(struct ofpbuf *, size_t);
@@ -55,6 +68,8 @@ struct ofpbuf *ofpbuf_clone(const struct ofpbuf *);
 struct ofpbuf *ofpbuf_clone_with_headroom(const struct ofpbuf *,
                                           size_t headroom);
 struct ofpbuf *ofpbuf_clone_data(const void *, size_t);
+struct ofpbuf *ofpbuf_clone_data_with_headroom(const void *, size_t,
+                                               size_t headroom);
 void ofpbuf_delete(struct ofpbuf *);
 
 void *ofpbuf_at(const struct ofpbuf *, size_t offset, size_t size);
@@ -80,6 +95,8 @@ void ofpbuf_trim(struct ofpbuf *);
 void ofpbuf_clear(struct ofpbuf *);
 void *ofpbuf_pull(struct ofpbuf *, size_t);
 void *ofpbuf_try_pull(struct ofpbuf *, size_t);
+
+void *ofpbuf_steal_data(struct ofpbuf *);
 
 char *ofpbuf_to_string(const struct ofpbuf *, size_t maxbytes);
 

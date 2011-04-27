@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,10 +45,12 @@ struct nl_sock;
 #endif
 
 /* Netlink sockets. */
-int nl_sock_create(int protocol, int multicast_group,
-                   size_t so_sndbuf, size_t so_rcvbuf,
-                   struct nl_sock **);
+int nl_sock_create(int protocol, struct nl_sock **);
+int nl_sock_clone(const struct nl_sock *, struct nl_sock **);
 void nl_sock_destroy(struct nl_sock *);
+
+int nl_sock_join_mcgroup(struct nl_sock *, unsigned int multicast_group);
+int nl_sock_leave_mcgroup(struct nl_sock *, unsigned int multicast_group);
 
 int nl_sock_send(struct nl_sock *, const struct ofpbuf *, bool wait);
 int nl_sock_sendv(struct nl_sock *sock, const struct iovec iov[], size_t n_iov,
@@ -56,6 +58,8 @@ int nl_sock_sendv(struct nl_sock *sock, const struct iovec iov[], size_t n_iov,
 int nl_sock_recv(struct nl_sock *, struct ofpbuf **, bool wait);
 int nl_sock_transact(struct nl_sock *, const struct ofpbuf *request,
                      struct ofpbuf **reply);
+
+int nl_sock_drain(struct nl_sock *);
 
 void nl_sock_wait(const struct nl_sock *, short int events);
 

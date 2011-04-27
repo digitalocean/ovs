@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,6 +85,22 @@ extern const char *program_name;
 #define OVS_TYPEOF(OBJECT) void *
 #endif
 
+/* Given OBJECT of type pointer-to-structure, expands to the offset of MEMBER
+ * within an instance of the structure.
+ *
+ * The GCC-specific version avoids the technicality of undefined behavior if
+ * OBJECT is null, invalid, or not yet initialized.  This makes some static
+ * checkers (like Coverity) happier.  But the non-GCC version does not actually
+ * dereference any pointer, so it would be surprising for it to cause any
+ * problems in practice.
+ */
+#ifdef __GNUC__
+#define OBJECT_OFFSETOF(OBJECT, MEMBER) offsetof(typeof(*(OBJECT)), MEMBER)
+#else
+#define OBJECT_OFFSETOF(OBJECT, MEMBER) \
+    ((char *) &(OBJECT)->MEMBER - (char *) (OBJECT))
+#endif
+
 /* Given POINTER, the address of the given MEMBER in a STRUCT object, returns
    the STRUCT object. */
 #define CONTAINER_OF(POINTER, STRUCT, MEMBER)                           \
@@ -99,7 +115,7 @@ extern const char *program_name;
  * from the type of '*OBJECT'. */
 #define OBJECT_CONTAINING(POINTER, OBJECT, MEMBER)                      \
     ((OVS_TYPEOF(OBJECT)) (void *)                                      \
-     ((char *) (POINTER) - ((char *) &(OBJECT)->MEMBER - (char *) (OBJECT))))
+     ((char *) (POINTER) - OBJECT_OFFSETOF(OBJECT, MEMBER)))
 
 /* Given POINTER, the address of the given MEMBER within an object of the type
  * that that OBJECT points to, assigns the address of the outer object to
@@ -133,10 +149,16 @@ char *xvasprintf(const char *format, va_list) PRINTF_FORMAT(1, 0) MALLOC_LIKE;
 void *x2nrealloc(void *p, size_t *n, size_t s);
 
 void ovs_strlcpy(char *dst, const char *src, size_t size);
+void ovs_strzcpy(char *dst, const char *src, size_t size);
 
+void ovs_abort(int err_no, const char *format, ...)
+    PRINTF_FORMAT(2, 3) NO_RETURN;
 void ovs_fatal(int err_no, const char *format, ...)
     PRINTF_FORMAT(2, 3) NO_RETURN;
 void ovs_error(int err_no, const char *format, ...) PRINTF_FORMAT(2, 3);
+void ovs_error_valist(int err_no, const char *format, va_list)
+    PRINTF_FORMAT(2, 0);
+const char *ovs_retval_to_string(int);
 void ovs_hex_dump(FILE *, const void *, size_t, uintptr_t offset, bool ascii);
 
 bool str_to_int(const char *, int base, int *);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,10 +29,13 @@ struct flow_stats_request;
 struct list;
 struct ofpbuf;
 
+void parse_ofp_str(struct flow_mod *, uint8_t *table_idx,
+                   struct ofpbuf *actions, char *string);
+
 void parse_ofp_flow_mod_str(struct list *packets, enum nx_flow_format *cur,
                             char *string, uint16_t command);
-bool parse_ofp_add_flow_file(struct list *packets, enum nx_flow_format *cur,
-                             FILE *);
+bool parse_ofp_flow_mod_file(struct list *packets, enum nx_flow_format *cur,
+                             FILE *, uint16_t command);
 
 void parse_ofp_flow_stats_request_str(struct flow_stats_request *,
                                       bool aggregate, char *string);

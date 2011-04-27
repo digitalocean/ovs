@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010 Nicira Networks
+/* Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@
 #include "netdev.h"
 #include "ovsdb-idl.h"
 #include "poll-loop.h"
-#include "proc-net-compat.h"
 #include "process.h"
 #include "signals.h"
 #include "stream-ssl.h"
@@ -84,8 +83,6 @@ main(int argc, char *argv[])
     }
     unixctl_command_register("exit", ovs_vswitchd_exit, &exiting);
 
-    daemonize_complete();
-
     bridge_init(remote);
     exiting = false;
     while (!exiting) {
@@ -119,17 +116,16 @@ parse_options(int argc, char *argv[])
     enum {
         OPT_PEER_CA_CERT = UCHAR_MAX + 1,
         OPT_MLOCKALL,
-        OPT_FAKE_PROC_NET,
         VLOG_OPTION_ENUMS,
         LEAK_CHECKER_OPTION_ENUMS,
         OPT_BOOTSTRAP_CA_CERT,
-        OPT_ENABLE_DUMMY
+        OPT_ENABLE_DUMMY,
+        DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
         {"help",        no_argument, 0, 'h'},
         {"version",     no_argument, 0, 'V'},
         {"mlockall",    no_argument, 0, OPT_MLOCKALL},
-        {"fake-proc-net", no_argument, 0, OPT_FAKE_PROC_NET},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         LEAK_CHECKER_LONG_OPTIONS,
@@ -142,7 +138,6 @@ parse_options(int argc, char *argv[])
         {0, 0, 0, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
-    int error;
 
     for (;;) {
         int c;
@@ -169,14 +164,6 @@ parse_options(int argc, char *argv[])
 #else
             VLOG_ERR("mlockall not supported on this system");
 #endif
-            break;
-
-        case OPT_FAKE_PROC_NET:
-            error = proc_net_compat_init();
-            if (error) {
-                ovs_fatal(error, "failed to initialize /proc/net "
-                          "compatibility");
-            }
             break;
 
         VLOG_OPTION_HANDLERS
@@ -229,9 +216,7 @@ usage(void)
     stream_usage("DATABASE", true, false, true);
     daemon_usage();
     vlog_usage();
-    printf("\nLegacy compatibility options:\n"
-           " --fake-proc-net          simulate some files in /proc/net\n"
-           "\nOther options:\n"
+    printf("\nOther options:\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
     leak_checker_usage();

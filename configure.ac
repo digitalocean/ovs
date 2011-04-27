@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2009, 2010 Nicira Networks
+# Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.1.0pre2, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 1.1.0, ovs-bugs@openvswitch.org)
 NX_BUILDNR
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -47,6 +47,7 @@ OVS_CHECK_NDEBUG
 OVS_CHECK_NETLINK
 OVS_CHECK_OPENSSL
 OVS_CHECK_LOGDIR
+OVS_CHECK_RTNL_LINK_STATS64
 OVS_CHECK_PYTHON
 OVS_CHECK_PYUIC4
 OVS_CHECK_OVSDBMONITOR
@@ -55,7 +56,7 @@ OVS_CHECK_IF_PACKET
 OVS_CHECK_STRTOK_R
 AC_CHECK_MEMBERS([struct stat.st_mtim.tv_nsec, struct stat.st_mtimensec],
   [], [], [[#include <sys/stat.h>]])
-AC_CHECK_FUNCS([mlockall strsignal getloadavg statvfs setmntent])
+AC_CHECK_FUNCS([mlockall strnlen strsignal getloadavg statvfs setmntent])
 AC_CHECK_HEADERS([mntent.h sys/statvfs.h])
 
 OVS_CHECK_PKIDIR
@@ -64,6 +65,7 @@ OVS_CHECK_MALLOC_HOOKS
 OVS_CHECK_VALGRIND
 OVS_CHECK_SOCKET_LIBS
 OVS_CHECK_LINKER_SECTIONS
+OVS_CHECK_XENSERVER_VERSION
 
 OVS_ENABLE_OPTION([-Wall])
 OVS_ENABLE_OPTION([-Wno-sign-compare])

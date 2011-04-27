@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  * Copyright (c) 2009 InMon Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,7 +72,7 @@ static bool
 ofproto_sflow_options_equal(const struct ofproto_sflow_options *a,
                             const struct ofproto_sflow_options *b)
 {
-    return (svec_equal(&a->targets, &b->targets)
+    return (sset_equals(&a->targets, &b->targets)
             && a->sampling_rate == b->sampling_rate
             && a->polling_interval == b->polling_interval
             && a->header_len == b->header_len
@@ -85,7 +85,7 @@ static struct ofproto_sflow_options *
 ofproto_sflow_options_clone(const struct ofproto_sflow_options *old)
 {
     struct ofproto_sflow_options *new = xmemdup(old, sizeof *old);
-    svec_clone(&new->targets, &old->targets);
+    sset_clone(&new->targets, &old->targets);
     new->agent_device = old->agent_device ? xstrdup(old->agent_device) : NULL;
     new->control_ip = old->control_ip ? xstrdup(old->control_ip) : NULL;
     return new;
@@ -95,7 +95,7 @@ static void
 ofproto_sflow_options_destroy(struct ofproto_sflow_options *options)
 {
     if (options) {
-        svec_destroy(&options->targets);
+        sset_destroy(&options->targets);
         free(options->agent_device);
         free(options->control_ip);
         free(options);
@@ -395,7 +395,7 @@ ofproto_sflow_set_options(struct ofproto_sflow *os,
     SFLAddress agentIP;
     time_t now;
 
-    if (!options->targets.n || !options->sampling_rate) {
+    if (sset_is_empty(&options->targets) || !options->sampling_rate) {
         /* No point in doing any work if there are no targets or nothing to
          * sample. */
         ofproto_sflow_clear(os);
@@ -409,7 +409,7 @@ ofproto_sflow_set_options(struct ofproto_sflow *os,
      * collectors (which indicates that opening one or more of the configured
      * collectors failed, so that we should retry). */
     if (options_changed
-        || collectors_count(os->collectors) < options->targets.n) {
+        || collectors_count(os->collectors) < sset_count(&options->targets)) {
         collectors_destroy(os->collectors);
         collectors_create(&options->targets, SFL_DEFAULT_COLLECTOR_PORT,
                           &os->collectors);
@@ -477,46 +477,24 @@ ofproto_sflow_odp_port_to_ifindex(const struct ofproto_sflow *os,
 }
 
 void
-ofproto_sflow_received(struct ofproto_sflow *os, struct odp_msg *msg)
+ofproto_sflow_received(struct ofproto_sflow *os,
+                       const struct dpif_upcall *upcall,
+                       const struct flow *flow)
 {
     SFL_FLOW_SAMPLE_TYPE fs;
     SFLFlow_sample_element hdrElem;
     SFLSampled_header *header;
     SFLFlow_sample_element switchElem;
     SFLSampler *sampler;
-    const struct odp_sflow_sample_header *hdr;
-    const struct nlattr *actions, *a;
     unsigned int left;
-    struct ofpbuf b;
+    struct nlattr *a;
     size_t n_outputs;
-    struct flow flow;
-
-    /* Pull odp_msg header. */
-    ofpbuf_use_const(&b, msg, msg->length);
-    ofpbuf_pull(&b, sizeof *msg);
-
-    /* Pull odp_sflow_sample_header. */
-    hdr = ofpbuf_try_pull(&b, sizeof *hdr);
-    if (!hdr) {
-        VLOG_WARN_RL(&rl, "missing odp_sflow_sample_header");
-        return;
-    }
-
-    /* Pull actions. */
-    actions = ofpbuf_try_pull(&b, hdr->actions_len);
-    if (!actions) {
-        VLOG_WARN_RL(&rl, "missing odp actions");
-        return;
-    }
-
-    /* Now only the payload is left. */
-    flow_extract(&b, 0, msg->port, &flow);
 
     /* Build a flow sample */
     memset(&fs, 0, sizeof fs);
-    fs.input = ofproto_sflow_odp_port_to_ifindex(os, msg->port);
+    fs.input = ofproto_sflow_odp_port_to_ifindex(os, flow->in_port);
     fs.output = 0;              /* Filled in correctly below. */
-    fs.sample_pool = hdr->sample_pool;
+    fs.sample_pool = upcall->sample_pool;
 
     /* We are going to give it to the sampler that represents this input port.
      * By implementing "ingress-only" sampling like this we ensure that we
@@ -535,17 +513,18 @@ ofproto_sflow_received(struct ofproto_sflow *os, struct odp_msg *msg)
     header->header_protocol = SFLHEADER_ETHERNET_ISO8023;
     /* The frame_length should include the Ethernet FCS (4 bytes),
        but it has already been stripped,  so we need to add 4 here. */
-    header->frame_length = b.size + 4;
+    header->frame_length = upcall->packet->size + 4;
     /* Ethernet FCS stripped off. */
     header->stripped = 4;
-    header->header_length = MIN(b.size, sampler->sFlowFsMaximumHeaderSize);
-    header->header_bytes = b.data;
+    header->header_length = MIN(upcall->packet->size,
+                                sampler->sFlowFsMaximumHeaderSize);
+    header->header_bytes = upcall->packet->data;
 
     /* Add extended switch element. */
     memset(&switchElem, 0, sizeof(switchElem));
     switchElem.tag = SFLFLOW_EX_SWITCH;
-    switchElem.flowType.sw.src_vlan = vlan_tci_to_vid(flow.vlan_tci);
-    switchElem.flowType.sw.src_priority = vlan_tci_to_pcp(flow.vlan_tci);
+    switchElem.flowType.sw.src_vlan = vlan_tci_to_vid(flow->vlan_tci);
+    switchElem.flowType.sw.src_priority = vlan_tci_to_pcp(flow->vlan_tci);
      /* Initialize the output VLAN and priority to be the same as the input,
         but these fields can be overriden below if affected by an action. */
     switchElem.flowType.sw.dst_vlan = switchElem.flowType.sw.src_vlan;
@@ -553,17 +532,17 @@ ofproto_sflow_received(struct ofproto_sflow *os, struct odp_msg *msg)
 
     /* Figure out the output ports. */
     n_outputs = 0;
-    NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, hdr->actions_len) {
+    NL_ATTR_FOR_EACH_UNSAFE (a, left, upcall->actions, upcall->actions_len) {
         ovs_be16 tci;
 
         switch (nl_attr_type(a)) {
-        case ODPAT_OUTPUT:
+        case ODP_ACTION_ATTR_OUTPUT:
             fs.output = ofproto_sflow_odp_port_to_ifindex(os,
                                                           nl_attr_get_u32(a));
             n_outputs++;
             break;
 
-        case ODPAT_SET_DL_TCI:
+        case ODP_ACTION_ATTR_SET_DL_TCI:
             tci = nl_attr_get_be16(a);
             switchElem.flowType.sw.dst_vlan = vlan_tci_to_vid(tci);
             switchElem.flowType.sw.dst_priority = vlan_tci_to_pcp(tci);

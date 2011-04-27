@@ -345,6 +345,7 @@ idltest_link1_columns_init(void)
     c->name = "k";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "link1";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
@@ -356,6 +357,7 @@ idltest_link1_columns_init(void)
     c->name = "ka";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "link1";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -367,6 +369,7 @@ idltest_link1_columns_init(void)
     c->name = "l2";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "link2";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -552,6 +555,7 @@ idltest_link2_columns_init(void)
     c->name = "l1";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "link1";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -1338,7 +1342,6 @@ idltest_simple_columns_init(void)
     c->name = "s";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
-    c->type.key.u.string.maxLen = 9223372036854775807;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
@@ -1350,7 +1353,6 @@ idltest_simple_columns_init(void)
     c->name = "sa";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
-    c->type.key.u.string.maxLen = 9223372036854775807;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -1379,13 +1381,13 @@ idltest_simple_columns_init(void)
 }
 
 struct ovsdb_idl_table_class idltest_table_classes[IDLTEST_N_TABLES] = {
-    {"link1",
+    {"link1", true,
      idltest_link1_columns, ARRAY_SIZE(idltest_link1_columns),
      sizeof(struct idltest_link1)},
-    {"link2",
+    {"link2", true,
      idltest_link2_columns, ARRAY_SIZE(idltest_link2_columns),
      sizeof(struct idltest_link2)},
-    {"simple",
+    {"simple", true,
      idltest_simple_columns, ARRAY_SIZE(idltest_simple_columns),
      sizeof(struct idltest_simple)},
 };

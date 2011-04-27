@@ -1,15 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <database title="Open vSwitch Configuration Database">
-  <p>A database with this schema holds the configuration for one Open
-    vSwitch daemon.  The root of the configuration for the daemon is
-    the <ref table="Open_vSwitch"/> table, which must have exactly one
+  <p>
+    A database with this schema holds the configuration for one Open
+    vSwitch daemon.  The top-level configuration for the daemon is the
+    <ref table="Open_vSwitch"/> table, which must have exactly one
     record.  Records in other tables are significant only when they
-    can be reached directly or indirectly from the
-    <ref table="Open_vSwitch"/> table.</p>
+    can be reached directly or indirectly from the <ref
+    table="Open_vSwitch"/> table.  Records that are not reachable from
+    the <ref table="Open_vSwitch"/> table are automatically deleted
+    from the database, except for records in a few distinguished
+    ``root set'' tables noted below.
+  </p>
 
   <table name="Open_vSwitch" title="Open vSwitch configuration.">
-    Configuration for an Open vSwitch daemon.  There must be exactly one record
-    in the <ref table="Open_vSwitch"/> table.
+    Configuration for an Open vSwitch daemon.  There must be exactly
+    one record in the <ref table="Open_vSwitch"/> table.
 
     <group title="Configuration">
       <column name="bridges">
@@ -205,9 +210,9 @@
       </p>
 
       <column name="ovs_version">
-        The Open vSwitch version number, e.g. <code>1.1.0pre2</code>.
+        The Open vSwitch version number, e.g. <code>1.1.0</code>.
         If Open vSwitch was configured with a build number, then it is
-        also included, e.g. <code>1.1.0pre2+build4948</code>.
+        also included, e.g. <code>1.1.0+build6579</code>.
       </column>
 
       <column name="db_version">
@@ -244,7 +249,7 @@
       <column name="system_version">
         <p>
           The version of the system identified by <ref column="system_type"/>,
-          e.g. <code>5.5.0-24648p</code> on XenServer 5.5.0 build 24648.
+          e.g. <code>5.6.100-39265p</code> on XenServer 5.6.100 build 39265.
         </p>
         <p>
           System integrators are responsible for choosing and setting an
@@ -272,21 +277,6 @@
         connect or to which it should listen, along with options for how these
         connection should be configured.  See the <ref table="Manager"/> table
         for more information.
-      </column>
-
-      <column name="managers">
-        <p>
-          Remote database clients to which the Open vSwitch's database server
-          should connect or to which it should listen.  Adding an OVSDB target
-          to this set is equivalent to adding it to <ref
-          column="manager_options"/> with all of the default options.
-        </p>
-
-        <p>
-          Use of this column is deprecated and may be removed sometime in the
-          future.  New applications should use and set <ref
-          column="manager_options"/> instead.
-        </p>
       </column>
     </group>
   </table>
@@ -508,22 +498,45 @@
 
     <group title="Bonding Configuration">
       <p>A port that has more than one interface is a ``bonded port.'' Bonding
-        allows for load balancing and fail-over.  Open vSwitch supports
-        ``source load balancing'' (SLB) and "active backup" bonding.  SLB
-        bonding assigns flows to slaves based on source MAC address and output
-        VLAN, with periodic rebalancing as traffic patterns change.  Active
-        backup bonding assigns all flows to one slave, failing over to a backup
-        slave when the active slave is disabled.  Neither form of bonding
-        require 802.3ad or other special support from the upstream switch to
-        which the slave devices are connected.</p>
+        allows for load balancing and fail-over.  Some kinds of bonding will
+        work with any kind of upstream switch:</p>
+
+      <dl>
+        <dt><code>balance-slb</code></dt>
+        <dd>
+          Balances flows among slaves based on source MAC address and output
+          VLAN, with periodic rebalancing as traffic patterns change.
+        </dd>
+
+        <dt><code>active-backup</code></dt>
+        <dd>
+          Assigns all flows to one slave, failing over to a backup slave when
+          the active slave is disabled.
+        </dd>
+      </dl>
+
+      <p>
+        The following mode requires the upstream switch to support 802.3ad with
+        successful LACP negotiation.  If LACP negotiation fails then
+        <code>balance-slb</code> mode is used as a fallback:
+      </p>
+
+      <dl>
+        <dt><code>balance-tcp</code></dt>
+        <dd>
+          Balances flows among slaves based on L2, L3, and L4 protocol
+          information such as destination MAC address, IP address, and TCP
+          port.
+        </dd>
+      </dl>
 
       <p>These columns apply only to bonded ports.  Their values are
         otherwise ignored.</p>
 
-      <column name="bond_type">
-        <p>The type of bonding used for a bonded port.  Currently supported
-          values are <code>slb</code> and <code>active-backup</code>.  Defaults
-          to SLB if unset.</p>
+      <column name="bond_mode">
+        <p>The type of bonding used for a bonded port.  Defaults to
+          <code>balance-slb</code> if unset.
+        </p>
       </column>
 
       <column name="bond_updelay">
@@ -546,6 +559,18 @@
         name of the port.  Use only for compatibility with legacy software that
         requires this.
       </column>
+
+      <column name="lacp">
+        <p>Configures LACP on this port.  LACP allows directly connected
+          switches to negotiate which links may be bonded.  LACP may be enabled
+          on non-bonded ports for the benefit of any switches they may be
+          connected to.  <code>active</code> ports are allowed to initiate LACP
+          negotiations.  <code>passive</code> ports are allowed to participate
+          in LACP negotiations initiated by a remote switch, but not allowed to
+          initiate such negotiations themselves. If unset Open vSwitch will
+          choose a reasonable default. </p>
+      </column>
+
     </group>
 
     <group title="Other Features">
@@ -597,6 +622,28 @@
             the bond to another in an attempt to keep usage of each
             interface roughly equal.  The default is 10000 (10
             seconds), and the minimum is 1000 (1 second).</dd>
+          <dt><code>bond-detect-mode</code></dt>
+          <dd> Sets the method used to detect link failures in a bonded port.
+            Options are <code>carrier</code> and <code>miimon</code>. Defaults
+            to <code>carrier</code> which uses each interface's carrier to detect
+            failures.  When set to <code>miimon</code>, will check for failures
+            by polling each interface's MII. </dd>
+          <dt><code>bond-miimon-interval</code></dt>
+          <dd> The number of milliseconds between successive attempts to
+            poll each interface's MII.  Only relevant on ports which use
+            <code>miimon</code> to detect failures. </dd>
+          <dt><code>lacp-system-priority</code></dt>
+          <dd> The LACP system priority of this <ref table="Port"/>.  In
+            LACP negotiations, link status decisions are made by the system
+            with the numerically lower priority.  Must be a number between 1
+            and 65535.</dd>
+          <dt><code>lacp-time</code></dt>
+          <dd> The LACP timing which should be used on this
+            <ref table="Port"/>.  Possible values are <code>fast</code> and
+            <code>slow</code>.  By default <code>slow</code> is used.  When
+            configured to be <code>fast</code> more frequent LACP heartbeats
+            will be requested causing connectivity problems to be detected more
+            quickly.</dd>
         </dl>
       </column>
     </group>
@@ -887,7 +934,7 @@
              where GRE is not available.  Note that only the tunneling component
              of the protocol is implemented.  Due to the non-standard use of
              CAPWAP, UDP ports 58881 and 58882 are used as the source and
-             destinations ports respectivedly.  Each tunnel must be uniquely
+             destination ports respectively.  Each tunnel must be uniquely
              identified by the combination of <code>remote_ip</code> and
              <code>local_ip</code>.  If two ports are defined that are the same
              except one includes <code>local_ip</code> and the other does not,
@@ -972,18 +1019,83 @@
         Configuration options whose interpretation varies based on
         <ref column="type"/>.
       </column>
+    </group>
+
+    <group title="Interface Status">
+      <p>
+        Status information about interfaces attached to bridges, updated every
+        5 seconds.  Not all interfaces have all of these properties; virtual
+        interfaces don't have a link speed, for example.  Non-applicable
+        columns will have empty values.
+      </p>
+      <column name="admin_state">
+        <p>
+          The administrative state of the physical network link.
+        </p>
+      </column>
+
+      <column name="link_state">
+        <p>
+          The observed state of the physical network link.  This is ordinarily
+          the link's carrier status.  If the interface's <ref table="Port"/> is
+          a bond configured for miimon monitoring, it is instead the network
+          link's miimon status.
+        </p>
+      </column>
+
+      <column name="link_speed">
+        <p>
+          The negotiated speed of the physical network link.
+          Valid values are positive integers greater than 0.
+        </p>
+      </column>
+
+      <column name="duplex">
+        <p>
+          The duplex mode of the physical network link.
+        </p>
+      </column>
+
+      <column name="mtu">
+        <p>
+          The MTU (maximum transmission unit); i.e. the largest
+          amount of data that can fit into a single Ethernet frame.
+          The standard Ethernet MTU is 1500 bytes.  Some physical media
+          and many kinds of virtual interfaces can be configured with
+          higher MTUs.
+        </p>
+        <p>
+          This column will be empty for an interface that does not
+          have an MTU as, for example, some kinds of tunnels do not.
+        </p>
+      </column>
 
       <column name="status">
         <p>
           Key-value pairs that report port status.  Supported status
-          values are <code>type</code>-dependent.
+          values are <code>type</code>-dependent; some interfaces may not have
+          a valid <code>driver_name</code>, for example.
         </p>
         <p>The currently defined key-value pairs are:</p>
         <dl>
+          <dt><code>driver_name</code></dt>
+          <dd>The name of the device driver controlling the network
+            adapter.</dd>
+        </dl>
+        <dl>
+          <dt><code>driver_version</code></dt>
+          <dd>The version string of the device driver controlling the
+            network adapter.</dd>
+        </dl>
+        <dl>
+          <dt><code>firmware_version</code></dt>
+          <dd>The version string of the network adapter's firmware, if
+            available.</dd>
+        </dl>
+        <dl>
           <dt><code>source_ip</code></dt>
           <dd>The source IP address used for an IPv4 tunnel end-point,
-            such as <code>gre</code> or <code>capwap</code>.  Not
-            supported by all implementations.</dd>
+            such as <code>gre</code> or <code>capwap</code>.</dd>
         </dl>
         <dl>
             <dt><code>tunnel_egress_iface</code></dt>
@@ -992,6 +1104,12 @@
                 the name of the interface which is responsible for routing
                 traffic destined for the configured <code>remote_ip</code>.
                 This could be an internal interface such as a bridge port.</dd>
+        </dl>
+        <dl>
+            <dt><code>tunnel_egress_iface_carrier</code></dt>
+            <dd>Whether a carrier is detected on <ref
+            column="tunnel_egress_iface"/>.  Valid values are <code>down</code>
+            and <code>up</code>.</dd>
         </dl>
       </column>
     </group>
@@ -1119,8 +1237,14 @@
       </column>
 
       <column name="other_config">
-        Key-value pairs for rarely used interface features.  Currently,
-        there are none defined.
+        Key-value pairs for rarely used interface features.
+        <dl>
+          <dt><code>lacp-port-priority</code></dt>
+          <dd> The LACP port priority of this <ref table="Interface"/>.  In
+            LACP negotiations <ref table="Interface"/>s with numerically lower
+            priorities are preferred for aggregation.  Must be a number between
+            1 and 65535.</dd>
+        </dl>
       </column>
 
       <column name="statistics">
@@ -1269,7 +1393,7 @@
         column="type"/> of <code>linux-htb</code> are:</p>
       <dl>
         <dt><code>min-rate</code></dt>
-        <dd>Minimum guaranteed bandwidth, in bit/s.  Required.</dd>
+        <dd>Minimum guaranteed bandwidth, in bit/s.</dd>
         <dt><code>max-rate</code></dt>
         <dd>Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
           queue's rate will not be allowed to exceed the specified value, even
@@ -1292,7 +1416,7 @@
         column="type"/> of <code>linux-hfsc</code> are:</p>
       <dl>
         <dt><code>min-rate</code></dt>
-        <dd>Minimum guaranteed bandwidth, in bit/s.  Required.</dd>
+        <dd>Minimum guaranteed bandwidth, in bit/s.</dd>
         <dt><code>max-rate</code></dt>
         <dd>Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
           queue's rate will not be allowed to exceed the specified value, even
@@ -1358,22 +1482,6 @@
     </group>
 
     <group title="Monitor Status">
-      <column name="unexpected_remote_mpids">
-        A set of MPIDs representing MPs to which this <ref table="Monitor"/>
-        has detected connectivity that are not in the
-        <ref column="remote_mps"/> set.  This <ref table="Monitor"/> should not
-        have connectivity to any MPs not listed in <ref column="remote_mps"/>.
-        Thus, if this set is non-empty a fault is indicated.
-      </column>
-
-      <column name="unexpected_remote_maids">
-        A set of MAIDs representing foreign Maintenance Associations (MAs)
-        which this <ref table="Monitor"/> has detected connectivity to. A
-        <ref table="Monitor"/> should not have connectivity to a Maintenance
-        Association other than its own.  Thus, if this set is non-empty a fault
-        is indicated.
-      </column>
-
       <column name="fault">
         Indicates a Connectivity Fault caused by a configuration error, a down
         remote MP, or unexpected connectivity to a remote MAID or remote MP.
@@ -1577,23 +1685,6 @@
           <dd>The specified TCP <var>port</var> (default: 6633) on the host at
             the given <var>ip</var>, which must be expressed as an IP address
             (not a DNS name).</dd>
-          <dt><code>discover</code></dt>
-          <dd>
-            <p>Enables controller discovery.</p>
-            <p>In controller discovery mode, Open vSwitch broadcasts a DHCP
-              request with vendor class identifier <code>OpenFlow</code> across
-              all of the bridge's network devices.  It will accept any valid
-              DHCP reply that has the same vendor class identifier and includes
-              a vendor-specific option with code 1 whose contents are a string
-              specifying the location of the controller in the same format as
-              <ref column="target"/>.</p>
-            <p>The DHCP reply may also, optionally, include a vendor-specific
-              option with code 2 whose contents are a string specifying the URI
-              to the base of the OpenFlow PKI
-              (e.g. <code>http://192.168.0.1/openflow/pki</code>).  This URI is
-              used only for bootstrapping the OpenFlow PKI at initial switch
-              setup; <code>ovs-vswitchd</code> does not use it at all.</p>
-          </dd>
         </dl>
         <p>
           The following connection methods are currently supported for service
@@ -1653,10 +1744,7 @@
           </dd>
         </dl>
 
-        <p>If not specified, the default is implementation-specific.  If
-          <ref column="target"/> is <code>discover</code>, the connection mode
-          is always treated as <code>in-band</code> regardless of the actual
-          setting.</p>
+        <p>If not specified, the default is implementation-specific.</p>
       </column>
     </group>
 
@@ -1706,33 +1794,9 @@
         </column>
     </group>
 
-    <group title="Additional Discovery Configuration">
-      <p>These values are considered only when <ref column="target"/>
-        is <code>discover</code>.</p>
-
-      <column name="discover_accept_regex">
-        A POSIX
-        extended regular expression against which the discovered controller
-        location is validated.  The regular expression is implicitly
-        anchored at the beginning of the controller location string, as
-        if it begins with <code>^</code>.  If not specified, the default
-        is implementation-specific.
-      </column>
-
-      <column name="discover_update_resolv_conf">
-        Whether to update <code>/etc/resolv.conf</code> when the
-        controller is discovered.  If not specified, the default
-        is implementation-specific.  Open vSwitch will only modify
-        <code>/etc/resolv.conf</code> if the DHCP response that it receives
-        specifies one or more DNS servers.
-      </column>
-    </group>
-
     <group title="Additional In-Band Configuration">
       <p>These values are considered only in in-band control mode (see
-        <ref column="connection_mode"/>) and only when <ref column="target"/>
-        is not <code>discover</code>.  (For controller discovery, the network
-        configuration obtained via DHCP is used instead.)</p>
+        <ref column="connection_mode"/>).</p>
 
       <p>When multiple controllers are configured on a single bridge, there
         should be only one set of unique values in these columns.  If different
@@ -1767,6 +1831,60 @@
         either use the Open vSwitch development mailing list to coordinate on
         common key-value definitions, or choose key names that are likely to be
         unique.  No common key-value pairs are currently defined.
+      </column>
+    </group>
+
+    <group title="Controller Status">
+      <column name="is_connected">
+        <code>true</code> if currently connected to this controller,
+        <code>false</code> otherwise.
+      </column>
+
+      <column name="role">
+        <p>The level of authority this controller has on the associated
+          bridge. Possible values are:</p>
+        <dl>
+          <dt><code>other</code></dt>
+          <dd>Allows the controller access to all OpenFlow features.</dd>
+          <dt><code>master</code></dt>
+          <dd>Equivalent to <code>other</code>, except that there may be at
+            most one master controller at a time.  When a controller configures
+            itself as <code>master</code>, any existing master is demoted to
+            the <code>slave</code>role.</dd>
+          <dt><code>slave</code></dt>
+          <dd>Allows the controller read-only access to OpenFlow features.
+            Attempts to modify the flow table will be rejected with an
+            error.  Slave controllers do not receive OFPT_PACKET_IN or
+            OFPT_FLOW_REMOVED messages, but they do receive OFPT_PORT_STATUS
+            messages.</dd>
+        </dl>
+      </column>
+
+      <column name="status">
+        <p>Key-value pairs that report controller status.</p>
+        <dl>
+          <dt><code>last_error</code></dt>
+          <dd>A human-readable description of the last error on the connection
+            to the controller; i.e. <code>strerror(errno)</code>.  This key
+            will exist only if an error has occurred.</dd>
+          <dt><code>state</code></dt>
+          <dd>The state of the connection to the controller.  Possible values
+            are: <code>VOID</code> (connection is disabled),
+            <code>BACKOFF</code> (attempting to reconnect at an increasing
+            period), <code>CONNECTING</code> (attempting to connect),
+            <code>ACTIVE</code> (connected, remote host responsive), and
+            <code>IDLE</code> (remote host idle, sending keep-alive).  These
+            values may change in the future.  They are provided only for human
+            consumption.</dd>
+          <dt><code>sec_since_connect</code></dt>
+          <dd>The amount of time since this controller last successfully
+            connected to the switch (in seconds). Value is empty if controller
+            has never successfully connected.</dd>
+          <dt><code>sec_since_disconnect</code></dt>
+          <dd>The amount of time since this controller last disconnected from
+            the switch (in seconds). Value is empty if controller has never
+            disconnected.</dd>
+        </dl>
       </column>
     </group>
   </table>
@@ -1906,6 +2024,46 @@
         either use the Open vSwitch development mailing list to coordinate on
         common key-value definitions, or choose key names that are likely to be
         unique.  No common key-value pairs are currently defined.
+      </column>
+    </group>
+
+    <group title="Status">
+      <column name="is_connected">
+        <code>true</code> if currently connected to this manager,
+        <code>false</code> otherwise.
+      </column>
+
+      <column name="status">
+        <p>Key-value pairs that report manager status.</p>
+        <dl>
+          <dt><code>last_error</code></dt>
+          <dd>A human-readable description of the last error on the connection
+            to the manager; i.e. <code>strerror(errno)</code>.  This key
+            will exist only if an error has occurred.</dd>
+        </dl>
+        <dl>
+          <dt><code>state</code></dt>
+          <dd>The state of the connection to the manager.  Possible values
+            are: <code>VOID</code> (connection is disabled),
+            <code>BACKOFF</code> (attempting to reconnect at an increasing
+            period), <code>CONNECTING</code> (attempting to connect),
+            <code>ACTIVE</code> (connected, remote host responsive), and
+            <code>IDLE</code> (remote host idle, sending keep-alive).  These
+            values may change in the future.  They are provided only for human
+            consumption.</dd>
+        </dl>
+        <dl>
+          <dt><code>sec_since_connect</code></dt>
+          <dd>The amount of time since this manager last successfully connected
+            to the database (in seconds). Value is empty if manager has never
+            successfully connected.</dd>
+        </dl>
+        <dl>
+          <dt><code>sec_since_disconnect</code></dt>
+          <dd>The amount of time since this manager last disconnected from the
+            database (in seconds). Value is empty if manager has never
+            disconnected.</dd>
+        </dl>
       </column>
     </group>
   </table>

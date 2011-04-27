@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include <linux/ip.h>
 #include <linux/types.h>
 #include <linux/ethtool.h>
+#include <linux/mii.h>
 #include <linux/pkt_sched.h>
 #include <linux/rtnetlink.h>
 #include <linux/sockios.h>
@@ -46,6 +47,7 @@
 #include <unistd.h>
 
 #include "coverage.h"
+#include "dpif-linux.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "hash.h"
@@ -62,7 +64,7 @@
 #include "rtnetlink-link.h"
 #include "socket-util.h"
 #include "shash.h"
-#include "svec.h"
+#include "sset.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(netdev_linux);
@@ -445,7 +447,7 @@ netdev_linux_init(void)
 
         /* Create rtnetlink socket. */
         if (!status) {
-            status = nl_sock_create(NETLINK_ROUTE, 0, 0, 0, &rtnl_sock);
+            status = nl_sock_create(NETLINK_ROUTE, &rtnl_sock);
             if (status) {
                 VLOG_ERR_RL(&rl, "failed to create rtnetlink socket: %s",
                             strerror(status));
@@ -521,7 +523,7 @@ netdev_linux_create(const struct netdev_class *class,
     cache_notifier_refcount++;
 
     netdev_dev = xzalloc(sizeof *netdev_dev);
-    netdev_dev_init(&netdev_dev->netdev_dev, name, class);
+    netdev_dev_init(&netdev_dev->netdev_dev, name, args, class);
 
     *netdev_devp = &netdev_dev->netdev_dev;
     return 0;
@@ -561,7 +563,7 @@ netdev_linux_create_tap(const struct netdev_class *class OVS_UNUSED,
 
     /* Create tap device. */
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
     if (ioctl(state->fd, TUNSETIFF, &ifr) == -1) {
         VLOG_WARN("%s: creating tap device failed: %s", name,
                   strerror(errno));
@@ -575,7 +577,7 @@ netdev_linux_create_tap(const struct netdev_class *class OVS_UNUSED,
         goto error;
     }
 
-    netdev_dev_init(&netdev_dev->netdev_dev, name, &netdev_tap_class);
+    netdev_dev_init(&netdev_dev->netdev_dev, name, args, &netdev_tap_class);
     *netdev_devp = &netdev_dev->netdev_dev;
     return 0;
 
@@ -727,9 +729,9 @@ netdev_linux_close(struct netdev *netdev_)
     free(netdev);
 }
 
-/* Initializes 'svec' with a list of the names of all known network devices. */
+/* Initializes 'sset' with a list of the names of all known network devices. */
 static int
-netdev_linux_enumerate(struct svec *svec)
+netdev_linux_enumerate(struct sset *sset)
 {
     struct if_nameindex *names;
 
@@ -738,7 +740,7 @@ netdev_linux_enumerate(struct svec *svec)
         size_t i;
 
         for (i = 0; names[i].if_name != NULL; i++) {
-            svec_add(svec, names[i].if_name);
+            sset_add(sset, names[i].if_name);
         }
         if_freenameindex(names);
         return 0;
@@ -1007,6 +1009,66 @@ exit:
     return error;
 }
 
+static int
+netdev_linux_do_miimon(const struct netdev *netdev, int cmd,
+                       const char *cmd_name, struct mii_ioctl_data *data)
+{
+    struct ifreq ifr;
+    int error;
+
+    memset(&ifr, 0, sizeof ifr);
+    memcpy(&ifr.ifr_data, data, sizeof *data);
+    error = netdev_linux_do_ioctl(netdev_get_name(netdev),
+                                  &ifr, cmd, cmd_name);
+    memcpy(data, &ifr.ifr_data, sizeof *data);
+
+    return error;
+}
+
+static int
+netdev_linux_get_miimon(const struct netdev *netdev, bool *miimon)
+{
+    const char *name = netdev_get_name(netdev);
+    struct mii_ioctl_data data;
+    int error;
+
+    *miimon = false;
+
+    memset(&data, 0, sizeof data);
+    error = netdev_linux_do_miimon(netdev, SIOCGMIIPHY, "SIOCGMIIPHY", &data);
+    if (!error) {
+        /* data.phy_id is filled out by previous SIOCGMIIPHY miimon call. */
+        data.reg_num = MII_BMSR;
+        error = netdev_linux_do_miimon(netdev, SIOCGMIIREG, "SIOCGMIIREG",
+                                       &data);
+
+        if (!error) {
+            *miimon = !!(data.val_out & BMSR_LSTATUS);
+        } else {
+            VLOG_WARN_RL(&rl, "%s: failed to query MII", name);
+        }
+    } else {
+        struct ethtool_cmd ecmd;
+
+        VLOG_DBG_RL(&rl, "%s: failed to query MII, falling back to ethtool",
+                    name);
+
+        memset(&ecmd, 0, sizeof ecmd);
+        error = netdev_linux_do_ethtool(name, &ecmd, ETHTOOL_GLINK,
+                                        "ETHTOOL_GLINK");
+        if (!error) {
+            struct ethtool_value eval;
+
+            memcpy(&eval, &ecmd, sizeof eval);
+            *miimon = !!eval.data;
+        } else {
+            VLOG_WARN_RL(&rl, "%s: ethtool link status failed", name);
+        }
+    }
+
+    return error;
+}
+
 /* Check whether we can we use RTM_GETLINK to get network device statistics.
  * In pre-2.6.19 kernels, this was only available if wireless extensions were
  * enabled. */
@@ -1044,22 +1106,8 @@ netdev_linux_update_is_pseudo(struct netdev_dev_linux *netdev_dev)
         const char *type = netdev_dev_get_type(&netdev_dev->netdev_dev);
 
         netdev_dev->is_tap = !strcmp(type, "tap");
-        netdev_dev->is_internal = false;
-        if (!netdev_dev->is_tap) {
-            struct ethtool_drvinfo drvinfo;
-            int error;
-
-            memset(&drvinfo, 0, sizeof drvinfo);
-            error = netdev_linux_do_ethtool(name,
-                                            (struct ethtool_cmd *)&drvinfo,
-                                            ETHTOOL_GDRVINFO,
-                                            "ETHTOOL_GDRVINFO");
-
-            if (!error && !strcmp(drvinfo.driver, "openvswitch")) {
-                netdev_dev->is_internal = true;
-            }
-        }
-
+        netdev_dev->is_internal = (!netdev_dev->is_tap
+                                   && dpif_linux_is_internal_device(name));
         netdev_dev->cache_valid |= VALID_IS_PSEUDO;
     }
 }
@@ -1140,7 +1188,7 @@ netdev_linux_get_stats(const struct netdev *netdev_,
  * bitmap of "enum ofp_port_features" bits, in host byte order.  Returns 0 if
  * successful, otherwise a positive errno value. */
 static int
-netdev_linux_get_features(struct netdev *netdev,
+netdev_linux_get_features(const struct netdev *netdev,
                           uint32_t *current, uint32_t *advertised,
                           uint32_t *supported, uint32_t *peer)
 {
@@ -1462,14 +1510,14 @@ netdev_linux_set_policing(struct netdev *netdev,
 
 static int
 netdev_linux_get_qos_types(const struct netdev *netdev OVS_UNUSED,
-                           struct svec *types)
+                           struct sset *types)
 {
     const struct tc_ops **opsp;
 
     for (opsp = tcs; *opsp != NULL; opsp++) {
         const struct tc_ops *ops = *opsp;
         if (ops->tc_install && ops->ovs_name[0] != '\0') {
-            svec_add(types, ops->ovs_name);
+            sset_add(types, ops->ovs_name);
         }
     }
     return 0;
@@ -1876,7 +1924,7 @@ do_set_addr(struct netdev *netdev,
             int ioctl_nr, const char *ioctl_name, struct in_addr addr)
 {
     struct ifreq ifr;
-    strncpy(ifr.ifr_name, netdev_get_name(netdev), sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, netdev_get_name(netdev), sizeof ifr.ifr_name);
     make_in4_sockaddr(&ifr.ifr_addr, addr);
 
     return netdev_linux_do_ioctl(netdev_get_name(netdev), &ifr, ioctl_nr,
@@ -1964,6 +2012,26 @@ netdev_linux_get_next_hop(const struct in_addr *host, struct in_addr *next_hop,
     return ENXIO;
 }
 
+static int
+netdev_linux_get_status(const struct netdev *netdev, struct shash *sh)
+{
+    struct ethtool_drvinfo drvinfo;
+    int error;
+
+    memset(&drvinfo, 0, sizeof drvinfo);
+    error = netdev_linux_do_ethtool(netdev_get_name(netdev),
+                                    (struct ethtool_cmd *)&drvinfo,
+                                    ETHTOOL_GDRVINFO,
+                                    "ETHTOOL_GDRVINFO");
+    if (!error) {
+        shash_add(sh, "driver_name", xstrdup(drvinfo.driver));
+        shash_add(sh, "driver_version", xstrdup(drvinfo.version));
+        shash_add(sh, "firmware_version", xstrdup(drvinfo.fw_version));
+    }
+
+    return error;
+}
+
 /* Looks up the ARP table entry for 'ip' on 'netdev'.  If one exists and can be
  * successfully retrieved, it stores the corresponding MAC address in 'mac' and
  * returns 0.  Otherwise, it returns a positive errno value; in particular,
@@ -1977,13 +2045,14 @@ netdev_linux_arp_lookup(const struct netdev *netdev,
     int retval;
 
     memset(&r, 0, sizeof r);
+    memset(&sin, 0, sizeof sin);
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = ip;
     sin.sin_port = 0;
     memcpy(&r.arp_pa, &sin, sizeof sin);
     r.arp_ha.sa_family = ARPHRD_ETHER;
     r.arp_flags = 0;
-    strncpy(r.arp_dev, netdev_get_name(netdev), sizeof r.arp_dev);
+    ovs_strzcpy(r.arp_dev, netdev_get_name(netdev), sizeof r.arp_dev);
     COVERAGE_INC(netdev_arp_lookup);
     retval = ioctl(af_inet_sock, SIOCGARP, &r) < 0 ? errno : 0;
     if (!retval) {
@@ -2133,7 +2202,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
                                                                 \
     CREATE,                                                     \
     netdev_linux_destroy,                                       \
-    NULL,                       /* reconfigure */               \
+    NULL,                       /* set_config */                \
                                                                 \
     netdev_linux_open,                                          \
     netdev_linux_close,                                         \
@@ -2152,6 +2221,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
     netdev_linux_get_mtu,                                       \
     netdev_linux_get_ifindex,                                   \
     netdev_linux_get_carrier,                                   \
+    netdev_linux_get_miimon,                                    \
     netdev_linux_get_stats,                                     \
     SET_STATS,                                                  \
                                                                 \
@@ -2176,7 +2246,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
     netdev_linux_get_in6,                                       \
     netdev_linux_add_router,                                    \
     netdev_linux_get_next_hop,                                  \
-    NULL,                       /* get_status */                \
+    netdev_linux_get_status,                                    \
     netdev_linux_arp_lookup,                                    \
                                                                 \
     netdev_linux_update_flags,                                  \
@@ -2231,7 +2301,7 @@ htb_get__(const struct netdev *netdev)
     return CONTAINER_OF(netdev_dev->tc, struct htb, tc);
 }
 
-static struct htb *
+static void
 htb_install__(struct netdev *netdev, uint64_t max_rate)
 {
     struct netdev_dev_linux *netdev_dev =
@@ -2243,8 +2313,6 @@ htb_install__(struct netdev *netdev, uint64_t max_rate)
     htb->max_rate = max_rate;
 
     netdev_dev->tc = &htb->tc;
-
-    return htb;
 }
 
 /* Create an HTB qdisc.
@@ -2296,6 +2364,11 @@ htb_setup_class__(struct netdev *netdev, unsigned int handle,
     int mtu;
 
     netdev_get_mtu(netdev, &mtu);
+    if (mtu == INT_MAX) {
+        VLOG_WARN_RL(&rl, "cannot set up HTB on device %s that lacks MTU",
+                     netdev_get_name(netdev));
+        return EINVAL;
+    }
 
     memset(&opt, 0, sizeof opt);
     tc_fill_rate(&opt.rate, class->min_rate, mtu);
@@ -2415,13 +2488,17 @@ htb_parse_class_details__(struct netdev *netdev,
     const char *priority_s = shash_find_data(details, "priority");
     int mtu;
 
-    /* min-rate.  Don't allow a min-rate below 1500 bytes/s. */
-    if (!min_rate_s) {
-        /* min-rate is required. */
+    netdev_get_mtu(netdev, &mtu);
+    if (mtu == INT_MAX) {
+        VLOG_WARN_RL(&rl, "cannot parse HTB class on device %s that lacks MTU",
+                     netdev_get_name(netdev));
         return EINVAL;
     }
-    hc->min_rate = strtoull(min_rate_s, NULL, 10) / 8;
-    hc->min_rate = MAX(hc->min_rate, 1500);
+
+    /* HTB requires at least an mtu sized min-rate to send any traffic even
+     * on uncongested links. */
+    hc->min_rate = min_rate_s ? strtoull(min_rate_s, NULL, 10) / 8 : 0;
+    hc->min_rate = MAX(hc->min_rate, mtu);
     hc->min_rate = MIN(hc->min_rate, htb->max_rate);
 
     /* max-rate */
@@ -2440,7 +2517,6 @@ htb_parse_class_details__(struct netdev *netdev,
      * doesn't include the Ethernet header, we need to add at least 14 (18?) to
      * the MTU.  We actually add 64, instead of 14, as a guard against
      * additional headers get tacked on somewhere that we're not aware of. */
-    netdev_get_mtu(netdev, &mtu);
     hc->burst = burst_s ? strtoull(burst_s, NULL, 10) / 8 : 0;
     hc->burst = MAX(hc->burst, mtu + 64);
 
@@ -2522,12 +2598,11 @@ htb_tc_load(struct netdev *netdev, struct ofpbuf *nlmsg OVS_UNUSED)
     struct ofpbuf msg;
     struct nl_dump dump;
     struct htb_class hc;
-    struct htb *htb;
 
     /* Get qdisc options. */
     hc.max_rate = 0;
     htb_query_class__(netdev, tc_make_handle(1, 0xfffe), 0, &hc, NULL);
-    htb = htb_install__(netdev, hc.max_rate);
+    htb_install__(netdev, hc.max_rate);
 
     /* Get queues. */
     if (!start_queue_dump(netdev, &dump)) {
@@ -2711,7 +2786,7 @@ hfsc_class_cast__(const struct tc_queue *queue)
     return CONTAINER_OF(queue, struct hfsc_class, tc_queue);
 }
 
-static struct hfsc *
+static void
 hfsc_install__(struct netdev *netdev, uint32_t max_rate)
 {
     struct netdev_dev_linux * netdev_dev;
@@ -2722,8 +2797,6 @@ hfsc_install__(struct netdev *netdev, uint32_t max_rate)
     tc_init(&hfsc->tc, &tc_ops_hfsc);
     hfsc->max_rate = max_rate;
     netdev_dev->tc = &hfsc->tc;
-
-    return hfsc;
 }
 
 static void
@@ -2896,12 +2969,8 @@ hfsc_parse_class_details__(struct netdev *netdev,
     min_rate_s = shash_find_data(details, "min-rate");
     max_rate_s = shash_find_data(details, "max-rate");
 
-    if (!min_rate_s) {
-        return EINVAL;
-    }
-
-    min_rate = strtoull(min_rate_s, NULL, 10) / 8;
-    min_rate = MAX(min_rate, 1500);
+    min_rate = min_rate_s ? strtoull(min_rate_s, NULL, 10) / 8 : 0;
+    min_rate = MAX(min_rate, 1);
     min_rate = MIN(min_rate, hfsc->max_rate);
 
     max_rate = (max_rate_s
@@ -3026,13 +3095,12 @@ static int
 hfsc_tc_load(struct netdev *netdev, struct ofpbuf *nlmsg OVS_UNUSED)
 {
     struct ofpbuf msg;
-    struct hfsc *hfsc;
     struct nl_dump dump;
     struct hfsc_class hc;
 
     hc.max_rate = 0;
     hfsc_query_class__(netdev, tc_make_handle(1, 0xfffe), 0, &hc, NULL);
-    hfsc = hfsc_install__(netdev, hc.max_rate);
+    hfsc_install__(netdev, hc.max_rate);
 
     if (!start_queue_dump(netdev, &dump)) {
         return ENODEV;
@@ -3974,7 +4042,7 @@ do_get_ifindex(const char *netdev_name)
 {
     struct ifreq ifr;
 
-    strncpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     COVERAGE_INC(netdev_get_ifindex);
     if (ioctl(af_inet_sock, SIOCGIFINDEX, &ifr) < 0) {
         VLOG_WARN_RL(&rl, "ioctl(SIOCGIFINDEX) on %s device failed: %s",
@@ -4009,7 +4077,7 @@ get_etheraddr(const char *netdev_name, uint8_t ea[ETH_ADDR_LEN])
     int hwaddr_family;
 
     memset(&ifr, 0, sizeof ifr);
-    strncpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     COVERAGE_INC(netdev_get_hwaddr);
     if (ioctl(af_inet_sock, SIOCGIFHWADDR, &ifr) < 0) {
         VLOG_ERR("ioctl(SIOCGIFHWADDR) on %s device failed: %s",
@@ -4032,7 +4100,7 @@ set_etheraddr(const char *netdev_name, int hwaddr_family,
     struct ifreq ifr;
 
     memset(&ifr, 0, sizeof ifr);
-    strncpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     ifr.ifr_hwaddr.sa_family = hwaddr_family;
     memcpy(ifr.ifr_hwaddr.sa_data, mac, ETH_ADDR_LEN);
     COVERAGE_INC(netdev_set_hwaddr);
@@ -4051,7 +4119,7 @@ netdev_linux_do_ethtool(const char *name, struct ethtool_cmd *ecmd,
     struct ifreq ifr;
 
     memset(&ifr, 0, sizeof ifr);
-    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+    ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
     ifr.ifr_data = (caddr_t) ecmd;
 
     ecmd->cmd = cmd;
@@ -4074,7 +4142,7 @@ static int
 netdev_linux_do_ioctl(const char *name, struct ifreq *ifr, int cmd,
                       const char *cmd_name)
 {
-    strncpy(ifr->ifr_name, name, sizeof ifr->ifr_name);
+    ovs_strzcpy(ifr->ifr_name, name, sizeof ifr->ifr_name);
     if (ioctl(af_inet_sock, cmd, ifr) == -1) {
         VLOG_DBG_RL(&rl, "%s: ioctl(%s) failed: %s", name, cmd_name,
                      strerror(errno));

@@ -8,7 +8,6 @@ openvswitch_sources += \
 	linux-2.6/compat-2.6/skbuff-openvswitch.c \
 	linux-2.6/compat-2.6/time.c
 openvswitch_headers += \
-	linux-2.6/compat-2.6/compat26.h \
 	linux-2.6/compat-2.6/include/asm-generic/bug.h \
 	linux-2.6/compat-2.6/include/linux/bottom_half.h \
 	linux-2.6/compat-2.6/include/linux/compiler.h \
@@ -16,7 +15,9 @@ openvswitch_headers += \
 	linux-2.6/compat-2.6/include/linux/cpumask.h \
 	linux-2.6/compat-2.6/include/linux/dmi.h \
 	linux-2.6/compat-2.6/include/linux/err.h \
+	linux-2.6/compat-2.6/include/linux/genetlink.h \
 	linux-2.6/compat-2.6/include/linux/icmp.h \
+	linux-2.6/compat-2.6/include/linux/icmpv6.h \
 	linux-2.6/compat-2.6/include/linux/if.h \
 	linux-2.6/compat-2.6/include/linux/if_arp.h \
 	linux-2.6/compat-2.6/include/linux/if_ether.h \
@@ -36,6 +37,7 @@ openvswitch_headers += \
 	linux-2.6/compat-2.6/include/linux/netfilter_ipv4.h \
 	linux-2.6/compat-2.6/include/linux/netlink.h \
 	linux-2.6/compat-2.6/include/linux/rculist.h \
+	linux-2.6/compat-2.6/include/linux/rcupdate.h \
 	linux-2.6/compat-2.6/include/linux/rtnetlink.h \
 	linux-2.6/compat-2.6/include/linux/skbuff.h \
 	linux-2.6/compat-2.6/include/linux/slab.h \
@@ -49,14 +51,12 @@ openvswitch_headers += \
 	linux-2.6/compat-2.6/include/net/dst.h \
 	linux-2.6/compat-2.6/include/net/genetlink.h \
 	linux-2.6/compat-2.6/include/net/ip.h \
+	linux-2.6/compat-2.6/include/net/net_namespace.h \
 	linux-2.6/compat-2.6/include/net/netlink.h \
 	linux-2.6/compat-2.6/include/net/protocol.h \
-	linux-2.6/compat-2.6/include/net/route.h
+	linux-2.6/compat-2.6/include/net/route.h \
+	linux-2.6/compat-2.6/genetlink.inc
 
 both_modules += brcompat
-brcompat_sources = \
-	linux-2.6/compat-2.6/genetlink-brcompat.c \
-	brcompat.c \
-	brc_procfs.c
-brcompat_headers = \
-	brc_procfs.h
+brcompat_sources = linux-2.6/compat-2.6/genetlink-brcompat.c brcompat.c
+brcompat_headers =

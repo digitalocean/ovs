@@ -1,5 +1,5 @@
 '\" pt
-.TH Open_vSwitch 5 "January 2011" "Open vSwitch" "Open vSwitch Manual"
+.TH Open_vSwitch 5 "April 2011" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
@@ -14,11 +14,13 @@
 ..
 .SH "Open_vSwitch DATABASE"
 A database with this schema holds the configuration for one Open
-vSwitch daemon.  The root of the configuration for the daemon is
-the \fBOpen_vSwitch\fR table, which must have exactly one
+vSwitch daemon.  The top-level configuration for the daemon is the
+\fBOpen_vSwitch\fR table, which must have exactly one
 record.  Records in other tables are significant only when they
-can be reached directly or indirectly from the
-\fBOpen_vSwitch\fR table.
+can be reached directly or indirectly from the \fBOpen_vSwitch\fR table.  Records that are not reachable from
+the \fBOpen_vSwitch\fR table are automatically deleted
+from the database, except for records in a few distinguished
+``root set\(cq\(cq tables noted below.
 .sp
 .ce 1
 \fBOpen_vSwitch\fR Database Tables:
@@ -48,68 +50,105 @@ Capability	Capability configuration.
 .SH "TABLE RELATIONSHIPS"
 .PP
 The following diagram shows the relationship among tables in the
-database.  Each node represents a table.  Each edge leads from the
+database.  Each node represents a table.  Tables that are part of the
+``root set'' are shown with double borders.  Each edge leads from the
 table that contains it and points to the table that its value
-represents.  Edges are labeled with their column names.
+represents.  Edges are labeled with their column names.  Thick lines
+represent strong references; thin lines represent weak references.
 .RS -1in
-.\" Generated from vswitch.gv with cksum "3734436941 2390"
+.\" Generated from vswitch.gv with cksum "1443954516 1149"
 .PS
 linethick = 1;
+linethick = 1;
 box at 2.320997253,3.1110975 wid 0.5020540998 height 0.296295 "Bridge"
+linethick = 1;
 box at 0.2304523251,2.37036 wid 0.4609046502 height 0.296295 "sFlow"
+linethick = 1;
 box at 0.847759254,2.37036 wid 0.4855919496 height 0.296295 "Mirror"
+linethick = 1;
 box at 2.320997253,2.37036 wid 0.4444425 height 0.296295 "Port"
+linethick = 1;
 box at 3.045260751,2.37036 wid 0.707789496 height 0.296295 "Controller"
+linethick = 1;
 box at 3.851835,2.37036 wid 0.609064002 height 0.296295 "NetFlow"
+linethick = 0.5;
 box at 2.057590998,1.6296225 wid 0.4444425 height 0.296295 "QoS"
+box at 2.057590998,1.6296225 wid 0.388886944444444 height 0.240739444444444
+linethick = 0.5;
 box at 1.991754249,0.888885 wid 0.5102851749 height 0.296295 "Queue"
+box at 1.991754249,0.888885 wid 0.454729619344444 height 0.240739444444444
+linethick = 1;
 box at 2.938238997,0.888885 wid 0.5761278498 height 0.296295 "Monitor"
+linethick = 1;
 box at 2.938238997,0.1481475 wid 1.218128004 height 0.296295 "Maintenance_Point"
+linethick = 0.5;
 box at 3.637850751,3.851835 wid 0.954721749 height 0.296295 "Open_vSwitch"
+box at 3.637850751,3.851835 wid 0.899166193444444 height 0.240739444444444
+linethick = 1;
 box at 3.061734753,3.1110975 wid 0.699611754 height 0.296295 "Capability"
+linethick = 1;
 box at 4.22220375,3.1110975 wid 0.4444425 height 0.296295 "SSL"
+linethick = 1;
 box at 4.905341502,3.1110975 wid 0.633715746 height 0.296295 "Manager"
+linethick = 1;
 box at 2.872402248,1.6296225 wid 0.641952747 height 0.296295 "Interface"
+linethick = 1;
 spline -> from 2.072227971,3.066534732 to 2.072227971,3.066534732 to 1.825829049,3.018534942 to 1.439934441,2.932787169 to 1.119343251,2.8148025 to 0.887818338,2.729588058 to 0.637567581,2.60087751 to 0.4617876093,2.503870527
 "sflow" at 1.271579622,2.74072875
+linethick = 1;
 spline -> from 2.071042791,2.98546842 to 2.071042791,2.98546842 to 1.796021772,2.847157914 to 1.357208877,2.626536657 to 1.086632283,2.490477993
 "mirrors" at 1.9259175,2.74072875
+linethick = 1;
 spline -> from 2.320997253,2.96117223 to 2.320997253,2.96117223 to 2.320997253,2.832698718 to 2.320997253,2.648462487 to 2.320997253,2.520048234
 "ports" at 2.469144753,2.74072875
+linethick = 1;
 spline -> from 2.495218713,2.960816676 to 2.495218713,2.960816676 to 2.546240712,2.915068728 to 2.601410841,2.863868952 to 2.650180998,2.8148025 to 2.743336146,2.721054762 to 2.842120899,2.609944137 to 2.917557606,2.522300076
 "controller" at 3.065823624,2.74072875
+linethick = 1;
 spline -> from 2.571070233,2.988964701 to 2.571070233,2.988964701 to 2.594773833,2.979424002 to 2.61865521,2.970594411 to 2.641943997,2.96295 to 2.957675949,2.859720822 to 3.079038381,2.966624058 to 3.374444496,2.8148025 to 3.514473513,2.742862074 to 3.643184061,2.618003361 to 3.731598489,2.518922313
 "netflow" at 3.802472253,2.74072875
+linethick = 0.5;
 spline -> from 1.091017449,2.37036 to 1.091017449,2.37036 to 1.370542152,2.37036 to 1.825414236,2.37036 to 2.096701938,2.37036
 "select_src_port" at 1.588496754,2.44443375
+linethick = 0.5;
 spline -> from 1.067787921,2.221501392 to 1.067787921,2.221501392 to 1.095284097,2.208345894 to 1.123787676,2.197086684 to 1.152231996,2.189264496 to 1.526156286,2.08650939 to 1.651429812,2.084257548 to 2.024702253,2.189264496 to 2.052553983,2.197145943 to 2.080346454,2.208405153 to 2.107190781,2.221501392
 "output_port" at 1.588496754,2.263338246
+linethick = 0.5;
 spline -> from 0.905240484,2.221264356 to 0.905240484,2.221264356 to 0.953892123,2.117798142 to 1.034780658,1.987843155 to 1.152231996,1.9259175 to 1.495282347,1.745118291 to 1.682837082,1.742984967 to 2.024702253,1.9259175 to 2.140790634,1.988080191 to 2.21924955,2.117975919 to 2.266123419,2.221442133
 "select_dst_port" at 1.588496754,1.99999125
+linethick = 1;
 spline -> from 2.267664153,2.22043473 to 2.267664153,2.22043473 to 2.221975464,2.091961218 to 2.156494269,1.907724987 to 2.11080558,1.779310734
 "qos" at 2.312760252,1.99999125
+linethick = 1;
 spline -> from 2.43258195,2.22043473 to 2.43258195,2.22043473 to 2.528225976,2.091961218 to 2.665351302,1.907724987 to 2.760995328,1.779310734
 "interfaces" at 2.930001996,1.99999125
+linethick = 1;
 spline -> from 2.023220778,1.479637971 to 2.023220778,1.479637971 to 2.013917115,1.433001138 to 2.005028265,1.381268031 to 1.99999125,1.3333275 to 1.989620925,1.235076078 to 1.98754686,1.123965453 to 1.988080191,1.037447313
 "queues value" at 2.378597001,1.25925375
+linethick = 1;
 spline -> from 2.938238997,0.73895973 to 2.938238997,0.73895973 to 2.938238997,0.610486218 to 2.938238997,0.4262736906 to 2.938238997,0.2978238822
 "remote_mps" at 3.288044874,0.51851625
+linethick = 1;
 spline -> from 3.159808398,3.796309317 to 3.159808398,3.796309317 to 2.96591295,3.754828017 to 2.749321305,3.682295001 to 2.584344249,3.55554 to 2.486211345,3.480162552 to 2.417352387,3.356903832 to 2.374685907,3.259245
 "bridges" at 2.790091497,3.48146625
+linethick = 1;
 spline -> from 3.219067398,3.702146766 to 3.219067398,3.702146766 to 3.159926916,3.663332121 to 3.106830852,3.615095295 to 3.069971754,3.55554 to 3.015927546,3.468251493 to 3.015809028,3.35168904 to 3.028194159,3.25983759
 "capabilities value" at 3.55554,3.48146625
+linethick = 1;
 spline -> from 3.884901522,3.703568982 to 3.884901522,3.703568982 to 3.941612385,3.661080279 to 3.997849176,3.611065683 to 4.041108246,3.55554 to 4.109256096,3.468132975 to 4.155478116,3.351570522 to 4.184159472,3.259778331
 "ssl" at 4.205729748,3.48146625
+linethick = 1;
 spline -> from 4.020249078,3.702146766 to 4.020249078,3.702146766 to 4.117848651,3.659065473 to 4.22101857,3.609110136 to 4.312751502,3.55554 to 4.46042493,3.469258896 to 4.614616848,3.352696443 to 4.728690423,3.260548698
 "manager_options" at 5.024689128,3.48146625
+linethick = 1;
 spline -> from 2.885735523,1.47969723 to 2.885735523,1.47969723 to 2.89717251,1.351223718 to 2.913527994,1.166987487 to 2.924964981,1.038573234
 "monitor" at 3.139897374,1.25925375
 .PE
 .RE
 .bp
 .SS "Open_vSwitch Table"
-Configuration for an Open vSwitch daemon.  There must be exactly one record
-in the \fBOpen_vSwitch\fR table.
+Configuration for an Open vSwitch daemon.  There must be exactly
+one record in the \fBOpen_vSwitch\fR table.
 .sp
 .ce 1
 \fBOpen_vSwitch\fR Table Columns:
@@ -176,9 +215,6 @@ Database Configuration
 _
 \ \ \fBmanager_options\fR	T{
 set of \fBManager\fRs
-T}
-\ \ \fBmanagers\fR	T{
-set of strings
 T}
 .TE
 .ST "Configuration:"
@@ -336,9 +372,9 @@ should test whether specific features are supported instead of relying
 on version number checks.  These values are primarily intended for
 reporting to human administrators.
 .IP "\fBovs_version\fR: optional string"
-The Open vSwitch version number, e.g. \fB1.1.0pre2\fR\.
+The Open vSwitch version number, e.g. \fB1.1.0\fR\.
 If Open vSwitch was configured with a build number, then it is
-also included, e.g. \fB1.1.0pre2+build4948\fR\.
+also included, e.g. \fB1.1.0+build6579\fR\.
 .IP "\fBdb_version\fR: optional string"
 The database schema version number in the form
 \fB\fImajor\fB\.\fIminor\fB\.\fItweak\fB\fR,
@@ -361,7 +397,7 @@ System integrators are responsible for choosing and setting an
 appropriate value for this column.
 .IP "\fBsystem_version\fR: optional string"
 The version of the system identified by \fBsystem_type\fR,
-e.g. \fB5.5.0\-24648p\fR on XenServer 5.5.0 build 24648.
+e.g. \fB5.6.100\-39265p\fR on XenServer 5.6.100 build 39265.
 .IP
 System integrators are responsible for choosing and setting an
 appropriate value for this column.
@@ -377,13 +413,6 @@ Database clients to which the Open vSwitch database server should
 connect or to which it should listen, along with options for how these
 connection should be configured.  See the \fBManager\fR table
 for more information.
-.IP "\fBmanagers\fR: set of strings"
-Remote database clients to which the Open vSwitch\(cqs database server
-should connect or to which it should listen.  Adding an OVSDB target
-to this set is equivalent to adding it to \fBmanager_options\fR with all of the default options.
-.IP
-Use of this column is deprecated and may be removed sometime in the
-future.  New applications should use and set \fBmanager_options\fR instead.
 .bp
 .SS "Bridge Table"
 Configuration for a bridge within an
@@ -610,8 +639,8 @@ li | s
 l | l.
 Bonding Configuration
 _
-\ \ \fBbond_type\fR	T{
-optional string, either \fBactive\-backup\fR or \fBslb\fR
+\ \ \fBbond_mode\fR	T{
+optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR
 T}
 \ \ \fBbond_updelay\fR	T{
 integer
@@ -621,6 +650,9 @@ integer
 T}
 \ \ \fBbond_fake_iface\fR	T{
 boolean
+T}
+\ \ \fBlacp\fR	T{
+optional string, one of \fBactive\fR, \fBpassive\fR, or \fBoff\fR
 T}
 _
 .T&
@@ -690,21 +722,35 @@ in one of the specified VLANs.  For this purpose, packets
 that have no VLAN header are treated as part of VLAN 0.
 .ST "Bonding Configuration:"
 A port that has more than one interface is a ``bonded port.\(cq\(cq Bonding
-allows for load balancing and fail-over.  Open vSwitch supports
-``source load balancing\(cq\(cq (SLB) and \(dqactive backup\(dq bonding.  SLB
-bonding assigns flows to slaves based on source MAC address and output
-VLAN, with periodic rebalancing as traffic patterns change.  Active
-backup bonding assigns all flows to one slave, failing over to a backup
-slave when the active slave is disabled.  Neither form of bonding
-require 802.3ad or other special support from the upstream switch to
-which the slave devices are connected.
+allows for load balancing and fail-over.  Some kinds of bonding will
+work with any kind of upstream switch:
+.RS
+.TP
+\fBbalance\-slb\fR
+Balances flows among slaves based on source MAC address and output
+VLAN, with periodic rebalancing as traffic patterns change.
+.TP
+\fBactive\-backup\fR
+Assigns all flows to one slave, failing over to a backup slave when
+the active slave is disabled.
+.RE
+.PP
+The following mode requires the upstream switch to support 802.3ad with
+successful LACP negotiation.  If LACP negotiation fails then
+\fBbalance\-slb\fR mode is used as a fallback:
+.RS
+.TP
+\fBbalance\-tcp\fR
+Balances flows among slaves based on L2, L3, and L4 protocol
+information such as destination MAC address, IP address, and TCP
+port.
+.RE
 .PP
 These columns apply only to bonded ports.  Their values are
 otherwise ignored.
-.IP "\fBbond_type\fR: optional string, either \fBactive\-backup\fR or \fBslb\fR"
-The type of bonding used for a bonded port.  Currently supported
-values are \fBslb\fR and \fBactive\-backup\fR\.  Defaults
-to SLB if unset.
+.IP "\fBbond_mode\fR: optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR"
+The type of bonding used for a bonded port.  Defaults to
+\fBbalance\-slb\fR if unset.
 .IP "\fBbond_updelay\fR: integer"
 For a bonded port, the number of milliseconds for which carrier must
 stay up on an interface before the interface is considered to be up.
@@ -721,6 +767,15 @@ down.  Specify \fB0\fR to disable the interface immediately.
 For a bonded port, whether to create a fake internal interface with the
 name of the port.  Use only for compatibility with legacy software that
 requires this.
+.IP "\fBlacp\fR: optional string, one of \fBactive\fR, \fBpassive\fR, or \fBoff\fR"
+Configures LACP on this port.  LACP allows directly connected
+switches to negotiate which links may be bonded.  LACP may be enabled
+on non-bonded ports for the benefit of any switches they may be
+connected to.  \fBactive\fR ports are allowed to initiate LACP
+negotiations.  \fBpassive\fR ports are allowed to participate
+in LACP negotiations initiated by a remote switch, but not allowed to
+initiate such negotiations themselves. If unset Open vSwitch will
+choose a reasonable default.
 .ST "Other Features:"
 .IP "\fBqos\fR: optional \fBQoS\fR"
 Quality of Service configuration for this port.
@@ -760,6 +815,32 @@ move source MACs and their flows from one interface on
 the bond to another in an attempt to keep usage of each
 interface roughly equal.  The default is 10000 (10
 seconds), and the minimum is 1000 (1 second).
+.TP
+\fBbond\-detect\-mode\fR
+Sets the method used to detect link failures in a bonded port.
+Options are \fBcarrier\fR and \fBmiimon\fR\. Defaults
+to \fBcarrier\fR which uses each interface\(cqs carrier to detect
+failures.  When set to \fBmiimon\fR, will check for failures
+by polling each interface\(cqs MII.
+.TP
+\fBbond\-miimon\-interval\fR
+The number of milliseconds between successive attempts to
+poll each interface\(cqs MII.  Only relevant on ports which use
+\fBmiimon\fR to detect failures.
+.TP
+\fBlacp\-system\-priority\fR
+The LACP system priority of this \fBPort\fR\.  In
+LACP negotiations, link status decisions are made by the system
+with the numerically lower priority.  Must be a number between 1
+and 65535.
+.TP
+\fBlacp\-time\fR
+The LACP timing which should be used on this
+\fBPort\fR\.  Possible values are \fBfast\fR and
+\fBslow\fR\.  By default \fBslow\fR is used.  When
+configured to be \fBfast\fR more frequent LACP heartbeats
+will be requested causing connectivity problems to be detected more
+quickly.
 .RE
 .bp
 .SS "Interface Table"
@@ -797,6 +878,27 @@ string
 T}
 \ \ \fBoptions\fR	T{
 map of string-string pairs
+T}
+_
+.T&
+li | s
+l | l.
+Interface Status
+_
+\ \ \fBadmin_state\fR	T{
+optional string, either \fBdown\fR or \fBup\fR
+T}
+\ \ \fBlink_state\fR	T{
+optional string, either \fBdown\fR or \fBup\fR
+T}
+\ \ \fBlink_speed\fR	T{
+optional integer
+T}
+\ \ \fBduplex\fR	T{
+optional string, either \fBfull\fR or \fBhalf\fR
+T}
+\ \ \fBmtu\fR	T{
+optional integer
 T}
 \ \ \fBstatus\fR	T{
 map of string-string pairs
@@ -1139,7 +1241,7 @@ Ethernet tunneling over the UDP transport portion of CAPWAP
 where GRE is not available.  Note that only the tunneling component
 of the protocol is implemented.  Due to the non-standard use of
 CAPWAP, UDP ports 58881 and 58882 are used as the source and
-destinations ports respectivedly.  Each tunnel must be uniquely
+destination ports respectively.  Each tunnel must be uniquely
 identified by the combination of \fBremote_ip\fR and
 \fBlocal_ip\fR\.  If two ports are defined that are the same
 except one includes \fBlocal_ip\fR and the other does not,
@@ -1220,17 +1322,61 @@ interfaces must have reversed \fBname\fR and
 .IP "\fBoptions\fR: map of string-string pairs"
 Configuration options whose interpretation varies based on
 \fBtype\fR\.
+.ST "Interface Status:"
+Status information about interfaces attached to bridges, updated every
+5 seconds.  Not all interfaces have all of these properties; virtual
+interfaces don\(cqt have a link speed, for example.  Non-applicable
+columns will have empty values.
+.IP "\fBadmin_state\fR: optional string, either \fBdown\fR or \fBup\fR"
+The administrative state of the physical network link.
+.IP "\fBlink_state\fR: optional string, either \fBdown\fR or \fBup\fR"
+The observed state of the physical network link.  This is ordinarily
+the link\(cqs carrier status.  If the interface\(cqs \fBPort\fR is
+a bond configured for miimon monitoring, it is instead the network
+link\(cqs miimon status.
+.IP "\fBlink_speed\fR: optional integer"
+The negotiated speed of the physical network link.
+Valid values are positive integers greater than 0.
+.IP "\fBduplex\fR: optional string, either \fBfull\fR or \fBhalf\fR"
+The duplex mode of the physical network link.
+.IP "\fBmtu\fR: optional integer"
+The MTU (maximum transmission unit); i.e. the largest
+amount of data that can fit into a single Ethernet frame.
+The standard Ethernet MTU is 1500 bytes.  Some physical media
+and many kinds of virtual interfaces can be configured with
+higher MTUs.
+.IP
+This column will be empty for an interface that does not
+have an MTU as, for example, some kinds of tunnels do not.
 .IP "\fBstatus\fR: map of string-string pairs"
 Key-value pairs that report port status.  Supported status
-values are \fBtype\fR-dependent.
+values are \fBtype\fR-dependent; some interfaces may not have
+a valid \fBdriver_name\fR, for example.
 .IP
 The currently defined key-value pairs are:
 .RS
 .TP
+\fBdriver_name\fR
+The name of the device driver controlling the network
+adapter.
+.RE
+.RS
+.TP
+\fBdriver_version\fR
+The version string of the device driver controlling the
+network adapter.
+.RE
+.RS
+.TP
+\fBfirmware_version\fR
+The version string of the network adapter\(cqs firmware, if
+available.
+.RE
+.RS
+.TP
 \fBsource_ip\fR
 The source IP address used for an IPv4 tunnel end-point,
-such as \fBgre\fR or \fBcapwap\fR\.  Not
-supported by all implementations.
+such as \fBgre\fR or \fBcapwap\fR\.
 .RE
 .RS
 .TP
@@ -1240,6 +1386,12 @@ and CAPWAP tunnels.  On Linux systems, this column will show
 the name of the interface which is responsible for routing
 traffic destined for the configured \fBremote_ip\fR\.
 This could be an internal interface such as a bridge port.
+.RE
+.RS
+.TP
+\fBtunnel_egress_iface_carrier\fR
+Whether a carrier is detected on \fBtunnel_egress_iface\fR\.  Valid values are \fBdown\fR
+and \fBup\fR\.
 .RE
 .ST "Ingress Policing:"
 These settings control ingress policing for packets received on this
@@ -1345,8 +1497,15 @@ The virtual network to which this interface is attached.
 The VM to which this interface belongs.
 .RE
 .IP "\fBother_config\fR: map of string-string pairs"
-Key-value pairs for rarely used interface features.  Currently,
-there are none defined.
+Key-value pairs for rarely used interface features.
+.RS
+.TP
+\fBlacp\-port\-priority\fR
+The LACP port priority of this \fBInterface\fR\.  In
+LACP negotiations \fBInterface\fRs with numerically lower
+priorities are preferred for aggregation.  Must be a number between
+1 and 65535.
+.RE
 .IP "\fBstatistics\fR: map of string-integer pairs"
 Key-value pairs that report interface statistics.  The current
 implementation updates these counters periodically.  In the future,
@@ -1520,7 +1679,7 @@ The key-value pairs defined for \fBQoS\fR \fBtype\fR of \fBlinux\-htb\fR are:
 .RS
 .TP
 \fBmin\-rate\fR
-Minimum guaranteed bandwidth, in bit/s.  Required.
+Minimum guaranteed bandwidth, in bit/s.
 .TP
 \fBmax\-rate\fR
 Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
@@ -1547,7 +1706,7 @@ The key-value pairs defined for \fBQoS\fR \fBtype\fR of \fBlinux\-hfsc\fR are:
 .RS
 .TP
 \fBmin\-rate\fR
-Minimum guaranteed bandwidth, in bit/s.  Required.
+Minimum guaranteed bandwidth, in bit/s.
 .TP
 \fBmax\-rate\fR
 Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
@@ -1606,12 +1765,6 @@ li | s
 l | l.
 Monitor Status
 _
-\ \ \fBunexpected_remote_mpids\fR	T{
-set of integers
-T}
-\ \ \fBunexpected_remote_maids\fR	T{
-set of strings
-T}
 \ \ \fBfault\fR	T{
 optional boolean
 T}
@@ -1640,18 +1793,6 @@ uniquely identify a MA. Defaults to \fBovs\fR if unset.
 The transmission interval of CCMs in milliseconds.  Three missed CCMs
 indicate a connectivity fault.  Defaults to 1000ms.
 .ST "Monitor Status:"
-.IP "\fBunexpected_remote_mpids\fR: set of integers"
-A set of MPIDs representing MPs to which this \fBMonitor\fR
-has detected connectivity that are not in the
-\fBremote_mps\fR set.  This \fBMonitor\fR should not
-have connectivity to any MPs not listed in \fBremote_mps\fR\.
-Thus, if this set is non-empty a fault is indicated.
-.IP "\fBunexpected_remote_maids\fR: set of strings"
-A set of MAIDs representing foreign Maintenance Associations (MAs)
-which this \fBMonitor\fR has detected connectivity to. A
-\fBMonitor\fR should not have connectivity to a Maintenance
-Association other than its own.  Thus, if this set is non-empty a fault
-is indicated.
 .IP "\fBfault\fR: optional boolean"
 Indicates a Connectivity Fault caused by a configuration error, a down
 remote MP, or unexpected connectivity to a remote MAID or remote MP.
@@ -1909,18 +2050,6 @@ _
 .T&
 li | s
 l | l.
-Additional Discovery Configuration
-_
-\ \ \fBdiscover_accept_regex\fR	T{
-optional string
-T}
-\ \ \fBdiscover_update_resolv_conf\fR	T{
-optional boolean
-T}
-_
-.T&
-li | s
-l | l.
 Additional In-Band Configuration
 _
 \ \ \fBlocal_ip\fR	T{
@@ -1939,6 +2068,21 @@ l | l.
 Other Features
 _
 \ \ \fBexternal_ids\fR	T{
+map of string-string pairs
+T}
+_
+.T&
+li | s
+l | l.
+Controller Status
+_
+\ \ \fBis_connected\fR	T{
+boolean
+T}
+\ \ \fBrole\fR	T{
+optional string, one of \fBslave\fR, \fBother\fR, or \fBmaster\fR
+T}
+\ \ \fBstatus\fR	T{
 map of string-string pairs
 T}
 .TE
@@ -1964,24 +2108,6 @@ part of Open vSwitch.
 The specified TCP \fIport\fR (default: 6633) on the host at
 the given \fIip\fR, which must be expressed as an IP address
 (not a DNS name).
-.TP
-\fBdiscover\fR
-Enables controller discovery.
-.IP
-In controller discovery mode, Open vSwitch broadcasts a DHCP
-request with vendor class identifier \fBOpenFlow\fR across
-all of the bridge\(cqs network devices.  It will accept any valid
-DHCP reply that has the same vendor class identifier and includes
-a vendor-specific option with code 1 whose contents are a string
-specifying the location of the controller in the same format as
-\fBtarget\fR\.
-.IP
-The DHCP reply may also, optionally, include a vendor-specific
-option with code 2 whose contents are a string specifying the URI
-to the base of the OpenFlow PKI
-(e.g. \fBhttp://192.168.0.1/openflow/pki\fR).  This URI is
-used only for bootstrapping the OpenFlow PKI at initial switch
-setup; \fBovs\-vswitchd\fR does not use it at all.
 .RE
 .IP
 The following connection methods are currently supported for service
@@ -2034,10 +2160,7 @@ with the controller.  The control network must be configured
 separately, before or after \fBovs\-vswitchd\fR is started.
 .RE
 .IP
-If not specified, the default is implementation-specific.  If
-\fBtarget\fR is \fBdiscover\fR, the connection mode
-is always treated as \fBin\-band\fR regardless of the actual
-setting.
+If not specified, the default is implementation-specific.
 .ST "Controller Failure Detection and Handling:"
 .IP "\fBmax_backoff\fR: optional integer, at least 1,000"
 Maximum number of milliseconds to wait between connection attempts.
@@ -2077,27 +2200,9 @@ In conjunction with \fBcontroller_rate_limit\fR,
 the maximum number of unused packet credits that the bridge will
 allow to accumulate, in packets.  If not specified, the default
 is implementation-specific.
-.ST "Additional Discovery Configuration:"
-These values are considered only when \fBtarget\fR
-is \fBdiscover\fR\.
-.IP "\fBdiscover_accept_regex\fR: optional string"
-A POSIX
-extended regular expression against which the discovered controller
-location is validated.  The regular expression is implicitly
-anchored at the beginning of the controller location string, as
-if it begins with \fB^\fR\.  If not specified, the default
-is implementation-specific.
-.IP "\fBdiscover_update_resolv_conf\fR: optional boolean"
-Whether to update \fB/etc/resolv.conf\fR when the
-controller is discovered.  If not specified, the default
-is implementation-specific.  Open vSwitch will only modify
-\fB/etc/resolv.conf\fR if the DHCP response that it receives
-specifies one or more DNS servers.
 .ST "Additional In-Band Configuration:"
 These values are considered only in in-band control mode (see
-\fBconnection_mode\fR) and only when \fBtarget\fR
-is not \fBdiscover\fR\.  (For controller discovery, the network
-configuration obtained via DHCP is used instead.)
+\fBconnection_mode\fR).
 .PP
 When multiple controllers are configured on a single bridge, there
 should be only one set of unique values in these columns.  If different
@@ -2124,6 +2229,60 @@ vSwitch, rather than by Open vSwitch itself.  System integrators should
 either use the Open vSwitch development mailing list to coordinate on
 common key-value definitions, or choose key names that are likely to be
 unique.  No common key-value pairs are currently defined.
+.ST "Controller Status:"
+.IP "\fBis_connected\fR: boolean"
+\fBtrue\fR if currently connected to this controller,
+\fBfalse\fR otherwise.
+.IP "\fBrole\fR: optional string, one of \fBslave\fR, \fBother\fR, or \fBmaster\fR"
+The level of authority this controller has on the associated
+bridge. Possible values are:
+.RS
+.TP
+\fBother\fR
+Allows the controller access to all OpenFlow features.
+.TP
+\fBmaster\fR
+Equivalent to \fBother\fR, except that there may be at
+most one master controller at a time.  When a controller configures
+itself as \fBmaster\fR, any existing master is demoted to
+the \fBslave\fRrole.
+.TP
+\fBslave\fR
+Allows the controller read-only access to OpenFlow features.
+Attempts to modify the flow table will be rejected with an
+error.  Slave controllers do not receive OFPT_PACKET_IN or
+OFPT_FLOW_REMOVED messages, but they do receive OFPT_PORT_STATUS
+messages.
+.RE
+.IP "\fBstatus\fR: map of string-string pairs"
+Key-value pairs that report controller status.
+.RS
+.TP
+\fBlast_error\fR
+A human-readable description of the last error on the connection
+to the controller; i.e. \fBstrerror(errno)\fR\.  This key
+will exist only if an error has occurred.
+.TP
+\fBstate\fR
+The state of the connection to the controller.  Possible values
+are: \fBVOID\fR (connection is disabled),
+\fBBACKOFF\fR (attempting to reconnect at an increasing
+period), \fBCONNECTING\fR (attempting to connect),
+\fBACTIVE\fR (connected, remote host responsive), and
+\fBIDLE\fR (remote host idle, sending keep-alive).  These
+values may change in the future.  They are provided only for human
+consumption.
+.TP
+\fBsec_since_connect\fR
+The amount of time since this controller last successfully
+connected to the switch (in seconds). Value is empty if controller
+has never successfully connected.
+.TP
+\fBsec_since_disconnect\fR
+The amount of time since this controller last disconnected from
+the switch (in seconds). Value is empty if controller has never
+disconnected.
+.RE
 .bp
 .SS "Manager Table"
 Configuration for a database connection to an Open vSwitch database
@@ -2175,6 +2334,18 @@ l | l.
 Other Features
 _
 \ \ \fBexternal_ids\fR	T{
+map of string-string pairs
+T}
+_
+.T&
+li | s
+l | l.
+Status
+_
+\ \ \fBis_connected\fR	T{
+boolean
+T}
+\ \ \fBstatus\fR	T{
 map of string-string pairs
 T}
 .TE
@@ -2264,6 +2435,45 @@ vSwitch, rather than by Open vSwitch itself.  System integrators should
 either use the Open vSwitch development mailing list to coordinate on
 common key-value definitions, or choose key names that are likely to be
 unique.  No common key-value pairs are currently defined.
+.ST "Status:"
+.IP "\fBis_connected\fR: boolean"
+\fBtrue\fR if currently connected to this manager,
+\fBfalse\fR otherwise.
+.IP "\fBstatus\fR: map of string-string pairs"
+Key-value pairs that report manager status.
+.RS
+.TP
+\fBlast_error\fR
+A human-readable description of the last error on the connection
+to the manager; i.e. \fBstrerror(errno)\fR\.  This key
+will exist only if an error has occurred.
+.RE
+.RS
+.TP
+\fBstate\fR
+The state of the connection to the manager.  Possible values
+are: \fBVOID\fR (connection is disabled),
+\fBBACKOFF\fR (attempting to reconnect at an increasing
+period), \fBCONNECTING\fR (attempting to connect),
+\fBACTIVE\fR (connected, remote host responsive), and
+\fBIDLE\fR (remote host idle, sending keep-alive).  These
+values may change in the future.  They are provided only for human
+consumption.
+.RE
+.RS
+.TP
+\fBsec_since_connect\fR
+The amount of time since this manager last successfully connected
+to the database (in seconds). Value is empty if manager has never
+successfully connected.
+.RE
+.RS
+.TP
+\fBsec_since_disconnect\fR
+The amount of time since this manager last disconnected from the
+database (in seconds). Value is empty if manager has never
+disconnected.
+.RE
 .bp
 .SS "NetFlow Table"
 A NetFlow target.  NetFlow is a protocol that exports a number of

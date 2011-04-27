@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include "flow.h"
 #include "netflow.h"
+#include "sset.h"
 #include "tag.h"
 
 #ifdef  __cplusplus
@@ -34,7 +35,17 @@ struct cls_rule;
 struct nlattr;
 struct ofhooks;
 struct ofproto;
-struct svec;
+struct shash;
+
+struct ofproto_controller_info {
+    bool is_connected;
+    enum nx_role role;
+    struct {
+        const char *keys[4];
+        const char *values[4];
+        size_t n;
+    } pairs;
+};
 
 struct ofexpired {
     struct flow flow;
@@ -44,7 +55,7 @@ struct ofexpired {
 };
 
 struct ofproto_sflow_options {
-    struct svec targets;
+    struct sset targets;
     uint32_t sampling_rate;
     uint32_t polling_interval;
     uint32_t header_len;
@@ -70,10 +81,6 @@ struct ofproto_controller {
     int probe_interval;         /* Max idle time before probing, in seconds. */
     enum ofproto_band band;      /* In-band or out-of-band? */
 
-    /* Discovery options. */
-    char *accept_re;            /* Regexp for acceptable controllers.  */
-    bool update_resolv_conf;    /* Update /etc/resolv.conf? */
-
     /* OpenFlow packet-in rate-limiting. */
     int rate_limit;             /* Max packet-in rate in packets per second. */
     int burst_limit;            /* Limit on accumulating packet credits. */
@@ -98,7 +105,7 @@ bool ofproto_is_alive(const struct ofproto *);
 int ofproto_port_del(struct ofproto *, uint16_t odp_port);
 bool ofproto_port_is_floodable(struct ofproto *, uint16_t odp_port);
 
-/* Configuration. */
+/* Top-level configuration. */
 void ofproto_set_datapath_id(struct ofproto *, uint64_t datapath_id);
 void ofproto_set_controllers(struct ofproto *,
                              const struct ofproto_controller *, size_t n);
@@ -111,22 +118,31 @@ void ofproto_set_desc(struct ofproto *,
                       const char *mfr_desc, const char *hw_desc,
                       const char *sw_desc, const char *serial_desc,
                       const char *dp_desc);
-int ofproto_set_snoops(struct ofproto *, const struct svec *snoops);
+int ofproto_set_snoops(struct ofproto *, const struct sset *snoops);
 int ofproto_set_netflow(struct ofproto *,
                         const struct netflow_options *nf_options);
 void ofproto_set_sflow(struct ofproto *, const struct ofproto_sflow_options *);
+
+/* Configuration of individual interfaces. */
+struct cfm;
+
+void ofproto_iface_clear_cfm(struct ofproto *, uint32_t port_no);
+void ofproto_iface_set_cfm(struct ofproto *, uint32_t port_no,
+                           const struct cfm *,
+                           const uint16_t *remote_mps, size_t n_remote_mps);
+const struct cfm *ofproto_iface_get_cfm(struct ofproto *, uint32_t port_no);
 
 /* Configuration querying. */
 uint64_t ofproto_get_datapath_id(const struct ofproto *);
 bool ofproto_has_primary_controller(const struct ofproto *);
 enum ofproto_fail_mode ofproto_get_fail_mode(const struct ofproto *);
-void ofproto_get_listeners(const struct ofproto *, struct svec *);
-void ofproto_get_snoops(const struct ofproto *, struct svec *);
+void ofproto_get_listeners(const struct ofproto *, struct sset *);
+bool ofproto_has_snoops(const struct ofproto *);
+void ofproto_get_snoops(const struct ofproto *, struct sset *);
 void ofproto_get_all_flows(struct ofproto *p, struct ds *);
 
 /* Functions for use by ofproto implementation modules, not by clients. */
-int ofproto_send_packet(struct ofproto *, const struct flow *,
-                        const union ofp_action *, size_t n_actions,
+int ofproto_send_packet(struct ofproto *, uint32_t port_no, uint16_t vlan_tci,
                         const struct ofpbuf *);
 void ofproto_add_flow(struct ofproto *, const struct cls_rule *,
                       const union ofp_action *, size_t n_actions);
@@ -138,14 +154,19 @@ struct ofhooks {
     bool (*normal_cb)(const struct flow *, const struct ofpbuf *packet,
                       struct ofpbuf *odp_actions, tag_type *,
                       uint16_t *nf_output_iface, void *aux);
+    bool (*special_cb)(const struct flow *flow, const struct ofpbuf *packet,
+                       void *aux);
     void (*account_flow_cb)(const struct flow *, tag_type tags,
                             const struct nlattr *odp_actions,
                             size_t actions_len,
-                            unsigned long long int n_bytes, void *aux);
+                            uint64_t n_bytes, void *aux);
     void (*account_checkpoint_cb)(void *aux);
 };
 void ofproto_revalidate(struct ofproto *, tag_type);
 struct tag_set *ofproto_get_revalidate_set(struct ofproto *);
+
+void ofproto_get_ofproto_controller_info(const struct ofproto *, struct shash *);
+void ofproto_free_ofproto_controller_info(struct shash *);
 
 #ifdef  __cplusplus
 }

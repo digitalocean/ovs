@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira Networks.
+ * Copyright (c) 2009, 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -17,9 +17,7 @@
 #include <linux/rtnetlink.h>
 #include <net/genetlink.h>
 
-#include "compat.h"
 #include "openvswitch/brcompat-netlink.h"
-#include "brc_procfs.h"
 #include "datapath.h"
 
 static struct genl_family brc_genl_family;
@@ -397,22 +395,9 @@ nla_put_failure:
 	return err;
 }
 
-static struct genl_ops brc_genl_ops_query_dp = {
-	.cmd = BRC_GENL_C_QUERY_MC,
-	.flags = GENL_ADMIN_PERM, /* Requires CAP_NET_ADMIN privelege. */
-	.policy = NULL,
-	.doit = brc_genl_query,
-	.dumpit = NULL
-};
-
 /* Attribute policy: what each attribute may contain.  */
 static struct nla_policy brc_genl_policy[BRC_GENL_A_MAX + 1] = {
 	[BRC_GENL_A_ERR_CODE] = { .type = NLA_U32 },
-
-	[BRC_GENL_A_PROC_DIR] = { .type = NLA_NUL_STRING },
-	[BRC_GENL_A_PROC_NAME] = { .type = NLA_NUL_STRING },
-	[BRC_GENL_A_PROC_DATA] = { .type = NLA_NUL_STRING },
-
 	[BRC_GENL_A_FDB_DATA] = { .type = NLA_UNSPEC },
 };
 
@@ -446,20 +431,17 @@ static int brc_genl_dp_result(struct sk_buff *skb, struct genl_info *info)
 	return err;
 }
 
-static struct genl_ops brc_genl_ops_dp_result = {
-	.cmd = BRC_GENL_C_DP_RESULT,
-	.flags = GENL_ADMIN_PERM, /* Requires CAP_NET_ADMIN privelege. */
-	.policy = brc_genl_policy,
-	.doit = brc_genl_dp_result,
-	.dumpit = NULL
-};
-
-static struct genl_ops brc_genl_ops_set_proc = {
-	.cmd = BRC_GENL_C_SET_PROC,
-	.flags = GENL_ADMIN_PERM, /* Requires CAP_NET_ADMIN privelege. */
-	.policy = brc_genl_policy,
-	.doit = brc_genl_set_proc,
-	.dumpit = NULL
+static struct genl_ops brc_genl_ops[] = {
+	{ .cmd = BRC_GENL_C_QUERY_MC,
+	  .flags = GENL_ADMIN_PERM, /* Requires CAP_NET_ADMIN privelege. */
+	  .policy = NULL,
+	  .doit = brc_genl_query,
+	},
+	{ .cmd = BRC_GENL_C_DP_RESULT,
+	  .flags = GENL_ADMIN_PERM, /* Requires CAP_NET_ADMIN privelege. */
+	  .policy = brc_genl_policy,
+	  .doit = brc_genl_dp_result,
+	},
 };
 
 static struct sk_buff *brc_send_command(struct sk_buff *request,
@@ -532,21 +514,10 @@ static int __init brc_init(void)
 
 	/* Register generic netlink family to communicate changes to
 	 * userspace. */
-	err = genl_register_family(&brc_genl_family);
+	err = genl_register_family_with_ops(&brc_genl_family,
+					    brc_genl_ops, ARRAY_SIZE(brc_genl_ops));
 	if (err)
 		goto error;
-
-	err = genl_register_ops(&brc_genl_family, &brc_genl_ops_query_dp);
-	if (err != 0)
-		goto err_unregister;
-
-	err = genl_register_ops(&brc_genl_family, &brc_genl_ops_dp_result);
-	if (err != 0)
-		goto err_unregister;
-
-	err = genl_register_ops(&brc_genl_family, &brc_genl_ops_set_proc);
-	if (err != 0)
-		goto err_unregister;
 
 	strcpy(brc_mc_group.name, "brcompat");
 	err = genl_register_mc_group(&brc_genl_family, &brc_mc_group);
@@ -569,7 +540,6 @@ static void brc_cleanup(void)
 	brioctl_set(NULL);
 
 	genl_unregister_family(&brc_genl_family);
-	brc_procfs_exit();
 }
 
 module_init(brc_init);

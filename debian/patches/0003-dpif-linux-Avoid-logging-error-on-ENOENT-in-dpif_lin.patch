@@ -1,0 +1,28 @@
+From 7f1aca9025d638d53ca1dd7cea03f5aeb02d4702 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Fri, 8 Apr 2011 16:38:42 -0700
+Subject: [PATCH 3/3] dpif-linux: Avoid logging error on ENOENT in dpif_linux_is_internal_device().
+
+ENOENT can be returned if the kernel module isn't loaded.  If that's the
+case then we've already logged that and there's no point in logging it
+again.
+---
+ lib/dpif-linux.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/lib/dpif-linux.c b/lib/dpif-linux.c
+index fd08e64..fed81b7 100644
+--- a/lib/dpif-linux.c
++++ b/lib/dpif-linux.c
+@@ -1072,7 +1072,7 @@ dpif_linux_is_internal_device(const char *name)
+     error = dpif_linux_vport_get(name, &reply, &buf);
+     if (!error) {
+         ofpbuf_delete(buf);
+-    } else if (error != ENODEV) {
++    } else if (error != ENODEV && error != ENOENT) {
+         VLOG_WARN_RL(&error_rl, "%s: vport query failed (%s)",
+                      name, strerror(error));
+     }
+-- 
+1.7.4.1
+

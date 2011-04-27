@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * This file is offered under your choice of two licenses: Apache 2.0 or GNU
  * GPL 2.0 or later.  The permission statements for each of these licenses is
@@ -37,19 +37,9 @@
  * ----------------------------------------------------------------------
  */
 
-/* Protocol between userspace and kernel datapath.
- *
- * Be sure to update datapath/odp-compat.h if you change any of the structures
- * in here. */
-
 #ifndef OPENVSWITCH_DATAPATH_PROTOCOL_H
 #define OPENVSWITCH_DATAPATH_PROTOCOL_H 1
 
-/* The ovs_be<N> types indicate that an object is in big-endian, not
- * native-endian, byte order.  They are otherwise equivalent to uint<N>_t.
- * The Linux kernel already has __be<N> types for this, which take on
- * additional semantics when the "sparse" static checker is used, so we use
- * those types when compiling the kernel. */
 #ifdef __KERNEL__
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -61,274 +51,381 @@
 #include <sys/socket.h>
 #endif
 
-#ifndef __aligned_u64
-#define __aligned_u64 __u64 __attribute__((aligned(8)))
-#define __aligned_be64 __be64 __attribute__((aligned(8)))
-#define __aligned_le64 __le64 __attribute__((aligned(8)))
-#endif
-
 #include <linux/if_link.h>
 #include <linux/netlink.h>
+
+/* datapaths. */
 
-#define ODP_MAX 256             /* Maximum number of datapaths. */
+#define ODP_DATAPATH_FAMILY  "odp_datapath"
+#define ODP_DATAPATH_MCGROUP "odp_datapath"
 
-#define ODP_DP_CREATE           _IO('O', 0)
-#define ODP_DP_DESTROY          _IO('O', 1)
-#define ODP_DP_STATS            _IOW('O', 2, struct odp_stats)
+enum odp_datapath_cmd {
+	ODP_DP_CMD_UNSPEC,
+	ODP_DP_CMD_NEW,
+	ODP_DP_CMD_DEL,
+	ODP_DP_CMD_GET,
+	ODP_DP_CMD_SET
+};
 
-#define ODP_GET_DROP_FRAGS      _IOW('O', 3, int)
-#define ODP_SET_DROP_FRAGS      _IOR('O', 4, int)
+/**
+ * struct odp_header - header for ODP Generic Netlink messages.
+ * @dp_ifindex: ifindex of local port for datapath (0 to make a request not
+ * specific to a datapath).
+ *
+ * Attributes following the header are specific to a particular ODP Generic
+ * Netlink family, but all of the ODP families use this header.
+ */
+struct odp_header {
+	int dp_ifindex;
+};
+
+/**
+ * enum odp_datapath_attr - attributes for %ODP_DP_* commands.
+ * @ODP_DP_ATTR_NAME: Name of the network device that serves as the "local
+ * port".  This is the name of the network device whose dp_ifindex is given in
+ * the &struct odp_header.  Always present in notifications.  Required in
+ * %ODP_DP_NEW requests.  May be used as an alternative to specifying
+ * dp_ifindex in other requests (with a dp_ifindex of 0).
+ * @ODP_DP_ATTR_STATS: Statistics about packets that have passed through the
+ * datapath.  Always present in notifications.
+ * @ODP_DP_ATTR_IPV4_FRAGS: One of %ODP_DP_FRAG_*.  Always present in
+ * notifications.  May be included in %ODP_DP_NEW or %ODP_DP_SET requests to
+ * change the fragment handling policy.
+ * @ODP_DP_ATTR_SAMPLING: 32-bit fraction of packets to sample with
+ * @ODP_PACKET_CMD_SAMPLE.  A value of 0 samples no packets, a value of
+ * %UINT32_MAX samples all packets, and intermediate values sample intermediate
+ * fractions of packets.
+ * @ODP_DP_ATTR_MCGROUPS: Nested attributes with multicast groups.  Each nested
+ * attribute has a %ODP_PACKET_CMD_* type with a 32-bit value giving the
+ * Generic Netlink multicast group number used for sending this datapath's
+ * messages with that command type up to userspace.
+ *
+ * These attributes follow the &struct odp_header within the Generic Netlink
+ * payload for %ODP_DP_* commands.
+ */
+enum odp_datapath_attr {
+	ODP_DP_ATTR_UNSPEC,
+	ODP_DP_ATTR_NAME,       /* name of dp_ifindex netdev */
+	ODP_DP_ATTR_STATS,      /* struct odp_stats */
+	ODP_DP_ATTR_IPV4_FRAGS,	/* 32-bit enum odp_frag_handling */
+	ODP_DP_ATTR_SAMPLING,   /* 32-bit fraction of packets to sample. */
+	ODP_DP_ATTR_MCGROUPS,   /* Nested attributes with multicast groups. */
+	__ODP_DP_ATTR_MAX
+};
 
-#define ODP_GET_LISTEN_MASK     _IOW('O', 5, int)
-#define ODP_SET_LISTEN_MASK     _IOR('O', 6, int)
+#define ODP_DP_ATTR_MAX (__ODP_DP_ATTR_MAX - 1)
 
-#define ODP_VPORT_ATTACH        _IOR('O', 7, struct odp_port)
-#define ODP_VPORT_DETACH        _IOR('O', 8, int)
-#define ODP_VPORT_QUERY         _IOWR('O', 9, struct odp_port)
-#define ODP_VPORT_LIST          _IOWR('O', 10, struct odp_portvec)
-
-#define ODP_FLOW_GET            _IOWR('O', 13, struct odp_flowvec)
-#define ODP_FLOW_PUT            _IOWR('O', 14, struct odp_flow)
-#define ODP_FLOW_LIST           _IOWR('O', 15, struct odp_flowvec)
-#define ODP_FLOW_FLUSH          _IO('O', 16)
-#define ODP_FLOW_DEL            _IOWR('O', 17, struct odp_flow)
-
-#define ODP_EXECUTE             _IOR('O', 18, struct odp_execute)
-
-#define ODP_SET_SFLOW_PROBABILITY _IOR('O', 19, int)
-#define ODP_GET_SFLOW_PROBABILITY _IOW('O', 20, int)
-
-#define ODP_VPORT_MOD           _IOR('O', 22, struct odp_port)
-#define ODP_VPORT_STATS_GET     _IOWR('O', 24, struct odp_vport_stats_req)
-#define ODP_VPORT_ETHER_GET     _IOWR('O', 25, struct odp_vport_ether)
-#define ODP_VPORT_ETHER_SET     _IOW('O', 26, struct odp_vport_ether)
-#define ODP_VPORT_MTU_GET       _IOWR('O', 27, struct odp_vport_mtu)
-#define ODP_VPORT_MTU_SET       _IOW('O', 28, struct odp_vport_mtu)
-#define ODP_VPORT_STATS_SET     _IOWR('O', 29, struct odp_vport_stats_req)
+/**
+ * enum odp_frag_handling - policy for handling received IPv4 fragments.
+ * @ODP_DP_FRAG_ZERO: Treat IP fragments as IP protocol 0 and transport ports
+ * zero.
+ * @ODP_DP_FRAG_DROP: Drop IP fragments.  Do not pass them through the flow
+ * table or up to userspace.
+ */
+enum odp_frag_handling {
+	ODP_DP_FRAG_UNSPEC,
+	ODP_DP_FRAG_ZERO,	/* Treat IP fragments as transport port 0. */
+	ODP_DP_FRAG_DROP	/* Drop IP fragments. */
+};
 
 struct odp_stats {
-    /* Flows. */
-    uint32_t n_flows;           /* Number of flows in flow table. */
-    uint32_t cur_capacity;      /* Current flow table capacity. */
-    uint32_t max_capacity;      /* Maximum expansion of flow table capacity. */
-
-    /* Ports. */
-    uint32_t n_ports;           /* Current number of ports. */
-    uint32_t max_ports;         /* Maximum supported number of ports. */
-
-    /* Lookups. */
     uint64_t n_frags;           /* Number of dropped IP fragments. */
     uint64_t n_hit;             /* Number of flow table matches. */
     uint64_t n_missed;          /* Number of flow table misses. */
     uint64_t n_lost;            /* Number of misses not sent to userspace. */
-
-    /* Queues. */
-    uint16_t max_miss_queue;    /* Max length of ODPL_MISS queue. */
-    uint16_t max_action_queue;  /* Max length of ODPL_ACTION queue. */
-    uint16_t max_sflow_queue;   /* Max length of ODPL_SFLOW queue. */
 };
 
 /* Logical ports. */
 #define ODPP_LOCAL      ((uint16_t)0)
-#define ODPP_NONE       ((uint16_t)-1)
+
+#define ODP_PACKET_FAMILY "odp_packet"
 
-/* Listening channels. */
-#define _ODPL_MISS_NR   0       /* Packet missed in flow table. */
-#define ODPL_MISS       (1 << _ODPL_MISS_NR)
-#define _ODPL_ACTION_NR 1       /* Packet output to ODPP_CONTROLLER. */
-#define ODPL_ACTION     (1 << _ODPL_ACTION_NR)
-#define _ODPL_SFLOW_NR  2       /* sFlow samples. */
-#define ODPL_SFLOW      (1 << _ODPL_SFLOW_NR)
-#define ODPL_ALL        (ODPL_MISS | ODPL_ACTION | ODPL_SFLOW)
+enum odp_packet_cmd {
+        ODP_PACKET_CMD_UNSPEC,
 
-/**
- * struct odp_msg - format of messages read from datapath fd.
- * @length: Total length of message, including this header.
- * @type: One of the %_ODPL_* constants.
- * @port: Port that received the packet embedded in this message.
- * @arg: Argument value whose meaning depends on @type.
- *
- * For @type == %_ODPL_MISS_NR, the header is followed by packet data.  The
- * @arg member is the ID (in network byte order) of the tunnel that
- * encapsulated this packet. It is 0 if the packet was not received on a tunnel.
- *
- * For @type == %_ODPL_ACTION_NR, the header is followed by packet data.  The
- * @arg member is copied from the %ODPAT_CONTROLLER action that caused the
- * &struct odp_msg to be composed.
- *
- * For @type == %_ODPL_SFLOW_NR, the header is followed by &struct
- * odp_sflow_sample_header, then by a series of Netlink attributes (whose
- * length is specified in &struct odp_sflow_sample_header), then by packet
- * data.
- */
-struct odp_msg {
-    uint32_t length;
-    uint16_t type;
-    uint16_t port;
-    __aligned_u64 arg;
+        /* Kernel-to-user notifications. */
+        ODP_PACKET_CMD_MISS,    /* Flow table miss. */
+        ODP_PACKET_CMD_ACTION,  /* ODP_ACTION_ATTR_CONTROLLER action. */
+        ODP_PACKET_CMD_SAMPLE,  /* Sampled packet. */
+
+        /* User commands. */
+        ODP_PACKET_CMD_EXECUTE  /* Apply actions to a packet. */
 };
 
 /**
- * struct odp_sflow_sample_header - header added to sFlow sampled packet.
- * @sample_pool: Number of packets that were candidates for sFlow sampling,
- * regardless of whether they were actually chosen and sent down to userspace.
- * @actions_len: Number of bytes of actions immediately following this header.
+ * enum odp_packet_attr - attributes for %ODP_PACKET_* commands.
+ * @ODP_PACKET_ATTR_PACKET: Present for all notifications.  Contains the entire
+ * packet as received, from the start of the Ethernet header onward.  For
+ * %ODP_PACKET_CMD_ACTION, %ODP_PACKET_ATTR_PACKET reflects changes made by
+ * actions preceding %ODP_ACTION_ATTR_CONTROLLER, but %ODP_PACKET_ATTR_KEY is
+ * the flow key extracted from the packet as originally received.
+ * @ODP_PACKET_ATTR_KEY: Present for all notifications.  Contains the flow key
+ * extracted from the packet as nested %ODP_KEY_ATTR_* attributes.  This allows
+ * userspace to adapt its flow setup strategy by comparing its notion of the
+ * flow key against the kernel's.
+ * @ODP_PACKET_ATTR_USERDATA: Present for an %ODP_PACKET_CMD_ACTION
+ * notification if the %ODP_ACTION_ATTR_CONTROLLER, action's argument was
+ * nonzero.
+ * @ODP_PACKET_ATTR_SAMPLE_POOL: Present for %ODP_PACKET_CMD_SAMPLE.  Contains
+ * the number of packets processed so far that were candidates for sampling.
+ * @ODP_PACKET_ATTR_ACTIONS: Present for %ODP_PACKET_CMD_SAMPLE.  Contains a
+ * copy of the actions applied to the packet, as nested %ODP_ACTION_ATTR_*
+ * attributes.
  *
- * This header follows &struct odp_msg when that structure's @type is
- * %_ODPL_SFLOW_NR, and it is itself followed by a series of Netlink attributes
- * (the number of bytes of which is specified in @actions_len) and then by
- * packet data.
+ * These attributes follow the &struct odp_header within the Generic Netlink
+ * payload for %ODP_PACKET_* commands.
  */
-struct odp_sflow_sample_header {
-    uint32_t sample_pool;
-    uint32_t actions_len;
+enum odp_packet_attr {
+	ODP_PACKET_ATTR_UNSPEC,
+	ODP_PACKET_ATTR_PACKET,      /* Packet data. */
+	ODP_PACKET_ATTR_KEY,         /* Nested ODP_KEY_ATTR_* attributes. */
+	ODP_PACKET_ATTR_USERDATA,    /* u64 ODP_ACTION_ATTR_CONTROLLER arg. */
+	ODP_PACKET_ATTR_SAMPLE_POOL, /* # sampling candidate packets so far. */
+	ODP_PACKET_ATTR_ACTIONS,     /* Nested ODP_ACTION_ATTR_* attributes. */
+	__ODP_PACKET_ATTR_MAX
 };
 
-#define VPORT_TYPE_SIZE     16
-#define VPORT_CONFIG_SIZE     32
-struct odp_port {
-    char devname[16];           /* IFNAMSIZ */
-    char type[VPORT_TYPE_SIZE];
-    uint16_t port;
-    uint16_t reserved1;
-    uint32_t reserved2;
-    __aligned_u64 config[VPORT_CONFIG_SIZE / 8]; /* type-specific */
+#define ODP_PACKET_ATTR_MAX (__ODP_PACKET_ATTR_MAX - 1)
+
+enum odp_vport_type {
+	ODP_VPORT_TYPE_UNSPEC,
+	ODP_VPORT_TYPE_NETDEV,   /* network device */
+	ODP_VPORT_TYPE_INTERNAL, /* network device implemented by datapath */
+	ODP_VPORT_TYPE_PATCH,    /* virtual tunnel connecting two vports */
+	ODP_VPORT_TYPE_GRE,      /* GRE tunnel */
+	ODP_VPORT_TYPE_CAPWAP,   /* CAPWAP tunnel */
+	__ODP_VPORT_TYPE_MAX
 };
 
-struct odp_portvec {
-    struct odp_port *ports;
-    uint32_t n_ports;
+#define ODP_VPORT_TYPE_MAX (__ODP_VPORT_TYPE_MAX - 1)
+
+#define ODP_VPORT_FAMILY  "odp_vport"
+#define ODP_VPORT_MCGROUP "odp_vport"
+
+enum odp_vport_cmd {
+	ODP_VPORT_CMD_UNSPEC,
+	ODP_VPORT_CMD_NEW,
+	ODP_VPORT_CMD_DEL,
+	ODP_VPORT_CMD_GET,
+	ODP_VPORT_CMD_SET
+};
+
+/**
+ * enum odp_vport_attr - attributes for %ODP_VPORT_* commands.
+ * @ODP_VPORT_ATTR_PORT_NO: 32-bit port number within datapath.
+ * @ODP_VPORT_ATTR_TYPE: 32-bit %ODP_VPORT_TYPE_* constant describing the type
+ * of vport.
+ * @ODP_VPORT_ATTR_NAME: Name of vport.  For a vport based on a network device
+ * this is the name of the network device.  Maximum length %IFNAMSIZ-1 bytes
+ * plus a null terminator.
+ * @ODP_VPORT_ATTR_STATS: A &struct rtnl_link_stats64 giving statistics for
+ * packets sent or received through the vport.
+ * @ODP_VPORT_ATTR_ADDRESS: A 6-byte Ethernet address for the vport.
+ * @ODP_VPORT_ATTR_MTU: MTU for the vport.  Omitted if the vport does not have
+ * an MTU as, e.g., some tunnels do not.
+ * @ODP_VPORT_ATTR_IFINDEX: ifindex of the underlying network device, if any.
+ * @ODP_VPORT_ATTR_IFLINK: ifindex of the device on which packets are sent (for
+ * tunnels), if any.
+ *
+ * These attributes follow the &struct odp_header within the Generic Netlink
+ * payload for %ODP_VPORT_* commands.
+ *
+ * All attributes applicable to a given port are present in notifications.
+ * This means that, for example, a vport that has no corresponding network
+ * device would omit %ODP_VPORT_ATTR_IFINDEX.
+ *
+ * For %ODP_VPORT_CMD_NEW requests, the %ODP_VPORT_ATTR_TYPE and
+ * %ODP_VPORT_ATTR_NAME attributes are required.  %ODP_VPORT_ATTR_PORT_NO is
+ * optional; if not specified a free port number is automatically selected.
+ * Whether %ODP_VPORT_ATTR_OPTIONS is required or optional depends on the type
+ * of vport.  %ODP_VPORT_ATTR_STATS, %ODP_VPORT_ATTR_ADDRESS, and
+ * %ODP_VPORT_ATTR_MTU are optional, and other attributes are ignored.
+ *
+ * For other requests, if %ODP_VPORT_ATTR_NAME is specified then it is used to
+ * look up the vport to operate on; otherwise dp_idx from the &struct
+ * odp_header plus %ODP_VPORT_ATTR_PORT_NO determine the vport.
+ */
+enum odp_vport_attr {
+	ODP_VPORT_ATTR_UNSPEC,
+	ODP_VPORT_ATTR_PORT_NO,	/* port number within datapath */
+	ODP_VPORT_ATTR_TYPE,	/* 32-bit ODP_VPORT_TYPE_* constant. */
+	ODP_VPORT_ATTR_NAME,	/* string name, up to IFNAMSIZ bytes long */
+	ODP_VPORT_ATTR_STATS,	/* struct rtnl_link_stats64 */
+	ODP_VPORT_ATTR_ADDRESS, /* hardware address */
+	ODP_VPORT_ATTR_MTU,	/* 32-bit maximum transmission unit */
+	ODP_VPORT_ATTR_OPTIONS, /* nested attributes, varies by vport type */
+	ODP_VPORT_ATTR_IFINDEX, /* 32-bit ifindex of backing netdev */
+	ODP_VPORT_ATTR_IFLINK,	/* 32-bit ifindex on which packets are sent */
+	__ODP_VPORT_ATTR_MAX
+};
+
+#define ODP_VPORT_ATTR_MAX (__ODP_VPORT_ATTR_MAX - 1)
+
+/* ODP_VPORT_ATTR_OPTIONS attributes for patch vports. */
+enum {
+	ODP_PATCH_ATTR_UNSPEC,
+	ODP_PATCH_ATTR_PEER,	/* name of peer vport, as a string */
+	__ODP_PATCH_ATTR_MAX
+};
+
+#define ODP_PATCH_ATTR_MAX (__ODP_PATCH_ATTR_MAX - 1)
+
+/* Flows. */
+
+#define ODP_FLOW_FAMILY  "odp_flow"
+#define ODP_FLOW_MCGROUP "odp_flow"
+
+enum odp_flow_cmd {
+	ODP_FLOW_CMD_UNSPEC,
+	ODP_FLOW_CMD_NEW,
+	ODP_FLOW_CMD_DEL,
+	ODP_FLOW_CMD_GET,
+	ODP_FLOW_CMD_SET
 };
 
 struct odp_flow_stats {
     uint64_t n_packets;         /* Number of matched packets. */
     uint64_t n_bytes;           /* Number of matched bytes. */
-    uint64_t used_sec;          /* Time last used, in system monotonic time. */
-    uint32_t used_nsec;
-    uint8_t  tcp_flags;
-    uint8_t  reserved;
-    uint16_t error;             /* Used by ODP_FLOW_GET. */
 };
 
-/*
- * The datapath protocol adopts the Linux convention for TCI fields: if an
- * 802.1Q header is present then its TCI value is used verbatim except that the
- * CFI bit (0x1000) is always set to 1, and all-bits-zero indicates no 802.1Q
- * header.
+enum odp_key_type {
+	ODP_KEY_ATTR_UNSPEC,
+	ODP_KEY_ATTR_TUN_ID,    /* 64-bit tunnel ID */
+	ODP_KEY_ATTR_IN_PORT,   /* 32-bit ODP port number */
+	ODP_KEY_ATTR_ETHERNET,  /* struct odp_key_ethernet */
+	ODP_KEY_ATTR_8021Q,     /* struct odp_key_8021q */
+	ODP_KEY_ATTR_ETHERTYPE,	/* 16-bit Ethernet type */
+	ODP_KEY_ATTR_IPV4,      /* struct odp_key_ipv4 */
+	ODP_KEY_ATTR_IPV6,      /* struct odp_key_ipv6 */
+	ODP_KEY_ATTR_TCP,       /* struct odp_key_tcp */
+	ODP_KEY_ATTR_UDP,       /* struct odp_key_udp */
+	ODP_KEY_ATTR_ICMP,      /* struct odp_key_icmp */
+	ODP_KEY_ATTR_ICMPV6,    /* struct odp_key_icmpv6 */
+	ODP_KEY_ATTR_ARP,       /* struct odp_key_arp */
+	ODP_KEY_ATTR_ND,        /* struct odp_key_nd */
+	__ODP_KEY_ATTR_MAX
+};
+
+#define ODP_KEY_ATTR_MAX (__ODP_KEY_ATTR_MAX - 1)
+
+struct odp_key_ethernet {
+	uint8_t	 eth_src[6];
+	uint8_t	 eth_dst[6];
+};
+
+struct odp_key_8021q {
+	ovs_be16 q_tpid;
+	ovs_be16 q_tci;
+};
+
+struct odp_key_ipv4 {
+	ovs_be32 ipv4_src;
+	ovs_be32 ipv4_dst;
+	uint8_t  ipv4_proto;
+	uint8_t  ipv4_tos;
+};
+
+struct odp_key_ipv6 {
+	ovs_be32 ipv6_src[4];
+	ovs_be32 ipv6_dst[4];
+	uint8_t  ipv6_proto;
+	uint8_t  ipv6_tos;
+};
+
+struct odp_key_tcp {
+	ovs_be16 tcp_src;
+	ovs_be16 tcp_dst;
+};
+
+struct odp_key_udp {
+	ovs_be16 udp_src;
+	ovs_be16 udp_dst;
+};
+
+struct odp_key_icmp {
+	uint8_t icmp_type;
+	uint8_t icmp_code;
+};
+
+struct odp_key_icmpv6 {
+	uint8_t icmpv6_type;
+	uint8_t icmpv6_code;
+};
+
+struct odp_key_arp {
+	ovs_be32 arp_sip;
+	ovs_be32 arp_tip;
+	ovs_be16 arp_op;
+	uint8_t  arp_sha[6];
+	uint8_t  arp_tha[6];
+};
+
+struct odp_key_nd {
+	uint32_t nd_target[4];
+	uint8_t  nd_sll[6];
+	uint8_t  nd_tll[6];
+};
+
+/**
+ * enum odp_flow_attr - attributes for %ODP_FLOW_* commands.
+ * @ODP_FLOW_ATTR_KEY: Nested %ODP_KEY_ATTR_* attributes specifying the flow
+ * key.  Always present in notifications.  Required for all requests (except
+ * dumps).
+ * @ODP_FLOW_ATTR_ACTIONS: Nested %ODPAT_* attributes specifying the actions to
+ * take for packets that match the key.  Always present in notifications.
+ * Required for %ODP_FLOW_CMD_NEW requests, optional on %ODP_FLOW_CMD_SET
+ * request to change the existing actions, ignored for other requests.
+ * @ODP_FLOW_ATTR_STATS: &struct odp_flow_stats giving statistics for this
+ * flow.  Present in notifications if the stats would be nonzero.  Ignored in
+ * requests.
+ * @ODP_FLOW_ATTR_TCP_FLAGS: An 8-bit value giving the OR'd value of all of the
+ * TCP flags seen on packets in this flow.  Only present in notifications for
+ * TCP flows, and only if it would be nonzero.  Ignored in requests.
+ * @ODP_FLOW_ATTR_USED: A 64-bit integer giving the time, in milliseconds on
+ * the system monotonic clock, at which a packet was last processed for this
+ * flow.  Only present in notifications if a packet has been processed for this
+ * flow.  Ignored in requests.
+ * @ODP_FLOW_ATTR_CLEAR: If present in a %ODP_FLOW_CMD_SET request, clears the
+ * last-used time, accumulated TCP flags, and statistics for this flow.
+ * Otherwise ignored in requests.  Never present in notifications.
+ *
+ * These attributes follow the &struct odp_header within the Generic Netlink
+ * payload for %ODP_FLOW_* commands.
  */
-#define ODP_TCI_PRESENT 0x1000  /* CFI bit */
-
-struct odp_flow_key {
-    ovs_be64 tun_id;            /* Encapsulating tunnel ID. */
-    ovs_be32 nw_src;            /* IP source address. */
-    ovs_be32 nw_dst;            /* IP destination address. */
-    uint16_t in_port;           /* Input switch port. */
-    ovs_be16 dl_tci;            /* All zeros if 802.1Q header absent,
-                                  * ODP_TCI_PRESENT set if present. */
-    ovs_be16 dl_type;           /* Ethernet frame type. */
-    ovs_be16 tp_src;            /* TCP/UDP source port. */
-    ovs_be16 tp_dst;            /* TCP/UDP destination port. */
-    uint8_t  dl_src[6];         /* Ethernet source address. */
-    uint8_t  dl_dst[6];         /* Ethernet destination address. */
-    uint8_t  nw_proto;          /* IP protocol or lower 8 bits of
-                                   ARP opcode. */
-    uint8_t  nw_tos;            /* IP ToS (DSCP field, 6 bits). */
+enum odp_flow_attr {
+	ODP_FLOW_ATTR_UNSPEC,
+	ODP_FLOW_ATTR_KEY,       /* Sequence of ODP_KEY_ATTR_* attributes. */
+	ODP_FLOW_ATTR_ACTIONS,   /* Nested ODP_ACTION_ATTR_* attributes. */
+	ODP_FLOW_ATTR_STATS,     /* struct odp_flow_stats. */
+	ODP_FLOW_ATTR_TCP_FLAGS, /* 8-bit OR'd TCP flags. */
+	ODP_FLOW_ATTR_USED,      /* u64 msecs last used in monotonic time. */
+	ODP_FLOW_ATTR_CLEAR,     /* Flag to clear stats, tcp_flags, used. */
+	__ODP_FLOW_ATTR_MAX
 };
 
-/* Flags for ODP_FLOW. */
-#define ODPFF_ZERO_TCP_FLAGS (1 << 0) /* Zero the TCP flags. */
-
-struct odp_flow {
-    struct odp_flow_stats stats;
-    struct odp_flow_key key;
-    struct nlattr *actions;
-    uint32_t actions_len;
-    uint32_t flags;
-};
-
-/* Flags for ODP_FLOW_PUT. */
-#define ODPPF_CREATE        (1 << 0) /* Allow creating a new flow. */
-#define ODPPF_MODIFY        (1 << 1) /* Allow modifying an existing flow. */
-#define ODPPF_ZERO_STATS    (1 << 2) /* Zero the stats of an existing flow. */
-
-/* ODP_FLOW_PUT argument. */
-struct odp_flow_put {
-    struct odp_flow flow;
-    uint32_t flags;
-};
-
-struct odp_flowvec {
-    struct odp_flow *flows;
-    uint32_t n_flows;
-};
+#define ODP_FLOW_ATTR_MAX (__ODP_FLOW_ATTR_MAX - 1)
 
 /* Action types. */
 enum odp_action_type {
-    ODPAT_UNSPEC,
-    ODPAT_OUTPUT,		/* Output to switch port. */
-    ODPAT_CONTROLLER,		/* Send copy to controller. */
-    ODPAT_SET_DL_TCI,		/* Set the 802.1q TCI value. */
-    ODPAT_STRIP_VLAN,		/* Strip the 802.1q header. */
-    ODPAT_SET_DL_SRC,		/* Ethernet source address. */
-    ODPAT_SET_DL_DST,		/* Ethernet destination address. */
-    ODPAT_SET_NW_SRC,		/* IP source address. */
-    ODPAT_SET_NW_DST,		/* IP destination address. */
-    ODPAT_SET_NW_TOS,		/* IP ToS/DSCP field (6 bits). */
-    ODPAT_SET_TP_SRC,		/* TCP/UDP source port. */
-    ODPAT_SET_TP_DST,		/* TCP/UDP destination port. */
-    ODPAT_SET_TUNNEL,		/* Set the encapsulating tunnel ID. */
-    ODPAT_SET_PRIORITY,		/* Set skb->priority. */
-    ODPAT_POP_PRIORITY,		/* Restore original skb->priority. */
-    ODPAT_DROP_SPOOFED_ARP,	/* Drop ARPs with spoofed source MAC. */
-    __ODPAT_MAX
+	ODP_ACTION_ATTR_UNSPEC,
+	ODP_ACTION_ATTR_OUTPUT,	      /* Output to switch port. */
+	ODP_ACTION_ATTR_CONTROLLER,   /* Send copy to controller. */
+	ODP_ACTION_ATTR_SET_DL_TCI,   /* Set the 802.1q TCI value. */
+	ODP_ACTION_ATTR_STRIP_VLAN,   /* Strip the 802.1q header. */
+	ODP_ACTION_ATTR_SET_DL_SRC,   /* Ethernet source address. */
+	ODP_ACTION_ATTR_SET_DL_DST,   /* Ethernet destination address. */
+	ODP_ACTION_ATTR_SET_NW_SRC,   /* IPv4 source address. */
+	ODP_ACTION_ATTR_SET_NW_DST,   /* IPv4 destination address. */
+	ODP_ACTION_ATTR_SET_NW_TOS,   /* IP ToS/DSCP field (6 bits). */
+	ODP_ACTION_ATTR_SET_TP_SRC,   /* TCP/UDP source port. */
+	ODP_ACTION_ATTR_SET_TP_DST,   /* TCP/UDP destination port. */
+	ODP_ACTION_ATTR_SET_TUNNEL,   /* Set the encapsulating tunnel ID. */
+	ODP_ACTION_ATTR_SET_PRIORITY, /* Set skb->priority. */
+	ODP_ACTION_ATTR_POP_PRIORITY, /* Restore original skb->priority. */
+	ODP_ACTION_ATTR_DROP_SPOOFED_ARP, /* Drop ARPs with spoofed source MAC. */
+	__ODP_ACTION_ATTR_MAX
 };
 
-#define ODPAT_MAX (__ODPAT_MAX - 1)
-
-struct odp_execute {
-    struct nlattr *actions;
-    uint32_t actions_len;
-
-    const void *data;
-    uint32_t length;
-};
-
-#define VPORT_TYPE_SIZE     16
-struct odp_vport_add {
-    char port_type[VPORT_TYPE_SIZE];
-    char devname[16];           /* IFNAMSIZ */
-    void *config;
-};
-
-struct odp_vport_mod {
-    char devname[16];           /* IFNAMSIZ */
-    void *config;
-};
-
-struct odp_vport_stats_req {
-    char devname[16];           /* IFNAMSIZ */
-    struct rtnl_link_stats64 stats;
-};
-
-struct odp_vport_ether {
-    char devname[16];           /* IFNAMSIZ */
-    unsigned char ether_addr[6];
-};
-
-struct odp_vport_mtu {
-    char devname[16];           /* IFNAMSIZ */
-    uint16_t mtu;
-};
-
-/* Values below this cutoff are 802.3 packets and the two bytes
- * following MAC addresses are used as a frame length.  Otherwise, the
- * two bytes are used as the Ethernet type.
- */
-#define ODP_DL_TYPE_ETH2_CUTOFF   0x0600
-
-/* Value of dl_type to indicate that the frame does not include an
- * Ethernet type.
- */
-#define ODP_DL_TYPE_NOT_ETH_TYPE  0x05ff
+#define ODP_ACTION_ATTR_MAX (__ODP_ACTION_ATTR_MAX - 1)
 
 #endif  /* openvswitch/datapath-protocol.h */

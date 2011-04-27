@@ -1,9 +1,7 @@
 bin_PROGRAMS += \
 	utilities/ovs-appctl \
 	utilities/ovs-controller \
-	utilities/ovs-discover \
 	utilities/ovs-dpctl \
-	utilities/ovs-kill \
 	utilities/ovs-ofctl \
 	utilities/ovs-openflowd \
 	utilities/ovs-vsctl
@@ -19,9 +17,7 @@ noinst_SCRIPTS += utilities/ovs-pki-cgi utilities/ovs-parse-leaks
 EXTRA_DIST += \
 	utilities/ovs-appctl.8.in \
 	utilities/ovs-controller.8.in \
-	utilities/ovs-discover.8.in \
 	utilities/ovs-dpctl.8.in \
-	utilities/ovs-kill.8.in \
 	utilities/ovs-ofctl.8.in \
 	utilities/ovs-openflowd.8.in \
 	utilities/ovs-parse-leaks.8 \
@@ -31,17 +27,18 @@ EXTRA_DIST += \
 	utilities/ovs-pki-cgi.in \
 	utilities/ovs-pki.8.in \
 	utilities/ovs-pki.in \
+	utilities/ovs-save \
 	utilities/ovs-tcpundump.1.in \
 	utilities/ovs-tcpundump.in \
+	utilities/ovs-vlan-bugs.man \
 	utilities/ovs-vlan-test.in \
+	utilities/ovs-vlan-bug-workaround.8.in \
 	utilities/ovs-vlan-test.8.in \
 	utilities/ovs-vsctl.8.in
 DISTCLEANFILES += \
 	utilities/ovs-appctl.8 \
 	utilities/ovs-controller.8 \
-	utilities/ovs-discover.8 \
 	utilities/ovs-dpctl.8 \
-	utilities/ovs-kill.8 \
 	utilities/ovs-ofctl.8 \
 	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks \
@@ -54,20 +51,20 @@ DISTCLEANFILES += \
 	utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-test \
 	utilities/ovs-vlan-test.8 \
+	utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vsctl.8
 
 man_MANS += \
 	utilities/ovs-appctl.8 \
 	utilities/ovs-controller.8 \
-	utilities/ovs-discover.8 \
 	utilities/ovs-dpctl.8 \
-	utilities/ovs-kill.8 \
 	utilities/ovs-ofctl.8 \
 	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks.8 \
 	utilities/ovs-pcap.1 \
 	utilities/ovs-pki.8 \
 	utilities/ovs-tcpundump.1 \
+	utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
 
@@ -77,14 +74,8 @@ utilities_ovs_appctl_LDADD = lib/libopenvswitch.a
 utilities_ovs_controller_SOURCES = utilities/ovs-controller.c
 utilities_ovs_controller_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
-utilities_ovs_discover_SOURCES = utilities/ovs-discover.c
-utilities_ovs_discover_LDADD = lib/libopenvswitch.a
-
 utilities_ovs_dpctl_SOURCES = utilities/ovs-dpctl.c
 utilities_ovs_dpctl_LDADD = lib/libopenvswitch.a
-
-utilities_ovs_kill_SOURCES = utilities/ovs-kill.c
-utilities_ovs_kill_LDADD = lib/libopenvswitch.a
 
 utilities_ovs_ofctl_SOURCES = utilities/ovs-ofctl.c
 utilities_ovs_ofctl_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
@@ -100,6 +91,10 @@ utilities_ovs_vsctl_SOURCES = utilities/ovs-vsctl.c vswitchd/vswitch-idl.c
 utilities_ovs_vsctl_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 if HAVE_NETLINK
+sbin_PROGRAMS += utilities/ovs-vlan-bug-workaround
+utilities_ovs_vlan_bug_workaround_SOURCES = utilities/ovs-vlan-bug-workaround.c
+utilities_ovs_vlan_bug_workaround_LDADD = lib/libopenvswitch.a
+
 noinst_PROGRAMS += utilities/nlmon
 utilities_nlmon_SOURCES = utilities/nlmon.c
 utilities_nlmon_LDADD = lib/libopenvswitch.a

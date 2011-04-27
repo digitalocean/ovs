@@ -16,6 +16,9 @@ test, configure Open vSwitch to tag traffic originating from \fIvlan_ip\fR and
 forward it out the target interface. Then run the \fBovs\-vlan\-test\fR in
 client mode connecting to an \fBovs\-vlan\-test\fR server.
 \fBovs\-vlan\-test\fR will display "OK" if it did not detect problems.
+.PP
+Some examples of the types of problems that may be encountered are:
+.so utilities/ovs-vlan-bugs.man
 .
 .SS "Client Mode"
 An \fBovs\-vlan\-test\fR client may be run on a host to check for VLAN
@@ -58,19 +61,19 @@ Set up a bridge which forwards traffic originating from \fB1.2.3.4\fR out
 .IP
 .B \-\- set Interface vlan\-br\-tag type=internal
 .IP
-.B ifconfig vlan\-br\-tag up 5.6.7.8
+.B ifconfig vlan\-br\-tag up 1.2.3.4
 .
 .PP
 Run an \fBovs\-vlan\-test\fR server listening for client control traffic on
-5.6.7.8 port 80 and VLAN traffic on the default port of 1.2.3.0.
+172.16.0.142 port 8080 and VLAN traffic on the default port of 1.2.3.3.
 .IP
-.B ovs\-vlan\-test \-s 5.6.7.8:80 1.2.3.0
+.B ovs\-vlan\-test \-s 172.16.0.142:8080 1.2.3.3
 .
 .PP
-Run an \fBovs\-vlan\-test\fR client with a control server located at 5.6.7.8
-port 80 and a local VLAN ip of 1.2.3.4.
+Run an \fBovs\-vlan\-test\fR client with a control server located at
+172.16.0.142 port 8080 and a local VLAN ip of 1.2.3.4.
 .IP
-.B ovs\-vlan\-test 5.6.7.8:80 1.2.3.4
+.B ovs\-vlan\-test 172.16.0.142:8080 1.2.3.4
 .
 .TP
 

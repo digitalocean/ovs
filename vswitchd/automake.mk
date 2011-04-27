@@ -9,8 +9,6 @@ DISTCLEANFILES += \
 vswitchd_ovs_vswitchd_SOURCES = \
 	vswitchd/bridge.c \
 	vswitchd/bridge.h \
-	vswitchd/proc-net-compat.c \
-	vswitchd/proc-net-compat.h \
 	vswitchd/ovs-vswitchd.c \
 	vswitchd/system-stats.c \
 	vswitchd/system-stats.h \
@@ -102,6 +100,7 @@ vswitchd/vswitch.ovsschema.stamp: vswitchd/vswitch.ovsschema
 	  touch $@; \
 	else \
 	  ln=`sed -n '/"cksum":/=' $?`; \
-	  echo "$?:$$ln: checksum \"$$sum\" does not match (you should probably update the version number and fix the checksum)"; \
+	  echo >&2 "$?:$$ln: checksum \"$$sum\" does not match (you should probably update the version number and fix the checksum)"; \
+	  exit 1; \
 	fi
 CLEANFILES += vswitchd/vswitch.ovsschema.stamp

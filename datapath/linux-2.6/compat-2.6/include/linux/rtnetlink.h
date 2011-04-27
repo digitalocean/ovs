@@ -9,10 +9,10 @@
 static inline void rtnl_notify(struct sk_buff *skb, u32 pid, u32 group,
 			       struct nlmsghdr *nlh, gfp_t flags)
 {
-	BUG_ON(nlh);		/* not implemented */
+	BUG_ON(nlh != NULL);		/* not implemented */
 	if (group) {
 		/* errors reported via destination sk->sk_err */
-		nlmsg_multicast(rtnl, skb, 0, group);
+		nlmsg_multicast(rtnl, skb, 0, group, flags);
 	}
 }
 
@@ -53,19 +53,6 @@ static inline int lockdep_rtnl_is_held(void)
 	return 1;
 }
 #endif
-
-static inline int rcu_read_lock_held(void)
-{
-	return 1;
-}
-#endif
-
-#ifndef rcu_dereference_check
-#define rcu_dereference_check(p, c) rcu_dereference(p)
-#endif
-
-#ifndef rcu_dereference_protected
-#define rcu_dereference_protected(p, c) (p)
 #endif
 
 #ifndef rcu_dereference_rtnl

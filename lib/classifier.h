@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,6 +78,8 @@ void cls_rule_set_reg(struct cls_rule *, unsigned int reg_idx, uint32_t value);
 void cls_rule_set_reg_masked(struct cls_rule *, unsigned int reg_idx,
                              uint32_t value, uint32_t mask);
 void cls_rule_set_tun_id(struct cls_rule *, ovs_be64 tun_id);
+void cls_rule_set_tun_id_masked(struct cls_rule *,
+                                ovs_be64 tun_id, ovs_be64 mask);
 void cls_rule_set_in_port(struct cls_rule *, uint16_t odp_port);
 void cls_rule_set_dl_type(struct cls_rule *, ovs_be16);
 void cls_rule_set_dl_src(struct cls_rule *, const uint8_t[6]);
@@ -99,6 +101,15 @@ bool cls_rule_set_nw_dst_masked(struct cls_rule *, ovs_be32 ip, ovs_be32 mask);
 void cls_rule_set_nw_tos(struct cls_rule *, uint8_t);
 void cls_rule_set_icmp_type(struct cls_rule *, uint8_t);
 void cls_rule_set_icmp_code(struct cls_rule *, uint8_t);
+void cls_rule_set_arp_sha(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_arp_tha(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_ipv6_src(struct cls_rule *, const struct in6_addr *);
+bool cls_rule_set_ipv6_src_masked(struct cls_rule *, const struct in6_addr *,
+                                  const struct in6_addr *);
+void cls_rule_set_ipv6_dst(struct cls_rule *, const struct in6_addr *);
+bool cls_rule_set_ipv6_dst_masked(struct cls_rule *, const struct in6_addr *,
+                                  const struct in6_addr *);
+void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr);
 
 bool cls_rule_equal(const struct cls_rule *, const struct cls_rule *);
 

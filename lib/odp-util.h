@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,9 @@
 
 struct ds;
 struct flow;
+struct ofpbuf;
+
+#define ODPP_NONE ((uint16_t) -1)
 
 static inline uint16_t
 ofp_port_to_odp_port(uint16_t ofp_port)
@@ -55,30 +58,44 @@ odp_port_to_ofp_port(uint16_t odp_port)
     }
 }
 
-void format_odp_flow_key(struct ds *, const struct odp_flow_key *);
 int odp_action_len(uint16_t type);
 void format_odp_action(struct ds *, const struct nlattr *);
 void format_odp_actions(struct ds *, const struct nlattr *odp_actions,
                         size_t actions_len);
-void format_odp_flow_stats(struct ds *, const struct odp_flow_stats *);
-void format_odp_flow(struct ds *, const struct odp_flow *);
-void format_odp_port_type(struct ds *, const struct odp_port *);
 
-void odp_flow_key_from_flow(struct odp_flow_key *, const struct flow *);
-void odp_flow_key_to_flow(const struct odp_flow_key *, struct flow *);
+/* Upper bound on the length of a nlattr-formatted flow key.  The longest
+ * nlattr-formatted flow key would be:
+ *
+ *                         struct  pad  nl hdr  total
+ *                         ------  ---  ------  -----
+ *  ODP_KEY_ATTR_TUN_ID        8    --     4     12
+ *  ODP_KEY_ATTR_IN_PORT       4    --     4      8
+ *  ODP_KEY_ATTR_ETHERNET     12    --     4     16
+ *  ODP_KEY_ATTR_8021Q         4    --     4      8
+ *  ODP_KEY_ATTR_ETHERTYPE     2     2     4      8
+ *  ODP_KEY_ATTR_IPV6         34     2     4     40
+ *  ODP_KEY_ATTR_ICMPV6        2     2     4      8
+ *  ODP_KEY_ATTR_ND           28    --     4     32
+ *  -------------------------------------------------
+ *  total                                       132
+ */
+#define ODPUTIL_FLOW_KEY_BYTES 132
 
-static inline bool
-odp_flow_key_equal(const struct odp_flow_key *a, const struct odp_flow_key *b)
-{
-    return !memcmp(a, b, sizeof *a);
-}
+/* This is an imperfect sanity-check that ODPUTIL_FLOW_KEY_BYTES doesn't
+ * need to be updated, but will at least raise awareness when new ODP
+ * key types are added. */
+BUILD_ASSERT_DECL(__ODP_KEY_ATTR_MAX == 14);
 
-static inline size_t
-odp_flow_key_hash(const struct odp_flow_key *flow, uint32_t basis)
-{
-    BUILD_ASSERT_DECL(!(sizeof *flow % sizeof(uint32_t)));
-    return hash_words((const uint32_t *) flow,
-                      sizeof *flow / sizeof(uint32_t), basis);
-}
+/* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
+ * key.  An array of "struct nlattr" might not, in theory, be sufficiently
+ * aligned because it only contains 16-bit types. */
+struct odputil_keybuf {
+    uint32_t keybuf[DIV_ROUND_UP(ODPUTIL_FLOW_KEY_BYTES, 4)];
+};
+
+void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
+
+void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *);
+int odp_flow_key_to_flow(const struct nlattr *, size_t, struct flow *);
 
 #endif /* odp-util.h */

@@ -1001,6 +1001,7 @@ ovsrec_bridge_columns_init(void)
     c->name = "controller";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Controller";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -1076,6 +1077,7 @@ ovsrec_bridge_columns_init(void)
     c->name = "mirrors";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Mirror";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -1098,6 +1100,7 @@ ovsrec_bridge_columns_init(void)
     c->name = "netflow";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "NetFlow";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -1121,6 +1124,7 @@ ovsrec_bridge_columns_init(void)
     c->name = "ports";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Port";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -1132,6 +1136,7 @@ ovsrec_bridge_columns_init(void)
     c->name = "sflow";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "sFlow";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -1322,38 +1327,6 @@ ovsrec_controller_parse_controller_rate_limit(struct ovsdb_idl_row *row_, const 
 }
 
 static void
-ovsrec_controller_parse_discover_accept_regex(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->discover_accept_regex = datum->keys[0].string;
-    } else {
-        row->discover_accept_regex = NULL;
-    }
-}
-
-static void
-ovsrec_controller_parse_discover_update_resolv_conf(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
-    size_t n = MIN(1, datum->n);
-    size_t i;
-
-    assert(inited);
-    row->discover_update_resolv_conf = NULL;
-    row->n_discover_update_resolv_conf = 0;
-    for (i = 0; i < n; i++) {
-        if (!row->n_discover_update_resolv_conf) {
-            row->discover_update_resolv_conf = xmalloc(n * sizeof *row->discover_update_resolv_conf);
-        }
-        row->discover_update_resolv_conf[row->n_discover_update_resolv_conf] = datum->keys[i].boolean;
-        row->n_discover_update_resolv_conf++;
-    }
-}
-
-static void
 ovsrec_controller_parse_external_ids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_controller *row = ovsrec_controller_cast(row_);
@@ -1390,6 +1363,19 @@ ovsrec_controller_parse_inactivity_probe(struct ovsdb_idl_row *row_, const struc
         }
         row->inactivity_probe[row->n_inactivity_probe] = datum->keys[i].integer;
         row->n_inactivity_probe++;
+    }
+}
+
+static void
+ovsrec_controller_parse_is_connected(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->is_connected = datum->keys[0].boolean;
+    } else {
+        row->is_connected = false;
     }
 }
 
@@ -1452,6 +1438,40 @@ ovsrec_controller_parse_max_backoff(struct ovsdb_idl_row *row_, const struct ovs
 }
 
 static void
+ovsrec_controller_parse_role(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->role = datum->keys[0].string;
+    } else {
+        row->role = NULL;
+    }
+}
+
+static void
+ovsrec_controller_parse_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_status = NULL;
+    row->value_status = NULL;
+    row->n_status = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_status) {
+            row->key_status = xmalloc(datum->n * sizeof *row->key_status);
+            row->value_status = xmalloc(datum->n * sizeof *row->value_status);
+        }
+        row->key_status[row->n_status] = datum->keys[i].string;
+        row->value_status[row->n_status] = datum->values[i].string;
+        row->n_status++;
+    }
+}
+
+static void
 ovsrec_controller_parse_target(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_controller *row = ovsrec_controller_cast(row_);
@@ -1489,21 +1509,6 @@ ovsrec_controller_unparse_controller_rate_limit(struct ovsdb_idl_row *row_)
 }
 
 static void
-ovsrec_controller_unparse_discover_accept_regex(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-static void
-ovsrec_controller_unparse_discover_update_resolv_conf(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
-
-    assert(inited);
-    free(row->discover_update_resolv_conf);
-}
-
-static void
 ovsrec_controller_unparse_external_ids(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_controller *row = ovsrec_controller_cast(row_);
@@ -1520,6 +1525,12 @@ ovsrec_controller_unparse_inactivity_probe(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->inactivity_probe);
+}
+
+static void
+ovsrec_controller_unparse_is_connected(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
 }
 
 static void
@@ -1547,6 +1558,22 @@ ovsrec_controller_unparse_max_backoff(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->max_backoff);
+}
+
+static void
+ovsrec_controller_unparse_role(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+ovsrec_controller_unparse_status(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_controller *row = ovsrec_controller_cast(row_);
+
+    assert(inited);
+    free(row->key_status);
+    free(row->value_status);
 }
 
 static void
@@ -1602,20 +1629,6 @@ ovsrec_controller_verify_controller_rate_limit(const struct ovsrec_controller *r
 }
 
 void
-ovsrec_controller_verify_discover_accept_regex(const struct ovsrec_controller *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_DISCOVER_ACCEPT_REGEX]);
-}
-
-void
-ovsrec_controller_verify_discover_update_resolv_conf(const struct ovsrec_controller *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_DISCOVER_UPDATE_RESOLV_CONF]);
-}
-
-void
 ovsrec_controller_verify_external_ids(const struct ovsrec_controller *row)
 {
     assert(inited);
@@ -1627,6 +1640,13 @@ ovsrec_controller_verify_inactivity_probe(const struct ovsrec_controller *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_INACTIVITY_PROBE]);
+}
+
+void
+ovsrec_controller_verify_is_connected(const struct ovsrec_controller *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_IS_CONNECTED]);
 }
 
 void
@@ -1655,6 +1675,20 @@ ovsrec_controller_verify_max_backoff(const struct ovsrec_controller *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_MAX_BACKOFF]);
+}
+
+void
+ovsrec_controller_verify_role(const struct ovsrec_controller *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_ROLE]);
+}
+
+void
+ovsrec_controller_verify_status(const struct ovsrec_controller *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_STATUS]);
 }
 
 void
@@ -1733,52 +1767,6 @@ ovsrec_controller_get_controller_rate_limit(const struct ovsrec_controller *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_controller_rate_limit);
 }
 
-/* Returns the discover_accept_regex column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes discover_accept_regex's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_controller_get_discover_accept_regex(const struct ovsrec_controller *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_discover_accept_regex);
-}
-
-/* Returns the discover_update_resolv_conf column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_BOOLEAN.
- * (This helps to avoid silent bugs if someone changes discover_update_resolv_conf's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_controller_get_discover_update_resolv_conf(const struct ovsrec_controller *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_BOOLEAN);
-    return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_discover_update_resolv_conf);
-}
-
 /* Returns the external_ids column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -1826,6 +1814,29 @@ ovsrec_controller_get_inactivity_probe(const struct ovsrec_controller *row,
 {
     assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_inactivity_probe);
+}
+
+/* Returns the is_connected column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_BOOLEAN.
+ * (This helps to avoid silent bugs if someone changes is_connected's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_controller_get_is_connected(const struct ovsrec_controller *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_is_connected);
 }
 
 /* Returns the local_gateway column's value in 'row' as a struct ovsdb_datum.
@@ -1920,6 +1931,55 @@ ovsrec_controller_get_max_backoff(const struct ovsrec_controller *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_max_backoff);
 }
 
+/* Returns the role column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes role's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_controller_get_role(const struct ovsrec_controller *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_role);
+}
+
+/* Returns the status column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes status's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_controller_get_status(const struct ovsrec_controller *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_controller_col_status);
+}
+
 /* Returns the target column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -1996,41 +2056,6 @@ ovsrec_controller_set_controller_rate_limit(const struct ovsrec_controller *row,
 }
 
 void
-ovsrec_controller_set_discover_accept_regex(const struct ovsrec_controller *row, const char *discover_accept_regex)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    if (discover_accept_regex) {
-        datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].string = xstrdup(discover_accept_regex);
-    } else {
-        datum.n = 0;
-        datum.keys = NULL;
-    }
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_DISCOVER_ACCEPT_REGEX], &datum);
-}
-
-void
-ovsrec_controller_set_discover_update_resolv_conf(const struct ovsrec_controller *row, const bool *discover_update_resolv_conf, size_t n_discover_update_resolv_conf)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_discover_update_resolv_conf;
-    datum.keys = xmalloc(n_discover_update_resolv_conf * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_discover_update_resolv_conf; i++) {
-        datum.keys[i].boolean = discover_update_resolv_conf[i];
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_DISCOVER_UPDATE_RESOLV_CONF], &datum);
-}
-
-void
 ovsrec_controller_set_external_ids(const struct ovsrec_controller *row, char **key_external_ids, char **value_external_ids, size_t n_external_ids)
 {
     struct ovsdb_datum datum;
@@ -2063,6 +2088,19 @@ ovsrec_controller_set_inactivity_probe(const struct ovsrec_controller *row, cons
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
     ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_INACTIVITY_PROBE], &datum);
+}
+
+void
+ovsrec_controller_set_is_connected(const struct ovsrec_controller *row, bool is_connected)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    datum.n = 1;
+    datum.keys = xmalloc(sizeof *datum.keys);
+    datum.keys[0].boolean = is_connected;
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_IS_CONNECTED], &datum);
 }
 
 void
@@ -2137,6 +2175,42 @@ ovsrec_controller_set_max_backoff(const struct ovsrec_controller *row, const int
 }
 
 void
+ovsrec_controller_set_role(const struct ovsrec_controller *row, const char *role)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (role) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(role);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_ROLE], &datum);
+}
+
+void
+ovsrec_controller_set_status(const struct ovsrec_controller *row, char **key_status, char **value_status, size_t n_status)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_status;
+    datum.keys = xmalloc(n_status * sizeof *datum.keys);
+    datum.values = xmalloc(n_status * sizeof *datum.values);
+    for (i = 0; i < n_status; i++) {
+        datum.keys[i].string = xstrdup(key_status[i]);
+        datum.values[i].string = xstrdup(value_status[i]);
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_controller_columns[OVSREC_CONTROLLER_COL_STATUS], &datum);
+}
+
+void
 ovsrec_controller_set_target(const struct ovsrec_controller *row, const char *target)
 {
     struct ovsdb_datum datum;
@@ -2196,27 +2270,6 @@ ovsrec_controller_columns_init(void)
     c->parse = ovsrec_controller_parse_controller_rate_limit;
     c->unparse = ovsrec_controller_unparse_controller_rate_limit;
 
-    /* Initialize ovsrec_controller_col_discover_accept_regex. */
-    c = &ovsrec_controller_col_discover_accept_regex;
-    c->name = "discover_accept_regex";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_controller_parse_discover_accept_regex;
-    c->unparse = ovsrec_controller_unparse_discover_accept_regex;
-
-    /* Initialize ovsrec_controller_col_discover_update_resolv_conf. */
-    c = &ovsrec_controller_col_discover_update_resolv_conf;
-    c->name = "discover_update_resolv_conf";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_controller_parse_discover_update_resolv_conf;
-    c->unparse = ovsrec_controller_unparse_discover_update_resolv_conf;
-
     /* Initialize ovsrec_controller_col_external_ids. */
     c = &ovsrec_controller_col_external_ids;
     c->name = "external_ids";
@@ -2238,6 +2291,16 @@ ovsrec_controller_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_controller_parse_inactivity_probe;
     c->unparse = ovsrec_controller_unparse_inactivity_probe;
+
+    /* Initialize ovsrec_controller_col_is_connected. */
+    c = &ovsrec_controller_col_is_connected;
+    c->name = "is_connected";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 1;
+    c->type.n_max = 1;
+    c->parse = ovsrec_controller_parse_is_connected;
+    c->unparse = ovsrec_controller_unparse_is_connected;
 
     /* Initialize ovsrec_controller_col_local_gateway. */
     c = &ovsrec_controller_col_local_gateway;
@@ -2283,6 +2346,37 @@ ovsrec_controller_columns_init(void)
     c->parse = ovsrec_controller_parse_max_backoff;
     c->unparse = ovsrec_controller_unparse_max_backoff;
 
+    /* Initialize ovsrec_controller_col_role. */
+    c = &ovsrec_controller_col_role;
+    c->name = "role";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 3;
+    c->type.key.enum_->keys = xmalloc(3 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("master");
+    c->type.key.enum_->keys[1].string = xstrdup("other");
+    c->type.key.enum_->keys[2].string = xstrdup("slave");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_controller_parse_role;
+    c->unparse = ovsrec_controller_unparse_role;
+
+    /* Initialize ovsrec_controller_col_status. */
+    c = &ovsrec_controller_col_status;
+    c->name = "status";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_controller_parse_status;
+    c->unparse = ovsrec_controller_unparse_status;
+
     /* Initialize ovsrec_controller_col_target. */
     c = &ovsrec_controller_col_target;
     c->name = "target";
@@ -2296,6 +2390,32 @@ ovsrec_controller_columns_init(void)
 }
 
 /* Interface table. */
+
+static void
+ovsrec_interface_parse_admin_state(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->admin_state = datum->keys[0].string;
+    } else {
+        row->admin_state = NULL;
+    }
+}
+
+static void
+ovsrec_interface_parse_duplex(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->duplex = datum->keys[0].string;
+    } else {
+        row->duplex = NULL;
+    }
+}
 
 static void
 ovsrec_interface_parse_external_ids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
@@ -2345,6 +2465,38 @@ ovsrec_interface_parse_ingress_policing_rate(struct ovsdb_idl_row *row_, const s
 }
 
 static void
+ovsrec_interface_parse_link_speed(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->link_speed = NULL;
+    row->n_link_speed = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_link_speed) {
+            row->link_speed = xmalloc(n * sizeof *row->link_speed);
+        }
+        row->link_speed[row->n_link_speed] = datum->keys[i].integer;
+        row->n_link_speed++;
+    }
+}
+
+static void
+ovsrec_interface_parse_link_state(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->link_state = datum->keys[0].string;
+    } else {
+        row->link_state = NULL;
+    }
+}
+
+static void
 ovsrec_interface_parse_mac(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2367,6 +2519,25 @@ ovsrec_interface_parse_monitor(struct ovsdb_idl_row *row_, const struct ovsdb_da
         row->monitor = ovsrec_monitor_cast(ovsdb_idl_get_row_arc(row_, &ovsrec_table_classes[OVSREC_TABLE_MONITOR], &datum->keys[0].uuid));
     } else {
         row->monitor = NULL;
+    }
+}
+
+static void
+ovsrec_interface_parse_mtu(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->mtu = NULL;
+    row->n_mtu = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_mtu) {
+            row->mtu = xmalloc(n * sizeof *row->mtu);
+        }
+        row->mtu[row->n_mtu] = datum->keys[i].integer;
+        row->n_mtu++;
     }
 }
 
@@ -2500,6 +2671,18 @@ ovsrec_interface_parse_type(struct ovsdb_idl_row *row_, const struct ovsdb_datum
 }
 
 static void
+ovsrec_interface_unparse_admin_state(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+ovsrec_interface_unparse_duplex(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_interface_unparse_external_ids(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2522,6 +2705,21 @@ ovsrec_interface_unparse_ingress_policing_rate(struct ovsdb_idl_row *row OVS_UNU
 }
 
 static void
+ovsrec_interface_unparse_link_speed(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    free(row->link_speed);
+}
+
+static void
+ovsrec_interface_unparse_link_state(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_interface_unparse_mac(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -2531,6 +2729,15 @@ static void
 ovsrec_interface_unparse_monitor(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
+}
+
+static void
+ovsrec_interface_unparse_mtu(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    free(row->mtu);
 }
 
 static void
@@ -2620,6 +2827,20 @@ ovsrec_interface_insert(struct ovsdb_idl_txn *txn)
 
 
 void
+ovsrec_interface_verify_admin_state(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_ADMIN_STATE]);
+}
+
+void
+ovsrec_interface_verify_duplex(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_DUPLEX]);
+}
+
+void
 ovsrec_interface_verify_external_ids(const struct ovsrec_interface *row)
 {
     assert(inited);
@@ -2641,6 +2862,20 @@ ovsrec_interface_verify_ingress_policing_rate(const struct ovsrec_interface *row
 }
 
 void
+ovsrec_interface_verify_link_speed(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_SPEED]);
+}
+
+void
+ovsrec_interface_verify_link_state(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_STATE]);
+}
+
+void
 ovsrec_interface_verify_mac(const struct ovsrec_interface *row)
 {
     assert(inited);
@@ -2652,6 +2887,13 @@ ovsrec_interface_verify_monitor(const struct ovsrec_interface *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MONITOR]);
+}
+
+void
+ovsrec_interface_verify_mtu(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MTU]);
 }
 
 void
@@ -2701,6 +2943,52 @@ ovsrec_interface_verify_type(const struct ovsrec_interface *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_TYPE]);
+}
+
+/* Returns the admin_state column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes admin_state's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_admin_state(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_admin_state);
+}
+
+/* Returns the duplex column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes duplex's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_duplex(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_duplex);
 }
 
 /* Returns the external_ids column's value in 'row' as a struct ovsdb_datum.
@@ -2775,6 +3063,52 @@ ovsrec_interface_get_ingress_policing_rate(const struct ovsrec_interface *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_ingress_policing_rate);
 }
 
+/* Returns the link_speed column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes link_speed's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_link_speed(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_link_speed);
+}
+
+/* Returns the link_state column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes link_state's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_link_state(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_link_state);
+}
+
 /* Returns the mac column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -2819,6 +3153,29 @@ ovsrec_interface_get_monitor(const struct ovsrec_interface *row,
 {
     assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_monitor);
+}
+
+/* Returns the mtu column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes mtu's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_mtu(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_mtu);
 }
 
 /* Returns the name column's value in 'row' as a struct ovsdb_datum.
@@ -2995,6 +3352,42 @@ ovsrec_interface_get_type(const struct ovsrec_interface *row,
 }
 
 void
+ovsrec_interface_set_admin_state(const struct ovsrec_interface *row, const char *admin_state)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (admin_state) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(admin_state);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_ADMIN_STATE], &datum);
+}
+
+void
+ovsrec_interface_set_duplex(const struct ovsrec_interface *row, const char *duplex)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (duplex) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(duplex);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_DUPLEX], &datum);
+}
+
+void
 ovsrec_interface_set_external_ids(const struct ovsrec_interface *row, char **key_external_ids, char **value_external_ids, size_t n_external_ids)
 {
     struct ovsdb_datum datum;
@@ -3039,6 +3432,41 @@ ovsrec_interface_set_ingress_policing_rate(const struct ovsrec_interface *row, i
 }
 
 void
+ovsrec_interface_set_link_speed(const struct ovsrec_interface *row, const int64_t *link_speed, size_t n_link_speed)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_link_speed;
+    datum.keys = xmalloc(n_link_speed * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_link_speed; i++) {
+        datum.keys[i].integer = link_speed[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_SPEED], &datum);
+}
+
+void
+ovsrec_interface_set_link_state(const struct ovsrec_interface *row, const char *link_state)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (link_state) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(link_state);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_STATE], &datum);
+}
+
+void
 ovsrec_interface_set_mac(const struct ovsrec_interface *row, const char *mac)
 {
     struct ovsdb_datum datum;
@@ -3072,6 +3500,23 @@ ovsrec_interface_set_monitor(const struct ovsrec_interface *row, const struct ov
     }
     datum.values = NULL;
     ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MONITOR], &datum);
+}
+
+void
+ovsrec_interface_set_mtu(const struct ovsrec_interface *row, const int64_t *mtu, size_t n_mtu)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_mtu;
+    datum.keys = xmalloc(n_mtu * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_mtu; i++) {
+        datum.keys[i].integer = mtu[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MTU], &datum);
 }
 
 void
@@ -3196,6 +3641,42 @@ ovsrec_interface_columns_init(void)
 {
     struct ovsdb_idl_column *c;
 
+    /* Initialize ovsrec_interface_col_admin_state. */
+    c = &ovsrec_interface_col_admin_state;
+    c->name = "admin_state";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 2;
+    c->type.key.enum_->keys = xmalloc(2 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("down");
+    c->type.key.enum_->keys[1].string = xstrdup("up");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_admin_state;
+    c->unparse = ovsrec_interface_unparse_admin_state;
+
+    /* Initialize ovsrec_interface_col_duplex. */
+    c = &ovsrec_interface_col_duplex;
+    c->name = "duplex";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 2;
+    c->type.key.enum_->keys = xmalloc(2 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("full");
+    c->type.key.enum_->keys[1].string = xstrdup("half");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_duplex;
+    c->unparse = ovsrec_interface_unparse_duplex;
+
     /* Initialize ovsrec_interface_col_external_ids. */
     c = &ovsrec_interface_col_external_ids;
     c->name = "external_ids";
@@ -3230,6 +3711,34 @@ ovsrec_interface_columns_init(void)
     c->parse = ovsrec_interface_parse_ingress_policing_rate;
     c->unparse = ovsrec_interface_unparse_ingress_policing_rate;
 
+    /* Initialize ovsrec_interface_col_link_speed. */
+    c = &ovsrec_interface_col_link_speed;
+    c->name = "link_speed";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_link_speed;
+    c->unparse = ovsrec_interface_unparse_link_speed;
+
+    /* Initialize ovsrec_interface_col_link_state. */
+    c = &ovsrec_interface_col_link_state;
+    c->name = "link_state";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 2;
+    c->type.key.enum_->keys = xmalloc(2 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("down");
+    c->type.key.enum_->keys[1].string = xstrdup("up");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_link_state;
+    c->unparse = ovsrec_interface_unparse_link_state;
+
     /* Initialize ovsrec_interface_col_mac. */
     c = &ovsrec_interface_col_mac;
     c->name = "mac";
@@ -3246,11 +3755,22 @@ ovsrec_interface_columns_init(void)
     c->name = "monitor";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Monitor";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
     c->parse = ovsrec_interface_parse_monitor;
     c->unparse = ovsrec_interface_unparse_monitor;
+
+    /* Initialize ovsrec_interface_col_mtu. */
+    c = &ovsrec_interface_col_mtu;
+    c->name = "mtu";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_mtu;
+    c->unparse = ovsrec_interface_unparse_mtu;
 
     /* Initialize ovsrec_interface_col_name. */
     c = &ovsrec_interface_col_name;
@@ -3582,6 +4102,19 @@ ovsrec_manager_parse_inactivity_probe(struct ovsdb_idl_row *row_, const struct o
 }
 
 static void
+ovsrec_manager_parse_is_connected(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_manager *row = ovsrec_manager_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->is_connected = datum->keys[0].boolean;
+    } else {
+        row->is_connected = false;
+    }
+}
+
+static void
 ovsrec_manager_parse_max_backoff(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_manager *row = ovsrec_manager_cast(row_);
@@ -3597,6 +4130,27 @@ ovsrec_manager_parse_max_backoff(struct ovsdb_idl_row *row_, const struct ovsdb_
         }
         row->max_backoff[row->n_max_backoff] = datum->keys[i].integer;
         row->n_max_backoff++;
+    }
+}
+
+static void
+ovsrec_manager_parse_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_manager *row = ovsrec_manager_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_status = NULL;
+    row->value_status = NULL;
+    row->n_status = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_status) {
+            row->key_status = xmalloc(datum->n * sizeof *row->key_status);
+            row->value_status = xmalloc(datum->n * sizeof *row->value_status);
+        }
+        row->key_status[row->n_status] = datum->keys[i].string;
+        row->value_status[row->n_status] = datum->values[i].string;
+        row->n_status++;
     }
 }
 
@@ -3639,12 +4193,28 @@ ovsrec_manager_unparse_inactivity_probe(struct ovsdb_idl_row *row_)
 }
 
 static void
+ovsrec_manager_unparse_is_connected(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_manager_unparse_max_backoff(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_manager *row = ovsrec_manager_cast(row_);
 
     assert(inited);
     free(row->max_backoff);
+}
+
+static void
+ovsrec_manager_unparse_status(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_manager *row = ovsrec_manager_cast(row_);
+
+    assert(inited);
+    free(row->key_status);
+    free(row->value_status);
 }
 
 static void
@@ -3700,10 +4270,24 @@ ovsrec_manager_verify_inactivity_probe(const struct ovsrec_manager *row)
 }
 
 void
+ovsrec_manager_verify_is_connected(const struct ovsrec_manager *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_IS_CONNECTED]);
+}
+
+void
 ovsrec_manager_verify_max_backoff(const struct ovsrec_manager *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_MAX_BACKOFF]);
+}
+
+void
+ovsrec_manager_verify_status(const struct ovsrec_manager *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_STATUS]);
 }
 
 void
@@ -3785,6 +4369,29 @@ ovsrec_manager_get_inactivity_probe(const struct ovsrec_manager *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_manager_col_inactivity_probe);
 }
 
+/* Returns the is_connected column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_BOOLEAN.
+ * (This helps to avoid silent bugs if someone changes is_connected's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_manager_get_is_connected(const struct ovsrec_manager *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    return ovsdb_idl_read(&row->header_, &ovsrec_manager_col_is_connected);
+}
+
 /* Returns the max_backoff column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -3806,6 +4413,32 @@ ovsrec_manager_get_max_backoff(const struct ovsrec_manager *row,
 {
     assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &ovsrec_manager_col_max_backoff);
+}
+
+/* Returns the status column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes status's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_manager_get_status(const struct ovsrec_manager *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_manager_col_status);
 }
 
 /* Returns the target column's value in 'row' as a struct ovsdb_datum.
@@ -3885,6 +4518,19 @@ ovsrec_manager_set_inactivity_probe(const struct ovsrec_manager *row, const int6
 }
 
 void
+ovsrec_manager_set_is_connected(const struct ovsrec_manager *row, bool is_connected)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    datum.n = 1;
+    datum.keys = xmalloc(sizeof *datum.keys);
+    datum.keys[0].boolean = is_connected;
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_IS_CONNECTED], &datum);
+}
+
+void
 ovsrec_manager_set_max_backoff(const struct ovsrec_manager *row, const int64_t *max_backoff, size_t n_max_backoff)
 {
     struct ovsdb_datum datum;
@@ -3899,6 +4545,24 @@ ovsrec_manager_set_max_backoff(const struct ovsrec_manager *row, const int64_t *
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
     ovsdb_idl_txn_write(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_MAX_BACKOFF], &datum);
+}
+
+void
+ovsrec_manager_set_status(const struct ovsrec_manager *row, char **key_status, char **value_status, size_t n_status)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_status;
+    datum.keys = xmalloc(n_status * sizeof *datum.keys);
+    datum.values = xmalloc(n_status * sizeof *datum.values);
+    for (i = 0; i < n_status; i++) {
+        datum.keys[i].string = xstrdup(key_status[i]);
+        datum.values[i].string = xstrdup(value_status[i]);
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_manager_columns[OVSREC_MANAGER_COL_STATUS], &datum);
 }
 
 void
@@ -3961,6 +4625,16 @@ ovsrec_manager_columns_init(void)
     c->parse = ovsrec_manager_parse_inactivity_probe;
     c->unparse = ovsrec_manager_unparse_inactivity_probe;
 
+    /* Initialize ovsrec_manager_col_is_connected. */
+    c = &ovsrec_manager_col_is_connected;
+    c->name = "is_connected";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 1;
+    c->type.n_max = 1;
+    c->parse = ovsrec_manager_parse_is_connected;
+    c->unparse = ovsrec_manager_unparse_is_connected;
+
     /* Initialize ovsrec_manager_col_max_backoff. */
     c = &ovsrec_manager_col_max_backoff;
     c->name = "max_backoff";
@@ -3971,6 +4645,18 @@ ovsrec_manager_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_manager_parse_max_backoff;
     c->unparse = ovsrec_manager_unparse_max_backoff;
+
+    /* Initialize ovsrec_manager_col_status. */
+    c = &ovsrec_manager_col_status;
+    c->name = "status";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_manager_parse_status;
+    c->unparse = ovsrec_manager_unparse_status;
 
     /* Initialize ovsrec_manager_col_target. */
     c = &ovsrec_manager_col_target;
@@ -4623,6 +5309,7 @@ ovsrec_mirror_columns_init(void)
     c->name = "output_port";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Port";
+    c->type.key.u.uuid.refType = OVSDB_REF_WEAK;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -4656,6 +5343,7 @@ ovsrec_mirror_columns_init(void)
     c->name = "select_dst_port";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Port";
+    c->type.key.u.uuid.refType = OVSDB_REF_WEAK;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -4667,6 +5355,7 @@ ovsrec_mirror_columns_init(void)
     c->name = "select_src_port";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Port";
+    c->type.key.u.uuid.refType = OVSDB_REF_WEAK;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -4787,42 +5476,6 @@ ovsrec_monitor_parse_remote_mps(struct ovsdb_idl_row *row_, const struct ovsdb_d
 }
 
 static void
-ovsrec_monitor_parse_unexpected_remote_maids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-    size_t i;
-
-    assert(inited);
-    row->unexpected_remote_maids = NULL;
-    row->n_unexpected_remote_maids = 0;
-    for (i = 0; i < datum->n; i++) {
-        if (!row->n_unexpected_remote_maids) {
-            row->unexpected_remote_maids = xmalloc(datum->n * sizeof *row->unexpected_remote_maids);
-        }
-        row->unexpected_remote_maids[row->n_unexpected_remote_maids] = datum->keys[i].string;
-        row->n_unexpected_remote_maids++;
-    }
-}
-
-static void
-ovsrec_monitor_parse_unexpected_remote_mpids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-    size_t i;
-
-    assert(inited);
-    row->unexpected_remote_mpids = NULL;
-    row->n_unexpected_remote_mpids = 0;
-    for (i = 0; i < datum->n; i++) {
-        if (!row->n_unexpected_remote_mpids) {
-            row->unexpected_remote_mpids = xmalloc(datum->n * sizeof *row->unexpected_remote_mpids);
-        }
-        row->unexpected_remote_mpids[row->n_unexpected_remote_mpids] = datum->keys[i].integer;
-        row->n_unexpected_remote_mpids++;
-    }
-}
-
-static void
 ovsrec_monitor_unparse_fault(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
@@ -4865,24 +5518,6 @@ ovsrec_monitor_unparse_remote_mps(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->remote_mps);
-}
-
-static void
-ovsrec_monitor_unparse_unexpected_remote_maids(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    free(row->unexpected_remote_maids);
-}
-
-static void
-ovsrec_monitor_unparse_unexpected_remote_mpids(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    free(row->unexpected_remote_mpids);
 }
 
 const struct ovsrec_monitor *
@@ -4950,20 +5585,6 @@ ovsrec_monitor_verify_remote_mps(const struct ovsrec_monitor *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_REMOTE_MPS]);
-}
-
-void
-ovsrec_monitor_verify_unexpected_remote_maids(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_UNEXPECTED_REMOTE_MAIDS]);
-}
-
-void
-ovsrec_monitor_verify_unexpected_remote_mpids(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_UNEXPECTED_REMOTE_MPIDS]);
 }
 
 /* Returns the fault column's value in 'row' as a struct ovsdb_datum.
@@ -5104,52 +5725,6 @@ ovsrec_monitor_get_remote_mps(const struct ovsrec_monitor *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_remote_mps);
 }
 
-/* Returns the unexpected_remote_maids column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes unexpected_remote_maids's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_unexpected_remote_maids(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_unexpected_remote_maids);
-}
-
-/* Returns the unexpected_remote_mpids column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_INTEGER.
- * (This helps to avoid silent bugs if someone changes unexpected_remote_mpids's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_unexpected_remote_mpids(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_INTEGER);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_unexpected_remote_mpids);
-}
-
 void
 ovsrec_monitor_set_fault(const struct ovsrec_monitor *row, const bool *fault, size_t n_fault)
 {
@@ -5250,40 +5825,6 @@ ovsrec_monitor_set_remote_mps(const struct ovsrec_monitor *row, struct ovsrec_ma
     ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_REMOTE_MPS], &datum);
 }
 
-void
-ovsrec_monitor_set_unexpected_remote_maids(const struct ovsrec_monitor *row, char **unexpected_remote_maids, size_t n_unexpected_remote_maids)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_unexpected_remote_maids;
-    datum.keys = xmalloc(n_unexpected_remote_maids * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_unexpected_remote_maids; i++) {
-        datum.keys[i].string = xstrdup(unexpected_remote_maids[i]);
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_UNEXPECTED_REMOTE_MAIDS], &datum);
-}
-
-void
-ovsrec_monitor_set_unexpected_remote_mpids(const struct ovsrec_monitor *row, const int64_t *unexpected_remote_mpids, size_t n_unexpected_remote_mpids)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_unexpected_remote_mpids;
-    datum.keys = xmalloc(n_unexpected_remote_mpids * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_unexpected_remote_mpids; i++) {
-        datum.keys[i].integer = unexpected_remote_mpids[i];
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_UNEXPECTED_REMOTE_MPIDS], &datum);
-}
-
 struct ovsdb_idl_column ovsrec_monitor_columns[OVSREC_MONITOR_N_COLUMNS];
 
 static void
@@ -5353,32 +5894,12 @@ ovsrec_monitor_columns_init(void)
     c->name = "remote_mps";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Maintenance_Point";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_monitor_parse_remote_mps;
     c->unparse = ovsrec_monitor_unparse_remote_mps;
-
-    /* Initialize ovsrec_monitor_col_unexpected_remote_maids. */
-    c = &ovsrec_monitor_col_unexpected_remote_maids;
-    c->name = "unexpected_remote_maids";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->parse = ovsrec_monitor_parse_unexpected_remote_maids;
-    c->unparse = ovsrec_monitor_unparse_unexpected_remote_maids;
-
-    /* Initialize ovsrec_monitor_col_unexpected_remote_mpids. */
-    c = &ovsrec_monitor_col_unexpected_remote_mpids;
-    c->name = "unexpected_remote_mpids";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->parse = ovsrec_monitor_parse_unexpected_remote_mpids;
-    c->unparse = ovsrec_monitor_unparse_unexpected_remote_mpids;
 }
 
 /* NetFlow table. */
@@ -6030,24 +6551,6 @@ ovsrec_open_vswitch_parse_manager_options(struct ovsdb_idl_row *row_, const stru
 }
 
 static void
-ovsrec_open_vswitch_parse_managers(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
-    size_t i;
-
-    assert(inited);
-    row->managers = NULL;
-    row->n_managers = 0;
-    for (i = 0; i < datum->n; i++) {
-        if (!row->n_managers) {
-            row->managers = xmalloc(datum->n * sizeof *row->managers);
-        }
-        row->managers[row->n_managers] = datum->keys[i].string;
-        row->n_managers++;
-    }
-}
-
-static void
 ovsrec_open_vswitch_parse_next_cfg(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
@@ -6184,15 +6687,6 @@ ovsrec_open_vswitch_unparse_manager_options(struct ovsdb_idl_row *row_)
 }
 
 static void
-ovsrec_open_vswitch_unparse_managers(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
-
-    assert(inited);
-    free(row->managers);
-}
-
-static void
 ovsrec_open_vswitch_unparse_next_cfg(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -6297,13 +6791,6 @@ ovsrec_open_vswitch_verify_manager_options(const struct ovsrec_open_vswitch *row
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_MANAGER_OPTIONS]);
-}
-
-void
-ovsrec_open_vswitch_verify_managers(const struct ovsrec_open_vswitch *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_MANAGERS]);
 }
 
 void
@@ -6490,29 +6977,6 @@ ovsrec_open_vswitch_get_manager_options(const struct ovsrec_open_vswitch *row,
 {
     assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &ovsrec_open_vswitch_col_manager_options);
-}
-
-/* Returns the managers column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes managers's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_open_vswitch_get_managers(const struct ovsrec_open_vswitch *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_open_vswitch_col_managers);
 }
 
 /* Returns the next_cfg column's value in 'row' as a struct ovsdb_datum.
@@ -6758,23 +7222,6 @@ ovsrec_open_vswitch_set_manager_options(const struct ovsrec_open_vswitch *row, s
 }
 
 void
-ovsrec_open_vswitch_set_managers(const struct ovsrec_open_vswitch *row, char **managers, size_t n_managers)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_managers;
-    datum.keys = xmalloc(n_managers * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_managers; i++) {
-        datum.keys[i].string = xstrdup(managers[i]);
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_MANAGERS], &datum);
-}
-
-void
 ovsrec_open_vswitch_set_next_cfg(const struct ovsrec_open_vswitch *row, int64_t next_cfg)
 {
     struct ovsdb_datum datum;
@@ -6889,6 +7336,7 @@ ovsrec_open_vswitch_columns_init(void)
     c->name = "bridges";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Bridge";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
@@ -6902,6 +7350,7 @@ ovsrec_open_vswitch_columns_init(void)
     c->type.key.u.string.minLen = 0;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_UUID);
     c->type.value.u.uuid.refTableName = "Capability";
+    c->type.value.u.uuid.refType = OVSDB_REF_STRONG;
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_open_vswitch_parse_capabilities;
@@ -6945,22 +7394,12 @@ ovsrec_open_vswitch_columns_init(void)
     c->name = "manager_options";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Manager";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_open_vswitch_parse_manager_options;
     c->unparse = ovsrec_open_vswitch_unparse_manager_options;
-
-    /* Initialize ovsrec_open_vswitch_col_managers. */
-    c = &ovsrec_open_vswitch_col_managers;
-    c->name = "managers";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->parse = ovsrec_open_vswitch_parse_managers;
-    c->unparse = ovsrec_open_vswitch_unparse_managers;
 
     /* Initialize ovsrec_open_vswitch_col_next_cfg. */
     c = &ovsrec_open_vswitch_col_next_cfg;
@@ -6988,6 +7427,7 @@ ovsrec_open_vswitch_columns_init(void)
     c->name = "ssl";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "SSL";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -7058,15 +7498,15 @@ ovsrec_port_parse_bond_fake_iface(struct ovsdb_idl_row *row_, const struct ovsdb
 }
 
 static void
-ovsrec_port_parse_bond_type(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+ovsrec_port_parse_bond_mode(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_port *row = ovsrec_port_cast(row_);
 
     assert(inited);
     if (datum->n >= 1) {
-        row->bond_type = datum->keys[0].string;
+        row->bond_mode = datum->keys[0].string;
     } else {
-        row->bond_type = NULL;
+        row->bond_mode = NULL;
     }
 }
 
@@ -7135,6 +7575,19 @@ ovsrec_port_parse_interfaces(struct ovsdb_idl_row *row_, const struct ovsdb_datu
             row->interfaces[row->n_interfaces] = keyRow;
             row->n_interfaces++;
         }
+    }
+}
+
+static void
+ovsrec_port_parse_lacp(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->lacp = datum->keys[0].string;
+    } else {
+        row->lacp = NULL;
     }
 }
 
@@ -7249,7 +7702,7 @@ ovsrec_port_unparse_bond_fake_iface(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
-ovsrec_port_unparse_bond_type(struct ovsdb_idl_row *row OVS_UNUSED)
+ovsrec_port_unparse_bond_mode(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
 }
@@ -7283,6 +7736,12 @@ ovsrec_port_unparse_interfaces(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->interfaces);
+}
+
+static void
+ovsrec_port_unparse_lacp(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
 }
 
 static void
@@ -7371,10 +7830,10 @@ ovsrec_port_verify_bond_fake_iface(const struct ovsrec_port *row)
 }
 
 void
-ovsrec_port_verify_bond_type(const struct ovsrec_port *row)
+ovsrec_port_verify_bond_mode(const struct ovsrec_port *row)
 {
     assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_TYPE]);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_MODE]);
 }
 
 void
@@ -7403,6 +7862,13 @@ ovsrec_port_verify_interfaces(const struct ovsrec_port *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_INTERFACES]);
+}
+
+void
+ovsrec_port_verify_lacp(const struct ovsrec_port *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_LACP]);
 }
 
 void
@@ -7493,13 +7959,13 @@ ovsrec_port_get_bond_fake_iface(const struct ovsrec_port *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_fake_iface);
 }
 
-/* Returns the bond_type column's value in 'row' as a struct ovsdb_datum.
+/* Returns the bond_mode column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
  * the same operation on the "cooked" form in 'row'.
  *
  * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes bond_type's
+ * (This helps to avoid silent bugs if someone changes bond_mode's
  * type without updating the caller.)
  *
  * The caller must not modify or free the returned value.
@@ -7509,11 +7975,11 @@ ovsrec_port_get_bond_fake_iface(const struct ovsrec_port *row,
  * If the returned value is needed for a long time, it is best to make a copy
  * of it with ovsdb_datum_clone(). */
 const struct ovsdb_datum *
-ovsrec_port_get_bond_type(const struct ovsrec_port *row,
+ovsrec_port_get_bond_mode(const struct ovsrec_port *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
     assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_type);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_mode);
 }
 
 /* Returns the bond_updelay column's value in 'row' as a struct ovsdb_datum.
@@ -7609,6 +8075,29 @@ ovsrec_port_get_interfaces(const struct ovsrec_port *row,
 {
     assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &ovsrec_port_col_interfaces);
+}
+
+/* Returns the lacp column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes lacp's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_lacp(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_lacp);
 }
 
 /* Returns the mac column's value in 'row' as a struct ovsdb_datum.
@@ -7779,21 +8268,21 @@ ovsrec_port_set_bond_fake_iface(const struct ovsrec_port *row, bool bond_fake_if
 }
 
 void
-ovsrec_port_set_bond_type(const struct ovsrec_port *row, const char *bond_type)
+ovsrec_port_set_bond_mode(const struct ovsrec_port *row, const char *bond_mode)
 {
     struct ovsdb_datum datum;
 
     assert(inited);
-    if (bond_type) {
+    if (bond_mode) {
         datum.n = 1;
         datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].string = xstrdup(bond_type);
+        datum.keys[0].string = xstrdup(bond_mode);
     } else {
         datum.n = 0;
         datum.keys = NULL;
     }
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_TYPE], &datum);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_MODE], &datum);
 }
 
 void
@@ -7855,6 +8344,24 @@ ovsrec_port_set_interfaces(const struct ovsrec_port *row, struct ovsrec_interfac
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_UUID, OVSDB_TYPE_VOID);
     ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_INTERFACES], &datum);
+}
+
+void
+ovsrec_port_set_lacp(const struct ovsrec_port *row, const char *lacp)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (lacp) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(lacp);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_LACP], &datum);
 }
 
 void
@@ -7985,23 +8492,24 @@ ovsrec_port_columns_init(void)
     c->parse = ovsrec_port_parse_bond_fake_iface;
     c->unparse = ovsrec_port_unparse_bond_fake_iface;
 
-    /* Initialize ovsrec_port_col_bond_type. */
-    c = &ovsrec_port_col_bond_type;
-    c->name = "bond_type";
+    /* Initialize ovsrec_port_col_bond_mode. */
+    c = &ovsrec_port_col_bond_mode;
+    c->name = "bond_mode";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
-    c->type.key.enum_->n = 2;
-    c->type.key.enum_->keys = xmalloc(2 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->n = 3;
+    c->type.key.enum_->keys = xmalloc(3 * sizeof *c->type.key.enum_->keys);
     c->type.key.enum_->keys[0].string = xstrdup("active-backup");
-    c->type.key.enum_->keys[1].string = xstrdup("slb");
+    c->type.key.enum_->keys[1].string = xstrdup("balance-slb");
+    c->type.key.enum_->keys[2].string = xstrdup("balance-tcp");
     c->type.key.enum_->values = NULL;
     ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
-    c->parse = ovsrec_port_parse_bond_type;
-    c->unparse = ovsrec_port_unparse_bond_type;
+    c->parse = ovsrec_port_parse_bond_mode;
+    c->unparse = ovsrec_port_unparse_bond_mode;
 
     /* Initialize ovsrec_port_col_bond_updelay. */
     c = &ovsrec_port_col_bond_updelay;
@@ -8040,11 +8548,31 @@ ovsrec_port_columns_init(void)
     c->name = "interfaces";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "Interface";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_port_parse_interfaces;
     c->unparse = ovsrec_port_unparse_interfaces;
+
+    /* Initialize ovsrec_port_col_lacp. */
+    c = &ovsrec_port_col_lacp;
+    c->name = "lacp";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 3;
+    c->type.key.enum_->keys = xmalloc(3 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("active");
+    c->type.key.enum_->keys[1].string = xstrdup("off");
+    c->type.key.enum_->keys[2].string = xstrdup("passive");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_port_parse_lacp;
+    c->unparse = ovsrec_port_unparse_lacp;
 
     /* Initialize ovsrec_port_col_mac. */
     c = &ovsrec_port_col_mac;
@@ -8085,6 +8613,7 @@ ovsrec_port_columns_init(void)
     c->name = "qos";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
     c->type.key.u.uuid.refTableName = "QoS";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
@@ -8493,6 +9022,7 @@ ovsrec_qos_columns_init(void)
     c->type.key.u.integer.max = INT64_C(4294967295);
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_UUID);
     c->type.value.u.uuid.refTableName = "Queue";
+    c->type.value.u.uuid.refType = OVSDB_REF_STRONG;
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
     c->parse = ovsrec_qos_parse_queues;
@@ -9701,49 +10231,49 @@ ovsrec_sflow_columns_init(void)
 }
 
 struct ovsdb_idl_table_class ovsrec_table_classes[OVSREC_N_TABLES] = {
-    {"Bridge",
+    {"Bridge", false,
      ovsrec_bridge_columns, ARRAY_SIZE(ovsrec_bridge_columns),
      sizeof(struct ovsrec_bridge)},
-    {"Capability",
+    {"Capability", false,
      ovsrec_capability_columns, ARRAY_SIZE(ovsrec_capability_columns),
      sizeof(struct ovsrec_capability)},
-    {"Controller",
+    {"Controller", false,
      ovsrec_controller_columns, ARRAY_SIZE(ovsrec_controller_columns),
      sizeof(struct ovsrec_controller)},
-    {"Interface",
+    {"Interface", false,
      ovsrec_interface_columns, ARRAY_SIZE(ovsrec_interface_columns),
      sizeof(struct ovsrec_interface)},
-    {"Maintenance_Point",
+    {"Maintenance_Point", false,
      ovsrec_maintenance_point_columns, ARRAY_SIZE(ovsrec_maintenance_point_columns),
      sizeof(struct ovsrec_maintenance_point)},
-    {"Manager",
+    {"Manager", false,
      ovsrec_manager_columns, ARRAY_SIZE(ovsrec_manager_columns),
      sizeof(struct ovsrec_manager)},
-    {"Mirror",
+    {"Mirror", false,
      ovsrec_mirror_columns, ARRAY_SIZE(ovsrec_mirror_columns),
      sizeof(struct ovsrec_mirror)},
-    {"Monitor",
+    {"Monitor", false,
      ovsrec_monitor_columns, ARRAY_SIZE(ovsrec_monitor_columns),
      sizeof(struct ovsrec_monitor)},
-    {"NetFlow",
+    {"NetFlow", false,
      ovsrec_netflow_columns, ARRAY_SIZE(ovsrec_netflow_columns),
      sizeof(struct ovsrec_netflow)},
-    {"Open_vSwitch",
+    {"Open_vSwitch", true,
      ovsrec_open_vswitch_columns, ARRAY_SIZE(ovsrec_open_vswitch_columns),
      sizeof(struct ovsrec_open_vswitch)},
-    {"Port",
+    {"Port", false,
      ovsrec_port_columns, ARRAY_SIZE(ovsrec_port_columns),
      sizeof(struct ovsrec_port)},
-    {"QoS",
+    {"QoS", true,
      ovsrec_qos_columns, ARRAY_SIZE(ovsrec_qos_columns),
      sizeof(struct ovsrec_qos)},
-    {"Queue",
+    {"Queue", true,
      ovsrec_queue_columns, ARRAY_SIZE(ovsrec_queue_columns),
      sizeof(struct ovsrec_queue)},
-    {"SSL",
+    {"SSL", false,
      ovsrec_ssl_columns, ARRAY_SIZE(ovsrec_ssl_columns),
      sizeof(struct ovsrec_ssl)},
-    {"sFlow",
+    {"sFlow", false,
      ovsrec_sflow_columns, ARRAY_SIZE(ovsrec_sflow_columns),
      sizeof(struct ovsrec_sflow)},
 };

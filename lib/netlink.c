@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "netlink-protocol.h"
 #include "ofpbuf.h"
 #include "timeval.h"
+#include "unaligned.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(netlink);
@@ -435,7 +436,8 @@ nl_attr_get_u32(const struct nlattr *nla)
 uint64_t
 nl_attr_get_u64(const struct nlattr *nla)
 {
-    return NL_ATTR_GET_AS(nla, uint64_t);
+    const ovs_32aligned_u64 *x = nl_attr_get_unspec(nla, sizeof *x);
+    return get_32aligned_u64(x);
 }
 
 /* Returns the 16-bit network byte order value in 'nla''s payload.
@@ -462,7 +464,8 @@ nl_attr_get_be32(const struct nlattr *nla)
 ovs_be64
 nl_attr_get_be64(const struct nlattr *nla)
 {
-    return NL_ATTR_GET_AS(nla, ovs_be64);
+    const ovs_32aligned_be64 *x = nl_attr_get_unspec(nla, sizeof *x);
+    return get_32aligned_be64(x);
 }
 
 /* Returns the null-terminated string value in 'nla''s payload.
@@ -582,6 +585,9 @@ nl_policy_parse(const struct ofpbuf *msg, size_t nla_offset,
                 assert(n_required > 0);
                 --n_required;
             }
+            if (attrs[type]) {
+                VLOG_DBG_RL(&rl, "%zu: duplicate attr %"PRIu16, offset, type);
+            }
             attrs[type] = nla;
         } else {
             /* Skip attribute type that we don't care about. */
@@ -607,4 +613,40 @@ nl_parse_nested(const struct nlattr *nla, const struct nl_policy policy[],
 
     nl_attr_get_nested(nla, &buf);
     return nl_policy_parse(&buf, 0, policy, attrs, n_attrs);
+}
+
+static const struct nlattr *
+nl_attr_find__(const struct nlattr *attrs, size_t size, uint16_t type)
+{
+    const struct nlattr *nla;
+    size_t left;
+
+    NL_ATTR_FOR_EACH (nla, left, attrs, size) {
+        if (nl_attr_type (nla) == type) {
+            return nla;
+        }
+    }
+    return NULL;
+}
+
+/* Returns the first Netlink attribute within 'buf' with the specified 'type',
+ * skipping a header of 'hdr_len' bytes at the beginning of 'buf'.
+ *
+ * This function does not validate the attribute's length. */
+const struct nlattr *
+nl_attr_find(const struct ofpbuf *buf, size_t hdr_len, uint16_t type)
+{
+    const uint8_t *start = (const uint8_t *) buf->data + hdr_len;
+    return nl_attr_find__((const struct nlattr *) start, buf->size - hdr_len,
+                          type);
+}
+
+/* Returns the first Netlink attribute within 'nla' with the specified
+ * 'type'.
+ *
+ * This function does not validate the attribute's length. */
+const struct nlattr *
+nl_attr_find_nested(const struct nlattr *nla, uint16_t type)
+{
+    return nl_attr_find__(nl_attr_get(nla), nl_attr_get_size(nla), type);
 }

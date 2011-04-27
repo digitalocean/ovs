@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ const char *program_name;
 void
 out_of_memory(void)
 {
-    ovs_fatal(0, "virtual memory exhausted");
+    ovs_abort(0, "virtual memory exhausted");
 }
 
 void *
@@ -137,51 +137,136 @@ xasprintf(const char *format, ...)
     return s;
 }
 
+/* Similar to strlcpy() from OpenBSD, but it never reads more than 'size - 1'
+ * bytes from 'src' and doesn't return anything. */
 void
 ovs_strlcpy(char *dst, const char *src, size_t size)
 {
     if (size > 0) {
-        size_t n = strlen(src);
-        size_t n_copy = MIN(n, size - 1);
-        memcpy(dst, src, n_copy);
-        dst[n_copy] = '\0';
+        size_t len = strnlen(src, size - 1);
+        memcpy(dst, src, len);
+        dst[len] = '\0';
     }
 }
 
+/* Copies 'src' to 'dst'.  Reads no more than 'size - 1' bytes from 'src'.
+ * Always null-terminates 'dst' (if 'size' is nonzero), and writes a zero byte
+ * to every otherwise unused byte in 'dst'.
+ *
+ * Except for performance, the following call:
+ *     ovs_strzcpy(dst, src, size);
+ * is equivalent to these two calls:
+ *     memset(dst, '\0', size);
+ *     ovs_strlcpy(dst, src, size);
+ *
+ * (Thus, ovs_strzcpy() is similar to strncpy() without some of the pitfalls.)
+ */
+void
+ovs_strzcpy(char *dst, const char *src, size_t size)
+{
+    if (size > 0) {
+        size_t len = strnlen(src, size - 1);
+        memcpy(dst, src, len);
+        memset(dst + len, '\0', size - len);
+    }
+}
+
+/* Prints 'format' on stderr, formatting it like printf() does.  If 'err_no' is
+ * nonzero, then it is formatted with ovs_retval_to_string() and appended to
+ * the message inside parentheses.  Then, terminates with abort().
+ *
+ * This function is preferred to ovs_fatal() in a situation where it would make
+ * sense for a monitoring process to restart the daemon.
+ *
+ * 'format' should not end with a new-line, because this function will add one
+ * itself. */
+void
+ovs_abort(int err_no, const char *format, ...)
+{
+    va_list args;
+
+    va_start(args, format);
+    ovs_error_valist(err_no, format, args);
+    va_end(args);
+
+    abort();
+}
+
+/* Prints 'format' on stderr, formatting it like printf() does.  If 'err_no' is
+ * nonzero, then it is formatted with ovs_retval_to_string() and appended to
+ * the message inside parentheses.  Then, terminates with EXIT_FAILURE.
+ *
+ * 'format' should not end with a new-line, because this function will add one
+ * itself. */
 void
 ovs_fatal(int err_no, const char *format, ...)
 {
     va_list args;
 
-    fprintf(stderr, "%s: ", program_name);
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    ovs_error_valist(err_no, format, args);
     va_end(args);
-    if (err_no != 0)
-        fprintf(stderr, " (%s)",
-                err_no == EOF ? "end of file" : strerror(err_no));
-    putc('\n', stderr);
 
     exit(EXIT_FAILURE);
 }
 
+/* Prints 'format' on stderr, formatting it like printf() does.  If 'err_no' is
+ * nonzero, then it is formatted with ovs_retval_to_string() and appended to
+ * the message inside parentheses.
+ *
+ * 'format' should not end with a new-line, because this function will add one
+ * itself. */
 void
 ovs_error(int err_no, const char *format, ...)
 {
-    int save_errno = errno;
     va_list args;
 
-    fprintf(stderr, "%s: ", program_name);
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    ovs_error_valist(err_no, format, args);
     va_end(args);
+}
+
+/* Same as ovs_error() except that the arguments are supplied as a va_list. */
+void
+ovs_error_valist(int err_no, const char *format, va_list args)
+{
+    int save_errno = errno;
+
+    fprintf(stderr, "%s: ", program_name);
+    vfprintf(stderr, format, args);
     if (err_no != 0) {
-        fprintf(stderr, " (%s)",
-                err_no == EOF ? "end of file" : strerror(err_no));
+        fprintf(stderr, " (%s)", ovs_retval_to_string(err_no));
     }
     putc('\n', stderr);
 
     errno = save_errno;
+}
+
+/* Many OVS functions return an int which is one of:
+ * - 0: no error yet
+ * - >0: errno value
+ * - EOF: end of file (not necessarily an error; depends on the function called)
+ *
+ * Returns the appropriate human-readable string. The caller must copy the
+ * string if it wants to hold onto it, as the storage may be overwritten on
+ * subsequent function calls.
+ */
+const char *
+ovs_retval_to_string(int retval)
+{
+    static char unknown[48];
+
+    if (!retval) {
+        return "";
+    }
+    if (retval > 0) {
+        return strerror(retval);
+    }
+    if (retval == EOF) {
+        return "End of file";
+    }
+    snprintf(unknown, sizeof unknown, "***unknown return value: %d***", retval);
+    return unknown;
 }
 
 /* Sets program_name based on 'argv0'.  Should be called at the beginning of

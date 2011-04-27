@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -269,7 +269,8 @@ read_flow_file(const char *name)
     }
 
     flow_format = NXFF_OPENFLOW10;
-    while (parse_ofp_add_flow_file(&default_flows, &flow_format, stream)) {
+    while (parse_ofp_flow_mod_file(&default_flows, &flow_format, stream,
+                                   OFPFC_ADD)) {
         continue;
     }
 
@@ -306,7 +307,8 @@ parse_options(int argc, char *argv[])
         OPT_MUTE,
         OPT_WITH_FLOWS,
         OPT_UNIXCTL,
-        VLOG_OPTION_ENUMS
+        VLOG_OPTION_ENUMS,
+        DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
         {"hub",         no_argument, 0, 'H'},

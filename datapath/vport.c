@@ -16,6 +16,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/percpu.h>
+#include <linux/rcupdate.h>
 #include <linux/rtnetlink.h>
 #include <linux/compat.h>
 #include <linux/version.h>
@@ -38,54 +39,9 @@ static const struct vport_ops *base_vport_ops_list[] = {
 static const struct vport_ops **vport_ops_list;
 static int n_vport_types;
 
+/* Protected by RCU read lock for reading, RTNL lock for writing. */
 static struct hlist_head *dev_table;
 #define VPORT_HASH_BUCKETS 1024
-
-/* Both RTNL lock and vport_mutex need to be held when updating dev_table.
- *
- * If you use vport_locate and then perform some operations, you need to hold
- * one of these locks if you don't want the vport to be deleted out from under
- * you.
- *
- * If you get a reference to a vport through a datapath, it is protected
- * by RCU and you need to hold rcu_read_lock instead when reading.
- *
- * If multiple locks are taken, the hierarchy is:
- * 1. RTNL
- * 2. DP
- * 3. vport
- */
-static DEFINE_MUTEX(vport_mutex);
-
-/**
- *	vport_lock - acquire vport lock
- *
- * Acquire global vport lock.  See above comment about locking requirements
- * and specific function definitions.  May sleep.
- */
-void vport_lock(void)
-{
-	mutex_lock(&vport_mutex);
-}
-
-/**
- *	vport_unlock - release vport lock
- *
- * Release lock acquired with vport_lock.
- */
-void vport_unlock(void)
-{
-	mutex_unlock(&vport_mutex);
-}
-
-#define ASSERT_VPORT()						\
-do {								\
-	if (unlikely(!mutex_is_locked(&vport_mutex))) {		\
-		pr_err("vport lock not held at %s (%d)\n",	\
-		       __FILE__, __LINE__);			\
-		dump_stack();					\
-	}							\
-} while (0)
 
 /**
  *	vport_init - initialize vport subsystem
@@ -136,26 +92,6 @@ error:
 	return err;
 }
 
-static void vport_del_all(void)
-{
-	int i;
-
-	rtnl_lock();
-	vport_lock();
-
-	for (i = 0; i < VPORT_HASH_BUCKETS; i++) {
-		struct hlist_head *bucket = &dev_table[i];
-		struct vport *vport;
-		struct hlist_node *node, *next;
-
-		hlist_for_each_entry_safe(vport, node, next, bucket, hash_node)
-			vport_del(vport);
-	}
-
-	vport_unlock();
-	rtnl_unlock();
-}
-
 /**
  *	vport_exit - shutdown vport subsystem
  *
@@ -166,8 +102,6 @@ void vport_exit(void)
 {
 	int i;
 
-	vport_del_all();
-
 	for (i = 0; i < n_vport_types; i++) {
 		if (vport_ops_list[i]->exit)
 			vport_ops_list[i]->exit();
@@ -175,277 +109,6 @@ void vport_exit(void)
 
 	kfree(vport_ops_list);
 	kfree(dev_table);
-}
-
-/**
- *	vport_user_mod - modify existing vport device (for userspace callers)
- *
- * @uport: New configuration for vport
- *
- * Modifies an existing device with the specified configuration (which is
- * dependent on device type).  This function is for userspace callers and
- * assumes no locks are held.
- */
-int vport_user_mod(const struct odp_port __user *uport)
-{
-	struct odp_port port;
-	struct vport *vport;
-	int err;
-
-	if (copy_from_user(&port, uport, sizeof(port)))
-		return -EFAULT;
-
-	port.devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-
-	vport = vport_locate(port.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	vport_lock();
-	err = vport_mod(vport, &port);
-	vport_unlock();
-
-out:
-	rtnl_unlock();
-	return err;
-}
-
-/**
- *	vport_user_stats_get - retrieve device stats (for userspace callers)
- *
- * @ustats_req: Stats request parameters.
- *
- * Retrieves transmit, receive, and error stats for the given device.  This
- * function is for userspace callers and assumes no locks are held.
- */
-int vport_user_stats_get(struct odp_vport_stats_req __user *ustats_req)
-{
-	struct odp_vport_stats_req stats_req;
-	struct vport *vport;
-	int err;
-
-	if (copy_from_user(&stats_req, ustats_req, sizeof(struct odp_vport_stats_req)))
-		return -EFAULT;
-
-	stats_req.devname[IFNAMSIZ - 1] = '\0';
-
-	vport_lock();
-
-	vport = vport_locate(stats_req.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	err = vport_get_stats(vport, &stats_req.stats);
-
-out:
-	vport_unlock();
-
-	if (!err)
-		if (copy_to_user(ustats_req, &stats_req, sizeof(struct odp_vport_stats_req)))
-			err = -EFAULT;
-
-	return err;
-}
-
-/**
- *	vport_user_stats_set - sets offset device stats (for userspace callers)
- *
- * @ustats_req: Stats set parameters.
- *
- * Provides a set of transmit, receive, and error stats to be added as an
- * offset to the collect data when stats are retreived.  Some devices may not
- * support setting the stats, in which case the result will always be
- * -EOPNOTSUPP.  This function is for userspace callers and assumes no locks
- * are held.
- */
-int vport_user_stats_set(struct odp_vport_stats_req __user *ustats_req)
-{
-	struct odp_vport_stats_req stats_req;
-	struct vport *vport;
-	int err;
-
-	if (copy_from_user(&stats_req, ustats_req, sizeof(struct odp_vport_stats_req)))
-		return -EFAULT;
-
-	stats_req.devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-	vport_lock();
-
-	vport = vport_locate(stats_req.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	err = vport_set_stats(vport, &stats_req.stats);
-
-out:
-	vport_unlock();
-	rtnl_unlock();
-	return err;
-}
-
-
-/**
- *	vport_user_ether_get - retrieve device Ethernet address (for userspace callers)
- *
- * @uvport_ether: Ethernet address request parameters.
- *
- * Retrieves the Ethernet address of the given device.  This function is for
- * userspace callers and assumes no locks are held.
- */
-int vport_user_ether_get(struct odp_vport_ether __user *uvport_ether)
-{
-	struct odp_vport_ether vport_ether;
-	struct vport *vport;
-	int err = 0;
-
-	if (copy_from_user(&vport_ether, uvport_ether, sizeof(struct odp_vport_ether)))
-		return -EFAULT;
-
-	vport_ether.devname[IFNAMSIZ - 1] = '\0';
-
-	vport_lock();
-
-	vport = vport_locate(vport_ether.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	rcu_read_lock();
-	memcpy(vport_ether.ether_addr, vport_get_addr(vport), ETH_ALEN);
-	rcu_read_unlock();
-
-out:
-	vport_unlock();
-
-	if (!err)
-		if (copy_to_user(uvport_ether, &vport_ether, sizeof(struct odp_vport_ether)))
-			err = -EFAULT;
-
-	return err;
-}
-
-/**
- *	vport_user_ether_set - set device Ethernet address (for userspace callers)
- *
- * @uvport_ether: Ethernet address request parameters.
- *
- * Sets the Ethernet address of the given device.  Some devices may not support
- * setting the Ethernet address, in which case the result will always be
- * -EOPNOTSUPP.  This function is for userspace callers and assumes no locks
- * are held.
- */
-int vport_user_ether_set(struct odp_vport_ether __user *uvport_ether)
-{
-	struct odp_vport_ether vport_ether;
-	struct vport *vport;
-	int err;
-
-	if (copy_from_user(&vport_ether, uvport_ether, sizeof(struct odp_vport_ether)))
-		return -EFAULT;
-
-	vport_ether.devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-	vport_lock();
-
-	vport = vport_locate(vport_ether.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	err = vport_set_addr(vport, vport_ether.ether_addr);
-
-out:
-	vport_unlock();
-	rtnl_unlock();
-	return err;
-}
-
-/**
- *	vport_user_mtu_get - retrieve device MTU (for userspace callers)
- *
- * @uvport_mtu: MTU request parameters.
- *
- * Retrieves the MTU of the given device.  This function is for userspace
- * callers and assumes no locks are held.
- */
-int vport_user_mtu_get(struct odp_vport_mtu __user *uvport_mtu)
-{
-	struct odp_vport_mtu vport_mtu;
-	struct vport *vport;
-	int err = 0;
-
-	if (copy_from_user(&vport_mtu, uvport_mtu, sizeof(struct odp_vport_mtu)))
-		return -EFAULT;
-
-	vport_mtu.devname[IFNAMSIZ - 1] = '\0';
-
-	vport_lock();
-
-	vport = vport_locate(vport_mtu.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	vport_mtu.mtu = vport_get_mtu(vport);
-
-out:
-	vport_unlock();
-
-	if (!err)
-		if (copy_to_user(uvport_mtu, &vport_mtu, sizeof(struct odp_vport_mtu)))
-			err = -EFAULT;
-
-	return err;
-}
-
-/**
- *	vport_user_mtu_set - set device MTU (for userspace callers)
- *
- * @uvport_mtu: MTU request parameters.
- *
- * Sets the MTU of the given device.  Some devices may not support setting the
- * MTU, in which case the result will always be -EOPNOTSUPP.  This function is
- * for userspace callers and assumes no locks are held.
- */
-int vport_user_mtu_set(struct odp_vport_mtu __user *uvport_mtu)
-{
-	struct odp_vport_mtu vport_mtu;
-	struct vport *vport;
-	int err;
-
-	if (copy_from_user(&vport_mtu, uvport_mtu, sizeof(struct odp_vport_mtu)))
-		return -EFAULT;
-
-	vport_mtu.devname[IFNAMSIZ - 1] = '\0';
-
-	rtnl_lock();
-	vport_lock();
-
-	vport = vport_locate(vport_mtu.devname);
-	if (!vport) {
-		err = -ENODEV;
-		goto out;
-	}
-
-	err = vport_set_mtu(vport, vport_mtu.mtu);
-
-out:
-	vport_unlock();
-	rtnl_unlock();
-	return err;
 }
 
 static struct hlist_head *hash_bucket(const char *name)
@@ -459,9 +122,7 @@ static struct hlist_head *hash_bucket(const char *name)
  *
  * @name: name of port to find
  *
- * Either RTNL or vport lock must be acquired before calling this function
- * and held while using the found port.  See the locking comments at the
- * top of the file.
+ * Must be called with RTNL or RCU read lock.
  */
 struct vport *vport_locate(const char *name)
 {
@@ -469,32 +130,11 @@ struct vport *vport_locate(const char *name)
 	struct vport *vport;
 	struct hlist_node *node;
 
-	if (unlikely(!mutex_is_locked(&vport_mutex) && !rtnl_is_locked())) {
-		pr_err("neither RTNL nor vport lock held in vport_locate\n");
-		dump_stack();
-	}
-
-	rcu_read_lock();
-
-	hlist_for_each_entry(vport, node, bucket, hash_node)
+	hlist_for_each_entry_rcu(vport, node, bucket, hash_node)
 		if (!strcmp(name, vport_get_name(vport)))
-			goto out;
+			return vport;
 
-	vport = NULL;
-
-out:
-	rcu_read_unlock();
-	return vport;
-}
-
-static void register_vport(struct vport *vport)
-{
-	hlist_add_head(&vport->hash_node, hash_bucket(vport_get_name(vport)));
-}
-
-static void unregister_vport(struct vport *vport)
-{
-	hlist_del(&vport->hash_node);
+	return NULL;
 }
 
 static void release_vport(struct kobject *kobj)
@@ -563,6 +203,9 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const stru
  * @vport: vport to free
  *
  * Frees a vport allocated with vport_alloc() when it is no longer needed.
+ *
+ * The caller must ensure that an RCU grace period has passed since the last
+ * time @vport was in a datapath.
  */
 void vport_free(struct vport *vport)
 {
@@ -578,8 +221,7 @@ void vport_free(struct vport *vport)
  * @parms: Information about new vport.
  *
  * Creates a new vport with the specified configuration (which is dependent on
- * device type) and attaches it to a datapath.  Both RTNL and vport locks must
- * be held.
+ * device type) and attaches it to a datapath.  RTNL lock must be held.
  */
 struct vport *vport_add(const struct vport_parms *parms)
 {
@@ -588,17 +230,17 @@ struct vport *vport_add(const struct vport_parms *parms)
 	int i;
 
 	ASSERT_RTNL();
-	ASSERT_VPORT();
 
 	for (i = 0; i < n_vport_types; i++) {
-		if (!strcmp(vport_ops_list[i]->type, parms->type)) {
+		if (vport_ops_list[i]->type == parms->type) {
 			vport = vport_ops_list[i]->create(parms);
 			if (IS_ERR(vport)) {
 				err = PTR_ERR(vport);
 				goto out;
 			}
 
-			register_vport(vport);
+			hlist_add_head_rcu(&vport->hash_node,
+					   hash_bucket(vport_get_name(vport)));
 			return vport;
 		}
 	}
@@ -610,39 +252,36 @@ out:
 }
 
 /**
- *	vport_mod - modify existing vport device (for kernel callers)
+ *	vport_set_options - modify existing vport device (for kernel callers)
  *
  * @vport: vport to modify.
  * @port: New configuration.
  *
  * Modifies an existing device with the specified configuration (which is
- * dependent on device type).  Both RTNL and vport locks must be held.
+ * dependent on device type).  RTNL lock must be held.
  */
-int vport_mod(struct vport *vport, struct odp_port *port)
+int vport_set_options(struct vport *vport, struct nlattr *options)
 {
 	ASSERT_RTNL();
-	ASSERT_VPORT();
 
-	if (vport->ops->modify)
-		return vport->ops->modify(vport, port);
-	else
+	if (!vport->ops->set_options)
 		return -EOPNOTSUPP;
+	return vport->ops->set_options(vport, options);
 }
 
 /**
- *	vport_del - delete existing vport device (for kernel callers)
+ *	vport_del - delete existing vport device
  *
  * @vport: vport to delete.
  *
  * Detaches @vport from its datapath and destroys it.  It is possible to fail
- * for reasons such as lack of memory.  Both RTNL and vport locks must be held.
+ * for reasons such as lack of memory.  RTNL lock must be held.
  */
 int vport_del(struct vport *vport)
 {
 	ASSERT_RTNL();
-	ASSERT_VPORT();
 
-	unregister_vport(vport);
+	hlist_del_rcu(&vport->hash_node);
 
 	return vport->ops->destroy(vport);
 }
@@ -701,7 +340,7 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
 }
 
 /**
- *	vport_set_stats - sets offset device stats (for kernel callers)
+ *	vport_set_stats - sets offset device stats
  *
  * @vport: vport on which to set stats
  * @stats: stats to set
@@ -709,7 +348,9 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
  * Provides a set of transmit, receive, and error stats to be added as an
  * offset to the collect data when stats are retreived.  Some devices may not
  * support setting the stats, in which case the result will always be
- * -EOPNOTSUPP.  RTNL lock must be held.
+ * -EOPNOTSUPP.
+ *
+ * Must be called with RTNL lock.
  */
 int vport_set_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 {
@@ -721,9 +362,7 @@ int vport_set_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 		spin_unlock_bh(&vport->stats_lock);
 
 		return 0;
-	} else if (vport->ops->set_stats)
-		return vport->ops->set_stats(vport, stats);
-	else
+	} else
 		return -EOPNOTSUPP;
 }
 
@@ -745,10 +384,9 @@ const char *vport_get_name(const struct vport *vport)
  *
  * @vport: vport from which to retrieve the type.
  *
- * Retrieves the type of the given device.  Either RTNL lock or rcu_read_lock
- * must be held for the entire duration that the type is in use.
+ * Retrieves the type of the given device.
  */
-const char *vport_get_type(const struct vport *vport)
+enum odp_vport_type vport_get_type(const struct vport *vport)
 {
 	return vport->ops->type;
 }
@@ -795,12 +433,14 @@ static int vport_call_get_stats(struct vport *vport, struct rtnl_link_stats64 *s
 }
 
 /**
- *	vport_get_stats - retrieve device stats (for kernel callers)
+ *	vport_get_stats - retrieve device stats
  *
  * @vport: vport from which to retrieve the stats
  * @stats: location to store stats
  *
  * Retrieves transmit, receive, and error stats for the given device.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 {
@@ -882,8 +522,9 @@ int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
  *
  * @vport: vport from which to retrieve the flags
  *
- * Retrieves the flags of the given device.  Either RTNL lock or rcu_read_lock
- * must be held.
+ * Retrieves the flags of the given device.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 unsigned vport_get_flags(const struct vport *vport)
 {
@@ -895,8 +536,9 @@ unsigned vport_get_flags(const struct vport *vport)
  *
  * @vport: vport on which to check status.
  *
- * Checks whether the given device is running.  Either RTNL lock or
- * rcu_read_lock must be held.
+ * Checks whether the given device is running.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 int vport_is_running(const struct vport *vport)
 {
@@ -908,8 +550,9 @@ int vport_is_running(const struct vport *vport)
  *
  * @vport: vport from which to check status
  *
- * Retrieves the RFC2863 operstate of the given device.  Either RTNL lock or
- * rcu_read_lock must be held.
+ * Retrieves the RFC2863 operstate of the given device.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 unsigned char vport_get_operstate(const struct vport *vport)
 {
@@ -923,8 +566,9 @@ unsigned char vport_get_operstate(const struct vport *vport)
  *
  * Retrieves the system interface index of the given device or 0 if
  * the device does not have one (in the case of virtual ports).
- * Returns a negative index on error. Either RTNL lock or
- * rcu_read_lock must be held.
+ * Returns a negative index on error.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 int vport_get_ifindex(const struct vport *vport)
 {
@@ -942,8 +586,9 @@ int vport_get_ifindex(const struct vport *vport)
  * Retrieves the system link index of the given device.  The link is the index
  * of the interface on which the packet will actually be sent.  In most cases
  * this is the same as the ifindex but may be different for tunnel devices.
- * Returns a negative index on error.  Either RTNL lock or rcu_read_lock must
- * be held.
+ * Returns a negative index on error.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
 int vport_get_iflink(const struct vport *vport)
 {
@@ -956,32 +601,55 @@ int vport_get_iflink(const struct vport *vport)
 }
 
 /**
- *	vport_get_mtu - retrieve device MTU (for kernel callers)
+ *	vport_get_mtu - retrieve device MTU
  *
  * @vport: vport from which to retrieve MTU
  *
- * Retrieves the MTU of the given device.  Either RTNL lock or rcu_read_lock
- * must be held.
+ * Retrieves the MTU of the given device.  Returns 0 if @vport does not have an
+ * MTU (as e.g. some tunnels do not).  Either RTNL lock or rcu_read_lock must
+ * be held.
  */
 int vport_get_mtu(const struct vport *vport)
 {
+	if (!vport->ops->get_mtu)
+		return 0;
 	return vport->ops->get_mtu(vport);
 }
 
 /**
- *	vport_get_config - retrieve device configuration
+ *	vport_get_options - retrieve device options
  *
- * @vport: vport from which to retrieve the configuration.
- * @config: buffer to store config, which must be at least the length
- *          of VPORT_CONFIG_SIZE.
+ * @vport: vport from which to retrieve the options.
+ * @skb: sk_buff where options should be appended.
  *
- * Retrieves the configuration of the given device.  Either RTNL lock or
- * rcu_read_lock must be held.
+ * Retrieves the configuration of the given device, appending an
+ * %ODP_VPORT_ATTR_OPTIONS attribute that in turn contains nested
+ * vport-specific attributes to @skb.
+ *
+ * Returns 0 if successful, -EMSGSIZE if @skb has insufficient room, or another
+ * negative error code if a real error occurred.  If an error occurs, @skb is
+ * left unmodified.
+ *
+ * Must be called with RTNL lock or rcu_read_lock.
  */
-void vport_get_config(const struct vport *vport, void *config)
+int vport_get_options(const struct vport *vport, struct sk_buff *skb)
 {
-	if (vport->ops->get_config)
-		vport->ops->get_config(vport, config);
+	struct nlattr *nla;
+
+	nla = nla_nest_start(skb, ODP_VPORT_ATTR_OPTIONS);
+	if (!nla)
+		return -EMSGSIZE;
+
+	if (vport->ops->get_options) {
+		int err = vport->ops->get_options(vport, skb);
+		if (err) {
+			nla_nest_cancel(skb, nla);
+			return err;
+		}
+	}
+
+	nla_nest_end(skb, nla);
+	return 0;
 }
 
 /**
@@ -1044,7 +712,7 @@ int vport_send(struct vport *vport, struct sk_buff *skb)
 	int sent;
 
 	mtu = vport_get_mtu(vport);
-	if (unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
+	if (mtu && unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
 		if (net_ratelimit())
 			pr_warn("%s: dropped over-mtu packet: %d > %d\n",
 				dp_name(vport->dp), packet_length(skb), mtu);

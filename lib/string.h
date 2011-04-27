@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira Networks.
+ * Copyright (c) 2009, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,12 @@
  * out-of-line version to be used instead. */
 #if HAVE_STRTOK_R_BUG
 #undef strtok_r
+#endif
+
+#ifndef HAVE_STRNLEN
+#undef strnlen
+#define strnlen rpl_strnlen
+size_t strnlen(const char *, size_t maxlen);
 #endif
 
 #endif /* string.h wrapper */

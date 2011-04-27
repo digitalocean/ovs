@@ -14,10 +14,17 @@
 
 struct datapath;
 struct sk_buff;
-struct odp_flow_key;
+struct sw_flow_key;
 
 int execute_actions(struct datapath *dp, struct sk_buff *skb,
-		    const struct odp_flow_key *key,
+		    const struct sw_flow_key *,
 		    const struct nlattr *, u32 actions_len);
+
+static inline void skb_clear_rxhash(struct sk_buff *skb)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,35)
+	skb->rxhash = 0;
+#endif
+}
 
 #endif /* actions.h */

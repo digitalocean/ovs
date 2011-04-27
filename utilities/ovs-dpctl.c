@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@
 #include "netdev.h"
 #include "odp-util.h"
 #include "shash.h"
-#include "svec.h"
+#include "sset.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
@@ -214,21 +214,6 @@ do_del_dp(int argc OVS_UNUSED, char *argv[])
     dpif_close(dpif);
 }
 
-static int
-compare_ports(const void *a_, const void *b_)
-{
-    const struct odp_port *a = a_;
-    const struct odp_port *b = b_;
-    return a->port < b->port ? -1 : a->port > b->port;
-}
-
-static void
-query_ports(struct dpif *dpif, struct odp_port **ports, size_t *n_ports)
-{
-    run(dpif_port_list(dpif, ports, n_ports), "listing ports");
-    qsort(*ports, *n_ports, sizeof **ports, compare_ports);
-}
-
 static void
 do_add_if(int argc OVS_UNUSED, char *argv[])
 {
@@ -256,7 +241,7 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
         }
 
         shash_init(&args);
-        while ((option = strtok_r(NULL, "", &save_ptr)) != NULL) {
+        while ((option = strtok_r(NULL, ",", &save_ptr)) != NULL) {
             char *save_ptr_2 = NULL;
             char *key, *value;
 
@@ -300,10 +285,11 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
 static bool
 get_port_number(struct dpif *dpif, const char *name, uint16_t *port)
 {
-    struct odp_port odp_port;
+    struct dpif_port dpif_port;
 
-    if (!dpif_port_query_by_name(dpif, name, &odp_port)) {
-        *port = odp_port.port;
+    if (!dpif_port_query_by_name(dpif, name, &dpif_port)) {
+        *port = dpif_port.port_no;
+        dpif_port_destroy(&dpif_port);
         return true;
     } else {
         ovs_error(0, "no port named %s", name);
@@ -346,39 +332,55 @@ do_del_if(int argc OVS_UNUSED, char *argv[])
 static void
 show_dpif(struct dpif *dpif)
 {
-    struct odp_port *ports;
+    struct dpif_port_dump dump;
+    struct dpif_port dpif_port;
     struct odp_stats stats;
-    size_t n_ports;
-    size_t i;
 
     printf("%s:\n", dpif_name(dpif));
     if (!dpif_get_dp_stats(dpif, &stats)) {
-        printf("\tflows: cur:%"PRIu32", soft-max:%"PRIu32", "
-               "hard-max:%"PRIu32"\n",
-               stats.n_flows, stats.cur_capacity, stats.max_capacity);
-        printf("\tports: cur:%"PRIu32", max:%"PRIu32"\n",
-               stats.n_ports, stats.max_ports);
         printf("\tlookups: frags:%llu, hit:%llu, missed:%llu, lost:%llu\n",
                (unsigned long long int) stats.n_frags,
                (unsigned long long int) stats.n_hit,
                (unsigned long long int) stats.n_missed,
                (unsigned long long int) stats.n_lost);
-        printf("\tqueues: max-miss:%"PRIu16", max-action:%"PRIu16"\n",
-               stats.max_miss_queue, stats.max_action_queue);
     }
-    query_ports(dpif, &ports, &n_ports);
-    for (i = 0; i < n_ports; i++) {
-        const struct odp_port *p = &ports[i];
-        struct ds ds;
+    DPIF_PORT_FOR_EACH (&dpif_port, &dump, dpif) {
+        printf("\tport %u: %s", dpif_port.port_no, dpif_port.name);
 
-        printf("\tport %u: %s", p->port, p->devname);
+        if (strcmp(dpif_port.type, "system")) {
+            struct netdev_options netdev_options;
+            struct netdev *netdev;
+            int error;
 
-        ds_init(&ds);
-        format_odp_port_type(&ds, p);
-        printf("%s\n", ds_cstr(&ds));
-        ds_destroy(&ds);
+            printf (" (%s", dpif_port.type);
+
+            netdev_options.name = dpif_port.name;
+            netdev_options.type = dpif_port.type;
+            netdev_options.args = NULL;
+            netdev_options.ethertype = NETDEV_ETH_TYPE_NONE;
+            error = netdev_open(&netdev_options, &netdev);
+            if (!error) {
+                const struct shash_node **nodes;
+                const struct shash *config;
+                size_t i;
+
+                config = netdev_get_config(netdev);
+                nodes = shash_sort(config);
+                for (i = 0; i < shash_count(config); i++) {
+                    const struct shash_node *node = nodes[i];
+                    printf("%c %s=%s", i ? ',' : ':',
+                           node->name, (char *) node->data);
+                }
+                free(nodes);
+
+                netdev_close(netdev);
+            } else {
+                printf(": open failed (%s)", strerror(error));
+            }
+            putchar(')');
+        }
+        putchar('\n');
     }
-    free(ports);
     dpif_close(dpif);
 }
 
@@ -402,21 +404,35 @@ do_show(int argc, char *argv[])
             }
         }
     } else {
-        unsigned int i;
-        for (i = 0; i < ODP_MAX; i++) {
-            char name[128];
-            struct dpif *dpif;
-            int error;
+        struct sset types;
+        const char *type;
 
-            sprintf(name, "dp%u", i);
-            error = parsed_dpif_open(name, false, &dpif);
-            if (!error) {
-                show_dpif(dpif);
-            } else if (error != ENODEV) {
-                ovs_error(error, "opening datapath %s failed", name);
+        sset_init(&types);
+        dp_enumerate_types(&types);
+        SSET_FOR_EACH (type, &types) {
+            struct sset names;
+            const char *name;
+
+            sset_init(&names);
+            if (dp_enumerate_names(type, &names)) {
                 failure = true;
+                continue;
             }
+            SSET_FOR_EACH (name, &names) {
+                struct dpif *dpif;
+                int error;
+
+                error = dpif_open(name, type, &dpif);
+                if (!error) {
+                    show_dpif(dpif);
+                } else {
+                    ovs_error(error, "opening datapath %s failed", name);
+                    failure = true;
+                }
+            }
+            sset_destroy(&names);
         }
+        sset_destroy(&types);
     }
     if (failure) {
         exit(EXIT_FAILURE);
@@ -426,34 +442,34 @@ do_show(int argc, char *argv[])
 static void
 do_dump_dps(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
-    struct svec dpif_names, dpif_types;
-    unsigned int i;
+    struct sset dpif_names, dpif_types;
+    const char *type;
     int error = 0;
 
-    svec_init(&dpif_names);
-    svec_init(&dpif_types);
+    sset_init(&dpif_names);
+    sset_init(&dpif_types);
     dp_enumerate_types(&dpif_types);
 
-    for (i = 0; i < dpif_types.n; i++) {
-        unsigned int j;
+    SSET_FOR_EACH (type, &dpif_types) {
+        const char *name;
         int retval;
 
-        retval = dp_enumerate_names(dpif_types.names[i], &dpif_names);
+        retval = dp_enumerate_names(type, &dpif_names);
         if (retval) {
             error = retval;
         }
 
-        for (j = 0; j < dpif_names.n; j++) {
+        SSET_FOR_EACH (name, &dpif_names) {
             struct dpif *dpif;
-            if (!dpif_open(dpif_names.names[j], dpif_types.names[i], &dpif)) {
+            if (!dpif_open(name, type, &dpif)) {
                 printf("%s\n", dpif_name(dpif));
                 dpif_close(dpif);
             }
         }
     }
 
-    svec_destroy(&dpif_names);
-    svec_destroy(&dpif_types);
+    sset_destroy(&dpif_names);
+    sset_destroy(&dpif_types);
     if (error) {
         exit(EXIT_FAILURE);
     }
@@ -462,29 +478,30 @@ do_dump_dps(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 static void
 do_dump_flows(int argc OVS_UNUSED, char *argv[])
 {
-    struct odp_flow *flows;
+    const struct dpif_flow_stats *stats;
+    const struct nlattr *actions;
+    struct dpif_flow_dump dump;
+    const struct nlattr *key;
+    size_t actions_len;
     struct dpif *dpif;
-    size_t n_flows;
+    size_t key_len;
     struct ds ds;
-    size_t i;
 
     run(parsed_dpif_open(argv[1], false, &dpif), "opening datapath");
-    run(dpif_flow_list_all(dpif, &flows, &n_flows), "listing all flows");
 
     ds_init(&ds);
-    for (i = 0; i < n_flows; i++) {
-        struct odp_flow *f = &flows[i];
-        enum { MAX_ACTIONS = 4096 }; /* An arbitrary but large number. */
-        struct nlattr actions[MAX_ACTIONS];
-
-        f->actions = actions;
-        f->actions_len = sizeof actions;
-        if (!dpif_flow_get(dpif, f)) {
-            ds_clear(&ds);
-            format_odp_flow(&ds, f);
-            printf("%s\n", ds_cstr(&ds));
-        }
+    dpif_flow_dump_start(&dump, dpif);
+    while (dpif_flow_dump_next(&dump, &key, &key_len,
+                               &actions, &actions_len, &stats)) {
+        ds_clear(&ds);
+        odp_flow_key_format(key, key_len, &ds);
+        ds_put_cstr(&ds, ", ");
+        dpif_flow_stats_format(stats, &ds);
+        ds_put_cstr(&ds, ", actions:");
+        format_odp_actions(&ds, actions, actions_len);
+        printf("%s\n", ds_cstr(&ds));
     }
+    dpif_flow_dump_done(&dump);
     ds_destroy(&ds);
     dpif_close(dpif);
 }

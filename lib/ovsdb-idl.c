@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010 Nicira Networks.
+/* Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -282,7 +282,7 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
     assert(!idl->txn);
     jsonrpc_session_run(idl->session);
     for (i = 0; jsonrpc_session_is_connected(idl->session) && i < 50; i++) {
-        struct jsonrpc_msg *msg, *reply;
+        struct jsonrpc_msg *msg;
         unsigned int seqno;
 
         seqno = jsonrpc_session_get_seqno(idl->session);
@@ -298,7 +298,6 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
             break;
         }
 
-        reply = NULL;
         if (msg->type == JSONRPC_NOTIFY
                    && !strcmp(msg->method, "update")
                    && msg->params->type == JSON_ARRAY
@@ -313,8 +312,7 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
             idl->monitor_request_id = NULL;
             ovsdb_idl_clear(idl);
             ovsdb_idl_parse_update(idl, msg->result);
-        } else if (msg->type == JSONRPC_REPLY
-                   && msg->id && msg->id->type == JSON_STRING
+        } else if (msg->type == JSONRPC_REPLY && msg->id->type == JSON_STRING
                    && !strcmp(msg->id->u.string, "echo")) {
             /* It's a reply to our echo request.  Ignore it. */
         } else if ((msg->type == JSONRPC_ERROR
@@ -328,9 +326,6 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
             VLOG_DBG("%s: received unexpected %s message",
                      jsonrpc_session_get_name(idl->session),
                      jsonrpc_msg_type_to_string(msg->type));
-        }
-        if (reply) {
-            jsonrpc_session_send(idl->session, reply);
         }
         jsonrpc_msg_destroy(msg);
     }

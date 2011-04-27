@@ -1,6 +1,6 @@
 /*
  * Distributed under the terms of the GNU GPL version 2.
- * Copyright (c) 2007, 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2007, 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Significant portions of this file may be copied from parts of the Linux
  * kernel, by Linus Torvalds and others.
@@ -24,10 +24,11 @@
 #include "checksum.h"
 #include "datapath.h"
 #include "openvswitch/datapath-protocol.h"
+#include "vlan.h"
 #include "vport.h"
 
 static int do_execute_actions(struct datapath *, struct sk_buff *,
-			      const struct odp_flow_key *,
+			      const struct sw_flow_key *,
 			      const struct nlattr *actions, u32 actions_len);
 
 static struct sk_buff *make_writable(struct sk_buff *skb, unsigned min_headroom)
@@ -52,20 +53,28 @@ static struct sk_buff *make_writable(struct sk_buff *skb, unsigned min_headroom)
 	return NULL;
 }
 
-static struct sk_buff *vlan_pull_tag(struct sk_buff *skb)
+static struct sk_buff *strip_vlan(struct sk_buff *skb)
 {
-	struct vlan_ethhdr *vh = vlan_eth_hdr(skb);
 	struct ethhdr *eh;
 
-	/* Verify we were given a vlan packet */
-	if (vh->h_vlan_proto != htons(ETH_P_8021Q) || skb->len < VLAN_ETH_HLEN)
+	if (vlan_tx_tag_present(skb)) {
+		vlan_set_tci(skb, 0);
 		return skb;
+	}
+
+	if (unlikely(vlan_eth_hdr(skb)->h_vlan_proto != htons(ETH_P_8021Q) ||
+	    skb->len < VLAN_ETH_HLEN))
+		return skb;
+
+	skb = make_writable(skb, 0);
+	if (unlikely(!skb))
+		return NULL;
 
 	if (get_ip_summed(skb) == OVS_CSUM_COMPLETE)
 		skb->csum = csum_sub(skb->csum, csum_partial(skb->data
 					+ ETH_HLEN, VLAN_HLEN, 0));
 
-	memmove(skb->data + VLAN_HLEN, skb->data, 2 * VLAN_ETH_ALEN);
+	memmove(skb->data + VLAN_HLEN, skb->data, 2 * ETH_ALEN);
 
 	eh = (struct ethhdr *)skb_pull(skb, VLAN_HLEN);
 
@@ -75,145 +84,41 @@ static struct sk_buff *vlan_pull_tag(struct sk_buff *skb)
 	return skb;
 }
 
-static struct sk_buff *modify_vlan_tci(struct datapath *dp, struct sk_buff *skb,
-				       const struct odp_flow_key *key,
-				       const struct nlattr *a, u32 actions_len)
+static struct sk_buff *modify_vlan_tci(struct sk_buff *skb, __be16 tci)
 {
-	__be16 tci = nla_get_be16(a);
+	struct vlan_ethhdr *vh;
+	__be16 old_tci;
 
-	skb = make_writable(skb, VLAN_HLEN);
-	if (!skb)
-		return ERR_PTR(-ENOMEM);
+	if (vlan_tx_tag_present(skb) || skb->protocol != htons(ETH_P_8021Q))
+		return __vlan_hwaccel_put_tag(skb, ntohs(tci));
 
-	if (skb->protocol == htons(ETH_P_8021Q)) {
-		/* Modify vlan id, but maintain other TCI values */
-		struct vlan_ethhdr *vh;
-		__be16 old_tci;
+	skb = make_writable(skb, 0);
+	if (unlikely(!skb))
+		return NULL;
 
-		if (skb->len < VLAN_ETH_HLEN)
-			return skb;
+	if (unlikely(skb->len < VLAN_ETH_HLEN))
+		return skb;
 
-		vh = vlan_eth_hdr(skb);
-		old_tci = vh->h_vlan_TCI;
+	vh = vlan_eth_hdr(skb);
 
-		vh->h_vlan_TCI = tci;
+	old_tci = vh->h_vlan_TCI;
+	vh->h_vlan_TCI = tci;
 
-		if (get_ip_summed(skb) == OVS_CSUM_COMPLETE) {
-			__be16 diff[] = { ~old_tci, vh->h_vlan_TCI };
-
-			skb->csum = ~csum_partial((char *)diff, sizeof(diff),
-						~skb->csum);
-		}
-	} else {
-		int err;
-
-		/* Add vlan header */
-
-		/* Set up checksumming pointers for checksum-deferred packets
-		 * on Xen.  Otherwise, dev_queue_xmit() will try to do this
-		 * when we send the packet out on the wire, and it will fail at
-		 * that point because skb_checksum_setup() will not look inside
-		 * an 802.1Q header. */
-		err = vswitch_skb_checksum_setup(skb);
-		if (unlikely(err)) {
-			kfree_skb(skb);
-			return ERR_PTR(err);
-		}
-
-		/* GSO is not implemented for packets with an 802.1Q header, so
-		 * we have to do segmentation before we add that header.
-		 *
-		 * GSO does work with hardware-accelerated VLAN tagging, but we
-		 * can't use hardware-accelerated VLAN tagging since it
-		 * requires the device to have a VLAN group configured (with
-		 * e.g. vconfig(8)) and we don't do that.
-		 *
-		 * Having to do this here may be a performance loss, since we
-		 * can't take advantage of TSO hardware support, although it
-		 * does not make a measurable network performance difference
-		 * for 1G Ethernet.  Fixing that would require patching the
-		 * kernel (either to add GSO support to the VLAN protocol or to
-		 * support hardware-accelerated VLAN tagging without VLAN
-		 * groups configured). */
-		if (skb_is_gso(skb)) {
-			const struct nlattr *actions_left;
-			int actions_len_left;
-			struct sk_buff *segs;
-
-			segs = skb_gso_segment(skb, 0);
-			kfree_skb(skb);
-			if (IS_ERR(segs))
-				return ERR_CAST(segs);
-
-			actions_len_left = actions_len;
-			actions_left = nla_next(a, &actions_len_left);
-
-			do {
-				struct sk_buff *nskb = segs->next;
-
-				segs->next = NULL;
-
-				/* GSO can change the checksum type so update.*/
-				compute_ip_summed(segs, true);
-
-				segs = __vlan_put_tag(segs, ntohs(tci));
-				err = -ENOMEM;
-				if (segs) {
-					err = do_execute_actions(
-						dp, segs, key, actions_left,
-						actions_len_left);
-				}
-
-				if (unlikely(err)) {
-					while ((segs = nskb)) {
-						nskb = segs->next;
-						segs->next = NULL;
-						kfree_skb(segs);
-					}
-					return ERR_PTR(err);
-				}
-
-				segs = nskb;
-			} while (segs->next);
-
-			skb = segs;
-			compute_ip_summed(skb, true);
-		}
-
-		/* The hardware-accelerated version of vlan_put_tag() works
-		 * only for a device that has a VLAN group configured (with
-		 * e.g. vconfig(8)), so call the software-only version
-		 * __vlan_put_tag() directly instead.
-		 */
-		skb = __vlan_put_tag(skb, ntohs(tci));
-		if (!skb)
-			return ERR_PTR(-ENOMEM);
-
-		/* GSO doesn't fix up the hardware computed checksum so this
-		 * will only be hit in the non-GSO case. */
-		if (get_ip_summed(skb) == OVS_CSUM_COMPLETE)
-			skb->csum = csum_add(skb->csum, csum_partial(skb->data
-						+ ETH_HLEN, VLAN_HLEN, 0));
+	if (get_ip_summed(skb) == OVS_CSUM_COMPLETE) {
+		__be16 diff[] = { ~old_tci, vh->h_vlan_TCI };
+		skb->csum = ~csum_partial((char *)diff, sizeof(diff), ~skb->csum);
 	}
 
 	return skb;
 }
 
-static struct sk_buff *strip_vlan(struct sk_buff *skb)
-{
-	skb = make_writable(skb, 0);
-	if (skb)
-		vlan_pull_tag(skb);
-	return skb;
-}
-
-static bool is_ip(struct sk_buff *skb, const struct odp_flow_key *key)
+static bool is_ip(struct sk_buff *skb, const struct sw_flow_key *key)
 {
 	return (key->dl_type == htons(ETH_P_IP) &&
 		skb->transport_header > skb->network_header);
 }
 
-static __sum16 *get_l4_checksum(struct sk_buff *skb, const struct odp_flow_key *key)
+static __sum16 *get_l4_checksum(struct sk_buff *skb, const struct sw_flow_key *key)
 {
 	int transport_len = skb->len - skb_transport_offset(skb);
 	if (key->nw_proto == IPPROTO_TCP) {
@@ -227,7 +132,7 @@ static __sum16 *get_l4_checksum(struct sk_buff *skb, const struct odp_flow_key *
 }
 
 static struct sk_buff *set_nw_addr(struct sk_buff *skb,
-				   const struct odp_flow_key *key,
+				   const struct sw_flow_key *key,
 				   const struct nlattr *a)
 {
 	__be32 new_nwaddr = nla_get_be32(a);
@@ -243,12 +148,14 @@ static struct sk_buff *set_nw_addr(struct sk_buff *skb,
 		return NULL;
 
 	nh = ip_hdr(skb);
-	nwaddr = nla_type(a) == ODPAT_SET_NW_SRC ? &nh->saddr : &nh->daddr;
+	nwaddr = nla_type(a) == ODP_ACTION_ATTR_SET_NW_SRC ? &nh->saddr : &nh->daddr;
 
 	check = get_l4_checksum(skb, key);
 	if (likely(check))
 		inet_proto_csum_replace4(check, skb, *nwaddr, new_nwaddr, 1);
 	csum_replace4(&nh->check, *nwaddr, new_nwaddr);
+
+	skb_clear_rxhash(skb);
 
 	*nwaddr = new_nwaddr;
 
@@ -256,7 +163,7 @@ static struct sk_buff *set_nw_addr(struct sk_buff *skb,
 }
 
 static struct sk_buff *set_nw_tos(struct sk_buff *skb,
-				  const struct odp_flow_key *key,
+				  const struct sw_flow_key *key,
 				  u8 nw_tos)
 {
 	if (unlikely(!is_ip(skb, key)))
@@ -279,7 +186,7 @@ static struct sk_buff *set_nw_tos(struct sk_buff *skb,
 }
 
 static struct sk_buff *set_tp_port(struct sk_buff *skb,
-				   const struct odp_flow_key *key,
+				   const struct sw_flow_key *key,
 				   const struct nlattr *a)
 {
 	struct udphdr *th;
@@ -306,9 +213,10 @@ static struct sk_buff *set_tp_port(struct sk_buff *skb,
 	 * supports those protocols.
 	 */
 	th = udp_hdr(skb);
-	port = nla_type(a) == ODPAT_SET_TP_SRC ? &th->source : &th->dest;
+	port = nla_type(a) == ODP_ACTION_ATTR_SET_TP_SRC ? &th->source : &th->dest;
 	inet_proto_csum_replace2(check, skb, *port, nla_get_be16(a), 0);
 	*port = nla_get_be16(a);
+	skb_clear_rxhash(skb);
 
 	return skb;
 }
@@ -324,7 +232,7 @@ static struct sk_buff *set_tp_port(struct sk_buff *skb,
  * or truncated header fields or one whose inner and outer Ethernet address
  * differ.
  */
-static bool is_spoofed_arp(struct sk_buff *skb, const struct odp_flow_key *key)
+static bool is_spoofed_arp(struct sk_buff *skb, const struct sw_flow_key *key)
 {
 	struct arp_eth_header *arp;
 
@@ -360,17 +268,27 @@ error:
 	kfree_skb(skb);
 }
 
-static int output_control(struct datapath *dp, struct sk_buff *skb, u64 arg)
+static int output_control(struct datapath *dp, struct sk_buff *skb, u64 arg,
+			  const struct sw_flow_key *key)
 {
+	struct dp_upcall_info upcall;
+
 	skb = skb_clone(skb, GFP_ATOMIC);
 	if (!skb)
 		return -ENOMEM;
-	return dp_output_control(dp, skb, _ODPL_ACTION_NR, arg);
+
+	upcall.cmd = ODP_PACKET_CMD_ACTION;
+	upcall.key = key;
+	upcall.userdata = arg;
+	upcall.sample_pool = 0;
+	upcall.actions = NULL;
+	upcall.actions_len = 0;
+	return dp_upcall(dp, skb, &upcall);
 }
 
 /* Execute a list of actions against 'skb'. */
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
-			      const struct odp_flow_key *key,
+			      const struct sw_flow_key *key,
 			      const struct nlattr *actions, u32 actions_len)
 {
 	/* Every output action needs a separate clone of 'skb', but the common
@@ -389,69 +307,67 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		}
 
 		switch (nla_type(a)) {
-		case ODPAT_OUTPUT:
+		case ODP_ACTION_ATTR_OUTPUT:
 			prev_port = nla_get_u32(a);
 			break;
 
-		case ODPAT_CONTROLLER:
-			err = output_control(dp, skb, nla_get_u64(a));
+		case ODP_ACTION_ATTR_CONTROLLER:
+			err = output_control(dp, skb, nla_get_u64(a), key);
 			if (err) {
 				kfree_skb(skb);
 				return err;
 			}
 			break;
 
-		case ODPAT_SET_TUNNEL:
+		case ODP_ACTION_ATTR_SET_TUNNEL:
 			OVS_CB(skb)->tun_id = nla_get_be64(a);
 			break;
 
-		case ODPAT_SET_DL_TCI:
-			skb = modify_vlan_tci(dp, skb, key, a, rem);
-			if (IS_ERR(skb))
-				return PTR_ERR(skb);
+		case ODP_ACTION_ATTR_SET_DL_TCI:
+			skb = modify_vlan_tci(skb, nla_get_be16(a));
 			break;
 
-		case ODPAT_STRIP_VLAN:
+		case ODP_ACTION_ATTR_STRIP_VLAN:
 			skb = strip_vlan(skb);
 			break;
 
-		case ODPAT_SET_DL_SRC:
+		case ODP_ACTION_ATTR_SET_DL_SRC:
 			skb = make_writable(skb, 0);
 			if (!skb)
 				return -ENOMEM;
 			memcpy(eth_hdr(skb)->h_source, nla_data(a), ETH_ALEN);
 			break;
 
-		case ODPAT_SET_DL_DST:
+		case ODP_ACTION_ATTR_SET_DL_DST:
 			skb = make_writable(skb, 0);
 			if (!skb)
 				return -ENOMEM;
 			memcpy(eth_hdr(skb)->h_dest, nla_data(a), ETH_ALEN);
 			break;
 
-		case ODPAT_SET_NW_SRC:
-		case ODPAT_SET_NW_DST:
+		case ODP_ACTION_ATTR_SET_NW_SRC:
+		case ODP_ACTION_ATTR_SET_NW_DST:
 			skb = set_nw_addr(skb, key, a);
 			break;
 
-		case ODPAT_SET_NW_TOS:
+		case ODP_ACTION_ATTR_SET_NW_TOS:
 			skb = set_nw_tos(skb, key, nla_get_u8(a));
 			break;
 
-		case ODPAT_SET_TP_SRC:
-		case ODPAT_SET_TP_DST:
+		case ODP_ACTION_ATTR_SET_TP_SRC:
+		case ODP_ACTION_ATTR_SET_TP_DST:
 			skb = set_tp_port(skb, key, a);
 			break;
 
-		case ODPAT_SET_PRIORITY:
+		case ODP_ACTION_ATTR_SET_PRIORITY:
 			skb->priority = nla_get_u32(a);
 			break;
 
-		case ODPAT_POP_PRIORITY:
+		case ODP_ACTION_ATTR_POP_PRIORITY:
 			skb->priority = priority;
 			break;
 
-		case ODPAT_DROP_SPOOFED_ARP:
+		case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
 			if (unlikely(is_spoofed_arp(skb, key)))
 				goto exit;
 			break;
@@ -467,41 +383,41 @@ exit:
 	return 0;
 }
 
-/* Send a copy of this packet up to the sFlow agent, along with extra
- * information about what happened to it. */
 static void sflow_sample(struct datapath *dp, struct sk_buff *skb,
-			 const struct nlattr *a, u32 actions_len,
-			 struct vport *vport)
+			 const struct sw_flow_key *key,
+			 const struct nlattr *a, u32 actions_len)
 {
-	struct odp_sflow_sample_header *hdr;
-	unsigned int hdrlen = sizeof(struct odp_sflow_sample_header);
 	struct sk_buff *nskb;
+	struct vport *p = OVS_CB(skb)->vport;
+	struct dp_upcall_info upcall;
 
-	nskb = skb_copy_expand(skb, actions_len + hdrlen, 0, GFP_ATOMIC);
-	if (!nskb)
+	if (unlikely(!p))
 		return;
 
-	memcpy(__skb_push(nskb, actions_len), a, actions_len);
-	hdr = (struct odp_sflow_sample_header*)__skb_push(nskb, hdrlen);
-	hdr->actions_len = actions_len;
-	hdr->sample_pool = atomic_read(&vport->sflow_pool);
-	dp_output_control(dp, nskb, _ODPL_SFLOW_NR, 0);
+	atomic_inc(&p->sflow_pool);
+	if (net_random() >= dp->sflow_probability)
+		return;
+
+	nskb = skb_clone(skb, GFP_ATOMIC);
+	if (unlikely(!nskb))
+		return;
+
+	upcall.cmd = ODP_PACKET_CMD_SAMPLE;
+	upcall.key = key;
+	upcall.userdata = 0;
+	upcall.sample_pool = atomic_read(&p->sflow_pool);
+	upcall.actions = a;
+	upcall.actions_len = actions_len;
+	dp_upcall(dp, nskb, &upcall);
 }
 
 /* Execute a list of actions against 'skb'. */
 int execute_actions(struct datapath *dp, struct sk_buff *skb,
-		    const struct odp_flow_key *key,
+		    const struct sw_flow_key *key,
 		    const struct nlattr *actions, u32 actions_len)
 {
-	if (dp->sflow_probability) {
-		struct vport *p = OVS_CB(skb)->vport;
-		if (p) {
-			atomic_inc(&p->sflow_pool);
-			if (dp->sflow_probability == UINT_MAX ||
-			    net_random() < dp->sflow_probability)
-				sflow_sample(dp, skb, actions, actions_len, p);
-		}
-	}
+	if (dp->sflow_probability)
+		sflow_sample(dp, skb, key, actions, actions_len);
 
 	OVS_CB(skb)->tun_id = 0;
 

@@ -49,9 +49,9 @@ else
        "$@"
        rc=$?
        if [ $rc -eq 0 ] ; then
-	       log_success_msg $"$STRING "
+            log_success_msg $"$STRING "
        else
-	       log_failure_msg $"$STRING "
+            log_failure_msg $"$STRING "
        fi
        return $rc
     }
@@ -75,26 +75,11 @@ case ${NETWORK_MODE:=openvswitch} in
         ;;
 esac
 
-# General config variables in /etc/sysconfig/openvswitch
-if [ -f /etc/xensource-inventory ]; then
-    if test "$PRODUCT_VERSION" = "5.5.0"; then
-        # XenServer 5.5.0 needs ovs-brcompatd and /proc/net simulation.
-        : ${ENABLE_BRCOMPAT:=y}
-        : ${ENABLE_FAKE_PROC_NET:=y}
-    else
-        # Later versions don't need them.
-        : ${ENABLE_BRCOMPAT:=n}
-        : ${ENABLE_FAKE_PROC_NET:=n}
-    fi
-else
-    : ${ENABLE_BRCOMPAT:=y}
-    : ${ENABLE_FAKE_PROC_NET:=y}
-fi
 : ${ENABLE_MONITOR:=y}
 : ${FORCE_COREFILES:=y}
 
 # Config variables specific to ovsdb-server
-: ${OVSDB_SERVER_REMOTES:=punix:/var/run/openvswitch/db.sock db:Open_vSwitch,managers}
+: ${OVSDB_SERVER_REMOTES:=punix:/var/run/openvswitch/db.sock db:Open_vSwitch,manager_options}
 : ${OVSDB_SERVER_DB:=/etc/openvswitch/conf.db}
 : ${OVSDB_SERVER_PIDFILE:=/var/run/openvswitch/ovsdb-server.pid}
 : ${OVSDB_SERVER_RUN_DIR:=/var/xen/openvswitch}
@@ -124,35 +109,16 @@ fi
 : ${VSWITCHD_VALGRIND_LOG:=}
 : ${VSWITCHD_VALGRIND_OPT:=}
 
-# Config variables specific to ovs-brcompatd
-: ${BRCOMPATD_PIDFILE:=/var/run/openvswitch/ovs-brcompatd.pid}
-: ${BRCOMPATD_RUN_DIR:=/var/xen/openvswitch}
-: ${BRCOMPATD_PRIORITY:=-10}
-: ${BRCOMPATD_LOGFILE:=/var/log/openvswitch/ovs-brcompatd.log}
-: ${BRCOMPATD_FILE_LOGLEVEL:=INFO}
-: ${BRCOMPATD_SYSLOG_LOGLEVEL:=ERR}
-: ${BRCOMPATD_MEMLEAK_LOGFILE:=}
-: ${BRCOMPATD_STRACE_LOG:=}
-: ${BRCOMPATD_STRACE_OPT:=}
-: ${BRCOMPATD_VALGRIND_LOG:=}
-: ${BRCOMPATD_VALGRIND_OPT:=}
+: ${OVS_XAPI_SYNC_PIDFILE:=/var/run/openvswitch/ovs-xapi-sync.pid}
 
 # Full paths to executables & modules
 ovsdb_server="/usr/sbin/ovsdb-server"
 ovsdb_tool="/usr/bin/ovsdb-tool"
 vswitchd="/usr/sbin/ovs-vswitchd"
-brcompatd="/usr/sbin/ovs-brcompatd"
 dpctl="/usr/bin/ovs-dpctl"
 appctl="/usr/bin/ovs-appctl"
 ofctl="/usr/bin/ovs-ofctl"
 vsctl="/usr/bin/ovs-vsctl"
-
-if [ "$ENABLE_FAKE_PROC_NET" = "y" ]; then
-    if [ "$ENABLE_BRCOMPAT" != "y" ]; then
-        warning "FAKE_PROC_NET required BRCOMPAT which was disabled.  Force enabling."
-        ENABLE_BRCOMPAT="y"
-    fi
-fi
 
 if test "$ENABLE_MONITOR" = "y"; then
     monitor_opt="--monitor"
@@ -161,13 +127,9 @@ else
 fi
 
 function hup_monitor_external_ids {
-    if [ -e /var/run/openvswitch/ovs-external-ids.pid ]; then
-        action "Configuring Open vSwitch external IDs" kill -HUP `cat /var/run/openvswitch/ovs-external-ids.pid`
+    if [ -e /var/run/openvswitch/ovs-xapi-sync.pid ]; then
+        action "Configuring Open vSwitch external IDs" kill -HUP `cat /var/run/openvswitch/ovs-xapi-sync.pid`
     fi
-}
-
-function dp_list {
-    "$dpctl" show | grep '^dp[0-9]\+:' | cut -d':' -f 1
 }
 
 function turn_on_corefiles {
@@ -175,15 +137,15 @@ function turn_on_corefiles {
 }
 
 function remove_all_dp {
-    for dp in $(dp_list); do
+    for dp in $($dpctl dump-dps); do
         action "Removing datapath: $dp" "$dpctl" del-dp "$dp"
     done
 }
 
 function insert_modules_if_required {
     if test -e /sys/module/bridge; then
-	bridges=`echo /sys/class/net/*/bridge | sed 's,/sys/class/net/,,g;s,/bridge,,g'`
-	if test "$bridges" != "*"; then
+        bridges=`echo /sys/class/net/*/bridge | sed 's,/sys/class/net/,,g;s,/bridge,,g'`
+        if test "$bridges" != "*"; then
             log_warning_msg "not removing bridge module because bridges exist ($bridges)"
         else
             action "removing bridge module" rmmod bridge
@@ -193,15 +155,9 @@ function insert_modules_if_required {
         action "Inserting llc module" modprobe llc
         action "Inserting openvswitch module" modprobe openvswitch_mod
     fi
-    if [ "$ENABLE_BRCOMPAT" = "y" ] && [ -n "$BRCOMPATD_PIDFILE" ] && ! lsmod | grep -q "brcompat_mod"; then
-        action "Inserting brcompat module" modprobe brcompat_mod
-    fi
 }
 
 function remove_modules {
-    if lsmod | grep -q "brcompat_mod"; then
-        action "Removing brcompat module" rmmod brcompat_mod.ko
-    fi
     if lsmod | grep -q "openvswitch_mod"; then
         action "Removing openvswitch module" rmmod openvswitch_mod.ko
     fi
@@ -284,25 +240,13 @@ function start_ovsdb_server {
 }
 
 function start_vswitchd {
-    local fake_proc_net_opt=
-    if [ "$ENABLE_FAKE_PROC_NET" = "y" ]; then
-        fake_proc_net_opt="--fake-proc-net"
-    fi
-
     local mlockall_opt=
     if [ "$VSWITCHD_MLOCKALL" != "no" ]; then
         mlockall_opt="--mlockall"
     fi
 
-    start_daemon VSWITCHD "$vswitchd" $fake_proc_net_opt $mlockall_opt \
-                 "$VSWITCHD_OVSDB_SERVER"
+    start_daemon VSWITCHD "$vswitchd" $mlockall_opt "$VSWITCHD_OVSDB_SERVER"
  }
-
-function start_brcompatd {
-    start_daemon BRCOMPATD "$brcompatd" \
-                 --appctl-command="$appctl --target=/var/run/openvswitch/ovs-vswitchd.\`cat $VSWITCHD_PIDFILE\`.ctl %s" \
-                 "$VSWITCHD_OVSDB_SERVER"
-}
 
 function stop_daemon {
     local DAEMON=$1
@@ -358,13 +302,13 @@ function set_system_ids {
             external-ids:system-id="$INSTALLATION_UUID" \
             external-ids:xs-system-uuid="$INSTALLATION_UUID"
     else
-	if test -f /etc/openvswitch/install_uuid.conf; then
+        if test -f /etc/openvswitch/install_uuid.conf; then
             . /etc/openvswitch/install_uuid.conf
-	elif INSTALLATION_UUID=`uuidgen`; then
-	    echo "INSTALLATION_UUID=$INSTALLATION_UUID" > /etc/openvswitch/install_uuid.conf
-	else
-	    log_failure_msg "missing uuidgen, could not generate system UUID"
-	    return
+        elif INSTALLATION_UUID=`uuidgen`; then
+            echo "INSTALLATION_UUID=$INSTALLATION_UUID" > /etc/openvswitch/install_uuid.conf
+        else
+            log_failure_msg "missing uuidgen, could not generate system UUID"
+            return
         fi
         $vsctl --no-wait --timeout=5 set Open_vSwitch . \
             external-ids:system-id="$INSTALLATION_UUID"
@@ -393,16 +337,24 @@ function start {
 
         action "Creating empty database $OVSDB_SERVER_DB" true
         $ovsdb_tool -vANY:console:emer create "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
-    else
-        # If schema version changed, then back up the old version.
-        oldver=`$ovsdb_tool db-version "$OVSDB_SERVER_DB"`
-        if test "X$oldver" != "X$schemaver"; then
-            backup=$OVSDB_SERVER_DB.backup$oldver
-            action "Backing up $OVSDB_SERVER_DB in $backup before converting from schema version \"$oldver\" to \"$schemaver\"" true
-            cp "$OVSDB_SERVER_DB" "$backup"
-        fi
+    elif test "X`$ovsdb_tool needs-conversion "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"`" != Xno; then
+        # Back up the old version.
+        version=`$ovsdb_tool db-version "$OVSDB_SERVER_DB"`
+        cksum=`$ovsdb_tool db-cksum "$OVSDB_SERVER_DB" | awk '{print $1}'`
+        cp "$OVSDB_SERVER_DB" "$OVSDB_SERVER_DB.backup$version-$cksum"
 
-        # Upgrade or downgrade schema and compact database.
+        # Compact database.  This is important if the old schema did not enable
+        # garbage collection (i.e. if it did not have any tables with "isRoot":
+        # true) but the new schema does.  In that situation the old database
+        # may contain a transaction that creates a record followed by a
+        # transaction that creates the first use of the record.  Replaying that
+        # series of transactions against the new database schema (as "convert"
+        # does) would cause the record to be dropped by the first transaction,
+        # then the second transaction would cause a referential integrity
+        # failure (for a strong reference).
+        $ovsdb_tool -vANY:console:emer compact "$OVSDB_SERVER_DB"
+
+        # Upgrade or downgrade schema.
         $ovsdb_tool -vANY:console:emer convert "$OVSDB_SERVER_DB" "$VSWITCHD_OVSDB_SCHEMA"
     fi
 
@@ -418,14 +370,11 @@ function start {
     set_system_ids
 
     start_vswitchd
-    if [ "${ENABLE_BRCOMPAT}" = "y" ] ; then
-        start_brcompatd
-    fi
 
     if [ -f /etc/xensource-inventory ]; then
         # Start daemon to monitor external ids
         PYTHONPATH=/usr/share/openvswitch/python \
-                   /usr/share/openvswitch/scripts/ovs-external-ids \
+                   /usr/share/openvswitch/scripts/ovs-xapi-sync \
                    --pidfile --detach $monitor_opt "$VSWITCHD_OVSDB_SERVER"
     fi
 
@@ -433,12 +382,9 @@ function start {
 }
 
 function stop {
-    stop_daemon BRCOMPATD "$brcompatd"
     stop_daemon VSWITCHD "$vswitchd"
     stop_daemon OVSDB_SERVER "$ovsdb_server"
-    if [ -e /var/run/openvswitch/ovs-external-ids.pid ]; then
-        kill `cat /var/run/openvswitch/ovs-external-ids.pid`
-    fi
+    stop_daemon OVS_XAPI_SYNC ovs-xapi-sync
     rm -f /var/lock/subsys/openvswitch
 }
 
@@ -447,6 +393,51 @@ function restart {
         stop
         start
     fi
+}
+
+function internal_interfaces {
+    # Outputs a list of internal interfaces:
+    #
+    #   - There is an internal interface for every bridge, whether it has
+    #     an Interface record or not and whether the Interface record's
+    #     'type' is properly set.
+    #
+    #   - There is an internal interface for each Interface record whose
+    #     'type' is 'internal'.
+    #
+    # But ignore interfaces that don't really exist.
+    for d in `(ovs-vsctl --bare \
+                -- --columns=name find Interface type=internal \
+		-- list-br) | sort -u`
+    do
+        if test -e "/sys/class/net/$d"; then
+	    printf "%s " "$d"
+	fi
+    done
+}
+
+function force_reload_kmod {
+    ifaces=$(internal_interfaces)
+    action "Configured internal interfaces: $ifaces" true
+
+    stop
+
+    script=$(mktemp)
+    action "Save interface configuration to $script" true
+    if ! /usr/share/openvswitch/scripts/ovs-save $ifaces > $script; then
+        warning "Failed to save configuration, not replacing kernel module"
+        start
+        exit 1
+    fi
+    chmod +x $script
+
+    action "Destroy datapaths" remove_all_dp
+
+    remove_modules
+
+    start
+
+    action "Restore interface configuration from $script" $script
 }
 
 case "$1" in
@@ -461,28 +452,24 @@ case "$1" in
         ;;
     reload|force-reload)
         # Nothing to do to ovs-vswitchd and ovsdb-server as they keep their
-        # configuration up-to-date all the time.  HUP ovs-external-ids so it
+        # configuration up-to-date all the time.  HUP ovs-xapi-sync so it
         # re-runs.
         hup_monitor_external_ids
-	;;
+        ;;
     strace-vswitchd)
         shift
         strace -p $(cat "$VSWITCHD_PIDFILE") "$@"
         ;;
-    strace-brcompatd)
-        shift
-        strace -p $(cat "$BRCOMPATD_PIDFILE") "$@"
-        ;;
     status)
         status -p "$OVSDB_SERVER_PIDFILE" ovsdb-server &&
-        status -p "$VSWITCHD_PIDFILE" ovs-vswitchd &&
-        (test "$ENABLE_BRCOMPAT" != "y" || 
-            status -p "$BRCOMPATD_PIDFILE" ovs-brcompatd)
+        status -p "$VSWITCHD_PIDFILE" ovs-vswitchd
         ;;
     version)
         /usr/sbin/ovsdb-server -V
         /usr/sbin/ovs-vswitchd -V
-        /usr/sbin/ovs-brcompatd -V
+        ;;
+    force-reload-kmod)
+	force_reload_kmod
         ;;
     help)
         printf "openvswitch [start|stop|restart|reload|force-reload|status|version]\n"

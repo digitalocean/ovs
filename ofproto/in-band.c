@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,15 +35,14 @@
 #include "openflow/openflow.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "status.h"
 #include "timeval.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(in_band);
 
-/* In-band control allows a single network to be used for OpenFlow
- * traffic and other data traffic.  Refer to ovs-vswitchd.conf(5) and
- * secchan(8) for a description of configuring in-band control.
+/* In-band control allows a single network to be used for OpenFlow traffic and
+ * other data traffic.  See ovs-vswitchd.conf.db(5) for a description of
+ * configuring in-band control.
  *
  * This comment is an attempt to describe how in-band control works at a
  * wire- and implementation-level.  Correctly implementing in-band
@@ -235,7 +234,6 @@ struct in_band_remote {
 
 struct in_band {
     struct ofproto *ofproto;
-    struct status_category *ss_cat;
     int queue_id, prev_queue_id;
 
     /* Remote information. */
@@ -373,37 +371,16 @@ refresh_local(struct in_band *ib)
     return true;
 }
 
-static void
-in_band_status_cb(struct status_reply *sr, void *in_band_)
-{
-    struct in_band *in_band = in_band_;
-
-    if (!eth_addr_is_zero(in_band->local_mac)) {
-        status_reply_put(sr, "local-mac="ETH_ADDR_FMT,
-                         ETH_ADDR_ARGS(in_band->local_mac));
-    }
-
-    if (in_band->n_remotes
-        && !eth_addr_is_zero(in_band->remotes[0].remote_mac)) {
-        status_reply_put(sr, "remote-mac="ETH_ADDR_FMT,
-                         ETH_ADDR_ARGS(in_band->remotes[0].remote_mac));
-    }
-}
-
 /* Returns true if 'packet' should be sent to the local port regardless
  * of the flow table. */
 bool
 in_band_msg_in_hook(struct in_band *in_band, const struct flow *flow,
                     const struct ofpbuf *packet)
 {
-    if (!in_band) {
-        return false;
-    }
-
     /* Regardless of how the flow table is configured, we want to be
      * able to see replies to our DHCP requests. */
     if (flow->dl_type == htons(ETH_TYPE_IP)
-            && flow->nw_proto == IP_TYPE_UDP
+            && flow->nw_proto == IPPROTO_UDP
             && flow->tp_src == htons(DHCP_SERVER_PORT)
             && flow->tp_dst == htons(DHCP_CLIENT_PORT)
             && packet->l7) {
@@ -428,24 +405,20 @@ in_band_msg_in_hook(struct in_band *in_band, const struct flow *flow,
 /* Returns true if the rule that would match 'flow' with 'actions' is
  * allowed to be set up in the datapath. */
 bool
-in_band_rule_check(struct in_band *in_band, const struct flow *flow,
+in_band_rule_check(const struct flow *flow,
                    const struct nlattr *actions, size_t actions_len)
 {
-    if (!in_band) {
-        return true;
-    }
-
     /* Don't allow flows that would prevent DHCP replies from being seen
      * by the local port. */
     if (flow->dl_type == htons(ETH_TYPE_IP)
-            && flow->nw_proto == IP_TYPE_UDP
+            && flow->nw_proto == IPPROTO_UDP
             && flow->tp_src == htons(DHCP_SERVER_PORT)
             && flow->tp_dst == htons(DHCP_CLIENT_PORT)) {
         const struct nlattr *a;
         unsigned int left;
 
         NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
-            if (nl_attr_type(a) == ODPAT_OUTPUT
+            if (nl_attr_type(a) == ODP_ACTION_ATTR_OUTPUT
                 && nl_attr_get_u32(a) == ODPP_LOCAL) {
                 return true;
             }
@@ -469,7 +442,7 @@ make_rules(struct in_band *ib,
         cls_rule_set_in_port(&rule, ODPP_LOCAL);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
         cls_rule_set_dl_src(&rule, ib->installed_local_mac);
-        cls_rule_set_nw_proto(&rule, IP_TYPE_UDP);
+        cls_rule_set_nw_proto(&rule, IPPROTO_UDP);
         cls_rule_set_tp_src(&rule, htons(DHCP_CLIENT_PORT));
         cls_rule_set_tp_dst(&rule, htons(DHCP_SERVER_PORT));
         cb(ib, &rule);
@@ -542,7 +515,7 @@ make_rules(struct in_band *ib,
             /* (h) Allow TCP traffic to the remote's IP and port. */
             cls_rule_init_catchall(&rule, IBR_TO_REMOTE_TCP);
             cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
-            cls_rule_set_nw_proto(&rule, IP_TYPE_TCP);
+            cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
             cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
             cls_rule_set_tp_dst(&rule, a->sin_port);
             cb(ib, &rule);
@@ -550,7 +523,7 @@ make_rules(struct in_band *ib,
             /* (i) Allow TCP traffic from the remote's IP and port. */
             cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_TCP);
             cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
-            cls_rule_set_nw_proto(&rule, IP_TYPE_TCP);
+            cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
             cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
             cls_rule_set_tp_src(&rule, a->sin_port);
             cb(ib, &rule);
@@ -641,7 +614,7 @@ compare_addrs(const void *a_, const void *b_)
 static int
 compare_macs(const void *a, const void *b)
 {
-    return memcmp(a, b, ETH_ADDR_LEN);
+    return eth_addr_compare_3way(a, b);
 }
 
 void
@@ -703,23 +676,14 @@ in_band_flushed(struct in_band *in_band)
 }
 
 int
-in_band_create(struct ofproto *ofproto, struct dpif *dpif,
-               struct switch_status *ss, struct in_band **in_bandp)
+in_band_create(struct ofproto *ofproto, const char *local_name,
+               struct in_band **in_bandp)
 {
     struct in_band *in_band;
-    char local_name[IF_NAMESIZE];
     struct netdev *local_netdev;
     int error;
 
     *in_bandp = NULL;
-    error = dpif_port_get_name(dpif, ODPP_LOCAL,
-                               local_name, sizeof local_name);
-    if (error) {
-        VLOG_ERR("failed to initialize in-band control: cannot get name "
-                 "of datapath local port (%s)", strerror(error));
-        return error;
-    }
-
     error = netdev_open_default(local_name, &local_netdev);
     if (error) {
         VLOG_ERR("failed to initialize in-band control: cannot open "
@@ -729,8 +693,6 @@ in_band_create(struct ofproto *ofproto, struct dpif *dpif,
 
     in_band = xzalloc(sizeof *in_band);
     in_band->ofproto = ofproto;
-    in_band->ss_cat = switch_status_register(ss, "in-band",
-                                             in_band_status_cb, in_band);
     in_band->queue_id = in_band->prev_queue_id = -1;
     in_band->next_remote_refresh = TIME_MIN;
     in_band->next_local_refresh = TIME_MIN;
@@ -747,7 +709,6 @@ in_band_destroy(struct in_band *ib)
     if (ib) {
         drop_rules(ib);
         in_band_set_remotes(ib, NULL, 0);
-        switch_status_unregister(ib->ss_cat);
         netdev_close(ib->local_netdev);
         free(ib);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <stdlib.h>
 
 #include "coverage.h"
 #include "netlink.h"
@@ -63,6 +64,17 @@ rtnetlink_create(int multicast_group, rtnetlink_parse_func *parse,
     return rtn;
 }
 
+/* Destroys 'rtn' by freeing any memory it has reserved and closing any sockets
+ * it has opened. */
+void
+rtnetlink_destroy(struct rtnetlink *rtn)
+{
+    if (rtn) {
+        nl_sock_destroy(rtn->notify_sock);
+        free(rtn);
+    }
+}
+
 /* Registers 'cb' to be called with auxiliary data 'aux' with change
  * notifications.  The notifier is stored in 'notifier', which the caller must
  * not modify or free.
@@ -77,13 +89,20 @@ rtnetlink_notifier_register(struct rtnetlink *rtn,
                             rtnetlink_notify_func *cb, void *aux)
 {
     if (!rtn->notify_sock) {
-        int error = nl_sock_create(NETLINK_ROUTE, rtn->multicast_group, 0, 0,
-                                   &rtn->notify_sock);
+        struct nl_sock *sock;
+        int error;
+
+        error = nl_sock_create(NETLINK_ROUTE, &sock);
+        if (!error) {
+            error = nl_sock_join_mcgroup(sock, rtn->multicast_group);
+        }
         if (error) {
+            nl_sock_destroy(sock);
             VLOG_WARN("could not create rtnetlink socket: %s",
                       strerror(error));
             return error;
         }
+        rtn->notify_sock = sock;
     } else {
         /* Catch up on notification work so that the new notifier won't
          * receive any stale notifications. */

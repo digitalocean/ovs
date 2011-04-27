@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -141,7 +141,7 @@ usage(void)
            "    parse string DATUMs as data of given TYPE, and re-serialize\n"
            "  parse-column NAME OBJECT\n"
            "    parse column NAME with info OBJECT, and re-serialize\n"
-           "  parse-table NAME OBJECT\n"
+           "  parse-table NAME OBJECT [DEFAULT-IS-ROOT]\n"
            "    parse table NAME with info OBJECT\n"
            "  parse-row TABLE ROW..., and re-serialize\n"
            "    parse each ROW of defined TABLE\n"
@@ -608,12 +608,15 @@ static void
 do_parse_table(int argc OVS_UNUSED, char *argv[])
 {
     struct ovsdb_table_schema *ts;
+    bool default_is_root;
     struct json *json;
+
+    default_is_root = argc > 3 && !strcmp(argv[3], "true");
 
     json = parse_json(argv[2]);
     check_ovsdb_error(ovsdb_table_schema_from_json(json, argv[1], &ts));
     json_destroy(json);
-    print_and_free_json(ovsdb_table_schema_to_json(ts));
+    print_and_free_json(ovsdb_table_schema_to_json(ts, default_is_root));
     ovsdb_table_schema_destroy(ts);
 }
 
@@ -1344,7 +1347,7 @@ static struct ovsdb_table *do_transact_table;
 static void
 do_transact_commit(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
-    ovsdb_txn_commit(do_transact_txn, false);
+    ovsdb_error_destroy(ovsdb_txn_commit(do_transact_txn, false));
     do_transact_txn = NULL;
 }
 
@@ -1749,7 +1752,9 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
                 idltest_simple_set_s(s, arg3);
             } else if (!strcmp(arg2, "u")) {
                 struct uuid uuid;
-                uuid_from_string(&uuid, arg3);
+                if (!uuid_from_string(&uuid, arg3)) {
+                    ovs_fatal(0, "\"%s\" is not a valid UUID", arg3);
+                }
                 idltest_simple_set_u(s, uuid);
             } else if (!strcmp(arg2, "r")) {
                 idltest_simple_set_r(s, atof(arg3));
@@ -1930,7 +1935,7 @@ static struct command all_commands[] = {
     { "parse-data-strings", 2, INT_MAX, do_parse_data_strings },
     { "sort-atoms", 2, 2, do_sort_atoms },
     { "parse-column", 2, 2, do_parse_column },
-    { "parse-table", 2, 2, do_parse_table },
+    { "parse-table", 2, 3, do_parse_table },
     { "parse-rows", 2, INT_MAX, do_parse_rows },
     { "compare-rows", 2, INT_MAX, do_compare_rows },
     { "parse-conditions", 2, INT_MAX, do_parse_conditions },

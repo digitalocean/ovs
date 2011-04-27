@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira Networks.
+ * Copyright (c) 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -9,17 +9,31 @@
 #ifndef COMPAT_H
 #define COMPAT_H 1
 
-#include <linux/version.h>
+#include <linux/netlink.h>
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+#ifndef HAVE_NLA_NUL_STRING
+static inline int CHECK_NUL_STRING(struct nlattr *attr, int maxlen)
+{
+	char *s;
+	int len;
+	if (!attr)
+		return 0;
 
-#include "compat26.h"
+	len = nla_len(attr);
+	if (len >= maxlen)
+		return -EINVAL;
 
+	s = nla_data(attr);
+	if (s[len - 1] != '\0')
+		return -EINVAL;
+
+	return 0;
+}
 #else
-
-#include "compat24.h"
-
-#endif
-
+static inline int CHECK_NUL_STRING(struct nlattr *attr, int maxlen)
+{
+	return 0;
+}
+#endif  /* !HAVE_NLA_NUL_STRING */
 
 #endif /* compat.h */

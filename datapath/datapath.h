@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -15,14 +15,15 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
-#include <linux/workqueue.h>
 #include <linux/seqlock.h>
 #include <linux/skbuff.h>
 #include <linux/version.h>
 
 #include "checksum.h"
+#include "compat.h"
 #include "flow.h"
 #include "dp_sysfs.h"
+#include "vlan.h"
 
 struct vport;
 
@@ -32,9 +33,6 @@ struct vport;
 #define VLAN_PCP_SHIFT 13
 
 #define DP_MAX_PORTS 1024
-
-#define DP_N_QUEUES 3
-#define DP_MAX_QUEUE_LEN 100
 
 /**
  * struct dp_stats_percpu - per-cpu packet processing statistics for a given
@@ -60,40 +58,36 @@ struct dp_stats_percpu {
 /**
  * struct datapath - datapath for flow-based packet switching
  * @rcu: RCU callback head for deferred destruction.
- * @mutex: Mutual exclusion for ioctls.
- * @dp_idx: Datapath number (index into the dps[] array in datapath.c).
- * @ifobj: Represents /sys/class/net/<devname>/brif.
+ * @dp_ifindex: ifindex of local port.
+ * @list_node: Element in global 'dps' list.
+ * @ifobj: Represents /sys/class/net/<devname>/brif.  Protected by RTNL.
  * @drop_frags: Drop all IP fragments if nonzero.
- * @queues: %DP_N_QUEUES sets of queued packets for userspace to handle.
- * @waitqueue: Waitqueue, for waiting for new packets in @queues.
  * @n_flows: Number of flows currently in flow table.
- * @table: Current flow table.
- * @n_ports: Number of ports currently in @ports.
+ * @table: Current flow table.  Protected by genl_lock and RCU.
  * @ports: Map from port number to &struct vport.  %ODPP_LOCAL port
- * always exists, other ports may be %NULL.
- * @port_list: List of all ports in @ports in arbitrary order.
+ * always exists, other ports may be %NULL.  Protected by RTNL and RCU.
+ * @port_list: List of all ports in @ports in arbitrary order.  RTNL required
+ * to iterate or modify.
  * @stats_percpu: Per-CPU datapath statistics.
  * @sflow_probability: Number of packets out of UINT_MAX to sample to the
- * %ODPL_SFLOW queue, e.g. (@sflow_probability/UINT_MAX) is the probability of
- * sampling a given packet.
+ * %ODP_PACKET_CMD_SAMPLE multicast group, e.g. (@sflow_probability/UINT_MAX)
+ * is the probability of sampling a given packet.
+ *
+ * Context: See the comment on locking at the top of datapath.c for additional
+ * locking information.
  */
 struct datapath {
 	struct rcu_head rcu;
-	struct mutex mutex;
-	int dp_idx;
+	int dp_ifindex;
+	struct list_head list_node;
 	struct kobject ifobj;
 
 	int drop_frags;
-
-	/* Queued data. */
-	struct sk_buff_head queues[DP_N_QUEUES];
-	wait_queue_head_t waitqueue;
 
 	/* Flow table. */
 	struct tbl __rcu *table;
 
 	/* Switch ports. */
-	unsigned int n_ports;
 	struct vport __rcu *ports[DP_MAX_PORTS];
 	struct list_head port_list;
 
@@ -112,6 +106,8 @@ struct datapath {
  * kernel versions.
  * @tun_id: ID of the tunnel that encapsulated this packet.  It is 0 if the
  * packet was not received on a tunnel.
+ * @vlan_tci: Provides a substitute for the skb->vlan_tci field on kernels
+ * before 2.6.27.
  */
 struct ovs_skb_cb {
 	struct vport		*vport;
@@ -120,15 +116,36 @@ struct ovs_skb_cb {
 	enum csum_type		ip_summed;
 #endif
 	__be64			tun_id;
+#ifdef NEED_VLAN_FIELD
+	u16			vlan_tci;
+#endif
 };
 #define OVS_CB(skb) ((struct ovs_skb_cb *)(skb)->cb)
+
+/**
+ * struct dp_upcall - metadata to include with a packet to send to userspace
+ * @cmd: One of %ODP_PACKET_CMD_*.
+ * @key: Becomes %ODP_PACKET_ATTR_KEY.  Must be nonnull.
+ * @userdata: Becomes %ODP_PACKET_ATTR_USERDATA if nonzero.
+ * @sample_pool: Becomes %ODP_PACKET_ATTR_SAMPLE_POOL if nonzero.
+ * @actions: Becomes %ODP_PACKET_ATTR_ACTIONS if nonnull.
+ * @actions_len: Number of bytes in @actions.
+*/
+struct dp_upcall_info {
+	u8 cmd;
+	const struct sw_flow_key *key;
+	u64 userdata;
+	u32 sample_pool;
+	const struct nlattr *actions;
+	u32 actions_len;
+};
 
 extern struct notifier_block dp_device_notifier;
 extern int (*dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
 
 void dp_process_received_packet(struct vport *, struct sk_buff *);
 int dp_detach_port(struct vport *);
-int dp_output_control(struct datapath *, struct sk_buff *, int, u64 arg);
+int dp_upcall(struct datapath *, struct sk_buff *, const struct dp_upcall_info *);
 int dp_min_mtu(const struct datapath *dp);
 void set_internal_devs_mtu(const struct datapath *dp);
 

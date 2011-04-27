@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -115,14 +115,17 @@ static struct netns_frags frag_netns_state = {
 
 static struct socket *capwap_rcv_socket;
 
-static int capwap_hdr_len(const struct tnl_port_config *port_config)
+static int capwap_hdr_len(const struct tnl_mutable_config *mutable)
 {
-	/* CAPWAP has neither checksums nor keys, so reject ports with those. */
-	if (port_config->flags & (TNL_F_CSUM | TNL_F_IN_KEY_MATCH |
-				  TNL_F_OUT_KEY_ACTION))
+	/* CAPWAP has no checksums. */
+	if (mutable->flags & TNL_F_CSUM)
 		return -EINVAL;
 
-	if (port_config->in_key != 0 || port_config->out_key != 0)
+	/* CAPWAP has no keys, so check that the configuration for keys is the
+	 * default if no key-specific attributes are used.
+	 */
+	if ((mutable->flags & (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION)) !=
+	    (TNL_F_IN_KEY_MATCH | TNL_F_OUT_KEY_ACTION))
 		return -EINVAL;
 
 	return CAPWAP_HLEN;
@@ -203,7 +206,7 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 		goto error;
 	}
 
-	tnl_rcv(vport, skb);
+	tnl_rcv(vport, skb, iph->tos);
 	goto out;
 
 error:
@@ -645,22 +648,20 @@ static void capwap_frag_expire(unsigned long ifq)
 }
 
 const struct vport_ops capwap_vport_ops = {
-	.type		= "capwap",
+	.type		= ODP_VPORT_TYPE_CAPWAP,
 	.flags		= VPORT_F_GEN_STATS,
 	.init		= capwap_init,
 	.exit		= capwap_exit,
 	.create		= capwap_create,
-	.modify		= tnl_modify,
 	.destroy	= tnl_destroy,
-	.set_mtu	= tnl_set_mtu,
 	.set_addr	= tnl_set_addr,
 	.get_name	= tnl_get_name,
 	.get_addr	= tnl_get_addr,
-	.get_config	= tnl_get_config,
+	.get_options	= tnl_get_options,
+	.set_options	= tnl_set_options,
 	.get_dev_flags	= vport_gen_get_dev_flags,
 	.is_running	= vport_gen_is_running,
 	.get_operstate	= vport_gen_get_operstate,
-	.get_mtu	= tnl_get_mtu,
 	.send		= tnl_send,
 };
 

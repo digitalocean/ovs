@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@
  *
  * This extension attempts to address the problem by adding a generic "error
  * vendor extension".  The extension works as follows: use NXET_VENDOR as type
- * and NXVC_VENDOR_CODE as code, followed by struct nx_vendor_error with
+ * and NXVC_VENDOR_ERROR as code, followed by struct nx_vendor_error with
  * vendor-specific details, followed by at least 64 bytes of the failed
  * request.
  *
@@ -76,7 +76,7 @@ struct nx_vendor_error {
  * that duplicate the current ones' meanings. */
 
 /* Additional "code" values for OFPET_BAD_REQUEST. */
-enum {
+enum nx_bad_request_code {
 /* Nicira Extended Match (NXM) errors. */
 
     /* Generic error code used when there is an error in an NXM sent to the
@@ -103,7 +103,7 @@ enum {
 };
 
 /* Additional "code" values for OFPET_FLOW_MOD_FAILED. */
-enum {
+enum nx_flow_mod_failed_code {
     /* Generic hardware error. */
     NXFMFC_HARDWARE = 0x100,
 
@@ -126,16 +126,9 @@ OFP_ASSERT(sizeof(struct nicira_header) == 16);
 
 /* Values for the 'subtype' member of struct nicira_header. */
 enum nicira_type {
-    /* Switch status request.  The request body is an ASCII string that
-     * specifies a prefix of the key names to include in the output; if it is
-     * the null string, then all key-value pairs are included. */
-    NXT_STATUS_REQUEST,
-
-    /* Switch status reply.  The reply body is an ASCII string of key-value
-     * pairs in the form "key=value\n". */
-    NXT_STATUS_REPLY,
-
     /* No longer used. */
+    NXT_STATUS_REQUEST__OBSOLETE,
+    NXT_STATUS_REPLY__OBSOLETE,
     NXT_ACT_SET_CONFIG__OBSOLETE,
     NXT_ACT_GET_CONFIG__OBSOLETE,
     NXT_COMMAND_REQUEST__OBSOLETE,
@@ -312,9 +305,9 @@ OFP_ASSERT(sizeof(struct nx_action_set_tunnel64) == 24);
  * Ethernet+IPv4 ARP packet for which the source Ethernet address inside the
  * ARP packet differs from the source Ethernet address in the Ethernet header.
  *
- * This is useful because OpenFlow does not provide a way to match on the
- * Ethernet addresses inside ARP packets, so there is no other way to drop
- * spoofed ARPs other than sending every ARP packet to a controller. */
+ * (This  action  is  deprecated in  favor of defining flows using the
+ * NXM_NX_ARP_SHA flow match and will likely be removed in a future version
+ * of Open vSwitch.) */
 struct nx_action_drop_spoofed_arp {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
     ovs_be16 len;                   /* Length is 16. */
@@ -386,6 +379,12 @@ OFP_ASSERT(sizeof(struct nx_action_pop_queue) == 16);
  *   - NXM_OF_ARP_SPA
  *   - NXM_OF_ARP_TPA
  *   - NXM_NX_TUN_ID
+ *   - NXM_NX_ARP_SHA
+ *   - NXM_NX_ARP_THA
+ *   - NXM_NX_ICMPV6_TYPE
+ *   - NXM_NX_ICMPV6_CODE
+ *   - NXM_NX_ND_SLL
+ *   - NXM_NX_ND_TLL
  *   - NXM_NX_REG(idx) for idx in the switch's accepted range.
  *
  * The following nxm_header values are potentially acceptable as 'dst':
@@ -430,9 +429,9 @@ OFP_ASSERT(sizeof(struct nx_action_reg_move) == 24);
  * starts at 0 for the least-significant bit, 1 for the next most significant
  * bit, and so on.
  *
- * 'dst' is an nxm_header with nxm_hasmask=0.  It must be one of the following:
- *
- *   - NXM_NX_REG(idx) for idx in the switch's accepted range.
+ * 'dst' is an nxm_header with nxm_hasmask=0.  See the documentation for
+ * NXAST_REG_MOVE, above, for the permitted fields and for the side effects of
+ * loading them.
  *
  * The 'ofs' and 'n_bits' fields are combined into a single 'ofs_nbits' field
  * to avoid enlarging the structure by another 8 bytes.  To allow 'n_bits' to
@@ -503,8 +502,9 @@ OFP_ASSERT(sizeof(struct nx_action_note) == 16);
  *       Some algorithms use 'arg' as an additional argument.
  *
  *    3. Stores 'link' in dst[ofs:ofs+n_bits].  The format and semantics of
- *       'dst' and 'ofs_nbits' are identical to those for the NXAST_REG_LOAD
- *       action; refer to the description of that action for details.
+ *       'dst' and 'ofs_nbits' are similar to those for the NXAST_REG_LOAD
+ *       action, except that 'dst' must be NXM_NX_REG(idx) for 'idx' in the
+ *       switch's supported range.
  *
  * The switch will reject actions that have an unknown 'fields', or an unknown
  * 'algorithm', or in which ofs+n_bits is greater than the width of 'dst', or
@@ -902,7 +902,7 @@ enum nx_mp_algorithm {
 
 /* The "type of service" byte of the IP header, with the ECN bits forced to 0.
  *
- * Prereqs: NXM_OF_ETH_TYPE must match 0x0800 exactly.
+ * Prereqs: NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
  *
  * Format: 8-bit integer with 2 least-significant bits forced to 0.
  *
@@ -911,7 +911,7 @@ enum nx_mp_algorithm {
 
 /* The "protocol" byte in the IP header.
  *
- * Prereqs: NXM_OF_ETH_TYPE must match 0x0800 exactly.
+ * Prereqs: NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
  *
  * Format: 8-bit integer.
  *
@@ -934,7 +934,7 @@ enum nx_mp_algorithm {
 /* The source or destination port in the TCP header.
  *
  * Prereqs:
- *   NXM_OF_ETH_TYPE must match 0x0800 exactly.
+ *   NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
  *   NXM_OF_IP_PROTO must match 6 exactly.
  *
  * Format: 16-bit integer in network byte order.
@@ -946,7 +946,7 @@ enum nx_mp_algorithm {
 /* The source or destination port in the UDP header.
  *
  * Prereqs:
- *   NXM_OF_ETH_TYPE must match 0x0800 exactly.
+ *   NXM_OF_ETH_TYPE must match either 0x0800 or 0x86dd.
  *   NXM_OF_IP_PROTO must match 17 exactly.
  *
  * Format: 16-bit integer in network byte order.
@@ -1037,6 +1037,81 @@ enum nx_mp_algorithm {
  * Masking: Arbitrary masks. */
 #define NXM_NX_TUN_ID     NXM_HEADER  (0x0001, 16, 8)
 #define NXM_NX_TUN_ID_W   NXM_HEADER_W(0x0001, 16, 8)
+
+/* For an Ethernet+IP ARP packet, the source or target hardware address
+ * in the ARP header.  Always 0 otherwise.
+ *
+ * Prereqs: NXM_OF_ETH_TYPE must match 0x0806 exactly.
+ *
+ * Format: 48-bit Ethernet MAC address.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_ARP_SHA    NXM_HEADER  (0x0001, 17, 6)
+#define NXM_NX_ARP_THA    NXM_HEADER  (0x0001, 18, 6)
+
+/* The source or destination address in the IPv6 header.
+ *
+ * Prereqs: NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *
+ * Format: 128-bit IPv6 address.
+ *
+ * Masking: Only CIDR masks are allowed, that is, masks that consist of N
+ *   high-order bits set to 1 and the other 128-N bits set to 0. */
+#define NXM_NX_IPV6_SRC    NXM_HEADER  (0x0001, 19, 16)
+#define NXM_NX_IPV6_SRC_W  NXM_HEADER_W(0x0001, 19, 16)
+#define NXM_NX_IPV6_DST    NXM_HEADER  (0x0001, 20, 16)
+#define NXM_NX_IPV6_DST_W  NXM_HEADER_W(0x0001, 20, 16)
+
+/* The type or code in the ICMPv6 header.
+ *
+ * Prereqs:
+ *   NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *   NXM_OF_IP_PROTO must match 58 exactly.
+ *
+ * Format: 8-bit integer.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_ICMPV6_TYPE NXM_HEADER  (0x0001, 21, 1)
+#define NXM_NX_ICMPV6_CODE NXM_HEADER  (0x0001, 22, 1)
+
+/* The target address in an IPv6 Neighbor Discovery message.
+ *
+ * Prereqs:
+ *   NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *   NXM_OF_IP_PROTO must match 58 exactly.
+ *   NXM_OF_ICMPV6_TYPE must be either 135 or 136.
+ *
+ * Format: 128-bit IPv6 address.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_ND_TARGET   NXM_HEADER  (0x0001, 23, 16)
+
+/* The source link-layer address option in an IPv6 Neighbor Discovery
+ * message.
+ *
+ * Prereqs:
+ *   NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *   NXM_OF_IP_PROTO must match 58 exactly.
+ *   NXM_OF_ICMPV6_TYPE must be exactly 135.
+ *
+ * Format: 48-bit Ethernet MAC address.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_ND_SLL      NXM_HEADER  (0x0001, 24, 6)
+
+/* The target link-layer address option in an IPv6 Neighbor Discovery
+ * message.
+ *
+ * Prereqs:
+ *   NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *   NXM_OF_IP_PROTO must match 58 exactly.
+ *   NXM_OF_ICMPV6_TYPE must be exactly 136.
+ *
+ * Format: 48-bit Ethernet MAC address.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_ND_TLL      NXM_HEADER  (0x0001, 25, 6)
+
 
 /* ## --------------------- ## */
 /* ## Requests and replies. ## */

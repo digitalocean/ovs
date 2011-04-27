@@ -12,6 +12,7 @@ TESTSUITE_AT = \
 	tests/check-structs.at \
 	tests/daemon.at \
 	tests/daemon-py.at \
+	tests/ofp-print.at \
 	tests/ovs-ofctl.at \
 	tests/multipath.at \
 	tests/vconn.at \
@@ -24,6 +25,7 @@ TESTSUITE_AT = \
 	tests/timeval.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
+	tests/ofproto-macros.at \
 	tests/ofproto.at \
 	tests/ovsdb.at \
 	tests/ovsdb-log.at \
@@ -66,7 +68,6 @@ lcov_wrappers = \
 	tests/lcov/test-byte-order \
 	tests/lcov/test-classifier \
 	tests/lcov/test-csum \
-	tests/lcov/test-dhcp-client \
 	tests/lcov/test-file_name \
 	tests/lcov/test-flows \
 	tests/lcov/test-hash \
@@ -77,6 +78,7 @@ lcov_wrappers = \
 	tests/lcov/test-lockfile \
 	tests/lcov/test-multipath \
 	tests/lcov/test-ovsdb \
+	tests/lcov/test-packets \
 	tests/lcov/test-random \
 	tests/lcov/test-reconnect \
 	tests/lcov/test-sha1 \
@@ -118,7 +120,6 @@ valgrind_wrappers = \
 	tests/valgrind/test-byte-order \
 	tests/valgrind/test-classifier \
 	tests/valgrind/test-csum \
-	tests/valgrind/test-dhcp-client \
 	tests/valgrind/test-file_name \
 	tests/valgrind/test-flows \
 	tests/valgrind/test-hash \
@@ -129,6 +130,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-lockfile \
 	tests/valgrind/test-multipath \
 	tests/valgrind/test-ovsdb \
+	tests/valgrind/test-packets \
 	tests/valgrind/test-random \
 	tests/valgrind/test-reconnect \
 	tests/valgrind/test-sha1 \
@@ -226,6 +228,10 @@ noinst_PROGRAMS += tests/test-multipath
 tests_test_multipath_SOURCES = tests/test-multipath.c
 tests_test_multipath_LDADD = lib/libopenvswitch.a
 
+noinst_PROGRAMS += tests/test-packets
+tests_test_packets_SOURCES = tests/test-packets.c
+tests_test_packets_LDADD = lib/libopenvswitch.a
+
 noinst_PROGRAMS += tests/test-random
 tests_test_random_SOURCES = tests/test-random.c
 tests_test_random_LDADD = lib/libopenvswitch.a
@@ -269,10 +275,6 @@ tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
 
 noinst_PROGRAMS += tests/test-type-props
 tests_test_type_props_SOURCES = tests/test-type-props.c
-
-noinst_PROGRAMS += tests/test-dhcp-client
-tests_test_dhcp_client_SOURCES = tests/test-dhcp-client.c
-tests_test_dhcp_client_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-uuid
 tests_test_uuid_SOURCES = tests/test-uuid.c

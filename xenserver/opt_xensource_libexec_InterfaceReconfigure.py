@@ -245,9 +245,10 @@ def _map_to_xml(xml, parent, tag, val, attrs):
     e = xml.createElement(tag)
     parent.appendChild(e)
     for n,v in val.items():
-        if not n in attrs:
-            raise Error("Unknown other-config attribute: %s" % n)
-        _str_to_xml(xml, e, n, v)
+        if n in attrs:
+            _str_to_xml(xml, e, n, v)
+        else:
+            log("Unknown other-config attribute: %s" % n)
 
 def _map_from_xml(n, attrs):
     ret = {}
@@ -276,11 +277,14 @@ _VLAN_XML_TAG = "vlan"
 _TUNNEL_XML_TAG = "tunnel"
 _BOND_XML_TAG = "bond"
 _NETWORK_XML_TAG = "network"
+_POOL_XML_TAG = "pool"
 
-_ETHTOOL_OTHERCONFIG_ATTRS = ['ethtool-%s' % x for x in 'autoneg', 'speed', 'duplex', 'rx', 'tx', 'sg', 'tso', 'ufo', 'gso' ]
+_ETHTOOL_OTHERCONFIG_ATTRS = ['ethtool-%s' % x for x in 'autoneg', 'speed', 'duplex', 'rx', 'tx', 'sg', 'tso', 'ufo', 'gso', 'gro', 'lro' ]
 
 _PIF_OTHERCONFIG_ATTRS = [ 'domain', 'peerdns', 'defaultroute', 'mtu', 'static-routes' ] + \
-                        [ 'bond-%s' % x for x in 'mode', 'miimon', 'downdelay', 'updelay', 'use_carrier' ] + \
+                        [ 'bond-%s' % x for x in 'mode', 'miimon', 'downdelay',
+                                'updelay', 'use_carrier', 'hashing-algorithm' ] + \
+                        [ 'vlan-bug-workaround' ] + \
                         _ETHTOOL_OTHERCONFIG_ATTRS
 
 _PIF_ATTRS = { 'uuid': (_str_to_xml,_str_from_xml),
@@ -329,7 +333,11 @@ _BOND_ATTRS = { 'uuid': (_str_to_xml,_str_from_xml),
                           lambda n: _strlist_from_xml(n, 'slaves', 'slave')),
               }
 
-_NETWORK_OTHERCONFIG_ATTRS = [ 'mtu', 'static-routes' ] + _ETHTOOL_OTHERCONFIG_ATTRS
+_NETWORK_OTHERCONFIG_ATTRS = [ 'mtu',
+                               'static-routes',
+                               'vswitch-controller-fail-mode',
+                               'vswitch-disable-in-band' ] \
+                               + _ETHTOOL_OTHERCONFIG_ATTRS
 
 _NETWORK_ATTRS = { 'uuid': (_str_to_xml,_str_from_xml),
                    'bridge': (_str_to_xml,_str_from_xml),
@@ -339,6 +347,12 @@ _NETWORK_ATTRS = { 'uuid': (_str_to_xml,_str_from_xml),
                    'other_config': (lambda x, p, t, v: _otherconfig_to_xml(x, p, v, _NETWORK_OTHERCONFIG_ATTRS),
                                     lambda n: _otherconfig_from_xml(n, _NETWORK_OTHERCONFIG_ATTRS)),
                  }
+
+_POOL_OTHERCONFIG_ATTRS = ['vswitch-controller-fail-mode']
+
+_POOL_ATTRS = { 'other_config': (lambda x, p, t, v: _otherconfig_to_xml(x, p, v, _POOL_OTHERCONFIG_ATTRS),
+                                 lambda n: _otherconfig_from_xml(n, _POOL_OTHERCONFIG_ATTRS)),
+              }
 
 #
 # Database Cache object
@@ -382,12 +396,7 @@ class DatabaseCache(object):
                 continue
             self.__pifs[p] = {}
             for f in _PIF_ATTRS:
-                if f in [ "tunnel_access_PIF_of", "tunnel_transport_PIF_of" ] and f not in rec:
-                    # XenServer 5.5 network records did not have
-                    # these fields, so allow them to be missing.
-                    pass
-                else:
-                    self.__pifs[p][f] = rec[f]
+                self.__pifs[p][f] = rec[f]
             self.__pifs[p]['other_config'] = {}
             for f in _PIF_OTHERCONFIG_ATTRS:
                 if not rec['other_config'].has_key(f): continue
@@ -395,8 +404,7 @@ class DatabaseCache(object):
 
     def __get_vlan_records_from_xapi(self, session):
         self.__vlans = {}
-        for v in session.xenapi.VLAN.get_all():
-            rec = session.xenapi.VLAN.get_record(v)
+        for (v,rec) in session.xenapi.VLAN.get_all_records().items():
             if not self.__pif_on_host(rec['untagged_PIF']):
                 continue
             self.__vlans[v] = {}
@@ -415,8 +423,7 @@ class DatabaseCache(object):
 
     def __get_bond_records_from_xapi(self, session):
         self.__bonds = {}
-        for b in session.xenapi.Bond.get_all():
-            rec = session.xenapi.Bond.get_record(b)
+        for (b,rec) in session.xenapi.Bond.get_all_records().items():
             if not self.__pif_on_host(rec['master']):
                 continue
             self.__bonds[b] = {}
@@ -425,8 +432,7 @@ class DatabaseCache(object):
 
     def __get_network_records_from_xapi(self, session):
         self.__networks = {}
-        for n in session.xenapi.network.get_all():
-            rec = session.xenapi.network.get_record(n)
+        for (n,rec) in session.xenapi.network.get_all_records().items():
             self.__networks[n] = {}
             for f in _NETWORK_ATTRS:
                 if f == "PIFs":
@@ -442,6 +448,20 @@ class DatabaseCache(object):
             for f in _NETWORK_OTHERCONFIG_ATTRS:
                 if not rec['other_config'].has_key(f): continue
                 self.__networks[n]['other_config'][f] = rec['other_config'][f]
+
+    def __get_pool_records_from_xapi(self, session):
+        self.__pools = {}
+        for p in session.xenapi.pool.get_all():
+            rec = session.xenapi.pool.get_record(p)
+
+            self.__pools[p] = {}
+
+            for f in _POOL_ATTRS:
+                self.__pools[p][f] = rec[f]
+
+            for f in _POOL_OTHERCONFIG_ATTRS:
+                if rec['other_config'].has_key(f):
+                    self.__pools[p]['other_config'][f] = rec['other_config'][f]
 
     def __to_xml(self, xml, parent, key, ref, rec, attrs):
         """Encode a database object as XML"""
@@ -489,13 +509,8 @@ class DatabaseCache(object):
 
                 self.__get_pif_records_from_xapi(session, host)
 
-                try:
-                    self.__get_tunnel_records_from_xapi(session)
-                except XenAPI.Failure, e:
-                    error,details = e.details
-                    if error == "MESSAGE_METHOD_UNKNOWN" and details == "tunnel.get_all":
-                        pass
-
+                self.__get_tunnel_records_from_xapi(session)
+                self.__get_pool_records_from_xapi(session)
                 self.__get_vlan_records_from_xapi(session)
                 self.__get_bond_records_from_xapi(session)
                 self.__get_network_records_from_xapi(session)
@@ -510,6 +525,7 @@ class DatabaseCache(object):
             self.__pifs = {}
             self.__bonds = {}
             self.__vlans = {}
+            self.__pools = {}
             self.__tunnels = {}
             self.__networks = {}
 
@@ -536,6 +552,9 @@ class DatabaseCache(object):
                 elif n.nodeName == _NETWORK_XML_TAG:
                     (ref,rec) = self.__from_xml(n, _NETWORK_ATTRS)
                     self.__networks[ref] = rec
+                elif n.nodeName == _POOL_XML_TAG:
+                    (ref,rec) = self.__from_xml(n, _POOL_ATTRS)
+                    self.__pools[ref] = rec
                 else:
                     raise Error("Unknown XML element %s" % n.nodeName)
 
@@ -554,6 +573,8 @@ class DatabaseCache(object):
         for (ref,rec) in self.__networks.items():
             self.__to_xml(xml, xml.documentElement, _NETWORK_XML_TAG, ref, rec,
                           _NETWORK_ATTRS)
+        for (ref,rec) in self.__pools.items():
+            self.__to_xml(xml, xml.documentElement, _POOL_XML_TAG, ref, rec, _POOL_ATTRS)
 
         f = open(cache_file, 'w')
         f.write(xml.toprettyxml())
@@ -575,10 +596,21 @@ class DatabaseCache(object):
                    filter(lambda (ref,rec): rec['device'] == device,
                           self.__pifs.items()))
 
+    def get_networks_with_bridge(self, bridge):
+        return map(lambda (ref,rec): ref,
+                  filter(lambda (ref,rec): rec['bridge'] == bridge,
+                         self.__networks.items()))
+
+    def get_network_by_bridge(self, bridge):
+        #Assumes one network has bridge.
+        try:
+            return self.get_networks_with_bridge(bridge)[0]
+        except KeyError:
+            return None
+
     def get_pif_by_bridge(self, bridge):
-        networks = map(lambda (ref,rec): ref,
-                       filter(lambda (ref,rec): rec['bridge'] == bridge,
-                              self.__networks.items()))
+        networks = self.get_networks_with_bridge(bridge)
+
         if len(networks) == 0:
             raise Error("No matching network \"%s\"" % bridge)
 
@@ -629,11 +661,16 @@ class DatabaseCache(object):
         else:
             return None
 
-#
-#
-#
+    def get_pool_record(self):
+        if len(self.__pools) > 0:
+            return self.__pools.values()[0]
 
-def ethtool_settings(oc):
+#
+#
+#
+PIF_OTHERCONFIG_DEFAULTS = {'gro': 'off', 'lro': 'off'}
+
+def ethtool_settings(oc, defaults = {}):
     settings = []
     if oc.has_key('ethtool-speed'):
         val = oc['ethtool-speed']
@@ -643,8 +680,8 @@ def ethtool_settings(oc):
             log("Invalid value for ethtool-speed = %s. Must be 10|100|1000." % val)
     if oc.has_key('ethtool-duplex'):
         val = oc['ethtool-duplex']
-        if val in ["10", "100", "1000"]:
-            settings += ['duplex', 'val']
+        if val in ["half", "full"]:
+            settings += ['duplex', val]
         else:
             log("Invalid value for ethtool-duplex = %s. Must be half|full." % val)
     if oc.has_key('ethtool-autoneg'):
@@ -656,7 +693,7 @@ def ethtool_settings(oc):
         else:
             log("Invalid value for ethtool-autoneg = %s. Must be on|true|off|false." % val)
     offload = []
-    for opt in ("rx", "tx", "sg", "tso", "ufo", "gso"):
+    for opt in ("rx", "tx", "sg", "tso", "ufo", "gso", "gro", "lro"):
         if oc.has_key("ethtool-" + opt):
             val = oc["ethtool-" + opt]
             if val in ["true", "on"]:
@@ -665,6 +702,8 @@ def ethtool_settings(oc):
                 offload += [opt, 'off']
             else:
                 log("Invalid value for ethtool-%s = %s. Must be on|true|off|false." % (opt, val))
+        elif opt in defaults:
+            offload += [opt, defaults[opt]]
     return settings,offload
 
 # By default the MTU is taken from the Network.MTU setting for VIF,
@@ -837,8 +876,7 @@ def pif_get_vlan_masters(pif):
 # Tunnel PIFs
 #
 def pif_is_tunnel(pif):
-    rec = db().get_pif_record(pif)
-    return rec.has_key('tunnel_access_PIF_of') and len(rec['tunnel_access_PIF_of']) > 0
+    return len(db().get_pif_record(pif)['tunnel_access_PIF_of']) > 0
 
 #
 # Datapath base class

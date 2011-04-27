@@ -1,6 +1,6 @@
 AT_INIT
 
-AT_COPYRIGHT([Copyright (c) 2009, 2010 Nicira Networks.
+AT_COPYRIGHT([Copyright (c) 2009, 2010, 2011 Nicira Networks.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,12 +36,14 @@ m4_define([OVS_WAIT_UNTIL], [OVS_WAIT([if $1; then exit 0; fi], [$2])])
 m4_define([OVS_WAIT_WHILE], [OVS_WAIT([if $1; then :; else exit 0; fi], [$2])])
 
 m4_include([tests/ovsdb-macros.at])
+m4_include([tests/ofproto-macros.at])
 
 m4_include([tests/library.at])
 m4_include([tests/classifier.at])
 m4_include([tests/check-structs.at])
 m4_include([tests/daemon.at])
 m4_include([tests/daemon-py.at])
+m4_include([tests/ofp-print.at])
 m4_include([tests/ovs-ofctl.at])
 m4_include([tests/multipath.at])
 m4_include([tests/vconn.at])

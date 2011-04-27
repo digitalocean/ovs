@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,8 +71,6 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_AGGREGATE_REPLY,
 
     /* NXT_* messages. */
-    OFPUTIL_NXT_STATUS_REQUEST,
-    OFPUTIL_NXT_STATUS_REPLY,
     OFPUTIL_NXT_TUN_ID_FROM_COOKIE,
     OFPUTIL_NXT_ROLE_REQUEST,
     OFPUTIL_NXT_ROLE_REPLY,
@@ -109,6 +107,10 @@ void ofputil_cls_rule_to_match(const struct cls_rule *, enum nx_flow_format,
                                ovs_be64 cookie_in, ovs_be64 *cookie_out);
 void normalize_match(struct ofp_match *);
 char *ofp_match_to_literal_string(const struct ofp_match *match);
+
+/* dl_type translation between OpenFlow and 'struct flow' format. */
+ovs_be16 ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type);
+ovs_be16 ofputil_dl_type_from_openflow(ovs_be16 ofp_dl_type);
 
 /* Flow formats. */
 bool ofputil_flow_format_is_valid(enum nx_flow_format);
@@ -153,6 +155,25 @@ int ofputil_decode_flow_stats_request(struct flow_stats_request *,
 struct ofpbuf *ofputil_encode_flow_stats_request(
     const struct flow_stats_request *, enum nx_flow_format);
 
+/* Flow stats reply, independent of flow format. */
+struct ofputil_flow_stats {
+    struct cls_rule rule;
+    ovs_be64 cookie;
+    uint8_t table_id;
+    uint32_t duration_sec;
+    uint32_t duration_nsec;
+    uint16_t idle_timeout;
+    uint16_t hard_timeout;
+    uint64_t packet_count;
+    uint64_t byte_count;
+    union ofp_action *actions;
+    size_t n_actions;
+};
+
+int ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *,
+                                    struct ofpbuf *msg,
+                                    enum nx_flow_format);
+
 /* Flow removed message, independent of flow format. */
 struct ofputil_flow_removed {
     struct cls_rule rule;
@@ -168,6 +189,21 @@ struct ofputil_flow_removed {
 int ofputil_decode_flow_removed(struct ofputil_flow_removed *,
                                 const struct ofp_header *,
                                 enum nx_flow_format);
+struct ofpbuf *ofputil_encode_flow_removed(const struct ofputil_flow_removed *,
+                                           enum nx_flow_format);
+
+/* Abstract packet-in message. */
+struct ofputil_packet_in {
+    struct ofpbuf *packet;
+    uint16_t in_port;
+    uint8_t reason;             /* One of OFPR_*. */
+
+    uint32_t buffer_id;
+    int send_len;
+};
+
+struct ofpbuf *ofputil_encode_packet_in(const struct ofputil_packet_in *,
+                                        struct ofpbuf *rw_packet);
 
 /* OpenFlow protocol utility functions. */
 void *make_openflow(size_t openflow_len, uint8_t type, struct ofpbuf **);
@@ -221,12 +257,7 @@ struct ofpbuf *make_unbuffered_packet_out(const struct ofpbuf *packet,
 struct ofpbuf *make_echo_request(void);
 struct ofpbuf *make_echo_reply(const struct ofp_header *rq);
 
-struct flow_stats_iterator {
-    const uint8_t *pos, *end;
-};
-const struct ofp_flow_stats *flow_stats_first(struct flow_stats_iterator *,
-                                              const struct ofp_stats_reply *);
-const struct ofp_flow_stats *flow_stats_next(struct flow_stats_iterator *);
+void hton_ofp_phy_port(struct ofp_phy_port *);
 
 /* Actions. */
 
@@ -384,6 +415,11 @@ get_ofp_err_code(int error)
     return error & 0xffff;
 }
 
-struct ofpbuf *make_ofp_error_msg(int error, const struct ofp_header *);
+struct ofpbuf *ofputil_encode_error_msg(int error, const struct ofp_header *);
+int ofputil_decode_error_msg(const struct ofp_header *, size_t *payload_ofs);
+
+/* String versions of errors. */
+void ofputil_format_error(struct ds *, int error);
+char *ofputil_error_to_string(int error);
 
 #endif /* ofp-util.h */

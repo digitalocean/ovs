@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,16 +16,20 @@
 
 #include <config.h>
 #include "ofp-print.h"
+#include <errno.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include "byte-order.h"
 #include "classifier.h"
+#include "dynamic-string.h"
 #include "multipath.h"
 #include "nx-match.h"
+#include "ofp-errors.h"
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "packets.h"
 #include "random.h"
+#include "unaligned.h"
 #include "type-props.h"
 #include "vlog.h"
 
@@ -121,6 +125,10 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     /* Initialize most of rule->wc. */
     flow_wildcards_init_catchall(wc);
     wc->wildcards = ofpfw & WC_INVARIANTS;
+
+    /* Wildcard fields that aren't defined by ofp_match or tun_id. */
+    wc->wildcards |= (FWW_ARP_SHA | FWW_ARP_THA | FWW_ND_TARGET);
+
     if (ofpfw & OFPFW_NW_TOS) {
         wc->wildcards |= FWW_NW_TOS;
     }
@@ -129,9 +137,6 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
 
     if (flow_format == NXFF_TUN_ID_FROM_COOKIE && !(ofpfw & NXFW_TUN_ID)) {
         rule->flow.tun_id = htonll(ntohll(cookie) >> 32);
-    } else {
-        wc->wildcards |= FWW_TUN_ID;
-        rule->flow.tun_id = htonll(0);
     }
 
     if (ofpfw & OFPFW_DL_DST) {
@@ -146,7 +151,7 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     rule->flow.nw_dst = match->nw_dst;
     rule->flow.in_port = (match->in_port == htons(OFPP_LOCAL) ? ODPP_LOCAL
                      : ntohs(match->in_port));
-    rule->flow.dl_type = match->dl_type;
+    rule->flow.dl_type = ofputil_dl_type_from_openflow(match->dl_type);
     rule->flow.tp_src = match->tp_src;
     rule->flow.tp_dst = match->tp_dst;
     memcpy(rule->flow.dl_src, match->dl_src, ETH_ADDR_LEN);
@@ -230,7 +235,7 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule,
 
     /* Tunnel ID. */
     if (flow_format == NXFF_TUN_ID_FROM_COOKIE) {
-        if (wc->wildcards & FWW_TUN_ID) {
+        if (wc->tun_id_mask == htonll(0)) {
             ofpfw |= NXFW_TUN_ID;
         } else {
             uint32_t cookie_lo = ntohll(cookie_in);
@@ -270,7 +275,7 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule,
                            : rule->flow.in_port);
     memcpy(match->dl_src, rule->flow.dl_src, ETH_ADDR_LEN);
     memcpy(match->dl_dst, rule->flow.dl_dst, ETH_ADDR_LEN);
-    match->dl_type = rule->flow.dl_type;
+    match->dl_type = ofputil_dl_type_to_openflow(rule->flow.dl_type);
     match->nw_src = rule->flow.nw_src;
     match->nw_dst = rule->flow.nw_dst;
     match->nw_tos = rule->flow.nw_tos;
@@ -279,6 +284,27 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule,
     match->tp_dst = rule->flow.tp_dst;
     memset(match->pad1, '\0', sizeof match->pad1);
     memset(match->pad2, '\0', sizeof match->pad2);
+}
+
+/* Given a 'dl_type' value in the format used in struct flow, returns the
+ * corresponding 'dl_type' value for use in an OpenFlow ofp_match structure. */
+ovs_be16
+ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type)
+{
+    return (flow_dl_type == htons(FLOW_DL_TYPE_NONE)
+            ? htons(OFP_DL_TYPE_NOT_ETH_TYPE)
+            : flow_dl_type);
+}
+
+/* Given a 'dl_type' value in the format used in an OpenFlow ofp_match
+ * structure, returns the corresponding 'dl_type' value for use in struct
+ * flow. */
+ovs_be16
+ofputil_dl_type_from_openflow(ovs_be16 ofp_dl_type)
+{
+    return (ofp_dl_type == htons(OFP_DL_TYPE_NOT_ETH_TYPE)
+            ? htons(FLOW_DL_TYPE_NONE)
+            : ofp_dl_type);
 }
 
 /* Returns a transaction ID to use for an outgoing OpenFlow message. */
@@ -373,14 +399,6 @@ ofputil_decode_vendor(const struct ofp_header *oh,
                       const struct ofputil_msg_type **typep)
 {
     static const struct ofputil_msg_type nxt_messages[] = {
-        { OFPUTIL_NXT_STATUS_REQUEST,
-          NXT_STATUS_REQUEST, "NXT_STATUS_REQUEST",
-          sizeof(struct nicira_header), 1 },
-
-        { OFPUTIL_NXT_STATUS_REPLY,
-          NXT_STATUS_REPLY, "NXT_STATUS_REPLY",
-          sizeof(struct nicira_header), 1 },
-
         { OFPUTIL_NXT_TUN_ID_FROM_COOKIE,
           NXT_TUN_ID_FROM_COOKIE, "NXT_TUN_ID_FROM_COOKIE",
           sizeof(struct nxt_tun_id_cookie), 0 },
@@ -826,6 +844,69 @@ regs_fully_wildcarded(const struct flow_wildcards *wc)
     return true;
 }
 
+static inline bool
+is_nxm_required(const struct cls_rule *rule, bool cookie_support,
+                ovs_be64 cookie)
+{
+    const struct flow_wildcards *wc = &rule->wc;
+    uint32_t cookie_hi;
+    uint64_t tun_id;
+
+    /* Only NXM supports separately wildcards the Ethernet multicast bit. */
+    if (!(wc->wildcards & FWW_DL_DST) != !(wc->wildcards & FWW_ETH_MCAST)) {
+        return true;
+    }
+
+    /* Only NXM supports matching ARP hardware addresses. */
+    if (!(wc->wildcards & FWW_ARP_SHA) || !(wc->wildcards & FWW_ARP_THA)) {
+        return true;
+    }
+
+    /* Only NXM supports matching IPv6 traffic. */
+    if (!(wc->wildcards & FWW_DL_TYPE)
+            && (rule->flow.dl_type == htons(ETH_TYPE_IPV6))) {
+        return true;
+    }
+
+    /* Only NXM supports matching registers. */
+    if (!regs_fully_wildcarded(wc)) {
+        return true;
+    }
+
+    switch (wc->tun_id_mask) {
+    case CONSTANT_HTONLL(0):
+        /* Other formats can fully wildcard tun_id. */
+        break;
+
+    case CONSTANT_HTONLL(UINT64_MAX):
+        /* Only NXM supports tunnel ID matching without a cookie. */
+        if (!cookie_support) {
+            return true;
+        }
+
+        /* Only NXM supports 64-bit tunnel IDs. */
+        tun_id = ntohll(rule->flow.tun_id);
+        if (tun_id > UINT32_MAX) {
+            return true;
+        }
+
+        /* Only NXM supports a cookie whose top 32 bits conflict with the
+         * tunnel ID. */
+        cookie_hi = ntohll(cookie) >> 32;
+        if (cookie_hi && cookie_hi != tun_id) {
+            return true;
+        }
+        break;
+
+    default:
+        /* Only NXM supports partial matches on tunnel ID. */
+        return true;
+    }
+
+    /* Other formats can express this rule. */
+    return false;
+}
+
 /* Returns the minimum nx_flow_format to use for sending 'rule' to a switch
  * (e.g. to add or remove a flow).  'cookie_support' should be true if the
  * command to be sent includes a flow cookie (as OFPT_FLOW_MOD does, for
@@ -850,16 +931,9 @@ enum nx_flow_format
 ofputil_min_flow_format(const struct cls_rule *rule, bool cookie_support,
                         ovs_be64 cookie)
 {
-    const struct flow_wildcards *wc = &rule->wc;
-    ovs_be32 cookie_hi = htonl(ntohll(cookie) >> 32);
-
-    if (!(wc->wildcards & FWW_DL_DST) != !(wc->wildcards & FWW_ETH_MCAST)
-        || !regs_fully_wildcarded(wc)
-        || (!(wc->wildcards & FWW_TUN_ID)
-            && (!cookie_support
-                || (cookie_hi && cookie_hi != ntohll(rule->flow.tun_id))))) {
+    if (is_nxm_required(rule, cookie_support, cookie)) {
         return NXFF_NXM;
-    } else if (!(wc->wildcards & FWW_TUN_ID)) {
+    } else if (rule->wc.tun_id_mask != htonll(0)) {
         return NXFF_TUN_ID_FROM_COOKIE;
     } else {
         return NXFF_OPENFLOW10;
@@ -1076,7 +1150,7 @@ ofputil_decode_nxst_flow_request(struct flow_stats_request *fsr,
 }
 
 /* Converts an OFPST_FLOW, OFPST_AGGREGATE, NXST_FLOW, or NXST_AGGREGATE
- * message 'oh', received when the current flow format was 'flow_format', into
+ * request 'oh', received when the current flow format was 'flow_format', into
  * an abstract flow_stats_request in 'fsr'.  Returns 0 if successful, otherwise
  * an OpenFlow error code.
  *
@@ -1116,7 +1190,7 @@ ofputil_decode_flow_stats_request(struct flow_stats_request *fsr,
 }
 
 /* Converts abstract flow_stats_request 'fsr' into an OFPST_FLOW,
- * OFPST_AGGREGATE, NXST_FLOW, or NXST_AGGREGATE message 'oh' according to
+ * OFPST_AGGREGATE, NXST_FLOW, or NXST_AGGREGATE request 'oh' according to
  * 'flow_format', and returns the message. */
 struct ofpbuf *
 ofputil_encode_flow_stats_request(const struct flow_stats_request *fsr,
@@ -1156,6 +1230,117 @@ ofputil_encode_flow_stats_request(const struct flow_stats_request *fsr,
     }
 
     return msg;
+}
+
+/* Converts an OFPST_FLOW or NXST_FLOW reply in 'msg' into an abstract
+ * ofputil_flow_stats in 'fs'.  For OFPST_FLOW messages, 'flow_format' should
+ * be the current flow format at the time when the request corresponding to the
+ * reply in 'msg' was sent.  Otherwise 'flow_format' is ignored.
+ *
+ * Multiple OFPST_FLOW or NXST_FLOW replies can be packed into a single
+ * OpenFlow message.  Calling this function multiple times for a single 'msg'
+ * iterates through the replies.  The caller must initially leave 'msg''s layer
+ * pointers null and not modify them between calls.
+ *
+ * Returns 0 if successful, EOF if no replies were left in this 'msg',
+ * otherwise a positive errno value. */
+int
+ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
+                                struct ofpbuf *msg,
+                                enum nx_flow_format flow_format)
+{
+    const struct ofputil_msg_type *type;
+    int code;
+
+    ofputil_decode_msg_type(msg->l2 ? msg->l2 : msg->data, &type);
+    code = ofputil_msg_type_code(type);
+    if (!msg->l2) {
+        msg->l2 = msg->data;
+        if (code == OFPUTIL_OFPST_FLOW_REPLY) {
+            ofpbuf_pull(msg, sizeof(struct ofp_stats_reply));
+        } else if (code == OFPUTIL_NXST_FLOW_REPLY) {
+            ofpbuf_pull(msg, sizeof(struct nicira_stats_msg));
+        } else {
+            NOT_REACHED();
+        }
+    }
+
+    if (!msg->size) {
+        return EOF;
+    } else if (code == OFPUTIL_OFPST_FLOW_REPLY) {
+        const struct ofp_flow_stats *ofs;
+        size_t length;
+
+        ofs = ofpbuf_try_pull(msg, sizeof *ofs);
+        if (!ofs) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return EINVAL;
+        }
+
+        length = ntohs(ofs->length);
+        if (length < sizeof *ofs) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "OFPST_FLOW reply claims invalid "
+                         "length %zu", length);
+            return EINVAL;
+        }
+
+        if (ofputil_pull_actions(msg, length - sizeof *ofs,
+                                 &fs->actions, &fs->n_actions)) {
+            return EINVAL;
+        }
+
+        fs->cookie = get_32aligned_be64(&ofs->cookie);
+        ofputil_cls_rule_from_match(&ofs->match, ntohs(ofs->priority),
+                                    flow_format, fs->cookie, &fs->rule);
+        fs->table_id = ofs->table_id;
+        fs->duration_sec = ntohl(ofs->duration_sec);
+        fs->duration_nsec = ntohl(ofs->duration_nsec);
+        fs->idle_timeout = ntohs(ofs->idle_timeout);
+        fs->hard_timeout = ntohs(ofs->hard_timeout);
+        fs->packet_count = ntohll(get_32aligned_be64(&ofs->packet_count));
+        fs->byte_count = ntohll(get_32aligned_be64(&ofs->byte_count));
+    } else if (code == OFPUTIL_NXST_FLOW_REPLY) {
+        const struct nx_flow_stats *nfs;
+        size_t match_len, length;
+
+        nfs = ofpbuf_try_pull(msg, sizeof *nfs);
+        if (!nfs) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "NXST_FLOW reply has %zu leftover "
+                         "bytes at end", msg->size);
+            return EINVAL;
+        }
+
+        length = ntohs(nfs->length);
+        match_len = ntohs(nfs->match_len);
+        if (length < sizeof *nfs + ROUND_UP(match_len, 8)) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "NXST_FLOW reply with match_len=%zu "
+                         "claims invalid length %zu", match_len, length);
+            return EINVAL;
+        }
+        if (nx_pull_match(msg, match_len, ntohs(nfs->priority), &fs->rule)) {
+            return EINVAL;
+        }
+
+        if (ofputil_pull_actions(msg,
+                                 length - sizeof *nfs - ROUND_UP(match_len, 8),
+                                 &fs->actions, &fs->n_actions)) {
+            return EINVAL;
+        }
+
+        fs->cookie = nfs->cookie;
+        fs->table_id = nfs->table_id;
+        fs->duration_sec = ntohl(nfs->duration_sec);
+        fs->duration_nsec = ntohl(nfs->duration_nsec);
+        fs->idle_timeout = ntohs(nfs->idle_timeout);
+        fs->hard_timeout = ntohs(nfs->hard_timeout);
+        fs->packet_count = ntohll(nfs->packet_count);
+        fs->byte_count = ntohll(nfs->byte_count);
+    } else {
+        NOT_REACHED();
+    }
+
+    return 0;
 }
 
 /* Converts an OFPT_FLOW_REMOVED or NXT_FLOW_REMOVED message 'oh', received
@@ -1218,6 +1403,97 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
     }
 
     return 0;
+}
+
+/* Converts abstract ofputil_flow_removed 'fr' into an OFPT_FLOW_REMOVED or
+ * NXT_FLOW_REMOVED message 'oh' according to 'flow_format', and returns the
+ * message. */
+struct ofpbuf *
+ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
+                            enum nx_flow_format flow_format)
+{
+    struct ofpbuf *msg;
+
+    if (flow_format == NXFF_OPENFLOW10
+        || flow_format == NXFF_TUN_ID_FROM_COOKIE) {
+        struct ofp_flow_removed *ofr;
+
+        ofr = make_openflow_xid(sizeof *ofr, OFPT_FLOW_REMOVED, htonl(0),
+                                &msg);
+        ofputil_cls_rule_to_match(&fr->rule, flow_format, &ofr->match,
+                                  fr->cookie, &ofr->cookie);
+        ofr->priority = htons(fr->rule.priority);
+        ofr->reason = fr->reason;
+        ofr->duration_sec = htonl(fr->duration_sec);
+        ofr->duration_nsec = htonl(fr->duration_nsec);
+        ofr->idle_timeout = htons(fr->idle_timeout);
+        ofr->packet_count = htonll(fr->packet_count);
+        ofr->byte_count = htonll(fr->byte_count);
+    } else if (flow_format == NXFF_NXM) {
+        struct nx_flow_removed *nfr;
+        int match_len;
+
+        make_nxmsg_xid(sizeof *nfr, NXT_FLOW_REMOVED, htonl(0), &msg);
+        match_len = nx_put_match(msg, &fr->rule);
+
+        nfr = msg->data;
+        nfr->cookie = fr->cookie;
+        nfr->priority = htons(fr->rule.priority);
+        nfr->reason = fr->reason;
+        nfr->duration_sec = htonl(fr->duration_sec);
+        nfr->duration_nsec = htonl(fr->duration_nsec);
+        nfr->idle_timeout = htons(fr->idle_timeout);
+        nfr->match_len = htons(match_len);
+        nfr->packet_count = htonll(fr->packet_count);
+        nfr->byte_count = htonll(fr->byte_count);
+    } else {
+        NOT_REACHED();
+    }
+
+    return msg;
+}
+
+/* Converts abstract ofputil_packet_in 'pin' into an OFPT_PACKET_IN message
+ * and returns the message.
+ *
+ * If 'rw_packet' is NULL, the caller takes ownership of the newly allocated
+ * returned ofpbuf.
+ *
+ * If 'rw_packet' is nonnull, then it must contain the same data as
+ * pin->packet.  'rw_packet' is allowed to be the same ofpbuf as pin->packet.
+ * It is modified in-place into an OFPT_PACKET_IN message according to 'pin',
+ * and then ofputil_encode_packet_in() returns 'rw_packet'.  If 'rw_packet' has
+ * enough headroom to insert a "struct ofp_packet_in", this is more efficient
+ * than ofputil_encode_packet_in() because it does not copy the packet
+ * payload. */
+struct ofpbuf *
+ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
+                        struct ofpbuf *rw_packet)
+{
+    int total_len = pin->packet->size;
+    struct ofp_packet_in *opi;
+
+    if (rw_packet) {
+        if (pin->send_len < rw_packet->size) {
+            rw_packet->size = pin->send_len;
+        }
+    } else {
+        rw_packet = ofpbuf_clone_data_with_headroom(
+            pin->packet->data, MIN(pin->send_len, pin->packet->size),
+            offsetof(struct ofp_packet_in, data));
+    }
+
+    /* Add OFPT_PACKET_IN. */
+    opi = ofpbuf_push_zeros(rw_packet, offsetof(struct ofp_packet_in, data));
+    opi->header.version = OFP_VERSION;
+    opi->header.type = OFPT_PACKET_IN;
+    opi->total_len = htons(total_len);
+    opi->in_port = htons(pin->in_port);
+    opi->reason = pin->reason;
+    opi->buffer_id = htonl(pin->buffer_id);
+    update_openflow_length(rw_packet);
+
+    return rw_packet;
 }
 
 /* Returns a string representing the message type of 'type'.  The string is the
@@ -1587,49 +1863,17 @@ make_echo_reply(const struct ofp_header *rq)
     return out;
 }
 
-const struct ofp_flow_stats *
-flow_stats_first(struct flow_stats_iterator *iter,
-                 const struct ofp_stats_reply *osr)
+/* Converts the members of 'opp' from host to network byte order. */
+void
+hton_ofp_phy_port(struct ofp_phy_port *opp)
 {
-    iter->pos = osr->body;
-    iter->end = osr->body + (ntohs(osr->header.length)
-                             - offsetof(struct ofp_stats_reply, body));
-    return flow_stats_next(iter);
-}
-
-const struct ofp_flow_stats *
-flow_stats_next(struct flow_stats_iterator *iter)
-{
-    ptrdiff_t bytes_left = iter->end - iter->pos;
-    const struct ofp_flow_stats *fs;
-    size_t length;
-
-    if (bytes_left < sizeof *fs) {
-        if (bytes_left != 0) {
-            VLOG_WARN_RL(&bad_ofmsg_rl,
-                         "%td leftover bytes in flow stats reply", bytes_left);
-        }
-        return NULL;
-    }
-
-    fs = (const void *) iter->pos;
-    length = ntohs(fs->length);
-    if (length < sizeof *fs) {
-        VLOG_WARN_RL(&bad_ofmsg_rl, "flow stats length %zu is shorter than "
-                     "min %zu", length, sizeof *fs);
-        return NULL;
-    } else if (length > bytes_left) {
-        VLOG_WARN_RL(&bad_ofmsg_rl, "flow stats length %zu but only %td "
-                     "bytes left", length, bytes_left);
-        return NULL;
-    } else if ((length - sizeof *fs) % sizeof fs->actions[0]) {
-        VLOG_WARN_RL(&bad_ofmsg_rl, "flow stats length %zu has %zu bytes "
-                     "left over in final action", length,
-                     (length - sizeof *fs) % sizeof fs->actions[0]);
-        return NULL;
-    }
-    iter->pos += length;
-    return fs;
+    opp->port_no = htons(opp->port_no);
+    opp->config = htonl(opp->config);
+    opp->state = htonl(opp->state);
+    opp->curr = htonl(opp->curr);
+    opp->advertised = htonl(opp->advertised);
+    opp->supported = htonl(opp->supported);
+    opp->peer = htonl(opp->peer);
 }
 
 static int
@@ -1977,6 +2221,9 @@ normalize_match(struct ofp_match *m)
             m->nw_dst &= ofputil_wcbits_to_netmask(wc >> OFPFW_NW_DST_SHIFT);
         }
         m->tp_src = m->tp_dst = m->nw_tos = 0;
+    } else if (m->dl_type == htons(ETH_TYPE_IPV6)) {
+        /* Don't normalize IPv6 traffic, since OpenFlow doesn't have a
+         * way to express it. */
     } else {
         /* Network and transport layer fields will always be extracted as
          * zeros, so we can do an exact-match on those values. */
@@ -2043,6 +2290,18 @@ vendor_code_to_id(uint8_t code)
     }
 }
 
+static int
+vendor_id_to_code(uint32_t id)
+{
+    switch (id) {
+#define OFPUTIL_VENDOR(NAME, VENDOR_ID) case VENDOR_ID: return NAME;
+        OFPUTIL_VENDORS
+#undef OFPUTIL_VENDOR
+    default:
+        return -1;
+    }
+}
+
 /* Creates and returns an OpenFlow message of type OFPT_ERROR with the error
  * information taken from 'error', whose encoding must be as described in the
  * large comment in ofp-util.h.  If 'oh' is nonnull, then the error will use
@@ -2051,7 +2310,7 @@ vendor_code_to_id(uint8_t code)
  *
  * Returns NULL if 'error' is not an OpenFlow error code. */
 struct ofpbuf *
-make_ofp_error_msg(int error, const struct ofp_header *oh)
+ofputil_encode_error_msg(int error, const struct ofp_header *oh)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
@@ -2122,6 +2381,102 @@ make_ofp_error_msg(int error, const struct ofp_header *oh)
     }
 
     return buf;
+}
+
+/* Decodes 'oh', which should be an OpenFlow OFPT_ERROR message, and returns an
+ * Open vSwitch internal error code in the format described in the large
+ * comment in ofp-util.h.
+ *
+ * If 'payload_ofs' is nonnull, on success '*payload_ofs' is set to the offset
+ * to the payload starting from 'oh' and on failure it is set to 0. */
+int
+ofputil_decode_error_msg(const struct ofp_header *oh, size_t *payload_ofs)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+    const struct ofp_error_msg *oem;
+    uint16_t type, code;
+    struct ofpbuf b;
+    int vendor;
+
+    if (payload_ofs) {
+        *payload_ofs = 0;
+    }
+    if (oh->type != OFPT_ERROR) {
+        return EPROTO;
+    }
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    oem = ofpbuf_try_pull(&b, sizeof *oem);
+    if (!oem) {
+        return EPROTO;
+    }
+
+    type = ntohs(oem->type);
+    code = ntohs(oem->code);
+    if (type == NXET_VENDOR && code == NXVC_VENDOR_ERROR) {
+        const struct nx_vendor_error *nve = ofpbuf_try_pull(&b, sizeof *nve);
+        if (!nve) {
+            return EPROTO;
+        }
+
+        vendor = vendor_id_to_code(ntohl(nve->vendor));
+        if (vendor < 0) {
+            VLOG_WARN_RL(&rl, "error contains unknown vendor ID %#"PRIx32,
+                         ntohl(nve->vendor));
+            return EPROTO;
+        }
+        type = ntohs(nve->type);
+        code = ntohs(nve->code);
+    } else {
+        vendor = OFPUTIL_VENDOR_OPENFLOW;
+    }
+
+    if (type >= 1024) {
+        VLOG_WARN_RL(&rl, "error contains type %"PRIu16" greater than "
+                     "supported maximum value 1023", type);
+        return EPROTO;
+    }
+
+    if (payload_ofs) {
+        *payload_ofs = (uint8_t *) b.data - (uint8_t *) oh;
+    }
+    return ofp_mkerr_vendor(vendor, type, code);
+}
+
+void
+ofputil_format_error(struct ds *s, int error)
+{
+    if (is_errno(error)) {
+        ds_put_cstr(s, strerror(error));
+    } else {
+        uint16_t type = get_ofp_err_type(error);
+        uint16_t code = get_ofp_err_code(error);
+        const char *type_s = ofp_error_type_to_string(type);
+        const char *code_s = ofp_error_code_to_string(type, code);
+
+        ds_put_format(s, "type ");
+        if (type_s) {
+            ds_put_cstr(s, type_s);
+        } else {
+            ds_put_format(s, "%"PRIu16, type);
+        }
+
+        ds_put_cstr(s, ", code ");
+        if (code_s) {
+            ds_put_cstr(s, code_s);
+        } else {
+            ds_put_format(s, "%"PRIu16, code);
+        }
+    }
+}
+
+char *
+ofputil_error_to_string(int error)
+{
+    struct ds s = DS_EMPTY_INITIALIZER;
+    ofputil_format_error(&s, error);
+    return ds_steal_cstr(&s);
 }
 
 /* Attempts to pull 'actions_len' bytes from the front of 'b'.  Returns 0 if

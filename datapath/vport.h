@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -16,30 +16,16 @@
 
 #include "datapath.h"
 #include "openvswitch/datapath-protocol.h"
-#include "odp-compat.h"
 
 struct vport;
 struct vport_parms;
 
 /* The following definitions are for users of the vport subsytem: */
 
-int vport_user_mod(const struct odp_port __user *);
-
-int vport_user_stats_get(struct odp_vport_stats_req __user *);
-int vport_user_stats_set(struct odp_vport_stats_req __user *);
-int vport_user_ether_get(struct odp_vport_ether __user *);
-int vport_user_ether_set(struct odp_vport_ether __user *);
-int vport_user_mtu_get(struct odp_vport_mtu __user *);
-int vport_user_mtu_set(struct odp_vport_mtu __user *);
-
-void vport_lock(void);
-void vport_unlock(void);
-
 int vport_init(void);
 void vport_exit(void);
 
 struct vport *vport_add(const struct vport_parms *);
-int vport_mod(struct vport *, struct odp_port *);
 int vport_del(struct vport *);
 
 struct vport *vport_locate(const char *name);
@@ -49,7 +35,7 @@ int vport_set_addr(struct vport *, const unsigned char *);
 int vport_set_stats(struct vport *, struct rtnl_link_stats64 *);
 
 const char *vport_get_name(const struct vport *);
-const char *vport_get_type(const struct vport *);
+enum odp_vport_type vport_get_type(const struct vport *);
 const unsigned char *vport_get_addr(const struct vport *);
 
 struct kobject *vport_get_kobj(const struct vport *);
@@ -63,7 +49,9 @@ int vport_get_ifindex(const struct vport *);
 int vport_get_iflink(const struct vport *);
 
 int vport_get_mtu(const struct vport *);
-void vport_get_config(const struct vport *, void *);
+
+int vport_set_options(struct vport *, struct nlattr *options);
+int vport_get_options(const struct vport *, struct sk_buff *);
 
 int vport_send(struct vport *, struct sk_buff *);
 
@@ -86,6 +74,7 @@ struct vport_err_stats {
 
 /**
  * struct vport - one port within a datapath
+ * @rcu: RCU callback head for deferred destruction.
  * @port_no: Index into @dp's @ports array.
  * @dp: Datapath to which this port belongs.
  * @kobj: Represents /sys/class/net/<devname>/brport.
@@ -106,6 +95,7 @@ struct vport_err_stats {
  * XAPI for Citrix XenServer.  Deprecated.
  */
 struct vport {
+	struct rcu_head rcu;
 	u16 port_no;
 	struct datapath	*dp;
 	struct kobject kobj;
@@ -133,15 +123,15 @@ struct vport {
  *
  * @name: New vport's name.
  * @type: New vport's type.
- * @config: Kernel copy of 'config' member of &struct odp_port describing
- * configuration for new port.  Exactly %VPORT_CONFIG_SIZE bytes.
+ * @options: %ODP_VPORT_ATTR_OPTIONS attribute from Netlink message, %NULL if
+ * none was supplied.
  * @dp: New vport's datapath.
  * @port_no: New vport's port number.
  */
 struct vport_parms {
 	const char *name;
-	const char *type;
-	const void *config;
+	enum odp_vport_type type;
+	struct nlattr *options;
 
 	/* For vport_alloc(). */
 	struct datapath *dp;
@@ -151,8 +141,7 @@ struct vport_parms {
 /**
  * struct vport_ops - definition of a type of virtual port
  *
- * @type: Name of port type, such as "netdev" or "internal" to be matched
- * against the device type when a new port needs to be created.
+ * @type: %ODP_VPORT_TYPE_* value for this type of virtual port.
  * @flags: Flags of type VPORT_F_* that influence how the generic vport layer
  * handles this vport.
  * @init: Called at module initialization.  If VPORT_F_REQUIRED is set then the
@@ -161,13 +150,15 @@ struct vport_parms {
  * @exit: Called at module unload.
  * @create: Create a new vport configured as specified.  On success returns
  * a new vport allocated with vport_alloc(), otherwise an ERR_PTR() value.
- * @modify: Modify the configuration of an existing vport.  May be null if
- * modification is not supported.
- * @destroy: Detach and destroy a vport.
+ * @destroy: Destroys a vport.  Must call vport_free() on the vport but not
+ * before an RCU grace period has elapsed.
+ * @set_options: Modify the configuration of an existing vport.  May be %NULL
+ * if modification is not supported.
+ * @get_options: Appends vport-specific attributes for the configuration of an
+ * existing vport to a &struct sk_buff.  May be %NULL for a vport that does not
+ * have any configuration.
  * @set_mtu: Set the device's MTU.  May be null if not supported.
  * @set_addr: Set the device's MAC address.  May be null if not supported.
- * @set_stats: Provides stats as an offset to be added to the device stats.
- * May be null if not supported.
  * @get_name: Get the device's name.
  * @get_addr: Get the device's MAC address.
  * @get_config: Get the device's configuration.
@@ -184,11 +175,12 @@ struct vport_parms {
  * @get_iflink: Get the system interface index associated with the device that
  * will be used to send packets (may be different than ifindex for tunnels).
  * May be null if the device does not have an iflink.
- * @get_mtu: Get the device's MTU.
+ * @get_mtu: Get the device's MTU.  May be %NULL if the device does not have an
+ * MTU (as e.g. some tunnels do not).
  * @send: Send a packet on the device.  Returns the length of the packet sent.
  */
 struct vport_ops {
-	const char *type;
+	enum odp_vport_type type;
 	u32 flags;
 
 	/* Called at module init and exit respectively. */
@@ -197,12 +189,13 @@ struct vport_ops {
 
 	/* Called with RTNL lock. */
 	struct vport *(*create)(const struct vport_parms *);
-	int (*modify)(struct vport *, struct odp_port *);
 	int (*destroy)(struct vport *);
+
+	int (*set_options)(struct vport *, struct nlattr *);
+	int (*get_options)(const struct vport *, struct sk_buff *);
 
 	int (*set_mtu)(struct vport *, int mtu);
 	int (*set_addr)(struct vport *, const unsigned char *);
-	int (*set_stats)(const struct vport *, struct rtnl_link_stats64 *);
 
 	/* Called with rcu_read_lock or RTNL lock. */
 	const char *(*get_name)(const struct vport *);

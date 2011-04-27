@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,16 +17,17 @@
 #ifndef IN_BAND_H
 #define IN_BAND_H 1
 
-#include "flow.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <sys/socket.h>
 
-struct dpif;
+struct flow;
 struct in_band;
+struct nlattr;
+struct ofpbuf;
 struct ofproto;
-struct rconn;
-struct settings;
-struct switch_status;
 
-int in_band_create(struct ofproto *, struct dpif *, struct switch_status *,
+int in_band_create(struct ofproto *, const char *local_name,
                    struct in_band **);
 void in_band_destroy(struct in_band *);
 
@@ -39,9 +40,8 @@ void in_band_wait(struct in_band *);
 
 bool in_band_msg_in_hook(struct in_band *, const struct flow *,
                          const struct ofpbuf *packet);
-bool in_band_rule_check(struct in_band *, const struct flow *,
-                        const struct nlattr *odp_actions,
-                        size_t actions_len);
+bool in_band_rule_check(const struct flow *,
+                        const struct nlattr *odp_actions, size_t actions_len);
 void in_band_flushed(struct in_band *);
 
 #endif /* in-band.h */

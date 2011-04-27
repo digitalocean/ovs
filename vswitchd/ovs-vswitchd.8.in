@@ -93,15 +93,10 @@ only allow privileged users, such as the superuser, to use it.
 \fBovs\-vswitchd\fR emits a log message if \fBmlockall()\fR is
 unavailable or unsuccessful.
 .
-.IP "\fB\-\-fake\-proc\-net\fR"
-Causes \fBovs\-vswitchd\fR to simulate some files in \fB/proc/net/vlan\fR
-and \fB/proc/net/bonding\fR that some legacy software expects to
-exist.  This option should only be used if such legacy software is
-actually in use.  It requires the \fBbrcompat_mod.ko\fR kernel module
-to be loaded.
-.IP
-On non-Linux hosts, this option is accepted but has no effect.
-.
+.ds DD \
+\fBovs\-vswitchd\fR detaches only after it has connected to the \
+database, retrieved the initial configuration, and set up that \
+configuration.
 .so lib/daemon.man
 .SS "Public Key Infrastructure Options"
 .so lib/ssl.man
@@ -118,6 +113,12 @@ how to configure Open vSwitch.
 .SS "GENERAL COMMANDS"
 .IP "\fBexit\fR"
 Causes \fBovs\-vswitchd\fR to gracefully terminate.
+.IP "\fBqos/show\fR \fIinterface\fR"
+Queries the kernel for Quality of Service configuration and statistics
+associated with the given \fIinterface\fR.
+.IP "\fBcfm/show\fR \fIinterface\fR"
+Displays detailed information about Connectivity Fault Management
+configured on \fIinterface\fR.
 .SS "BRIDGE COMMANDS"
 These commands manage bridges.
 .IP "\fBfdb/show\fR \fIbridge\fR"
@@ -155,6 +156,8 @@ lists information about each slave: whether it is enabled or disabled,
 the time to completion of an updelay or downdelay if one is in
 progress, whether it is the active slave, the MAC hashes assigned to
 the slave, and the MAC learning table entries that hash to each MAC.
+Any LACP information related to this bond may be found using the
+\fBlacp/show\fR command.
 .IP "\fBbond/migrate\fR \fIport\fR \fIhash\fR \fIslave\fR"
 Only valid for SLB bonds.  Assigns a given MAC hash to a new slave.
 \fIport\fR specifies the bond port, \fIhash\fR the MAC hash to be
@@ -182,6 +185,13 @@ status of \fIslave\fR changes.
 .IP "\fBbond/hash\fR \fImac\fR [\fIvlan\fR]"
 Returns the hash value which would be used for \fImac\fR with \fIvlan\fR
 if specified.
+.
+.IP "\fBlacp/show\fR \fIport\fR"
+Lists all of the LACP related information about the given \fIport\fR:
+active or passive, aggregation key, system id, and system priority.  Also
+lists information about each slave: whether it is enabled or disabled,
+whether it is attached or detached, port id and priority, actor
+information, and partner information.
 .
 .so ofproto/ofproto-unixctl.man
 .so lib/vlog-unixctl.man

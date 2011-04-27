@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,11 +29,6 @@
 extern "C" {
 #endif
 
-struct arg {
-    char *key;
-    char *value;
-};
-
 /* A network device (e.g. an Ethernet device).
  *
  * This structure should be treated as opaque by network device
@@ -44,11 +39,11 @@ struct netdev_dev {
                                                 this device. */
     int ref_cnt;                        /* Times this devices was opened. */
     struct shash_node *node;            /* Pointer to element in global map. */
-    struct arg *args;                   /* Argument list from last config. */
-    int n_args;                         /* Number of arguments in 'args'. */
+    struct shash args;                  /* Argument list from last config. */
 };
 
 void netdev_dev_init(struct netdev_dev *, const char *name,
+                     const struct shash *args,
                      const struct netdev_class *);
 void netdev_dev_uninit(struct netdev_dev *, bool destroy);
 const char *netdev_dev_get_type(const struct netdev_dev *);
@@ -143,12 +138,12 @@ struct netdev_class {
      * called. */
     void (*destroy)(struct netdev_dev *netdev_dev);
 
-    /* Reconfigures the device 'netdev_dev' with 'args'.
+    /* Changes the device 'netdev_dev''s configuration to 'args'.
      *
      * If this netdev class does not support reconfiguring a netdev
      * device, this may be a null pointer.
      */
-    int (*reconfigure)(struct netdev_dev *netdev_dev, const struct shash *args);
+    int (*set_config)(struct netdev_dev *netdev_dev, const struct shash *args);
 
     /* Attempts to open a network device.  On success, sets 'netdevp'
      * to the new network device.
@@ -171,7 +166,7 @@ struct netdev_class {
      *
      * If this netdev class does not support enumeration, this may be a null
      * pointer. */
-    int (*enumerate)(struct svec *all_names);
+    int (*enumerate)(struct sset *all_names);
 
     /* Attempts to receive a packet from 'netdev' into the 'size' bytes in
      * 'buffer'.  If successful, returns the number of bytes in the received
@@ -180,10 +175,9 @@ struct netdev_class {
      *
      * May return -EOPNOTSUPP if a network device does not implement packet
      * reception through this interface.  This function may be set to null if
-     * it would always return -EOPNOTSUPP anyhow.  (This will disable the OVS
-     * integrated DHCP client and OpenFlow controller discovery, and prevent
-     * the network device from being usefully used by the netdev-based
-     * "userspace datapath".) */
+     * it would always return -EOPNOTSUPP anyhow.  (This will prevent the
+     * network device from being usefully used by the netdev-based "userspace
+     * datapath".) */
     int (*recv)(struct netdev *netdev, void *buffer, size_t size);
 
     /* Registers with the poll loop to wake up from the next call to
@@ -214,10 +208,9 @@ struct netdev_class {
      *
      * May return EOPNOTSUPP if a network device does not implement packet
      * transmission through this interface.  This function may be set to null
-     * if it would always return EOPNOTSUPP anyhow.  (This will disable the OVS
-     * integrated DHCP client and OpenFlow controller discovery, and prevent
-     * the network device from being usefully used by the netdev-based
-     * "userspace datapath".) */
+     * if it would always return EOPNOTSUPP anyhow.  (This will prevent the
+     * network device from being usefully used by the netdev-based "userspace
+     * datapath".) */
     int (*send)(struct netdev *netdev, const void *buffer, size_t size);
 
     /* Registers with the poll loop to wake up from the next call to
@@ -242,7 +235,10 @@ struct netdev_class {
      *
      * The MTU is the maximum size of transmitted (and received) packets, in
      * bytes, not including the hardware header; thus, this is typically 1500
-     * bytes for Ethernet devices.*/
+     * bytes for Ethernet devices.
+     *
+     * If 'netdev' does not have an MTU (e.g. as some tunnels do not), then
+     * this function should set '*mtup' to INT_MAX. */
     int (*get_mtu)(const struct netdev *netdev, int *mtup);
 
     /* Returns the ifindex of 'netdev', if successful, as a positive number.
@@ -266,6 +262,14 @@ struct netdev_class {
      */
     int (*get_carrier)(const struct netdev *netdev, bool *carrier);
 
+    /* Sets 'miimon' to true if 'netdev' is up according to its MII.  If
+     * 'netdev' does not support MII, may fall back to another method or return
+     * EOPNOTSUPP.
+     *
+     * This function may be set to null if it would always return EOPNOTSUPP.
+     */
+    int (*get_miimon)(const struct netdev *netdev, bool *miimon);
+
     /* Retrieves current device stats for 'netdev' into 'stats'.
      *
      * A network device that supports some statistics but not others, it should
@@ -287,7 +291,7 @@ struct netdev_class {
      *
      * This function may be set to null if it would always return EOPNOTSUPP.
      */
-    int (*get_features)(struct netdev *netdev,
+    int (*get_features)(const struct netdev *netdev,
                         uint32_t *current, uint32_t *advertised,
                         uint32_t *supported, uint32_t *peer);
 
@@ -326,11 +330,11 @@ struct netdev_class {
      * this function must not add "" to 'types'.
      *
      * The caller is responsible for initializing 'types' (e.g. with
-     * svec_init()) before calling this function.  The caller takes ownership
-     * of the strings added to 'types'.
+     * sset_init()) before calling this function.  The caller retains ownership
+     * of 'types'.
      *
      * May be NULL if 'netdev' does not support QoS at all. */
-    int (*get_qos_types)(const struct netdev *netdev, struct svec *types);
+    int (*get_qos_types)(const struct netdev *netdev, struct sset *types);
 
     /* Queries 'netdev' for its capabilities regarding the specified 'type' of
      * QoS.  On success, initializes 'caps' with the QoS capabilities.

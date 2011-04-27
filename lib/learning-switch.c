@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -238,8 +238,6 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
     case OFPUTIL_OFPST_PORT_REPLY:
     case OFPUTIL_OFPST_TABLE_REPLY:
     case OFPUTIL_OFPST_AGGREGATE_REPLY:
-    case OFPUTIL_NXT_STATUS_REQUEST:
-    case OFPUTIL_NXT_STATUS_REPLY:
     case OFPUTIL_NXT_TUN_ID_FROM_COOKIE:
     case OFPUTIL_NXT_ROLE_REQUEST:
     case OFPUTIL_NXT_ROLE_REPLY:
@@ -326,12 +324,15 @@ lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
     uint16_t out_port;
 
     /* Learn the source MAC. */
-    if (sw->ml) {
-        if (mac_learning_learn(sw->ml, flow->dl_src, 0, flow->in_port,
-                               GRAT_ARP_LOCK_NONE)) {
+    if (mac_learning_may_learn(sw->ml, flow->dl_src, 0)) {
+        struct mac_entry *mac = mac_learning_insert(sw->ml, flow->dl_src, 0);
+        if (mac_entry_is_new(mac) || mac->port.i != flow->in_port) {
             VLOG_DBG_RL(&rl, "%016llx: learned that "ETH_ADDR_FMT" is on "
                         "port %"PRIu16, sw->datapath_id,
                         ETH_ADDR_ARGS(flow->dl_src), flow->in_port);
+
+            mac->port.i = flow->in_port;
+            mac_learning_changed(sw->ml, mac);
         }
     }
 
@@ -342,9 +343,11 @@ lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
 
     out_port = OFPP_FLOOD;
     if (sw->ml) {
-        int learned_port = mac_learning_lookup(sw->ml, flow->dl_dst, 0, NULL);
-        if (learned_port >= 0) {
-            out_port = learned_port;
+        struct mac_entry *mac;
+
+        mac = mac_learning_lookup(sw->ml, flow->dl_dst, 0, NULL);
+        if (mac) {
+            out_port = mac->port.i;
             if (out_port == flow->in_port) {
                 /* Don't send a packet back out its input port. */
                 return OFPP_NONE;
@@ -437,7 +440,6 @@ process_packet_in(struct lswitch *sw, struct rconn *rconn,
     /* Send the packet, and possibly the whole flow, to the output port. */
     if (sw->max_idle >= 0 && (!sw->ml || out_port != OFPP_FLOOD)) {
         struct ofpbuf *buffer;
-        struct ofp_flow_mod *ofm;
         struct cls_rule rule;
 
         /* The output port is known, or we always flood everything, so add a
@@ -446,7 +448,6 @@ process_packet_in(struct lswitch *sw, struct rconn *rconn,
         buffer = make_add_flow(&rule, ntohl(opi->buffer_id),
                                sw->max_idle, actions_len);
         ofpbuf_put(buffer, actions, actions_len);
-        ofm = buffer->data;
         queue_tx(sw, rconn, buffer);
 
         /* If the switch didn't buffer the packet, we need to send a copy. */
