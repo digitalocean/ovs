@@ -74,7 +74,6 @@ main(int argc, char *argv[])
     process_init();
     ovsrec_init();
 
-    die_if_already_running();
     daemonize_start();
 
     retval = unixctl_server_create(NULL, &unixctl);
@@ -199,8 +198,8 @@ parse_options(int argc, char *argv[])
     argv += optind;
 
     if (argc != 1) {
-        ovs_fatal(0, "database socket is only non-option argument; "
-                "use --help for usage");
+        VLOG_FATAL("database socket is only non-option argument; "
+                   "use --help for usage");
     }
 
     return argv[0];

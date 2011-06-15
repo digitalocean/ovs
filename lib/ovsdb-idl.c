@@ -1108,6 +1108,15 @@ ovsdb_idl_get(const struct ovsdb_idl_row *row,
 
     return ovsdb_idl_read(row, column);
 }
+
+/* Returns false if 'row' was obtained from the IDL, true if it was initialized
+ * to all-zero-bits by some other entity.  If 'row' was set up some other way
+ * then the return value is indeterminate. */
+bool
+ovsdb_idl_row_is_synthetic(const struct ovsdb_idl_row *row)
+{
+    return row->table == NULL;
+}
 
 /* Transactions. */
 
@@ -1397,12 +1406,16 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
         if (row->old == row->new) {
             continue;
         } else if (!row->new) {
-            struct json *op = json_object_create();
-            json_object_put_string(op, "op", "delete");
-            json_object_put_string(op, "table", class->name);
-            json_object_put(op, "where", where_uuid_equals(&row->uuid));
-            json_array_add(operations, op);
-            any_updates = true;
+            if (class->is_root) {
+                struct json *op = json_object_create();
+                json_object_put_string(op, "op", "delete");
+                json_object_put_string(op, "table", class->name);
+                json_object_put(op, "where", where_uuid_equals(&row->uuid));
+                json_array_add(operations, op);
+                any_updates = true;
+            } else {
+                /* Let ovsdb-server decide whether to really delete it. */
+            }
         } else {
             struct json *row_json;
             struct json *op;
@@ -1436,9 +1449,7 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
                                                         &class->columns[idx];
 
                     if (row->old
-                        ? !ovsdb_datum_equals(&row->old[idx], &row->new[idx],
-                                              &column->type)
-                        : !ovsdb_datum_is_default(&row->new[idx],
+                        || !ovsdb_datum_is_default(&row->new[idx],
                                                   &column->type)) {
                         json_object_put(row_json, column->name,
                                         substitute_uuids(
@@ -1632,6 +1643,21 @@ ovsdb_idl_txn_write(const struct ovsdb_idl_row *row_,
     assert(column_idx < class->n_columns);
     assert(row->old == NULL ||
            row->table->modes[column_idx] & OVSDB_IDL_MONITOR);
+
+    /* If this is a write-only column and the datum being written is the same
+     * as the one already there, just skip the update entirely.  This is worth
+     * optimizing because we have a lot of columns that get periodically
+     * refreshed into the database but don't actually change that often.
+     *
+     * We don't do this for read/write columns because that would break
+     * atomicity of transactions--some other client might have written a
+     * different value in that column since we read it. */
+    if (row->table->modes[column_idx] == OVSDB_IDL_MONITOR
+        && ovsdb_datum_equals(ovsdb_idl_read(row, column),
+                              datum, &column->type)) {
+        ovsdb_datum_destroy(datum, &column->type);
+        return;
+    }
 
     if (hmap_node_is_null(&row->txn_node)) {
         hmap_insert(&row->table->idl->txn->txn_rows, &row->txn_node,

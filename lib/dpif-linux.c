@@ -472,6 +472,8 @@ dpif_linux_flow_flush(struct dpif *dpif_)
 
 struct dpif_linux_port_state {
     struct nl_dump dump;
+    unsigned long *port_bitmap; /* Ports in the datapath. */
+    bool complete;              /* Dump completed without error. */
 };
 
 static int
@@ -483,6 +485,8 @@ dpif_linux_port_dump_start(const struct dpif *dpif_, void **statep)
     struct ofpbuf *buf;
 
     *statep = state = xmalloc(sizeof *state);
+    state->port_bitmap = bitmap_allocate(LRU_MAX_PORTS);
+    state->complete = false;
 
     dpif_linux_vport_init(&request);
     request.cmd = ODP_DP_CMD_GET;
@@ -506,12 +510,17 @@ dpif_linux_port_dump_next(const struct dpif *dpif OVS_UNUSED, void *state_,
     int error;
 
     if (!nl_dump_next(&state->dump, &buf)) {
+        state->complete = true;
         return EOF;
     }
 
     error = dpif_linux_vport_from_ofpbuf(&vport, &buf);
     if (error) {
         return error;
+    }
+
+    if (vport.port_no < LRU_MAX_PORTS) {
+        bitmap_set1(state->port_bitmap, vport.port_no);
     }
 
     dpif_port->name = (char *) vport.name;
@@ -521,10 +530,23 @@ dpif_linux_port_dump_next(const struct dpif *dpif OVS_UNUSED, void *state_,
 }
 
 static int
-dpif_linux_port_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
+dpif_linux_port_dump_done(const struct dpif *dpif_, void *state_)
 {
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
     struct dpif_linux_port_state *state = state_;
     int error = nl_dump_done(&state->dump);
+
+    if (state->complete) {
+        uint16_t i;
+
+        for (i = 0; i < LRU_MAX_PORTS; i++) {
+            if (!bitmap_is_set(state->port_bitmap, i)) {
+                dpif_linux_push_port(dpif, i);
+            }
+        }
+    }
+
+    free(state->port_bitmap);
     free(state);
     return error;
 }
@@ -1072,7 +1094,7 @@ dpif_linux_is_internal_device(const char *name)
     error = dpif_linux_vport_get(name, &reply, &buf);
     if (!error) {
         ofpbuf_delete(buf);
-    } else if (error != ENODEV) {
+    } else if (error != ENODEV && error != ENOENT) {
         VLOG_WARN_RL(&error_rl, "%s: vport query failed (%s)",
                      name, strerror(error));
     }
@@ -1253,6 +1275,15 @@ dpif_linux_vport_transact(const struct dpif_linux_vport *request,
     int error;
 
     assert((reply != NULL) == (bufp != NULL));
+
+    error = dpif_linux_init();
+    if (error) {
+        if (reply) {
+            *bufp = NULL;
+            dpif_linux_vport_init(reply);
+        }
+        return error;
+    }
 
     request_buf = ofpbuf_new(1024);
     dpif_linux_vport_to_ofpbuf(request, request_buf);

@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2009, 2010 Nicira Networks
+# Copyright (c) 2009, 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,6 +83,7 @@ path certificate "%s";
     cert_entry = """remote %s {
         exchange_mode main;
         nat_traversal on;
+        ike_frag on;
         certificate_type x509 "%s" "%s";
         my_identifier asn1dn;
         peers_identifier asn1dn;
@@ -450,8 +451,6 @@ def main(argv):
                          "(use --help for help)\n" % ovs.util.PROGRAM_NAME)
         sys.exit(1)
 
-    ovs.daemon.die_if_already_running()
- 
     remote = args[0]
     idl = ovs.db.idl.Idl(remote, "Open_vSwitch", monitor_uuid_schema_cb)
 

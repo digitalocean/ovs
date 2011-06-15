@@ -226,6 +226,11 @@ struct bridge {
 
     /* Port mirroring. */
     struct mirror *mirrors[MAX_MIRRORS];
+
+    /* Synthetic local port if necessary. */
+    struct ovsrec_port synth_local_port;
+    struct ovsrec_interface synth_local_iface;
+    struct ovsrec_interface *synth_local_ifacep;
 };
 
 /* List of all bridges. */
@@ -312,6 +317,7 @@ static void iface_update_cfm(struct iface *);
 static bool iface_refresh_cfm_stats(struct iface *iface);
 static void iface_update_carrier(struct iface *);
 static bool iface_get_carrier(const struct iface *);
+static bool iface_is_synthetic(const struct iface *);
 
 static void shash_from_ovs_idl_map(char **keys, char **values, size_t n,
                                    struct shash *);
@@ -335,15 +341,53 @@ bridge_init(const char *remote)
     ovsdb_idl_omit_alert(idl, &ovsrec_open_vswitch_col_cur_cfg);
     ovsdb_idl_omit_alert(idl, &ovsrec_open_vswitch_col_statistics);
     ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_external_ids);
+    ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_ovs_version);
+    ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_db_version);
+    ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_system_type);
+    ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_system_version);
 
+    ovsdb_idl_omit_alert(idl, &ovsrec_bridge_col_datapath_id);
     ovsdb_idl_omit(idl, &ovsrec_bridge_col_external_ids);
 
     ovsdb_idl_omit(idl, &ovsrec_port_col_external_ids);
     ovsdb_idl_omit(idl, &ovsrec_port_col_fake_bridge);
 
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_admin_state);
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_duplex);
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_link_speed);
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_link_state);
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_mtu);
     ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_ofport);
     ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_statistics);
+    ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_status);
     ovsdb_idl_omit(idl, &ovsrec_interface_col_external_ids);
+
+    ovsdb_idl_omit_alert(idl, &ovsrec_controller_col_is_connected);
+    ovsdb_idl_omit_alert(idl, &ovsrec_controller_col_role);
+    ovsdb_idl_omit_alert(idl, &ovsrec_controller_col_status);
+    ovsdb_idl_omit(idl, &ovsrec_controller_col_external_ids);
+
+    ovsdb_idl_omit_alert(idl, &ovsrec_maintenance_point_col_fault);
+
+    ovsdb_idl_omit_alert(idl, &ovsrec_monitor_col_fault);
+
+    ovsdb_idl_omit(idl, &ovsrec_qos_col_external_ids);
+
+    ovsdb_idl_omit(idl, &ovsrec_queue_col_external_ids);
+
+    ovsdb_idl_omit(idl, &ovsrec_mirror_col_external_ids);
+
+    ovsdb_idl_omit(idl, &ovsrec_netflow_col_external_ids);
+
+    ovsdb_idl_omit(idl, &ovsrec_sflow_col_external_ids);
+
+    ovsdb_idl_omit(idl, &ovsrec_manager_col_external_ids);
+    ovsdb_idl_omit(idl, &ovsrec_manager_col_inactivity_probe);
+    ovsdb_idl_omit(idl, &ovsrec_manager_col_is_connected);
+    ovsdb_idl_omit(idl, &ovsrec_manager_col_max_backoff);
+    ovsdb_idl_omit(idl, &ovsrec_manager_col_status);
+
+    ovsdb_idl_omit(idl, &ovsrec_ssl_col_external_ids);
 
     /* Register unixctl commands. */
     unixctl_command_register("fdb/show", bridge_unixctl_fdb_show, NULL);
@@ -454,9 +498,7 @@ set_iface_properties(struct bridge *br OVS_UNUSED, struct iface *iface,
 
     /* Set MAC address of internal interfaces other than the local
      * interface. */
-    if (iface->dp_ifidx != ODPP_LOCAL && !strcmp(iface->type, "internal")) {
-        iface_set_mac(iface);
-    }
+    iface_set_mac(iface);
 
     return true;
 }
@@ -1157,6 +1199,10 @@ iface_refresh_status(struct iface *iface)
     int64_t mtu_64;
     int error;
 
+    if (iface_is_synthetic(iface)) {
+        return;
+    }
+
     shash_init(&sh);
 
     if (!netdev_get_status(iface->netdev, &sh)) {
@@ -1277,6 +1323,10 @@ iface_refresh_stats(struct iface *iface)
     int n;
 
     struct netdev_stats stats;
+
+    if (iface_is_synthetic(iface)) {
+        return;
+    }
 
     /* Intentionally ignore return value, since errors will set 'stats' to
      * all-1s, and we will deal with that correctly below. */
@@ -1692,9 +1742,13 @@ bridge_destroy(struct bridge *br)
     if (br) {
         struct port *port, *next;
         int error;
+        int i;
 
         HMAP_FOR_EACH_SAFE (port, next, hmap_node, &br->ports) {
             port_destroy(port);
+        }
+        for (i = 0; i < MAX_MIRRORS; i++) {
+            mirror_destroy(br->mirrors[i]);
         }
         list_remove(&br->node);
         ofproto_destroy(br->ofproto);
@@ -1708,6 +1762,7 @@ bridge_destroy(struct bridge *br)
         hmap_destroy(&br->ifaces);
         hmap_destroy(&br->ports);
         shash_destroy(&br->iface_by_name);
+        free(br->synth_local_iface.type);
         free(br->name);
         free(br);
     }
@@ -1833,22 +1888,28 @@ bridge_reconfigure_one(struct bridge *br)
                       br->name, name);
         }
     }
+    if (!shash_find(&new_ports, br->name)) {
+        struct dpif_port dpif_port;
+        char *type;
 
-    /* If we have a controller, then we need a local port.  Complain if the
-     * user didn't specify one.
-     *
-     * XXX perhaps we should synthesize a port ourselves in this case. */
-    if (bridge_get_controllers(br, NULL)) {
-        char local_name[IF_NAMESIZE];
-        int error;
+        VLOG_WARN("bridge %s: no port named %s, synthesizing one",
+                  br->name, br->name);
 
-        error = dpif_port_get_name(br->dpif, ODPP_LOCAL,
-                                   local_name, sizeof local_name);
-        if (!error && !shash_find(&new_ports, local_name)) {
-            VLOG_WARN("bridge %s: controller specified but no local port "
-                      "(port named %s) defined",
-                      br->name, local_name);
-        }
+        dpif_port_query_by_number(br->dpif, ODPP_LOCAL, &dpif_port);
+        type = xstrdup(dpif_port.type ? dpif_port.type : "internal");
+        dpif_port_destroy(&dpif_port);
+
+        br->synth_local_port.interfaces = &br->synth_local_ifacep;
+        br->synth_local_port.n_interfaces = 1;
+        br->synth_local_port.name = br->name;
+
+        br->synth_local_iface.name = br->name;
+        free(br->synth_local_iface.type);
+        br->synth_local_iface.type = type;
+
+        br->synth_local_ifacep = &br->synth_local_iface;
+
+        shash_add(&new_ports, br->name, &br->synth_local_port);
     }
 
     /* Get rid of deleted ports.
@@ -4453,13 +4514,15 @@ iface_set_mac(struct iface *iface)
 {
     uint8_t ea[ETH_ADDR_LEN];
 
-    if (iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, ea)) {
-        if (eth_addr_is_multicast(ea)) {
+    if (!strcmp(iface->type, "internal")
+        && iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, ea)) {
+        if (iface->dp_ifidx == ODPP_LOCAL) {
+            VLOG_ERR("interface %s: ignoring mac in Interface record "
+                     "(use Bridge record to set local port's mac)",
+                     iface->name);
+        } else if (eth_addr_is_multicast(ea)) {
             VLOG_ERR("interface %s: cannot set MAC to multicast address",
                      iface->name);
-        } else if (iface->dp_ifidx == ODPP_LOCAL) {
-            VLOG_ERR("ignoring iface.%s.mac; use bridge.%s.mac instead",
-                     iface->name, iface->name);
         } else {
             int error = netdev_set_etheraddr(iface->netdev, ea);
             if (error) {
@@ -4474,7 +4537,7 @@ iface_set_mac(struct iface *iface)
 static void
 iface_set_ofport(const struct ovsrec_interface *if_cfg, int64_t ofport)
 {
-    if (if_cfg) {
+    if (if_cfg && !ovsdb_idl_row_is_synthetic(&if_cfg->header_)) {
         ovsrec_interface_set_ofport(if_cfg, &ofport, 1);
     }
 }
@@ -4569,7 +4632,7 @@ iface_update_carrier(struct iface *iface)
 static void
 iface_update_qos(struct iface *iface, const struct ovsrec_qos *qos)
 {
-    if (!qos || qos->type[0] == '\0') {
+    if (!qos || qos->type[0] == '\0' || qos->n_queues < 1) {
         netdev_set_qos(iface->netdev, NULL, NULL);
     } else {
         struct iface_delete_queues_cbdata cbdata;
@@ -4648,6 +4711,14 @@ iface_get_carrier(const struct iface *iface)
     return (iface->port->monitor
             ? netdev_get_carrier(iface->netdev)
             : netdev_get_miimon(iface->netdev));
+}
+
+/* Returns true if 'iface' is synthetic, that is, if we constructed it locally
+ * instead of obtaining it from the database. */
+static bool
+iface_is_synthetic(const struct iface *iface)
+{
+    return ovsdb_idl_row_is_synthetic(&iface->cfg->header_);
 }
 
 /* Port mirroring. */
@@ -4755,6 +4826,7 @@ mirror_create(struct bridge *br, struct ovsrec_mirror *cfg)
     mac_learning_flush(br->ml);
 
     br->mirrors[i] = m = xzalloc(sizeof *m);
+    m->uuid = cfg->header_.uuid;
     m->bridge = br;
     m->idx = i;
     m->name = xstrdup(cfg->name);
@@ -4838,19 +4910,6 @@ vlan_is_mirrored(const struct mirror *m, int vlan)
 
     for (i = 0; i < m->n_vlans; i++) {
         if (m->vlans[i] == vlan) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool
-port_trunks_any_mirrored_vlan(const struct mirror *m, const struct port *p)
-{
-    size_t i;
-
-    for (i = 0; i < m->n_vlans; i++) {
-        if (port_trunks_vlan(p, m->vlans[i])) {
             return true;
         }
     }
@@ -4941,11 +5000,7 @@ mirror_reconfigure_one(struct mirror *m, struct ovsrec_mirror *cfg)
     /* Update ports. */
     mirror_bit = MIRROR_MASK_C(1) << m->idx;
     HMAP_FOR_EACH (port, hmap_node, &m->bridge->ports) {
-        if (sset_contains(&m->src_ports, port->name)
-            || (m->n_vlans
-                && (!port->vlan
-                    ? port_trunks_any_mirrored_vlan(m, port)
-                    : vlan_is_mirrored(m, port->vlan)))) {
+        if (sset_contains(&m->src_ports, port->name)) {
             port->src_mirrors |= mirror_bit;
         } else {
             port->src_mirrors &= ~mirror_bit;

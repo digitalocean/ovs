@@ -41,7 +41,10 @@ The following additional people are mentioned in commit logs as having
 provided helpful bug reports or suggestions.
 
 Aaron M. Ucko           ucko@debian.org
+Aaron Rosen             arosen@clemson.edu
+Alex Yip                alex@nicira.com
 Alexey I. Froloff       raorn@altlinux.org
+Bob Ball                bob.ball@citrix.com
 Brad Hall               brad@nicira.com
 Brandon Heller          brandonh@stanford.edu
 Bryan Fulton            bryan@nicira.com
@@ -79,6 +82,7 @@ Stephen Hemminger       shemminger@vyatta.com
 Takayuki HAMA           t-hama@cb.jp.nec.com
 Teemu Koponen           koponen@nicira.com
 Vishal Swarankar        vishal.swarnkar@gmail.com
+YAMAMOTO Takashi        yamamoto@valinux.co.jp
 Yongqiang Liu           liuyq7809@gmail.com
 kk yap                  yapkke@stanford.edu
 

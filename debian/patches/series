@@ -1,3 +1,1 @@
-0001-vswitch-Improve-schema-documentation.patch
-0002-dpif-linux-Avoid-segfault-on-netdev_get_stats-withou.patch
-0003-dpif-linux-Avoid-logging-error-on-ENOENT-in-dpif_lin.patch
+0001-docs-Suppress-warning-macro-DD-not-defined-warnings-.patch

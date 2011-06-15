@@ -7,7 +7,7 @@ Build-Depends:
  debhelper (>= 5), autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
  libssl-dev, pkg-config (>= 0.21), po-debconf, bzip2, openssl, python,
  python-support (>= 0.8.4), procps
-Standards-Version: 3.9.1
+Standards-Version: 3.9.2
 Homepage: http://openvswitch.org/
 
 Package: openvswitch-datapath-source
@@ -35,7 +35,7 @@ Description: Open vSwitch common components
 Package: openvswitch-switch
 Architecture: linux-any
 Suggests: openvswitch-datapath-module
-Depends: ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps
 Description: Open vSwitch switch implementations
  openvswitch-switch provides the userspace components and utilities for
  the Open vSwitch kernel-based switch.  
@@ -50,7 +50,7 @@ Depends:
  racoon (>=0.8~alpha20101208),
  openvswitch-common (= ${binary:Version}),
  openvswitch-switch (= ${binary:Version}),
- python-openvswitch (= ${binary:Version})
+ python-openvswitch (= ${source:Version})
 Description: Open vSwitch GRE-over-IPsec support
  The ovs-monitor-ipsec script provides support for encrypting GRE
  tunnels with IPsec.
@@ -62,7 +62,7 @@ Architecture: all
 Depends:
  ${misc:Depends}, openvswitch-common (>= ${source:Version}),
  openvswitch-common (<< ${source:Version}.1~)
-Description: A dependency package for the Open vSwitch public key infrastructure
+Description: Open vSwitch public key infrastructure dependency package
  openvswitch-pki provides PKI (public key infrastructure) support for
  Open vSwitch switches and controllers, reducing the risk of
  man-in-the-middle attacks on the Open vSwitch network infrastructure.
@@ -97,7 +97,8 @@ Description: Debug symbols for Open vSwitch packages
 Package: python-openvswitch
 Architecture: all
 Section: python
-Depends: ${python:Depends}, openvswitch-switch (= ${binary:Version})
+Depends:
+ ${misc:Depends}, ${python:Depends}, openvswitch-switch (>= ${source:Version})
 Provides: ${python:Provides}
 Description: Python bindings for Open vSwitch
  This package contains the full Python bindings for Open vSwitch database.

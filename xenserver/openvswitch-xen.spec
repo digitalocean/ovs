@@ -8,22 +8,24 @@
 # without warranty of any kind.
 
 # When building, the rpmbuild command line should define
-# openvswitch_version, xen_version, and build_number using -D arguments.
+# openvswitch_version, kernel_name, kernel_version, kernel_flavor,
+# and build_number using -D arguments.
 # for example:
 #
-#    rpmbuild -D "openvswitch_version 0.8.9~1+build123" -D "xen_version 2.6.18-128.1.1.el5.xs5.1.0.483.1000xen" -D "build_number --with-build-number=123" -bb /usr/src/redhat/SPECS/openvswitch-xen.spec
+#    rpmbuild -D "openvswitch_version 1.1.0+build123"
+#      -D "kernel_name  NAME-xen"
+#      -D "kernel_version 2.6.32.12-0.7.1.xs5.6.100.323.170596"
+#      -D "kernel_flavor xen"
+#      -D "build_number --with-build-number=123"
+#      -bb /usr/src/redhat/SPECS/openvswitch-xen.spec
 
-%define version %{openvswitch_version}-%{xen_version}
+%define xen_version %{kernel_version}%{kernel_flavor}
 
 # bump this when breaking compatibility with userspace
 %define module_abi_version 0
 
-# extract kernel type (xen or kdump)
-%define binsuffix -%(echo '%{xen_version}' | sed -r 's/^.*[0-9]+//')
-# kernel version string w/o kernel type
-%define kernel_version %(echo '%{xen_version}' | sed -r 's/[a-z]+$//')
 # build-supplemental-pack.sh requires this naming for kernel module packages
-%define module_package modules%{binsuffix}-%{kernel_version}
+%define module_package modules-%{kernel_flavor}-%{kernel_version}
 
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
@@ -47,8 +49,8 @@ traffic.
 Summary: Open vSwitch kernel module
 Group: System Environment/Kernel
 License: GPLv2
-Provides: %{name}-modules = %{kernel_version}, openvswitch_mod.ko.%{module_abi_version}
-Requires: kernel%{binsuffix} = %{kernel_version}
+Provides: %{name}-modules-%{kernel_flavor} = %{kernel_version}, openvswitch_mod.ko.%{module_abi_version}
+Requires: kernel-%{kernel_name} = %{kernel_version}
 
 %description %{module_package}
 Open vSwitch Linux kernel module compiled against kernel version
@@ -112,8 +114,8 @@ install -m 644 \
         xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py \
                $RPM_BUILD_ROOT/usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.py
 
-install -d -m 755 $RPM_BUILD_ROOT/lib/modules/%{xen_version}/kernel/extra/openvswitch
-find datapath/linux-2.6 -name *.ko -exec install -m 755  \{\} $RPM_BUILD_ROOT/lib/modules/%{xen_version}/kernel/extra/openvswitch \;
+install -d -m 755 $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch
+find datapath/linux-2.6 -name *.ko -exec install -m 755  \{\} $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch \;
 install xenserver/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
 # Get rid of stuff we don't want to make RPM happy.
@@ -226,15 +228,19 @@ done
 
 if [ "$1" = "1" ]; then    # $1 = 2 for upgrade
     # Configure system to use Open vSwitch
-    echo vswitch > /etc/xensource/network.conf
+    /opt/xensource/bin/xe-switch-network-backend vswitch
+else    # $1 = 2 for upgrade
 
-    printf "\nYou MUST reboot the server NOW to complete the change to\n"
-    printf "Open vSwitch.  Attempts to modify networking on the server\n"
-    printf "or any hosted VM will fail until after the reboot and could\n"
-    printf "leave the server in an state requiring manual recovery.\n\n"
-else
-    printf "\nTo use the new Open vSwitch install, you should reboot the\n" 
-    printf "server now.  Failure to do so may result in incorrect operation."
+    mode=$(cat /etc/xensource/network.conf)
+    if [ "$mode" != "vswitch" ] && [ "$mode" != "openvswitch" ]; then
+        printf "\nThe server is not configured to run Open vSwitch.  To run in\n"
+        printf "vswitch mode, you must run the following command:\n\n"
+        printf "\txe-switch-network-backend vswitch"
+    else
+        printf "\nTo use the new Open vSwitch install, you should reboot the\n"
+        printf "server now.  Failure to do so may result in incorrect operation."
+    fi
+
     printf "\n\n"
 fi
 
@@ -243,9 +249,16 @@ fi
 depmod %{xen_version}
 
 %preun
-if [ "$1" = "0" ]; then     # $1 = 1 for upgrade
+if [ "$1" = "0" ]; then     # $1 = 0 for uninstall
+    # Configure system to use bridge
+    /opt/xensource/bin/xe-switch-network-backend bridge
+
+    # The "openvswitch" service should have been removed from
+    # "xe-switch-network-backend bridge".
     for s in openvswitch openvswitch-xapi-update; do
-        chkconfig --del $s || printf "Could not remove $s init script."
+        if chkconfig --list $s >/dev/null 2>&1; then
+            chkconfig --del $s || printf "Could not remove $s init script."
+        fi
     done
 fi
 
@@ -296,19 +309,12 @@ if [ "$1" = "0" ]; then     # $1 = 1 for upgrade
     rm -f /etc/openvswitch/conf.db
     rm -f /etc/sysconfig/openvswitch
     rm -f /etc/openvswitch/vswitchd.cacert
-    rm -f /var/xapi/network.dbcache
 
     # Remove saved XenServer scripts directory, but only if it's empty
     rmdir -p /usr/lib/openvswitch/xs-saved 2>/dev/null
-
-    # Configure system to use bridge
-    echo bridge > /etc/xensource/network.conf
-
-    printf "\nYou MUST reboot the server now to complete the change to\n"
-    printf "standard Xen networking.  Attempts to modify networking on the\n"
-    printf "server or any hosted VM will fail until after the reboot and\n"
-    printf "could leave the server in a state requiring manual recovery.\n\n"
 fi
+
+exit 0
 
 %files
 %defattr(-,root,root)
@@ -388,5 +394,5 @@ fi
 %exclude /usr/share/openvswitch/python/ovs/db/*.py[co]
 
 %files %{module_package}
-/lib/modules/%{xen_version}/kernel/extra/openvswitch/openvswitch_mod.ko
-%exclude /lib/modules/%{xen_version}/kernel/extra/openvswitch/brcompat_mod.ko
+/lib/modules/%{xen_version}/extra/openvswitch/openvswitch_mod.ko
+%exclude /lib/modules/%{xen_version}/extra/openvswitch/brcompat_mod.ko

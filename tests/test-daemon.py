@@ -1,4 +1,4 @@
-# Copyright (c) 2010 Nicira Networks.
+# Copyright (c) 2010, 2011 Nicira Networks.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import getopt
+import logging
 import signal
 import sys
 import time
@@ -24,6 +25,7 @@ def handler(signum, frame):
     raise Exception("Signal handler called with %d" % signum)
 
 def main(argv):
+    logging.basicConfig(level=logging.DEBUG)
 
     signal.signal(signal.SIGHUP, handler)
 
@@ -45,7 +47,6 @@ def main(argv):
                              % (ovs.util.PROGRAM_NAME, key))
             sys.exit(1)
 
-    ovs.daemon.die_if_already_running()
     ovs.daemon.daemonize_start()
     if bail:
         sys.stderr.write("%s: exiting after daemonize_start() as requested\n"

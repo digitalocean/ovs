@@ -1769,7 +1769,7 @@ fi
 # List of tests.
 if $at_list_p; then
   cat <<_ATEOF || at_write_fail=1
-openvswitch 1.1.0 test suite test groups:
+openvswitch 1.1.1 test suite test groups:
 
  NUM: FILE-NAME:LINE     TEST-GROUP-NAME
       KEYWORDS
@@ -1818,7 +1818,7 @@ _ATEOF
   exit $at_write_fail
 fi
 if $at_version_p; then
-  $as_echo "$as_me (openvswitch 1.1.0)" &&
+  $as_echo "$as_me (openvswitch 1.1.1)" &&
   cat <<\_ATEOF || at_write_fail=1
 
 Copyright (C) 2009 Free Software Foundation, Inc.
@@ -2205,13 +2205,13 @@ exec 5>>"$at_suite_log"
 # Banners and logs.
 cat <<\_ASBOX
 ## ----------------------------- ##
-## openvswitch 1.1.0 test suite. ##
+## openvswitch 1.1.1 test suite. ##
 ## ----------------------------- ##
 _ASBOX
 {
   cat <<\_ASBOX
 ## ----------------------------- ##
-## openvswitch 1.1.0 test suite. ##
+## openvswitch 1.1.1 test suite. ##
 ## ----------------------------- ##
 _ASBOX
   echo
@@ -3046,7 +3046,7 @@ _ASBOX
   $as_echo "Please send $at_msg and all information you think might help:
 
    To: <ovs-bugs@openvswitch.org>
-   Subject: [openvswitch 1.1.0] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
+   Subject: [openvswitch 1.1.1] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
 
 You may investigate any problem if you feel able to do so, in which
 case the test suite provides a good starting point.  Its output may
@@ -27929,40 +27929,55 @@ $at_failed && at_fn_log_failure  \
 $at_traceon; }
 
 { set +x
-$as_echo "$at_srcdir/ofproto.at:51: ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//' | sed 's/\\bduration=[0-9.]*s/duration=?s/'"
-at_fn_check_prepare_trace "ofproto.at:51"
-( $at_check_trace; ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//' | sed 's/\bduration=[0-9.]*s/duration=?s/'
+$as_echo "$at_srcdir/ofproto.at:53: ovs-ofctl add-flow -F tun_id_from_cookie br0 tun_id=1,actions=mod_vlan_vid:4"
+at_fn_check_prepare_trace "ofproto.at:53"
+( $at_check_trace; ovs-ofctl add-flow -F tun_id_from_cookie br0 tun_id=1,actions=mod_vlan_vid:4
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
 at_fn_diff_devnull "$at_stderr" || at_failed=:
-echo >>"$at_stdout"; $as_echo "NXST_FLOW reply:
- cookie=0x0, duration=?s, table_id=0, n_packets=0, n_bytes=0, in_port=1 actions=output:0
- cookie=0x0, duration=?s, table_id=0, n_packets=0, n_bytes=0, in_port=65534 actions=output:1
-" | \
-  $at_diff - "$at_stdout" || at_failed=:
-at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:51"
+at_fn_diff_devnull "$at_stdout" || at_failed=:
+at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:53"
 $at_failed && at_fn_log_failure  \
 "ovs-openflowd.log"
 $at_traceon; }
 
 { set +x
-$as_echo "$at_srcdir/ofproto.at:56: ovs-ofctl del-flows br0"
-at_fn_check_prepare_trace "ofproto.at:56"
+$as_echo "$at_srcdir/ofproto.at:54: ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//' | sed 's/\\bduration=[0-9.]*s/duration=?s/' | sort"
+at_fn_check_prepare_trace "ofproto.at:54"
+( $at_check_trace; ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//' | sed 's/\bduration=[0-9.]*s/duration=?s/' | sort
+) >>"$at_stdout" 2>>"$at_stderr"
+at_status=$? at_failed=false
+$at_check_filter
+at_fn_diff_devnull "$at_stderr" || at_failed=:
+echo >>"$at_stdout"; $as_echo " cookie=0x0, duration=?s, table_id=0, n_packets=0, n_bytes=0, in_port=1 actions=output:0
+ cookie=0x0, duration=?s, table_id=0, n_packets=0, n_bytes=0, in_port=65534 actions=output:1
+ cookie=0x100000000, duration=?s, table_id=0, n_packets=0, n_bytes=0, tun_id=0x1 actions=mod_vlan_vid:4
+NXST_FLOW reply:
+" | \
+  $at_diff - "$at_stdout" || at_failed=:
+at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:54"
+$at_failed && at_fn_log_failure  \
+"ovs-openflowd.log"
+$at_traceon; }
+
+{ set +x
+$as_echo "$at_srcdir/ofproto.at:60: ovs-ofctl del-flows br0"
+at_fn_check_prepare_trace "ofproto.at:60"
 ( $at_check_trace; ovs-ofctl del-flows br0
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
 at_fn_diff_devnull "$at_stderr" || at_failed=:
 at_fn_diff_devnull "$at_stdout" || at_failed=:
-at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:56"
+at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:60"
 $at_failed && at_fn_log_failure  \
 "ovs-openflowd.log"
 $at_traceon; }
 
 { set +x
-$as_echo "$at_srcdir/ofproto.at:57: ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//'"
-at_fn_check_prepare_trace "ofproto.at:57"
+$as_echo "$at_srcdir/ofproto.at:61: ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//'"
+at_fn_check_prepare_trace "ofproto.at:61"
 ( $at_check_trace; ovs-ofctl dump-flows br0 | sed 's/ (xid=0x[0-9a-fA-F]*)//'
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
@@ -27971,21 +27986,21 @@ at_fn_diff_devnull "$at_stderr" || at_failed=:
 echo >>"$at_stdout"; $as_echo "NXST_FLOW reply:
 " | \
   $at_diff - "$at_stdout" || at_failed=:
-at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:57"
+at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:61"
 $at_failed && at_fn_log_failure  \
 "ovs-openflowd.log"
 $at_traceon; }
 
 { set +x
-$as_echo "$at_srcdir/ofproto.at:59: ovs-appctl -t ovs-openflowd exit"
-at_fn_check_prepare_trace "ofproto.at:59"
+$as_echo "$at_srcdir/ofproto.at:63: ovs-appctl -t ovs-openflowd exit"
+at_fn_check_prepare_trace "ofproto.at:63"
 ( $at_check_trace; ovs-appctl -t ovs-openflowd exit
 ) >>"$at_stdout" 2>>"$at_stderr"
 at_status=$? at_failed=false
 $at_check_filter
 at_fn_diff_devnull "$at_stderr" || at_failed=:
 at_fn_diff_devnull "$at_stdout" || at_failed=:
-at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:59"
+at_fn_check_status 0 $at_status "$at_srcdir/ofproto.at:63"
 $at_failed && at_fn_log_failure  \
 "ovs-openflowd.log"
 $at_traceon; }

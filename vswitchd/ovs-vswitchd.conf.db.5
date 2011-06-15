@@ -1,5 +1,5 @@
 '\" pt
-.TH Open_vSwitch 5 "April 2011" "Open vSwitch" "Open vSwitch Manual"
+.TH Open_vSwitch 5 "May 2011" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
@@ -1896,6 +1896,9 @@ T}
 .IP "\fBname\fR: string"
 Arbitrary identifier for the \fBMirror\fR\.
 .ST "Selecting Packets for Mirroring:"
+To be selected for mirroring, a given packet must enter or leave the
+bridge through a selected port and it must also be in one of the
+selected VLANs.
 .IP "\fBselect_all\fR: boolean"
 If true, every packet arriving or departing on any port is
 selected for mirroring.
@@ -1907,9 +1910,10 @@ Ports on which arriving packets are selected for mirroring.
 VLANs on which packets are selected for mirroring.  An empty set
 selects packets on all VLANs.
 .ST "Mirroring Destination Configuration:"
+These columns are mutually exclusive.  Exactly one of them must be
+nonempty.
 .IP "\fBoutput_port\fR: optional weak reference to \fBPort\fR"
-Output port for selected packets, if nonempty.  Mutually exclusive
-with \fBoutput_vlan\fR\.
+Output port for selected packets, if nonempty.
 .IP
 Specifying a port for mirror output reserves that port exclusively
 for mirroring.  No frames other than those selected for mirroring
@@ -1918,8 +1922,7 @@ will be discarded.
 .IP
 This type of mirroring is sometimes called SPAN.
 .IP "\fBoutput_vlan\fR: optional integer, in range 1 to 4,095"
-Output VLAN for selected packets, if nonempty.  Mutually exclusive
-with \fBoutput_port\fR\.
+Output VLAN for selected packets, if nonempty.
 .IP
 The frames will be sent out all ports that trunk
 \fBoutput_vlan\fR, as well as any ports with implicit VLAN
@@ -2172,7 +2175,8 @@ vSwitch does not communicate with the controller for the specified
 number of seconds, it will send a probe.  If a response is not
 received for the same additional amount of time, Open vSwitch
 assumes the connection has been broken and attempts to reconnect.
-Default is implementation-specific.
+Default is implementation-specific.  A value of 0 disables
+inactivity probes.
 .ST "OpenFlow Rate Limiting:"
 .IP "\fBcontroller_rate_limit\fR: optional integer, at least 100"
 The maximum rate at which packets in unknown flows will be
@@ -2428,6 +2432,7 @@ communicate with the client for the specified number of seconds, it
 will send a probe.  If a response is not received for the same
 additional amount of time, Open vSwitch assumes the connection has been
 broken and attempts to reconnect.  Default is implementation-specific.
+A value of 0 disables inactivity probes.
 .ST "Other Features:"
 .IP "\fBexternal_ids\fR: map of string-string pairs"
 Key-value pairs for use by external frameworks that integrate with Open

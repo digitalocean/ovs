@@ -30,6 +30,7 @@
 #include "fatal-signal.h"
 #include "list.h"
 #include "poll-loop.h"
+#include "signals.h"
 #include "socket-util.h"
 #include "util.h"
 #include "vlog.h"
@@ -81,9 +82,7 @@ process_init(void)
     inited = true;
 
     /* Create notification pipe. */
-    if (pipe(fds)) {
-        ovs_fatal(errno, "could not create pipe");
-    }
+    xpipe(fds);
     set_nonblocking(fds[0]);
     set_nonblocking(fds[1]);
 
@@ -92,9 +91,7 @@ process_init(void)
     sa.sa_handler = sigchld_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL)) {
-        ovs_fatal(errno, "sigaction(SIGCHLD) failed");
-    }
+    xsigaction(SIGCHLD, &sa, NULL);
 }
 
 char *
@@ -353,17 +350,10 @@ process_status_msg(int status)
     struct ds ds = DS_EMPTY_INITIALIZER;
     if (WIFEXITED(status)) {
         ds_put_format(&ds, "exit status %d", WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status) || WIFSTOPPED(status)) {
-        int signr = WIFSIGNALED(status) ? WTERMSIG(status) : WSTOPSIG(status);
-        const char *name = NULL;
-#ifdef HAVE_STRSIGNAL
-        name = strsignal(signr);
-#endif
-        ds_put_format(&ds, "%s by signal %d",
-                      WIFSIGNALED(status) ? "killed" : "stopped", signr);
-        if (name) {
-            ds_put_format(&ds, " (%s)", name);
-        }
+    } else if (WIFSIGNALED(status)) {
+        ds_put_format(&ds, "killed (%s)", signal_name(WTERMSIG(status)));
+    } else if (WIFSTOPPED(status)) {
+        ds_put_format(&ds, "stopped (%s)", signal_name(WSTOPSIG(status)));
     } else {
         ds_put_format(&ds, "terminated abnormally (%x)", status);
     }
@@ -644,9 +634,8 @@ static bool
 sigchld_is_blocked(void)
 {
     sigset_t sigs;
-    if (sigprocmask(SIG_SETMASK, NULL, &sigs)) {
-        ovs_fatal(errno, "sigprocmask");
-    }
+
+    xsigprocmask(SIG_SETMASK, NULL, &sigs);
     return sigismember(&sigs, SIGCHLD);
 }
 
@@ -654,17 +643,14 @@ static void
 block_sigchld(sigset_t *oldsigs)
 {
     sigset_t sigchld;
+
     sigemptyset(&sigchld);
     sigaddset(&sigchld, SIGCHLD);
-    if (sigprocmask(SIG_BLOCK, &sigchld, oldsigs)) {
-        ovs_fatal(errno, "sigprocmask");
-    }
+    xsigprocmask(SIG_BLOCK, &sigchld, oldsigs);
 }
 
 static void
 unblock_sigchld(const sigset_t *oldsigs)
 {
-    if (sigprocmask(SIG_SETMASK, oldsigs, NULL)) {
-        ovs_fatal(errno, "sigprocmask");
-    }
+    xsigprocmask(SIG_SETMASK, oldsigs, NULL);
 }

@@ -136,7 +136,7 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     wc->nw_dst_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW_NW_DST_SHIFT);
 
     if (flow_format == NXFF_TUN_ID_FROM_COOKIE && !(ofpfw & NXFW_TUN_ID)) {
-        rule->flow.tun_id = htonll(ntohll(cookie) >> 32);
+        cls_rule_set_tun_id(rule, htonll(ntohll(cookie) >> 32));
     }
 
     if (ofpfw & OFPFW_DL_DST) {
@@ -2053,7 +2053,7 @@ check_action(const union ofp_action *a, unsigned int len,
         if (error) {
             return error;
         }
-        if (a->vlan_vid.vlan_vid & ~7) {
+        if (a->vlan_pcp.vlan_pcp & ~7) {
             return ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT);
         }
         return 0;

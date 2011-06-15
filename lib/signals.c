@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,11 @@
 #include <unistd.h>
 #include "poll-loop.h"
 #include "socket-util.h"
+#include "type-props.h"
 #include "util.h"
+#include "vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(signals);
 
 #if defined(_NSIG)
 #define N_SIGNALS _NSIG
@@ -57,9 +61,7 @@ signal_init(void)
     static bool inited;
     if (!inited) {
         inited = true;
-        if (pipe(fds)) {
-            ovs_fatal(errno, "could not create pipe");
-        }
+        xpipe(fds);
         set_nonblocking(fds[0]);
         set_nonblocking(fds[1]);
     }
@@ -82,9 +84,7 @@ signal_register(int signr)
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
-    if (sigaction(signr, &sa, NULL)) {
-        ovs_fatal(errno, "sigaction(%d) failed", signr);
-    }
+    xsigaction(signr, &sa, NULL);
 
     /* Return structure. */
     s = xmalloc(sizeof *s);
@@ -124,5 +124,43 @@ signal_handler(int signr)
     if (signr >= 1 && signr < N_SIGNALS) {
         ignore(write(fds[1], "", 1));
         signaled[signr] = true;
+    }
+}
+
+/* Returns the name of signal 'signum' as a string.  The string may be in a
+ * static buffer that is reused from one call to the next.
+ *
+ * The string is probably a (possibly multi-word) description of the signal
+ * (e.g. "Hangup") instead of just the stringified version of the macro
+ * (e.g. "SIGHUP"). */
+const char *
+signal_name(int signum)
+{
+    const char *name = NULL;
+#ifdef HAVE_STRSIGNAL
+    name = strsignal(signum);
+#endif
+    if (!name) {
+        static char buffer[7 + INT_STRLEN(int) + 1];
+        sprintf(buffer, "signal %d", signum);
+        name = buffer;
+    }
+    return name;
+}
+
+void
+xsigaction(int signum, const struct sigaction *new, struct sigaction *old)
+{
+    if (sigaction(signum, new, old)) {
+        VLOG_FATAL("sigaction(%s) failed (%s)",
+                   signal_name(signum), strerror(errno));
+    }
+}
+
+void
+xsigprocmask(int how, const sigset_t *new, sigset_t *old)
+{
+    if (sigprocmask(how, new, old)) {
+        VLOG_FATAL("sigprocmask failed (%s)", strerror(errno));
     }
 }
