@@ -71,24 +71,30 @@ rtnetlink_link_parse(struct ofpbuf *buf,
     return parsed;
 }
 
+static bool
+rtnetlink_link_parse_cb(struct ofpbuf *buf, void *change)
+{
+    return rtnetlink_link_parse(buf, change);
+}
+
 /* Registers 'cb' to be called with auxiliary data 'aux' with network device
  * change notifications.  The notifier is stored in 'notifier', which the
  * caller must not modify or free.
  *
  * This is probably not the function that you want.  You should probably be
- * using dpif_port_poll() or netdev_monitor_create(), which unlike this
- * function are not Linux-specific.
+ * using dpif_port_poll() or netdev_change_seq(), which unlike this function
+ * are not Linux-specific.
  *
  * Returns 0 if successful, otherwise a positive errno value. */
 int
 rtnetlink_link_notifier_register(struct rtnetlink_notifier *notifier,
                                  rtnetlink_link_notify_func *cb, void *aux)
 {
-    rtnetlink_parse_func *pf  = (rtnetlink_parse_func *) rtnetlink_link_parse;
     rtnetlink_notify_func *nf = (rtnetlink_notify_func *) cb;
 
     if (!rtn) {
-        rtn = rtnetlink_create(RTNLGRP_LINK, pf, &rtn_change);
+        rtn = rtnetlink_create(RTNLGRP_LINK, rtnetlink_link_parse_cb,
+                               &rtn_change);
     }
 
     return rtnetlink_notifier_register(rtn, notifier, nf, aux);

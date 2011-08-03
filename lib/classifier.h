@@ -84,6 +84,8 @@ void cls_rule_set_in_port(struct cls_rule *, uint16_t odp_port);
 void cls_rule_set_dl_type(struct cls_rule *, ovs_be16);
 void cls_rule_set_dl_src(struct cls_rule *, const uint8_t[6]);
 void cls_rule_set_dl_dst(struct cls_rule *, const uint8_t[6]);
+void cls_rule_set_dl_dst_masked(struct cls_rule *, const uint8_t dl_dst[6],
+                                const uint8_t mask[6]);
 void cls_rule_set_dl_tci(struct cls_rule *, ovs_be16 tci);
 void cls_rule_set_dl_tci_masked(struct cls_rule *,
                                 ovs_be16 tci, ovs_be16 mask);
@@ -112,6 +114,7 @@ bool cls_rule_set_ipv6_dst_masked(struct cls_rule *, const struct in6_addr *,
 void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr);
 
 bool cls_rule_equal(const struct cls_rule *, const struct cls_rule *);
+uint32_t cls_rule_hash(const struct cls_rule *, uint32_t basis);
 
 void cls_rule_format(const struct cls_rule *, struct ds *);
 char *cls_rule_to_string(const struct cls_rule *);
@@ -121,7 +124,8 @@ void classifier_init(struct classifier *);
 void classifier_destroy(struct classifier *);
 bool classifier_is_empty(const struct classifier *);
 int classifier_count(const struct classifier *);
-struct cls_rule *classifier_insert(struct classifier *, struct cls_rule *);
+void classifier_insert(struct classifier *, struct cls_rule *);
+struct cls_rule *classifier_replace(struct classifier *, struct cls_rule *);
 void classifier_remove(struct classifier *, struct cls_rule *);
 struct cls_rule *classifier_lookup(const struct classifier *,
                                    const struct flow *);

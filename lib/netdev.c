@@ -243,7 +243,7 @@ netdev_open(struct netdev_options *options, struct netdev **netdevp)
         assert(netdev_dev->netdev_class == class);
 
     } else if (!shash_is_empty(options->args) &&
-               !smap_equal(&netdev_dev->args, options->args)) {
+               !netdev_dev_args_equal(netdev_dev, options->args)) {
 
         VLOG_WARN("%s: attempted to open already open netdev with "
                   "different arguments", options->name);
@@ -289,7 +289,7 @@ netdev_set_config(struct netdev *netdev, const struct shash *args)
     }
 
     if (netdev_dev->netdev_class->set_config) {
-        if (!smap_equal(&netdev_dev->args, args)) {
+        if (!netdev_dev_args_equal(netdev_dev, args)) {
             update_device_args(netdev_dev, args);
             return netdev_dev->netdev_class->set_config(netdev_dev, args);
         }
@@ -846,7 +846,7 @@ netdev_turn_flags_off(struct netdev *netdev, enum netdev_flags flags,
  * ENXIO indicates that there is no ARP table entry for 'ip' on 'netdev'. */
 int
 netdev_arp_lookup(const struct netdev *netdev,
-                  uint32_t ip, uint8_t mac[ETH_ADDR_LEN])
+                  ovs_be32 ip, uint8_t mac[ETH_ADDR_LEN])
 {
     int error = (netdev_get_dev(netdev)->netdev_class->arp_lookup
                  ? netdev_get_dev(netdev)->netdev_class->arp_lookup(netdev,
@@ -886,32 +886,21 @@ netdev_get_carrier(const struct netdev *netdev)
     return carrier;
 }
 
-/* Returns true if 'netdev' is up according to its MII. */
-bool
-netdev_get_miimon(const struct netdev *netdev)
+/* Attempts to force netdev_get_carrier() to poll 'netdev''s MII registers for
+ * link status instead of checking 'netdev''s carrier.  'netdev''s MII
+ * registers will be polled once ever 'interval' milliseconds.  If 'netdev'
+ * does not support MII, another method may be used as a fallback.  If
+ * 'interval' is less than or equal to zero, reverts netdev_get_carrier() to
+ * its normal behavior.
+ *
+ * Returns 0 if successful, otherwise a positive errno value. */
+int
+netdev_set_miimon_interval(struct netdev *netdev, long long int interval)
 {
-    int error;
-    enum netdev_flags flags;
-    bool miimon;
-
-    netdev_get_flags(netdev, &flags);
-    if (!(flags & NETDEV_UP)) {
-        return false;
-    }
-
-    if (!netdev_get_dev(netdev)->netdev_class->get_miimon) {
-        return true;
-    }
-
-    error = netdev_get_dev(netdev)->netdev_class->get_miimon(netdev, &miimon);
-
-    if (error) {
-        VLOG_DBG("%s: failed to get network device MII status, assuming "
-                 "down: %s", netdev_get_name(netdev), strerror(error));
-        miimon = false;
-    }
-
-    return miimon;
+    struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
+    return (netdev_dev->netdev_class->set_miimon_interval
+            ? netdev_dev->netdev_class->set_miimon_interval(netdev, interval)
+            : EOPNOTSUPP);
 }
 
 /* Retrieves current device stats for 'netdev'. */
@@ -1234,6 +1223,19 @@ netdev_dump_queue_stats(const struct netdev *netdev,
             : EOPNOTSUPP);
 }
 
+/* Returns a sequence number which indicates changes in one of 'netdev''s
+ * properties.  The returned sequence will be nonzero so that callers have a
+ * value which they may use as a reset when tracking 'netdev'.
+ *
+ * The returned sequence number will change whenever 'netdev''s flags,
+ * features, ethernet address, or carrier changes.  It may change for other
+ * reasons as well, or no reason at all. */
+unsigned int
+netdev_change_seq(const struct netdev *netdev)
+{
+    return netdev_get_dev(netdev)->netdev_class->change_seq(netdev);
+}
+
 /* If 'netdev' is a VLAN network device (e.g. one created with vconfig(8)),
  * sets '*vlan_vid' to the VLAN VID associated with that device and returns 0.
  * Otherwise returns a errno value (specifically ENOENT if 'netdev_name' is the
@@ -1380,6 +1382,19 @@ netdev_dev_get_devices(const struct netdev_class *netdev_class,
     }
 }
 
+/* Returns true if 'args' is equivalent to the "args" field in
+ * 'netdev_dev', otherwise false. */
+bool
+netdev_dev_args_equal(const struct netdev_dev *netdev_dev,
+                      const struct shash *args)
+{
+    if (netdev_dev->netdev_class->config_equal) {
+        return netdev_dev->netdev_class->config_equal(netdev_dev, args);
+    } else {
+        return smap_equal(&netdev_dev->args, args);
+    }
+}
+
 /* Initializes 'netdev' as a instance of the netdev_dev.
  *
  * This function adds 'netdev' to a netdev-owned linked list, so it is very
@@ -1428,139 +1443,6 @@ struct netdev_dev *
 netdev_get_dev(const struct netdev *netdev)
 {
     return netdev->netdev_dev;
-}
-
-/* Initializes 'notifier' as a netdev notifier for 'netdev', for which
- * notification will consist of calling 'cb', with auxiliary data 'aux'. */
-void
-netdev_notifier_init(struct netdev_notifier *notifier, struct netdev *netdev,
-                     void (*cb)(struct netdev_notifier *), void *aux)
-{
-    notifier->netdev = netdev;
-    notifier->cb = cb;
-    notifier->aux = aux;
-}
-
-/* Tracks changes in the status of a set of network devices. */
-struct netdev_monitor {
-    struct shash polled_netdevs;
-    struct sset changed_netdevs;
-};
-
-/* Creates and returns a new structure for monitor changes in the status of
- * network devices. */
-struct netdev_monitor *
-netdev_monitor_create(void)
-{
-    struct netdev_monitor *monitor = xmalloc(sizeof *monitor);
-    shash_init(&monitor->polled_netdevs);
-    sset_init(&monitor->changed_netdevs);
-    return monitor;
-}
-
-/* Destroys 'monitor'. */
-void
-netdev_monitor_destroy(struct netdev_monitor *monitor)
-{
-    if (monitor) {
-        struct shash_node *node;
-
-        SHASH_FOR_EACH (node, &monitor->polled_netdevs) {
-            struct netdev_notifier *notifier = node->data;
-            netdev_get_dev(notifier->netdev)->netdev_class->poll_remove(
-                    notifier);
-        }
-
-        shash_destroy(&monitor->polled_netdevs);
-        sset_destroy(&monitor->changed_netdevs);
-        free(monitor);
-    }
-}
-
-static void
-netdev_monitor_cb(struct netdev_notifier *notifier)
-{
-    struct netdev_monitor *monitor = notifier->aux;
-    const char *name = netdev_get_name(notifier->netdev);
-    sset_add(&monitor->changed_netdevs, name);
-}
-
-/* Attempts to add 'netdev' as a netdev monitored by 'monitor'.  Returns 0 if
- * successful, otherwise a positive errno value.
- *
- * Adding a given 'netdev' to a monitor multiple times is equivalent to adding
- * it once. */
-int
-netdev_monitor_add(struct netdev_monitor *monitor, struct netdev *netdev)
-{
-    const char *netdev_name = netdev_get_name(netdev);
-    int error = 0;
-    if (!shash_find(&monitor->polled_netdevs, netdev_name)
-            && netdev_get_dev(netdev)->netdev_class->poll_add)
-    {
-        struct netdev_notifier *notifier;
-        error = netdev_get_dev(netdev)->netdev_class->poll_add(netdev,
-                    netdev_monitor_cb, monitor, &notifier);
-        if (!error) {
-            assert(notifier->netdev == netdev);
-            shash_add(&monitor->polled_netdevs, netdev_name, notifier);
-        }
-    }
-    return error;
-}
-
-/* Removes 'netdev' from the set of netdevs monitored by 'monitor'.  (This has
- * no effect if 'netdev' is not in the set of devices monitored by
- * 'monitor'.) */
-void
-netdev_monitor_remove(struct netdev_monitor *monitor, struct netdev *netdev)
-{
-    const char *netdev_name = netdev_get_name(netdev);
-    struct shash_node *node;
-
-    node = shash_find(&monitor->polled_netdevs, netdev_name);
-    if (node) {
-        /* Cancel future notifications. */
-        struct netdev_notifier *notifier = node->data;
-        netdev_get_dev(netdev)->netdev_class->poll_remove(notifier);
-        shash_delete(&monitor->polled_netdevs, node);
-
-        /* Drop any pending notification. */
-        sset_find_and_delete(&monitor->changed_netdevs, netdev_name);
-    }
-}
-
-/* Checks for changes to netdevs in the set monitored by 'monitor'.  If any of
- * the attributes (Ethernet address, carrier status, speed or peer-advertised
- * speed, flags, etc.) of a network device monitored by 'monitor' has changed,
- * sets '*devnamep' to the name of a device that has changed and returns 0.
- * The caller is responsible for freeing '*devnamep' (with free()).
- *
- * If no devices have changed, sets '*devnamep' to NULL and returns EAGAIN. */
-int
-netdev_monitor_poll(struct netdev_monitor *monitor, char **devnamep)
-{
-    if (sset_is_empty(&monitor->changed_netdevs)) {
-        *devnamep = NULL;
-        return EAGAIN;
-    } else {
-        *devnamep = sset_pop(&monitor->changed_netdevs);
-        return 0;
-    }
-}
-
-/* Registers with the poll loop to wake up from the next call to poll_block()
- * when netdev_monitor_poll(monitor) would indicate that a device has
- * changed. */
-void
-netdev_monitor_poll_wait(const struct netdev_monitor *monitor)
-{
-    if (!sset_is_empty(&monitor->changed_netdevs)) {
-        poll_immediate_wake();
-    } else {
-        /* XXX Nothing needed here for netdev_linux, but maybe other netdev
-         * classes need help. */
-    }
 }
 
 /* Restore the network device flags on 'netdev' to those that were active

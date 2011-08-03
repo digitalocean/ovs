@@ -142,10 +142,10 @@ cls_rule_set_tun_id_masked(struct cls_rule *rule,
 }
 
 void
-cls_rule_set_in_port(struct cls_rule *rule, uint16_t odp_port)
+cls_rule_set_in_port(struct cls_rule *rule, uint16_t ofp_port)
 {
     rule->wc.wildcards &= ~FWW_IN_PORT;
-    rule->flow.in_port = odp_port;
+    rule->flow.in_port = ofp_port;
 }
 
 void
@@ -162,11 +162,31 @@ cls_rule_set_dl_src(struct cls_rule *rule, const uint8_t dl_src[ETH_ADDR_LEN])
     memcpy(rule->flow.dl_src, dl_src, ETH_ADDR_LEN);
 }
 
+/* Modifies 'rule' so that the Ethernet address must match 'dl_dst' exactly. */
 void
 cls_rule_set_dl_dst(struct cls_rule *rule, const uint8_t dl_dst[ETH_ADDR_LEN])
 {
     rule->wc.wildcards &= ~(FWW_DL_DST | FWW_ETH_MCAST);
     memcpy(rule->flow.dl_dst, dl_dst, ETH_ADDR_LEN);
+}
+
+/* Modifies 'rule' so that the Ethernet address must match 'dl_dst' after each
+ * byte is ANDed with the appropriate byte in 'mask'.
+ *
+ * This function will assert-fail if 'mask' is invalid.  Only 'mask' values
+ * accepted by flow_wildcards_is_dl_dst_mask_valid() are allowed. */
+void
+cls_rule_set_dl_dst_masked(struct cls_rule *rule,
+                           const uint8_t dl_dst[ETH_ADDR_LEN],
+                           const uint8_t mask[ETH_ADDR_LEN])
+{
+    flow_wildcards_t *wc = &rule->wc.wildcards;
+    size_t i;
+
+    *wc = flow_wildcards_set_dl_dst_mask(*wc, mask);
+    for (i = 0; i < ETH_ADDR_LEN; i++) {
+        rule->flow.dl_dst[i] = dl_dst[i] & mask[i];
+    }
 }
 
 void
@@ -386,6 +406,16 @@ cls_rule_equal(const struct cls_rule *a, const struct cls_rule *b)
             && flow_equal(&a->flow, &b->flow));
 }
 
+/* Returns a hash value for the flow, wildcards, and priority in 'rule',
+ * starting from 'basis'. */
+uint32_t
+cls_rule_hash(const struct cls_rule *rule, uint32_t basis)
+{
+    uint32_t h0 = flow_hash(&rule->flow, basis);
+    uint32_t h1 = flow_wildcards_hash(&rule->wc, h0);
+    return hash_int(rule->priority, h1);
+}
+
 static void
 format_ip_netmask(struct ds *s, const char *name, ovs_be32 ip,
                   ovs_be32 netmask)
@@ -506,8 +536,7 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
         break;
     }
     if (!(w & FWW_IN_PORT)) {
-        ds_put_format(s, "in_port=%"PRIu16",",
-                      odp_port_to_ofp_port(f->in_port));
+        ds_put_format(s, "in_port=%"PRIu16",", f->in_port);
     }
     if (wc->vlan_tci_mask) {
         ovs_be16 vid_mask = wc->vlan_tci_mask & htons(VLAN_VID_MASK);
@@ -563,7 +592,7 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
     }
     if (!skip_proto && !(w & FWW_NW_PROTO)) {
         if (f->dl_type == htons(ETH_TYPE_ARP)) {
-            ds_put_format(s, "opcode=%"PRIu8",", f->nw_proto);
+            ds_put_format(s, "arp_op=%"PRIu8",", f->nw_proto);
         } else {
             ds_put_format(s, "nw_proto=%"PRIu8",", f->nw_proto);
         }
@@ -693,7 +722,7 @@ classifier_count(const struct classifier *cls)
  * rule, even rules that cannot have any effect because the new rule matches a
  * superset of their flows and has higher priority. */
 struct cls_rule *
-classifier_insert(struct classifier *cls, struct cls_rule *rule)
+classifier_replace(struct classifier *cls, struct cls_rule *rule)
 {
     struct cls_rule *old_rule;
     struct cls_table *table;
@@ -709,6 +738,19 @@ classifier_insert(struct classifier *cls, struct cls_rule *rule)
         cls->n_rules++;
     }
     return old_rule;
+}
+
+/* Inserts 'rule' into 'cls'.  Until 'rule' is removed from 'cls', the caller
+ * must not modify or free it.
+ *
+ * 'cls' must not contain an identical rule (including wildcards, values of
+ * fixed fields, and priority).  Use classifier_find_rule_exactly() to find
+ * such a rule. */
+void
+classifier_insert(struct classifier *cls, struct cls_rule *rule)
+{
+    struct cls_rule *displaced_rule = classifier_replace(cls, rule);
+    assert(!displaced_rule);
 }
 
 /* Removes 'rule' from 'cls'.  It is the caller's responsibility to free
@@ -761,10 +803,7 @@ classifier_lookup(const struct classifier *cls, const struct flow *flow)
 
 /* Finds and returns a rule in 'cls' with exactly the same priority and
  * matching criteria as 'target'.  Returns a null pointer if 'cls' doesn't
- * contain an exact match.
- *
- * Priority is ignored for exact-match rules (because OpenFlow 1.0 always
- * treats exact-match rules as highest priority). */
+ * contain an exact match. */
 struct cls_rule *
 classifier_find_rule_exactly(const struct classifier *cls,
                              const struct cls_rule *target)
@@ -778,9 +817,6 @@ classifier_find_rule_exactly(const struct classifier *cls,
     }
 
     head = find_equal(table, &target->flow, flow_hash(&target->flow, 0));
-    if (flow_wildcards_is_exact(&target->wc)) {
-        return head;
-    }
     FOR_EACH_RULE_IN_LIST (rule, head) {
         if (target->priority >= rule->priority) {
             return target->priority == rule->priority ? rule : NULL;
@@ -943,7 +979,7 @@ find_table(const struct classifier *cls, const struct flow_wildcards *wc)
 {
     struct cls_table *table;
 
-    HMAP_FOR_EACH_IN_BUCKET (table, hmap_node, flow_wildcards_hash(wc),
+    HMAP_FOR_EACH_IN_BUCKET (table, hmap_node, flow_wildcards_hash(wc, 0),
                              &cls->tables) {
         if (flow_wildcards_equal(wc, &table->wc)) {
             return table;
@@ -960,7 +996,7 @@ insert_table(struct classifier *cls, const struct flow_wildcards *wc)
     table = xzalloc(sizeof *table);
     hmap_init(&table->rules);
     table->wc = *wc;
-    hmap_insert(&cls->tables, &table->hmap_node, flow_wildcards_hash(wc));
+    hmap_insert(&cls->tables, &table->hmap_node, flow_wildcards_hash(wc, 0));
 
     return table;
 }

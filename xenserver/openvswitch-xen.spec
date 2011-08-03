@@ -60,7 +60,7 @@ Open vSwitch Linux kernel module compiled against kernel version
 %setup -q -n openvswitch-%{openvswitch_version}
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-l26=/lib/modules/%{xen_version}/build --enable-ssl %{build_number}
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{xen_version}/build --enable-ssl %{build_number}
 make %{_smp_mflags}
 
 %install
@@ -82,15 +82,7 @@ install -m 755 xenserver/etc_profile.d_openvswitch.sh \
 install -d -m 755 $RPM_BUILD_ROOT/etc/xapi.d/plugins
 install -m 755 xenserver/etc_xapi.d_plugins_openvswitch-cfg-update \
          $RPM_BUILD_ROOT/etc/xapi.d/plugins/openvswitch-cfg-update
-install -d -m 755 $RPM_BUILD_ROOT/etc/xensource/bugtool/network-status
-install -m 644 xenserver/etc_xensource_bugtool_network-status_openvswitch.xml \
-         $RPM_BUILD_ROOT/etc/xensource/bugtool/network-status/openvswitch.xml
-install -d -m 755 $RPM_BUILD_ROOT/etc/xensource/bugtool/kernel-info
-install -m 644 xenserver/etc_xensource_bugtool_kernel-info_openvswitch.xml \
-         $RPM_BUILD_ROOT/etc/xensource/bugtool/kernel-info/openvswitch.xml
 install -d -m 755 $RPM_BUILD_ROOT/usr/share/openvswitch/scripts
-install -m 644 vswitchd/vswitch.ovsschema \
-         $RPM_BUILD_ROOT/usr/share/openvswitch/vswitch.ovsschema
 install -m 755 xenserver/opt_xensource_libexec_interface-reconfigure \
              $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/interface-reconfigure
 install -m 644 xenserver/opt_xensource_libexec_InterfaceReconfigure.py \
@@ -105,26 +97,27 @@ install -m 755 xenserver/usr_share_openvswitch_scripts_ovs-xapi-sync \
                $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/ovs-xapi-sync
 install -m 755 xenserver/usr_share_openvswitch_scripts_sysconfig.template \
          $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/sysconfig.template
-install -m 755 xenserver/usr_share_openvswitch_scripts_xen-bugtool-tc-class-show \
-         $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/xen-bugtool-tc-class-show
-install -m 755 utilities/ovs-save \
-         $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/ovs-save
 install -d -m 755 $RPM_BUILD_ROOT/usr/lib/xsconsole/plugins-base
 install -m 644 \
         xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py \
                $RPM_BUILD_ROOT/usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.py
 
 install -d -m 755 $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch
-find datapath/linux-2.6 -name *.ko -exec install -m 755  \{\} $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch \;
+find datapath/linux -name *.ko -exec install -m 755  \{\} $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch \;
 install xenserver/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
+
+install -d -m 755 $RPM_BUILD_ROOT/etc/xensource/bugtool
+mv $RPM_BUILD_ROOT/etc/openvswitch/bugtool-plugins $RPM_BUILD_ROOT/etc/xensource/bugtool
 
 # Get rid of stuff we don't want to make RPM happy.
 rm \
+    $RPM_BUILD_ROOT/usr/bin/ovs-benchmark \
+    $RPM_BUILD_ROOT/usr/sbin/ovs-bugtool \
     $RPM_BUILD_ROOT/usr/bin/ovs-controller \
-    $RPM_BUILD_ROOT/usr/bin/ovs-openflowd \
     $RPM_BUILD_ROOT/usr/bin/ovs-pki \
+    $RPM_BUILD_ROOT/usr/share/man/man1/ovs-benchmark.1 \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-bugtool.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-openflowd.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-pki.8
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
@@ -152,11 +145,11 @@ if test ! -e /etc/openvswitch/conf.db; then
     install -d -m 755 -o root -g root /etc/openvswitch
 
     # Create ovs-vswitchd config database
-    ovsdb-tool -vANY:console:emer create /etc/openvswitch/conf.db \
+    ovsdb-tool -vANY:console:off create /etc/openvswitch/conf.db \
             /usr/share/openvswitch/vswitch.ovsschema
 
     # Create initial table in config database
-    ovsdb-tool -vANY:console:emer transact /etc/openvswitch/conf.db \
+    ovsdb-tool -vANY:console:off transact /etc/openvswitch/conf.db \
             '[{"op": "insert", "table": "Open_vSwitch", "row": {}}]' \
             > /dev/null
 fi
@@ -226,7 +219,7 @@ for s in openvswitch openvswitch-xapi-update; do
     chkconfig $s on || printf "Could not enable $s init script."
 done
 
-if [ "$1" = "1" ]; then    # $1 = 2 for upgrade
+if [ "$1" = "1" ]; then    # $1 = 1 for install
     # Configure system to use Open vSwitch
     /opt/xensource/bin/xe-switch-network-backend vswitch
 else    # $1 = 2 for upgrade
@@ -244,8 +237,14 @@ else    # $1 = 2 for upgrade
     printf "\n\n"
 fi
 
-%post %{module_package}
+%posttrans %{module_package}
 # Ensure that modprobe will find our modules.
+#
+# This has to be in %posttrans instead of %post because older versions
+# installed modules into a different directory and "rpm -U" runs the
+# new version's %post before removing the old version's files, so if
+# we use %post then depmod may find the old versions that are about to
+# be removed.
 depmod %{xen_version}
 
 %preun
@@ -294,7 +293,7 @@ do
     fi
 done
 
-if [ "$1" = "0" ]; then     # $1 = 1 for upgrade
+if [ "$1" = "0" ]; then     # $1 = 0 for uninstall
     rm -f /usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.pyc \
         /usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.pyo
 
@@ -321,8 +320,7 @@ exit 0
 /etc/init.d/openvswitch
 /etc/init.d/openvswitch-xapi-update
 /etc/xapi.d/plugins/openvswitch-cfg-update
-/etc/xensource/bugtool/network-status/openvswitch.xml
-/etc/xensource/bugtool/kernel-info/openvswitch.xml
+/etc/xensource/bugtool/*
 /etc/logrotate.d/openvswitch
 /etc/profile.d/openvswitch.sh
 /usr/share/openvswitch/python/ovs/__init__.py
@@ -354,8 +352,10 @@ exit 0
 /usr/share/openvswitch/scripts/InterfaceReconfigureVswitch.py
 /usr/share/openvswitch/scripts/vif
 /usr/share/openvswitch/scripts/sysconfig.template
-/usr/share/openvswitch/scripts/xen-bugtool-tc-class-show
+/usr/share/openvswitch/scripts/ovs-bugtool-*
 /usr/share/openvswitch/scripts/ovs-save
+/usr/share/openvswitch/scripts/ovs-ctl
+/usr/share/openvswitch/scripts/ovs-lib.sh
 /usr/share/openvswitch/vswitch.ovsschema
 /usr/sbin/ovs-vlan-bug-workaround
 /usr/sbin/ovs-vswitchd
@@ -363,6 +363,7 @@ exit 0
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
 /usr/bin/ovs-ofctl
+/usr/bin/ovs-parse-leaks
 /usr/bin/ovs-pcap
 /usr/bin/ovs-tcpundump
 /usr/bin/ovs-vlan-test
@@ -375,6 +376,7 @@ exit 0
 /usr/share/man/man1/ovsdb-tool.1.gz
 /usr/share/man/man5/ovs-vswitchd.conf.db.5.gz
 /usr/share/man/man8/ovs-appctl.8.gz
+/usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
 /usr/share/man/man8/ovs-parse-leaks.8.gz

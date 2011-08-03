@@ -3,23 +3,25 @@ bin_PROGRAMS += \
 	utilities/ovs-controller \
 	utilities/ovs-dpctl \
 	utilities/ovs-ofctl \
-	utilities/ovs-openflowd \
 	utilities/ovs-vsctl
-bin_SCRIPTS += utilities/ovs-pki utilities/ovs-vsctl
+bin_SCRIPTS += utilities/ovs-pki utilities/ovs-vsctl utilities/ovs-parse-leaks
 if HAVE_PYTHON
 bin_SCRIPTS += \
 	utilities/ovs-pcap \
 	utilities/ovs-tcpundump \
 	utilities/ovs-vlan-test
 endif
-noinst_SCRIPTS += utilities/ovs-pki-cgi utilities/ovs-parse-leaks
+noinst_SCRIPTS += utilities/ovs-pki-cgi
+scripts_SCRIPTS += utilities/ovs-ctl utilities/ovs-lib.sh utilities/ovs-save
 
 EXTRA_DIST += \
 	utilities/ovs-appctl.8.in \
+	utilities/ovs-benchmark.1.in \
 	utilities/ovs-controller.8.in \
+	utilities/ovs-ctl.in \
 	utilities/ovs-dpctl.8.in \
+	utilities/ovs-lib.sh.in \
 	utilities/ovs-ofctl.8.in \
-	utilities/ovs-openflowd.8.in \
 	utilities/ovs-parse-leaks.8 \
 	utilities/ovs-parse-leaks.in \
 	utilities/ovs-pcap.1.in \
@@ -37,10 +39,12 @@ EXTRA_DIST += \
 	utilities/ovs-vsctl.8.in
 DISTCLEANFILES += \
 	utilities/ovs-appctl.8 \
+	utilities/ovs-ctl \
+	utilities/ovs-benchmark.1 \
 	utilities/ovs-controller.8 \
 	utilities/ovs-dpctl.8 \
+	utilities/ovs-lib.sh \
 	utilities/ovs-ofctl.8 \
-	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks \
 	utilities/ovs-pcap \
 	utilities/ovs-pcap.1 \
@@ -56,10 +60,10 @@ DISTCLEANFILES += \
 
 man_MANS += \
 	utilities/ovs-appctl.8 \
+	utilities/ovs-benchmark.1 \
 	utilities/ovs-controller.8 \
 	utilities/ovs-dpctl.8 \
 	utilities/ovs-ofctl.8 \
-	utilities/ovs-openflowd.8 \
 	utilities/ovs-parse-leaks.8 \
 	utilities/ovs-pcap.1 \
 	utilities/ovs-pki.8 \
@@ -67,6 +71,7 @@ man_MANS += \
 	utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
+dist_man_MANS += utilities/ovs-ctl.8
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.a
@@ -78,12 +83,8 @@ utilities_ovs_dpctl_SOURCES = utilities/ovs-dpctl.c
 utilities_ovs_dpctl_LDADD = lib/libopenvswitch.a
 
 utilities_ovs_ofctl_SOURCES = utilities/ovs-ofctl.c
-utilities_ovs_ofctl_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
-
-utilities_ovs_openflowd_SOURCES = utilities/ovs-openflowd.c
-utilities_ovs_openflowd_LDADD = \
+utilities_ovs_ofctl_LDADD = \
 	ofproto/libofproto.a \
-	lib/libsflow.a \
 	lib/libopenvswitch.a \
 	$(SSL_LIBS)
 
@@ -99,3 +100,9 @@ noinst_PROGRAMS += utilities/nlmon
 utilities_nlmon_SOURCES = utilities/nlmon.c
 utilities_nlmon_LDADD = lib/libopenvswitch.a
 endif
+
+bin_PROGRAMS += utilities/ovs-benchmark
+utilities_ovs_benchmark_SOURCES = utilities/ovs-benchmark.c
+utilities_ovs_benchmark_LDADD = lib/libopenvswitch.a
+
+include utilities/bugtool/automake.mk

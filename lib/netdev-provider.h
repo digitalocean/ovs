@@ -52,6 +52,8 @@ const char *netdev_dev_get_name(const struct netdev_dev *);
 struct netdev_dev *netdev_dev_from_name(const char *name);
 void netdev_dev_get_devices(const struct netdev_class *,
                             struct shash *device_list);
+bool netdev_dev_args_equal(const struct netdev_dev *netdev_dev,
+                           const struct shash *args);
 
 static inline void netdev_dev_assert_class(const struct netdev_dev *netdev_dev,
                                            const struct netdev_class *class_)
@@ -81,19 +83,6 @@ static inline void netdev_assert_class(const struct netdev *netdev,
     netdev_dev_assert_class(netdev_get_dev(netdev), netdev_class);
 }
 
-/* A network device notifier.
- *
- * Network device implementations should use netdev_notifier_init() to
- * initialize this structure, but they may freely read its members after
- * initialization. */
-struct netdev_notifier {
-    struct netdev *netdev;
-    void (*cb)(struct netdev_notifier *);
-    void *aux;
-};
-void netdev_notifier_init(struct netdev_notifier *, struct netdev *,
-                          void (*cb)(struct netdev_notifier *), void *aux);
-
 /* Network device class structure, to be defined by each implementation of a
  * network device.
  *
@@ -121,7 +110,10 @@ struct netdev_class {
     void (*run)(void);
 
     /* Arranges for poll_block() to wake up if the "run" member function needs
-     * to be called.  May be null if nothing is needed here. */
+     * to be called.  Implementations are additionally required to wake
+     * whenever something changes in any of its netdevs which would cause their
+     * ->change_seq() function to change its result.  May be null if nothing is
+     * needed here. */
     void (*wait)(void);
 
     /* Attempts to create a network device named 'name' with initial 'args' in
@@ -144,6 +136,15 @@ struct netdev_class {
      * device, this may be a null pointer.
      */
     int (*set_config)(struct netdev_dev *netdev_dev, const struct shash *args);
+
+    /* Returns true if 'args' is equivalent to the "args" field in
+     * 'netdev_dev', otherwise false.
+     *
+     * If no special processing needs to be done beyond a simple
+     * shash comparison, this may be a null pointer.
+     */
+    bool (*config_equal)(const struct netdev_dev *netdev_dev,
+                         const struct shash *args);
 
     /* Attempts to open a network device.  On success, sets 'netdevp'
      * to the new network device.
@@ -210,7 +211,8 @@ struct netdev_class {
      * transmission through this interface.  This function may be set to null
      * if it would always return EOPNOTSUPP anyhow.  (This will prevent the
      * network device from being usefully used by the netdev-based "userspace
-     * datapath".) */
+     * datapath".  It will also prevent the OVS implementation of bonding from
+     * working properly over 'netdev'.) */
     int (*send)(struct netdev *netdev, const void *buffer, size_t size);
 
     /* Registers with the poll loop to wake up from the next call to
@@ -262,13 +264,17 @@ struct netdev_class {
      */
     int (*get_carrier)(const struct netdev *netdev, bool *carrier);
 
-    /* Sets 'miimon' to true if 'netdev' is up according to its MII.  If
-     * 'netdev' does not support MII, may fall back to another method or return
-     * EOPNOTSUPP.
+    /* Forces ->get_carrier() to poll 'netdev''s MII registers for link status
+     * instead of checking 'netdev''s carrier.  'netdev''s MII registers will
+     * be polled once ever 'interval' milliseconds.  If 'netdev' does not
+     * support MII, another method may be used as a fallback.  If 'interval' is
+     * less than or equal to zero, reverts ->get_carrier() to its normal
+     * behavior.
      *
-     * This function may be set to null if it would always return EOPNOTSUPP.
+     * Most network devices won't support this feature and will set this
+     * function pointer to NULL, which is equivalent to returning EOPNOTSUPP.
      */
-    int (*get_miimon)(const struct netdev *netdev, bool *miimon);
+    int (*set_miimon_interval)(struct netdev *netdev, long long int interval);
 
     /* Retrieves current device stats for 'netdev' into 'stats'.
      *
@@ -543,7 +549,8 @@ struct netdev_class {
      *
      * This function may be set to null if it would always return EOPNOTSUPP
      * anyhow. */
-    int (*arp_lookup)(const struct netdev *netdev, uint32_t ip, uint8_t mac[6]);
+    int (*arp_lookup)(const struct netdev *netdev, ovs_be32 ip,
+                      uint8_t mac[6]);
 
     /* Retrieves the current set of flags on 'netdev' into '*old_flags'.
      * Then, turns off the flags that are set to 1 in 'off' and turns on the
@@ -555,17 +562,16 @@ struct netdev_class {
     int (*update_flags)(struct netdev *netdev, enum netdev_flags off,
                         enum netdev_flags on, enum netdev_flags *old_flags);
 
-    /* Arranges for 'cb' to be called whenever one of the attributes of
-     * 'netdev' changes and sets '*notifierp' to a newly created
-     * netdev_notifier that represents this arrangement.  The created notifier
-     * will have its 'netdev', 'cb', and 'aux' members set to the values of the
-     * corresponding parameters. */
-    int (*poll_add)(struct netdev *netdev,
-                    void (*cb)(struct netdev_notifier *notifier), void *aux,
-                    struct netdev_notifier **notifierp);
-
-    /* Cancels poll notification for 'notifier'. */
-    void (*poll_remove)(struct netdev_notifier *notifier);
+    /* Returns a sequence number which indicates changes in one of 'netdev''s
+     * properties.  The returned sequence number must be nonzero so that
+     * callers have a value which they may use as a reset when tracking
+     * 'netdev'.
+     *
+     * Minimally, the returned sequence number is required to change whenever
+     * 'netdev''s flags, features, ethernet address, or carrier changes.  The
+     * returned sequence number is allowed to change even when 'netdev' doesn't
+     * change, although implementations should try to avoid this. */
+    unsigned int (*change_seq)(const struct netdev *netdev);
 };
 
 int netdev_register_provider(const struct netdev_class *);

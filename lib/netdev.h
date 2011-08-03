@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "openvswitch/types.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -129,7 +130,7 @@ int netdev_get_etheraddr(const struct netdev *, uint8_t mac[6]);
 
 /* PHY interface. */
 bool netdev_get_carrier(const struct netdev *);
-bool netdev_get_miimon(const struct netdev *);
+int netdev_set_miimon_interval(struct netdev *, long long int interval);
 int netdev_get_features(const struct netdev *,
                         uint32_t *current, uint32_t *advertised,
                         uint32_t *supported, uint32_t *peer);
@@ -146,7 +147,7 @@ int netdev_add_router(struct netdev *, struct in_addr router);
 int netdev_get_next_hop(const struct netdev *, const struct in_addr *host,
                         struct in_addr *next_hop, char **);
 int netdev_get_status(const struct netdev *, struct shash *sh);
-int netdev_arp_lookup(const struct netdev *, uint32_t ip, uint8_t mac[6]);
+int netdev_arp_lookup(const struct netdev *, ovs_be32 ip, uint8_t mac[6]);
 
 int netdev_get_flags(const struct netdev *, enum netdev_flags *);
 int netdev_set_flags(struct netdev *, enum netdev_flags, bool permanent);
@@ -204,16 +205,10 @@ typedef void netdev_dump_queue_stats_cb(unsigned int queue_id,
 int netdev_dump_queue_stats(const struct netdev *,
                             netdev_dump_queue_stats_cb *, void *aux);
 
+unsigned int netdev_change_seq(const struct netdev *netdev);
+
 /* Linux stuff. */
 int netdev_get_vlan_vid(const struct netdev *, int *vlan_vid);
-
-/* Monitoring for changes in network device status. */
-struct netdev_monitor *netdev_monitor_create(void);
-void netdev_monitor_destroy(struct netdev_monitor *);
-int netdev_monitor_add(struct netdev_monitor *, struct netdev *);
-void netdev_monitor_remove(struct netdev_monitor *, struct netdev *);
-int netdev_monitor_poll(struct netdev_monitor *, char **devnamep);
-void netdev_monitor_poll_wait(const struct netdev_monitor *);
 
 #ifdef  __cplusplus
 }

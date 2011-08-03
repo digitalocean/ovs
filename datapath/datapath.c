@@ -49,10 +49,14 @@
 #include "datapath.h"
 #include "actions.h"
 #include "flow.h"
-#include "loop_counter.h"
 #include "table.h"
 #include "vlan.h"
 #include "vport-internal_dev.h"
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18) || \
+    LINUX_VERSION_CODE >= KERNEL_VERSION(3,1,0)
+#error Kernels before 2.6.18 or after 3.0 are not supported by this version of Open vSwitch.
+#endif
 
 int (*dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
 EXPORT_SYMBOL(dp_ioctl_hook);
@@ -80,7 +84,7 @@ EXPORT_SYMBOL(dp_ioctl_hook);
 static LIST_HEAD(dps);
 
 static struct vport *new_vport(const struct vport_parms *);
-static int queue_control_packets(struct datapath *, struct sk_buff *,
+static int queue_userspace_packets(struct datapath *, struct sk_buff *,
 				 const struct dp_upcall_info *);
 
 /* Must be called with rcu_read_lock, genl_mutex, or RTNL lock. */
@@ -267,8 +271,6 @@ void dp_process_received_packet(struct vport *p, struct sk_buff *skb)
 	struct datapath *dp = p->dp;
 	struct dp_stats_percpu *stats;
 	int stats_counter_off;
-	struct sw_flow_actions *acts;
-	struct loop_counter *loop;
 	int error;
 
 	OVS_CB(skb)->vport = p;
@@ -276,24 +278,25 @@ void dp_process_received_packet(struct vport *p, struct sk_buff *skb)
 	if (!OVS_CB(skb)->flow) {
 		struct sw_flow_key key;
 		struct tbl_node *flow_node;
+		int key_len;
 		bool is_frag;
 
 		/* Extract flow from 'skb' into 'key'. */
-		error = flow_extract(skb, p->port_no, &key, &is_frag);
+		error = flow_extract(skb, p->port_no, &key, &key_len, &is_frag);
 		if (unlikely(error)) {
 			kfree_skb(skb);
 			return;
 		}
 
 		if (is_frag && dp->drop_frags) {
-			kfree_skb(skb);
+			consume_skb(skb);
 			stats_counter_off = offsetof(struct dp_stats_percpu, n_frags);
 			goto out;
 		}
 
 		/* Look up flow. */
-		flow_node = tbl_lookup(rcu_dereference(dp->table), &key,
-					flow_hash(&key), flow_cmp);
+		flow_node = tbl_lookup(rcu_dereference(dp->table), &key, key_len,
+				       flow_hash(&key, key_len), flow_cmp);
 		if (unlikely(!flow_node)) {
 			struct dp_upcall_info upcall;
 
@@ -313,32 +316,7 @@ void dp_process_received_packet(struct vport *p, struct sk_buff *skb)
 
 	stats_counter_off = offsetof(struct dp_stats_percpu, n_hit);
 	flow_used(OVS_CB(skb)->flow, skb);
-
-	acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
-
-	/* Check whether we've looped too much. */
-	loop = loop_get_counter();
-	if (unlikely(++loop->count > MAX_LOOPS))
-		loop->looping = true;
-	if (unlikely(loop->looping)) {
-		loop_suppress(dp, acts);
-		kfree_skb(skb);
-		goto out_loop;
-	}
-
-	/* Execute actions. */
-	execute_actions(dp, skb, &OVS_CB(skb)->flow->key, acts->actions,
-			acts->actions_len);
-
-	/* Check whether sub-actions looped too much. */
-	if (unlikely(loop->looping))
-		loop_suppress(dp, acts);
-
-out_loop:
-	/* Decrement loop counter. */
-	if (!--loop->count)
-		loop->looping = false;
-	loop_put_counter();
+	execute_actions(dp, skb);
 
 out:
 	/* Update datapath statistics. */
@@ -421,33 +399,28 @@ int dp_upcall(struct datapath *dp, struct sk_buff *skb, const struct dp_upcall_i
 
 	WARN_ON_ONCE(skb_shared(skb));
 
-	forward_ip_summed(skb);
-
-	err = vswitch_skb_checksum_setup(skb);
-	if (err)
-		goto err_kfree_skb;
+	forward_ip_summed(skb, true);
 
 	/* Break apart GSO packets into their component pieces.  Otherwise
 	 * userspace may try to stuff a 64kB packet into a 1500-byte MTU. */
 	if (skb_is_gso(skb)) {
 		struct sk_buff *nskb = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
 		
-		kfree_skb(skb);
-		skb = nskb;
-		if (IS_ERR(skb)) {
-			err = PTR_ERR(skb);
+		if (IS_ERR(nskb)) {
+			kfree_skb(skb);
+			err = PTR_ERR(nskb);
 			goto err;
 		}
+		consume_skb(skb);
+		skb = nskb;
 	}
 
-	err = queue_control_packets(dp, skb, upcall_info);
+	err = queue_userspace_packets(dp, skb, upcall_info);
 	if (err)
 		goto err;
 
 	return 0;
 
-err_kfree_skb:
-	kfree_skb(skb);
 err:
 	local_bh_disable();
 	stats = per_cpu_ptr(dp->stats_percpu, smp_processor_id());
@@ -465,18 +438,12 @@ err:
  * 'upcall_info'.  There will be only one packet unless we broke up a GSO
  * packet.
  */
-static int queue_control_packets(struct datapath *dp, struct sk_buff *skb,
+static int queue_userspace_packets(struct datapath *dp, struct sk_buff *skb,
 				 const struct dp_upcall_info *upcall_info)
 {
 	u32 group = packet_mc_group(dp, upcall_info->cmd);
 	struct sk_buff *nskb;
-	int port_no;
 	int err;
-
-	if (OVS_CB(skb)->vport)
-		port_no = OVS_CB(skb)->vport->port_no;
-	else
-		port_no = ODPP_LOCAL;
 
 	do {
 		struct odp_header *upcall;
@@ -540,7 +507,7 @@ static int queue_control_packets(struct datapath *dp, struct sk_buff *skb,
 		if (err)
 			goto err_kfree_skbs;
 
-		kfree_skb(skb);
+		consume_skb(skb);
 		skb = nskb;
 	} while (skb);
 	return 0;
@@ -585,7 +552,7 @@ static int validate_actions(const struct nlattr *attr)
 	nla_for_each_nested(a, attr, rem) {
 		static const u32 action_lens[ODP_ACTION_ATTR_MAX + 1] = {
 			[ODP_ACTION_ATTR_OUTPUT] = 4,
-			[ODP_ACTION_ATTR_CONTROLLER] = 8,
+			[ODP_ACTION_ATTR_USERSPACE] = 8,
 			[ODP_ACTION_ATTR_SET_DL_TCI] = 2,
 			[ODP_ACTION_ATTR_STRIP_VLAN] = 0,
 			[ODP_ACTION_ATTR_SET_DL_SRC] = ETH_ALEN,
@@ -598,7 +565,6 @@ static int validate_actions(const struct nlattr *attr)
 			[ODP_ACTION_ATTR_SET_TUNNEL] = 8,
 			[ODP_ACTION_ATTR_SET_PRIORITY] = 4,
 			[ODP_ACTION_ATTR_POP_PRIORITY] = 0,
-			[ODP_ACTION_ATTR_DROP_SPOOFED_ARP] = 0,
 		};
 		int type = nla_type(a);
 
@@ -609,7 +575,7 @@ static int validate_actions(const struct nlattr *attr)
 		case ODP_ACTION_ATTR_UNSPEC:
 			return -EINVAL;
 
-		case ODP_ACTION_ATTR_CONTROLLER:
+		case ODP_ACTION_ATTR_USERSPACE:
 		case ODP_ACTION_ATTR_STRIP_VLAN:
 		case ODP_ACTION_ATTR_SET_DL_SRC:
 		case ODP_ACTION_ATTR_SET_DL_DST:
@@ -620,7 +586,6 @@ static int validate_actions(const struct nlattr *attr)
 		case ODP_ACTION_ATTR_SET_TUNNEL:
 		case ODP_ACTION_ATTR_SET_PRIORITY:
 		case ODP_ACTION_ATTR_POP_PRIORITY:
-		case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
 			/* No validation needed. */
 			break;
 
@@ -677,16 +642,19 @@ static int odp_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 {
 	struct odp_header *odp_header = info->userhdr;
 	struct nlattr **a = info->attrs;
+	struct sw_flow_actions *acts;
 	struct sk_buff *packet;
-	struct sw_flow_key key;
+	struct sw_flow *flow;
 	struct datapath *dp;
 	struct ethhdr *eth;
 	bool is_frag;
 	int len;
 	int err;
+	int key_len;
 
 	err = -EINVAL;
-	if (!a[ODP_PACKET_ATTR_PACKET] || !a[ODP_PACKET_ATTR_ACTIONS] ||
+	if (!a[ODP_PACKET_ATTR_PACKET] || !a[ODP_PACKET_ATTR_KEY] ||
+	    !a[ODP_PACKET_ATTR_ACTIONS] ||
 	    nla_len(a[ODP_PACKET_ATTR_PACKET]) < ETH_HLEN)
 		goto err;
 
@@ -714,26 +682,46 @@ static int odp_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	else
 		packet->protocol = htons(ETH_P_802_2);
 
-	/* Initialize OVS_CB (it came from Netlink so might not be zeroed). */
-	memset(OVS_CB(packet), 0, sizeof(struct ovs_skb_cb));
-
-	err = flow_extract(packet, -1, &key, &is_frag);
-	if (err)
+	/* Build an sw_flow for sending this packet. */
+	flow = flow_alloc();
+	err = PTR_ERR(flow);
+	if (IS_ERR(flow))
 		goto err_kfree_skb;
+
+	err = flow_extract(packet, -1, &flow->key, &key_len, &is_frag);
+	if (err)
+		goto err_flow_put;
+	flow->tbl_node.hash = flow_hash(&flow->key, key_len);
+
+	err = flow_metadata_from_nlattrs(&flow->key.eth.in_port,
+					 &flow->key.eth.tun_id,
+					 a[ODP_PACKET_ATTR_KEY]);
+	if (err)
+		goto err_flow_put;
+
+	acts = flow_actions_alloc(a[ODP_PACKET_ATTR_ACTIONS]);
+	err = PTR_ERR(acts);
+	if (IS_ERR(acts))
+		goto err_flow_put;
+	rcu_assign_pointer(flow->sf_acts, acts);
+
+	OVS_CB(packet)->flow = flow;
 
 	rcu_read_lock();
 	dp = get_dp(odp_header->dp_ifindex);
 	err = -ENODEV;
 	if (!dp)
 		goto err_unlock;
-	err = execute_actions(dp, packet, &key,
-			      nla_data(a[ODP_PACKET_ATTR_ACTIONS]),
-			      nla_len(a[ODP_PACKET_ATTR_ACTIONS]));
+	err = execute_actions(dp, packet);
 	rcu_read_unlock();
+
+	flow_put(flow);
 	return err;
 
 err_unlock:
 	rcu_read_unlock();
+err_flow_put:
+	flow_put(flow);
 err_kfree_skb:
 	kfree_skb(packet);
 err:
@@ -742,6 +730,7 @@ err:
 
 static const struct nla_policy packet_policy[ODP_PACKET_ATTR_MAX + 1] = {
 	[ODP_PACKET_ATTR_PACKET] = { .type = NLA_UNSPEC },
+	[ODP_PACKET_ATTR_KEY] = { .type = NLA_NESTED },
 	[ODP_PACKET_ATTR_ACTIONS] = { .type = NLA_NESTED },
 };
 
@@ -954,12 +943,13 @@ static int odp_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 	struct tbl *table;
 	u32 hash;
 	int error;
+	int key_len;
 
 	/* Extract key. */
 	error = -EINVAL;
 	if (!a[ODP_FLOW_ATTR_KEY])
 		goto error;
-	error = flow_from_nlattrs(&key, a[ODP_FLOW_ATTR_KEY]);
+	error = flow_from_nlattrs(&key, &key_len, a[ODP_FLOW_ATTR_KEY]);
 	if (error)
 		goto error;
 
@@ -978,9 +968,9 @@ static int odp_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 	if (!dp)
 		goto error;
 
-	hash = flow_hash(&key);
+	hash = flow_hash(&key, key_len);
 	table = get_table_protected(dp);
-	flow_node = tbl_lookup(table, &key, hash, flow_cmp);
+	flow_node = tbl_lookup(table, &key, key_len, hash, flow_cmp);
 	if (!flow_node) {
 		struct sw_flow_actions *acts;
 
@@ -1090,10 +1080,11 @@ static int odp_flow_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	struct datapath *dp;
 	struct tbl *table;
 	int err;
+	int key_len;
 
 	if (!a[ODP_FLOW_ATTR_KEY])
 		return -EINVAL;
-	err = flow_from_nlattrs(&key, a[ODP_FLOW_ATTR_KEY]);
+	err = flow_from_nlattrs(&key, &key_len, a[ODP_FLOW_ATTR_KEY]);
 	if (err)
 		return err;
 
@@ -1102,7 +1093,8 @@ static int odp_flow_cmd_get(struct sk_buff *skb, struct genl_info *info)
 		return -ENODEV;
 
 	table = get_table_protected(dp);
-	flow_node = tbl_lookup(table, &key, flow_hash(&key), flow_cmp);
+	flow_node = tbl_lookup(table, &key, key_len, flow_hash(&key, key_len),
+			       flow_cmp);
 	if (!flow_node)
 		return -ENOENT;
 
@@ -1125,10 +1117,11 @@ static int odp_flow_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	struct datapath *dp;
 	struct tbl *table;
 	int err;
+	int key_len;
 
 	if (!a[ODP_FLOW_ATTR_KEY])
 		return flush_flows(odp_header->dp_ifindex);
-	err = flow_from_nlattrs(&key, a[ODP_FLOW_ATTR_KEY]);
+	err = flow_from_nlattrs(&key, &key_len, a[ODP_FLOW_ATTR_KEY]);
 	if (err)
 		return err;
 
@@ -1137,7 +1130,8 @@ static int odp_flow_cmd_del(struct sk_buff *skb, struct genl_info *info)
  		return -ENODEV;
 
 	table = get_table_protected(dp);
-	flow_node = tbl_lookup(table, &key, flow_hash(&key), flow_cmp);
+	flow_node = tbl_lookup(table, &key, key_len, flow_hash(&key, key_len),
+			       flow_cmp);
 	if (!flow_node)
 		return -ENOENT;
 	flow = flow_cast(flow_node);
@@ -1916,7 +1910,9 @@ static int odp_vport_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	if (IS_ERR(reply))
 		goto exit_unlock;
 
-	err = genlmsg_reply(reply, info);
+	rcu_read_unlock();
+
+	return genlmsg_reply(reply, info);
 
 exit_unlock:
 	rcu_read_unlock();

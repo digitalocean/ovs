@@ -57,14 +57,12 @@ parse_options(int argc, char *argv[])
         DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
-        {"verbose", optional_argument, 0, 'v'},
-        {"help", no_argument, 0, 'h'},
+        {"verbose", optional_argument, NULL, 'v'},
+        {"help", no_argument, NULL, 'h'},
         DAEMON_LONG_OPTIONS,
-#ifdef HAVE_OPENSSL
-        {"bootstrap-ca-cert", required_argument, 0, OPT_BOOTSTRAP_CA_CERT},
-        STREAM_SSL_LONG_OPTIONS
-#endif
-        {0, 0, 0, 0},
+        {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        STREAM_SSL_LONG_OPTIONS,
+        {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
 
@@ -84,13 +82,11 @@ parse_options(int argc, char *argv[])
 
         DAEMON_OPTION_HANDLERS
 
-#ifdef HAVE_OPENSSL
         STREAM_SSL_OPTION_HANDLERS
 
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(optarg, true);
             break;
-#endif
 
         case '?':
             exit(EXIT_FAILURE);

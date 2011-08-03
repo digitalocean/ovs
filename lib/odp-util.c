@@ -41,7 +41,7 @@ odp_action_len(uint16_t type)
 
     switch ((enum odp_action_type) type) {
     case ODP_ACTION_ATTR_OUTPUT: return 4;
-    case ODP_ACTION_ATTR_CONTROLLER: return 8;
+    case ODP_ACTION_ATTR_USERSPACE: return 8;
     case ODP_ACTION_ATTR_SET_DL_TCI: return 2;
     case ODP_ACTION_ATTR_STRIP_VLAN: return 0;
     case ODP_ACTION_ATTR_SET_DL_SRC: return ETH_ADDR_LEN;
@@ -54,7 +54,6 @@ odp_action_len(uint16_t type)
     case ODP_ACTION_ATTR_SET_TUNNEL: return 8;
     case ODP_ACTION_ATTR_SET_PRIORITY: return 4;
     case ODP_ACTION_ATTR_POP_PRIORITY: return 0;
-    case ODP_ACTION_ATTR_DROP_SPOOFED_ARP: return 0;
 
     case ODP_ACTION_ATTR_UNSPEC:
     case __ODP_ACTION_ATTR_MAX:
@@ -100,8 +99,8 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
     case ODP_ACTION_ATTR_OUTPUT:
         ds_put_format(ds, "%"PRIu16, nl_attr_get_u32(a));
         break;
-    case ODP_ACTION_ATTR_CONTROLLER:
-        ds_put_format(ds, "ctl(%"PRIu64")", nl_attr_get_u64(a));
+    case ODP_ACTION_ATTR_USERSPACE:
+        ds_put_format(ds, "userspace(%"PRIu64")", nl_attr_get_u64(a));
         break;
     case ODP_ACTION_ATTR_SET_TUNNEL:
         ds_put_format(ds, "set_tunnel(%#"PRIx64")",
@@ -145,9 +144,6 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
         break;
     case ODP_ACTION_ATTR_POP_PRIORITY:
         ds_put_cstr(ds, "pop_priority");
-        break;
-    case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
-        ds_put_cstr(ds, "drop_spoofed_arp");
         break;
     default:
         format_generic_odp_action(ds, a);
@@ -403,7 +399,8 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
         nl_msg_put_be64(buf, ODP_KEY_ATTR_TUN_ID, flow->tun_id);
     }
 
-    nl_msg_put_u32(buf, ODP_KEY_ATTR_IN_PORT, flow->in_port);
+    nl_msg_put_u32(buf, ODP_KEY_ATTR_IN_PORT,
+                   ofp_port_to_odp_port(flow->in_port));
 
     eth_key = nl_msg_put_unspec_uninit(buf, ODP_KEY_ATTR_ETHERNET,
                                        sizeof *eth_key);
@@ -551,7 +548,7 @@ odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
             if (nl_attr_get_u32(nla) >= UINT16_MAX) {
                 return EINVAL;
             }
-            flow->in_port = nl_attr_get_u32(nla);
+            flow->in_port = odp_port_to_ofp_port(nl_attr_get_u32(nla));
             break;
 
         case TRANSITION(ODP_KEY_ATTR_IN_PORT, ODP_KEY_ATTR_ETHERNET):

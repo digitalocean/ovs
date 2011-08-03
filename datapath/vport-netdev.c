@@ -38,7 +38,23 @@ MODULE_PARM_DESC(vlan_tso, "Enable TSO for VLAN packets");
 
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,39)
+/* Called with rcu_read_lock and bottom-halves disabled. */
+static rx_handler_result_t netdev_frame_hook(struct sk_buff **pskb)
+{
+	struct sk_buff *skb = *pskb;
+	struct vport *vport;
+
+	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
+		return RX_HANDLER_PASS;
+
+	vport = netdev_get_vport(skb->dev);
+
+	netdev_port_receive(vport, skb);
+
+	return RX_HANDLER_CONSUMED;
+}
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
 /* Called with rcu_read_lock and bottom-halves disabled. */
 static struct sk_buff *netdev_frame_hook(struct sk_buff *skb)
 {
@@ -252,6 +268,11 @@ int netdev_get_mtu(const struct vport *vport)
 /* Must be called with rcu_read_lock. */
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 {
+	if (unlikely(!vport)) {
+		kfree_skb(skb);
+		return;
+	}
+
 	/* Make our own copy of the packet.  Otherwise we will mangle the
 	 * packet for anyone who came before us (e.g. tcpdump via AF_PACKET).
 	 * (No one comes after us, since we tell handle_bridge() that we took
@@ -263,7 +284,11 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 	skb_warn_if_lro(skb);
 
 	skb_push(skb, ETH_HLEN);
-	compute_ip_summed(skb, false);
+
+	if (unlikely(compute_ip_summed(skb, false))) {
+		kfree_skb(skb);
+		return;
+	}
 	vlan_copy_skb_tci(skb);
 
 	vport_receive(vport, skb);
@@ -288,21 +313,14 @@ static int netdev_send(struct vport *vport, struct sk_buff *skb)
 	int len;
 
 	skb->dev = netdev_vport->dev;
-	forward_ip_summed(skb);
+	forward_ip_summed(skb, true);
 
 	if (vlan_tx_tag_present(skb) && !dev_supports_vlan_tx(skb->dev)) {
-		int err;
 		int features = 0;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26)
 		features = skb->dev->features & skb->dev->vlan_features;
 #endif
-
-		err = vswitch_skb_checksum_setup(skb);
-		if (unlikely(err)) {
-			kfree_skb(skb);
-			return 0;
-		}
 
 		if (!vlan_tso)
 			features &= ~(NETIF_F_TSO | NETIF_F_TSO6 |
@@ -325,10 +343,12 @@ static int netdev_send(struct vport *vport, struct sk_buff *skb)
 				goto tag;
 			}
 
-			kfree_skb(skb);
-			skb = nskb;
-			if (IS_ERR(skb))
+			if (IS_ERR(nskb)) {
+				kfree_skb(skb);
 				return 0;
+			}
+			consume_skb(skb);
+			skb = nskb;
 
 			len = 0;
 			do {

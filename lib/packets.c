@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,28 +66,43 @@ void
 compose_benign_packet(struct ofpbuf *b, const char *tag, uint16_t snap_type,
                       const uint8_t eth_src[ETH_ADDR_LEN])
 {
-    struct eth_header *eth;
-    struct llc_snap_header *llc_snap;
+    size_t tag_size = strlen(tag) + 1;
+    char *payload;
 
-    /* Compose basic packet structure.  (We need the payload size to stick into
-     * the 802.2 header.) */
-    ofpbuf_clear(b);
-    eth = ofpbuf_put_zeros(b, ETH_HEADER_LEN);
-    llc_snap = ofpbuf_put_zeros(b, LLC_SNAP_HEADER_LEN);
-    ofpbuf_put(b, tag, strlen(tag) + 1); /* Includes null byte. */
-    ofpbuf_put(b, eth_src, ETH_ADDR_LEN);
+    payload = snap_compose(b, eth_addr_broadcast, eth_src, 0x002320, snap_type,
+                           tag_size + ETH_ADDR_LEN);
+    memcpy(payload, tag, tag_size);
+    memcpy(payload + tag_size, eth_src, ETH_ADDR_LEN);
+}
 
-    /* Compose 802.2 header. */
-    memcpy(eth->eth_dst, eth_addr_broadcast, ETH_ADDR_LEN);
-    memcpy(eth->eth_src, eth_src, ETH_ADDR_LEN);
-    eth->eth_type = htons(b->size - ETH_HEADER_LEN);
+/* Modify the TCI field of 'packet', whose data must begin with an Ethernet
+ * header.  If a VLAN tag is present, its TCI field is replaced by 'tci'.  If a
+ * VLAN tag is not present, one is added with the TCI field set to 'tci'.
+ *
+ * Also sets 'packet->l2' to point to the new Ethernet header. */
+void
+eth_set_vlan_tci(struct ofpbuf *packet, ovs_be16 tci)
+{
+    struct eth_header *eh = packet->data;
+    struct vlan_eth_header *veh;
 
-    /* Compose LLC, SNAP headers. */
-    llc_snap->llc.llc_dsap = LLC_DSAP_SNAP;
-    llc_snap->llc.llc_ssap = LLC_SSAP_SNAP;
-    llc_snap->llc.llc_cntl = LLC_CNTL_SNAP;
-    memcpy(llc_snap->snap.snap_org, "\x00\x23\x20", 3);
-    llc_snap->snap.snap_type = htons(snap_type);
+    if (packet->size >= sizeof(struct vlan_eth_header)
+        && eh->eth_type == htons(ETH_TYPE_VLAN)) {
+        veh = packet->data;
+        veh->veth_tci = tci;
+    } else {
+        /* Insert new 802.1Q header. */
+        struct vlan_eth_header tmp;
+        memcpy(tmp.veth_dst, eh->eth_dst, ETH_ADDR_LEN);
+        memcpy(tmp.veth_src, eh->eth_src, ETH_ADDR_LEN);
+        tmp.veth_type = htons(ETH_TYPE_VLAN);
+        tmp.veth_tci = tci;
+        tmp.veth_next_type = eh->eth_type;
+
+        veh = ofpbuf_push_uninit(packet, VLAN_HEADER_LEN);
+        memcpy(veh, &tmp, sizeof tmp);
+    }
+    packet->l2 = packet->data;
 }
 
 /* Stores the string representation of the IPv6 address 'addr' into the
@@ -178,7 +193,6 @@ ipv6_count_cidr_bits(const struct in6_addr *netmask)
     return count;
 }
 
-
 /* Returns true if 'netmask' is a CIDR netmask, that is, if it consists of N
  * high-order 1-bits and 128-N low-order 0-bits. */
 bool
@@ -204,21 +218,25 @@ ipv6_is_cidr(const struct in6_addr *netmask)
     return true;
 }
 
-/* Populates 'b' with an L2 packet headed with the given 'eth_dst', 'eth_src'
- * and 'eth_type' paramaters.  A payload of 'size' bytes is allocated in 'b'
- * and returned.  This payload may be populated with appropriate information by
- * the caller. */
+/* Populates 'b' with an Ethernet II packet headed with the given 'eth_dst',
+ * 'eth_src' and 'eth_type' parameters.  A payload of 'size' bytes is allocated
+ * in 'b' and returned.  This payload may be populated with appropriate
+ * information by the caller.
+ *
+ * The returned packet has enough headroom to insert an 802.1Q VLAN header if
+ * desired. */
 void *
-compose_packet(struct ofpbuf *b, const uint8_t eth_dst[ETH_ADDR_LEN],
-               const uint8_t eth_src[ETH_ADDR_LEN], uint16_t eth_type,
-               size_t size)
+eth_compose(struct ofpbuf *b, const uint8_t eth_dst[ETH_ADDR_LEN],
+            const uint8_t eth_src[ETH_ADDR_LEN], uint16_t eth_type,
+            size_t size)
 {
     void *data;
     struct eth_header *eth;
 
     ofpbuf_clear(b);
 
-    ofpbuf_prealloc_tailroom(b, ETH_HEADER_LEN + size);
+    ofpbuf_prealloc_tailroom(b, ETH_HEADER_LEN + VLAN_HEADER_LEN + size);
+    ofpbuf_reserve(b, VLAN_HEADER_LEN);
     eth = ofpbuf_put_uninit(b, ETH_HEADER_LEN);
     data = ofpbuf_put_uninit(b, size);
 
@@ -229,45 +247,45 @@ compose_packet(struct ofpbuf *b, const uint8_t eth_dst[ETH_ADDR_LEN],
     return data;
 }
 
-/* Populates 'pdu' with a LACP PDU comprised of 'actor' and 'partner'. */
-void
-compose_lacp_pdu(const struct lacp_info *actor,
-                 const struct lacp_info *partner, struct lacp_pdu *pdu)
+/* Populates 'b' with an Ethernet LLC+SNAP packet headed with the given
+ * 'eth_dst', 'eth_src', 'snap_org', and 'snap_type'.  A payload of 'size'
+ * bytes is allocated in 'b' and returned.  This payload may be populated with
+ * appropriate information by the caller.
+ *
+ * The returned packet has enough headroom to insert an 802.1Q VLAN header if
+ * desired. */
+void *
+snap_compose(struct ofpbuf *b, const uint8_t eth_dst[ETH_ADDR_LEN],
+             const uint8_t eth_src[ETH_ADDR_LEN],
+             unsigned int oui, uint16_t snap_type, size_t size)
 {
-    memset(pdu, 0, sizeof *pdu);
+    struct eth_header *eth;
+    struct llc_snap_header *llc_snap;
+    void *payload;
 
-    pdu->subtype = 1;
-    pdu->version = 1;
+    /* Compose basic packet structure.  (We need the payload size to stick into
+     * the 802.2 header.) */
+    ofpbuf_clear(b);
+    ofpbuf_prealloc_tailroom(b, ETH_HEADER_LEN + VLAN_HEADER_LEN
+                             + LLC_SNAP_HEADER_LEN + size);
+    ofpbuf_reserve(b, VLAN_HEADER_LEN);
+    eth = ofpbuf_put_zeros(b, ETH_HEADER_LEN);
+    llc_snap = ofpbuf_put_zeros(b, LLC_SNAP_HEADER_LEN);
+    payload = ofpbuf_put_uninit(b, size);
 
-    pdu->actor_type = 1;
-    pdu->actor_len = 20;
-    pdu->actor = *actor;
+    /* Compose 802.2 header. */
+    memcpy(eth->eth_dst, eth_dst, ETH_ADDR_LEN);
+    memcpy(eth->eth_src, eth_src, ETH_ADDR_LEN);
+    eth->eth_type = htons(b->size - ETH_HEADER_LEN);
 
-    pdu->partner_type = 2;
-    pdu->partner_len = 20;
-    pdu->partner = *partner;
+    /* Compose LLC, SNAP headers. */
+    llc_snap->llc.llc_dsap = LLC_DSAP_SNAP;
+    llc_snap->llc.llc_ssap = LLC_SSAP_SNAP;
+    llc_snap->llc.llc_cntl = LLC_CNTL_SNAP;
+    llc_snap->snap.snap_org[0] = oui >> 16;
+    llc_snap->snap.snap_org[1] = oui >> 8;
+    llc_snap->snap.snap_org[2] = oui;
+    llc_snap->snap.snap_type = htons(snap_type);
 
-    pdu->collector_type = 3;
-    pdu->collector_len = 16;
-    pdu->collector_delay = htons(0);
-}
-
-/* Parses 'b' which represents a packet containing a LACP PDU.  This function
- * returns NULL if 'b' is malformed, or does not represent a LACP PDU format
- * supported by OVS.  Otherwise, it returns a pointer to the lacp_pdu contained
- * within 'b'. */
-const struct lacp_pdu *
-parse_lacp_packet(const struct ofpbuf *b)
-{
-    const struct lacp_pdu *pdu;
-
-    pdu = ofpbuf_at(b, (uint8_t *)b->l3 - (uint8_t *)b->data, LACP_PDU_LEN);
-
-    if (pdu && pdu->subtype == 1
-        && pdu->actor_type == 1 && pdu->actor_len == 20
-        && pdu->partner_type == 2 && pdu->partner_len == 20) {
-        return pdu;
-    } else {
-        return NULL;
-    }
+    return payload;
 }

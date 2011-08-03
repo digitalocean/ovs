@@ -39,6 +39,7 @@
 #include "ovsdb/ovsdb.h"
 #include "ovsdb/query.h"
 #include "ovsdb/row.h"
+#include "ovsdb/server.h"
 #include "ovsdb/table.h"
 #include "ovsdb/transaction.h"
 #include "ovsdb/trigger.h"
@@ -68,10 +69,10 @@ static void
 parse_options(int argc, char *argv[])
 {
     static struct option long_options[] = {
-        {"timeout", required_argument, 0, 't'},
-        {"verbose", optional_argument, 0, 'v'},
-        {"help", no_argument, 0, 'h'},
-        {0, 0, 0, 0},
+        {"timeout", required_argument, NULL, 't'},
+        {"verbose", optional_argument, NULL, 'v'},
+        {"help", no_argument, NULL, 'h'},
+        {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
 
@@ -975,6 +976,16 @@ do_execute_mutations(int argc OVS_UNUSED, char *argv[])
     ovsdb_table_destroy(table); /* Also destroys 'ts'. */
 }
 
+/* Inserts a row, without bothering to update metadata such as refcounts. */
+static void
+put_row(struct ovsdb_table *table, struct ovsdb_row *row)
+{
+    const struct uuid *uuid = ovsdb_row_get_uuid(row);
+    if (!ovsdb_table_get_row(table, uuid)) {
+        hmap_insert(&table->rows, &row->hmap_node, uuid_hash(uuid));
+    }
+}
+
 struct do_query_cbdata {
     struct uuid *row_uuids;
     int *counts;
@@ -1031,7 +1042,7 @@ do_query(int argc OVS_UNUSED, char *argv[])
                       UUID_ARGS(ovsdb_row_get_uuid(row)));
         }
         cbdata.row_uuids[i] = *ovsdb_row_get_uuid(row);
-        ovsdb_table_put_row(table, row);
+        put_row(table, row);
     }
     json_destroy(json);
 
@@ -1109,7 +1120,8 @@ do_query_distinct(int argc OVS_UNUSED, char *argv[])
 
     /* Parse column set. */
     json = parse_json(argv[4]);
-    check_ovsdb_error(ovsdb_column_set_from_json(json, table, &columns));
+    check_ovsdb_error(ovsdb_column_set_from_json(json, table->schema,
+                                                 &columns));
     json_destroy(json);
 
     /* Parse rows, add to table. */
@@ -1151,7 +1163,7 @@ do_query_distinct(int argc OVS_UNUSED, char *argv[])
             ovs_fatal(0, "duplicate UUID "UUID_FMT" in table",
                       UUID_ARGS(ovsdb_row_get_uuid(row)));
         }
-        ovsdb_table_put_row(table, row);
+        put_row(table, row);
 
     }
     json_destroy(json);
@@ -1246,7 +1258,7 @@ do_execute(int argc OVS_UNUSED, char *argv[])
         char *s;
 
         params = parse_json(argv[i]);
-        result = ovsdb_execute(db, params, 0, NULL);
+        result = ovsdb_execute(db, NULL, params, 0, NULL);
         s = json_to_string(result, JSSF_SORT);
         printf("%s\n", s);
         free(s);
@@ -1281,7 +1293,7 @@ static void
 do_trigger(int argc OVS_UNUSED, char *argv[])
 {
     struct ovsdb_schema *schema;
-    struct list completions;
+    struct ovsdb_session session;
     struct json *json;
     struct ovsdb *db;
     long long int now;
@@ -1294,7 +1306,8 @@ do_trigger(int argc OVS_UNUSED, char *argv[])
     json_destroy(json);
     db = ovsdb_create(schema);
 
-    list_init(&completions);
+    ovsdb_session_init(&session, db);
+
     now = 0;
     number = 0;
     for (i = 2; i < argc; i++) {
@@ -1308,7 +1321,7 @@ do_trigger(int argc OVS_UNUSED, char *argv[])
             json_destroy(params);
         } else {
             struct test_trigger *t = xmalloc(sizeof *t);
-            ovsdb_trigger_init(db, &t->trigger, params, &completions, now);
+            ovsdb_trigger_init(&session, &t->trigger, params, now);
             t->number = number++;
             if (ovsdb_trigger_is_complete(&t->trigger)) {
                 do_trigger_dump(t, now, "immediate");
@@ -1318,8 +1331,8 @@ do_trigger(int argc OVS_UNUSED, char *argv[])
         }
 
         ovsdb_trigger_run(db, now);
-        while (!list_is_empty(&completions)) {
-            do_trigger_dump(CONTAINER_OF(list_pop_front(&completions),
+        while (!list_is_empty(&session.completions)) {
+            do_trigger_dump(CONTAINER_OF(list_pop_front(&session.completions),
                                          struct test_trigger, trigger.node),
                             now, "delayed");
         }
@@ -1817,6 +1830,13 @@ idl_set(struct ovsdb_idl *idl, char *commands, int step)
             }
             ovsdb_idl_txn_increment(txn, arg1, arg2, NULL);
             increment = true;
+        } else if (!strcmp(name, "abort")) {
+            ovsdb_idl_txn_abort(txn);
+            break;
+        } else if (!strcmp(name, "destroy")) {
+            printf("%03d: destroy\n", step);
+            ovsdb_idl_txn_destroy(txn);
+            return;
         } else {
             ovs_fatal(0, "unknown command %s", name);
         }

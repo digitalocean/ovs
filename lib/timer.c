@@ -34,22 +34,9 @@ timer_msecs_until_expired(const struct timer *timer)
 
 /* Causes poll_block() to wake when 'timer' expires. */
 void
-timer_wait(const struct timer *timer)
+(timer_wait)(const struct timer *timer, const char *where)
 {
     if (timer->t < LLONG_MAX) {
-        poll_timer_wait_until(timer->t);
-    }
-}
-
-/* Returns the time at which 'timer' was set with 'duration'.  Infinite timers
- * were enabled at time LLONG_MAX.  Manually expired timers were enabled at
- * LLONG_MIN. */
-long long int
-timer_enabled_at(const struct timer *timer, long long int duration)
-{
-    switch (timer->t) {
-    case LLONG_MAX: return LLONG_MAX;
-    case LLONG_MIN: return LLONG_MIN;
-    default: return timer->t - duration;
+        (poll_timer_wait_until)(timer->t, where);
     }
 }

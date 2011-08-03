@@ -20,11 +20,16 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <stdbool.h>
+#include "openvswitch/types.h"
 
 int set_nonblocking(int fd);
 int get_max_fds(void);
+
 int lookup_ip(const char *host_name, struct in_addr *address);
 int lookup_ipv6(const char *host_name, struct in6_addr *address);
+
+int lookup_hostname(const char *host_name, struct in_addr *);
+
 int get_socket_error(int sock);
 int check_connection_completion(int fd);
 int drain_rcvbuf(int fd);
@@ -32,13 +37,16 @@ void drain_fd(int fd, size_t n_packets);
 int make_unix_socket(int style, bool nonblock, bool passcred,
                      const char *bind_path, const char *connect_path);
 int get_unix_name_len(socklen_t sun_len);
-uint32_t guess_netmask(uint32_t ip);
+ovs_be32 guess_netmask(ovs_be32 ip);
 int get_null_fd(void);
 
 bool inet_parse_active(const char *target, uint16_t default_port,
                        struct sockaddr_in *sinp);
 int inet_open_active(int style, const char *target, uint16_t default_port,
                     struct sockaddr_in *sinp, int *fdp);
+
+bool inet_parse_passive(const char *target, uint16_t default_port,
+                        struct sockaddr_in *sinp);
 int inet_open_passive(int style, const char *target, int default_port,
                       struct sockaddr_in *sinp);
 
@@ -49,5 +57,7 @@ int fsync_parent_dir(const char *file_name);
 int get_mtime(const char *file_name, struct timespec *mtime);
 
 void xpipe(int fds[2]);
+
+char *describe_fd(int fd);
 
 #endif /* socket-util.h */

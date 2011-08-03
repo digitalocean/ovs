@@ -1,4 +1,4 @@
-# Copyright (c) 2010 Nicira Networks
+# Copyright (c) 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -113,10 +113,9 @@ def from_string(s):
     try:
         s = unicode(s, 'utf-8')
     except UnicodeDecodeError, e:
-        seq = ' '.join(["0x%2x" % ord(c) for c in e.object[e.start:e.end]])
-        raise Error("\"%s\" is not a valid UTF-8 string: "
-                    "invalid UTF-8 sequence %s" % (s, seq),
-                    tag="constraint violation")
+        seq = ' '.join(["0x%2x" % ord(c)
+                        for c in e.object[e.start:e.end] if ord(c) >= 0x80])
+        return ("not a valid UTF-8 string: invalid UTF-8 sequence %s" % seq)
     p = Parser(check_trailer=True)
     p.feed(s)
     return p.finish()

@@ -100,14 +100,22 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
     sw->action_normal = cfg->mode == LSW_NORMAL;
 
     flow_wildcards_init_exact(&sw->wc);
-    if (!cfg->exact_flows) {
-        /* We cannot wildcard all fields.
-         * We need in_port to detect moves.
-         * We need both SA and DA to do learning. */
-        sw->wc.wildcards = (FWW_DL_TYPE | FWW_NW_PROTO
-                            | FWW_TP_SRC | FWW_TP_DST);
-        sw->wc.nw_src_mask = htonl(0);
-        sw->wc.nw_dst_mask = htonl(0);
+    if (cfg->wildcards) {
+        uint32_t ofpfw;
+
+        if (cfg->wildcards == UINT32_MAX) {
+            /* Try to wildcard as many fields as possible, but we cannot
+             * wildcard all fields.  We need in_port to detect moves.  We need
+             * Ethernet source and dest and VLAN VID to do L2 learning. */
+            ofpfw = (OFPFW_DL_TYPE | OFPFW_DL_VLAN_PCP
+                     | OFPFW_NW_SRC_ALL | OFPFW_NW_DST_ALL
+                     | OFPFW_NW_TOS | OFPFW_NW_PROTO
+                     | OFPFW_TP_SRC | OFPFW_TP_DST);
+        } else {
+            ofpfw = cfg->wildcards;
+        }
+
+        ofputil_wildcard_from_openflow(ofpfw, &sw->wc);
     }
 
     sw->default_queue = cfg->default_queue;
@@ -131,7 +139,14 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
         const struct ofpbuf *b;
 
         LIST_FOR_EACH (b, list_node, cfg->default_flows) {
-            queue_tx(sw, rconn, ofpbuf_clone(b));
+            struct ofpbuf *copy = ofpbuf_clone(b);
+            int error = rconn_send(rconn, copy, NULL);
+            if (error) {
+                VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
+                             rconn_get_name(rconn), strerror(error));
+                ofpbuf_delete(copy);
+                break;
+            }
         }
     }
     
@@ -210,7 +225,7 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
         /* Nothing to do. */
         break;
 
-    case OFPUTIL_INVALID:
+    case OFPUTIL_MSG_INVALID:
     case OFPUTIL_OFPT_HELLO:
     case OFPUTIL_OFPT_ERROR:
     case OFPUTIL_OFPT_ECHO_REPLY:
@@ -238,9 +253,9 @@ lswitch_process_packet(struct lswitch *sw, struct rconn *rconn,
     case OFPUTIL_OFPST_PORT_REPLY:
     case OFPUTIL_OFPST_TABLE_REPLY:
     case OFPUTIL_OFPST_AGGREGATE_REPLY:
-    case OFPUTIL_NXT_TUN_ID_FROM_COOKIE:
     case OFPUTIL_NXT_ROLE_REQUEST:
     case OFPUTIL_NXT_ROLE_REPLY:
+    case OFPUTIL_NXT_FLOW_MOD_TABLE_ID:
     case OFPUTIL_NXT_SET_FLOW_FORMAT:
     case OFPUTIL_NXT_FLOW_MOD:
     case OFPUTIL_NXT_FLOW_REMOVED:

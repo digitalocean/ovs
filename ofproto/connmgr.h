@@ -23,9 +23,10 @@
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
 
-struct dpif_upcall;
 struct ofconn;
+struct ofopgroup;
 struct ofputil_flow_removed;
+struct ofputil_packet_in;
 struct sset;
 
 /* ofproto supports two kinds of OpenFlow connections:
@@ -54,15 +55,18 @@ struct connmgr *connmgr_create(struct ofproto *ofproto,
 void connmgr_destroy(struct connmgr *);
 
 void connmgr_run(struct connmgr *,
-                 void (*handle_openflow)(struct ofconn *,
+                 bool (*handle_openflow)(struct ofconn *,
                                          struct ofpbuf *ofp_msg));
-void connmgr_wait(struct connmgr *);
+void connmgr_wait(struct connmgr *, bool handling_openflow);
 
 struct ofproto *ofconn_get_ofproto(const struct ofconn *);
+
+void connmgr_retry(struct connmgr *);
 
 /* OpenFlow configuration. */
 bool connmgr_has_controllers(const struct connmgr *);
 void connmgr_get_controller_info(struct connmgr *, struct shash *);
+void connmgr_free_controller_info(struct shash *);
 void connmgr_set_controllers(struct connmgr *,
                              const struct ofproto_controller[], size_t n);
 void connmgr_reconnect(const struct connmgr *);
@@ -80,20 +84,32 @@ void ofconn_set_role(struct ofconn *, enum nx_role);
 enum nx_flow_format ofconn_get_flow_format(struct ofconn *);
 void ofconn_set_flow_format(struct ofconn *, enum nx_flow_format);
 
+bool ofconn_get_flow_mod_table_id(const struct ofconn *);
+void ofconn_set_flow_mod_table_id(struct ofconn *, bool enable);
+
 int ofconn_get_miss_send_len(const struct ofconn *);
 void ofconn_set_miss_send_len(struct ofconn *, int miss_send_len);
 
 void ofconn_send_reply(const struct ofconn *, struct ofpbuf *);
+void ofconn_send_replies(const struct ofconn *, struct list *);
+void ofconn_send_error(const struct ofconn *, const struct ofp_header *request,
+                       int error);
 
 int ofconn_pktbuf_retrieve(struct ofconn *, uint32_t id,
                            struct ofpbuf **bufferp, uint16_t *in_port);
+
+size_t ofconn_n_pending_opgroups(const struct ofconn *);
+bool ofconn_has_pending_opgroups(const struct ofconn *);
+void ofconn_add_opgroup(struct ofconn *, struct list *);
+void ofconn_remove_opgroup(struct ofconn *, struct list *,
+                           const struct ofp_header *request, int error);
 
 /* Sending asynchronous messages. */
 void connmgr_send_port_status(struct connmgr *, const struct ofp_phy_port *,
                               uint8_t reason);
 void connmgr_send_flow_removed(struct connmgr *,
                                const struct ofputil_flow_removed *);
-void connmgr_send_packet_in(struct connmgr *, const struct dpif_upcall *,
+void connmgr_send_packet_in(struct connmgr *, const struct ofputil_packet_in *,
                             const struct flow *, struct ofpbuf *rw_packet);
 
 /* Fail-open settings. */

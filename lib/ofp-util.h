@@ -31,7 +31,7 @@ struct ofpbuf;
 
 /* Basic decoding and length validation of OpenFlow messages. */
 enum ofputil_msg_code {
-    OFPUTIL_INVALID,
+    OFPUTIL_MSG_INVALID,
 
     /* OFPT_* messages. */
     OFPUTIL_OFPT_HELLO,
@@ -71,10 +71,10 @@ enum ofputil_msg_code {
     OFPUTIL_OFPST_AGGREGATE_REPLY,
 
     /* NXT_* messages. */
-    OFPUTIL_NXT_TUN_ID_FROM_COOKIE,
     OFPUTIL_NXT_ROLE_REQUEST,
     OFPUTIL_NXT_ROLE_REPLY,
     OFPUTIL_NXT_SET_FLOW_FORMAT,
+    OFPUTIL_NXT_FLOW_MOD_TABLE_ID,
     OFPUTIL_NXT_FLOW_MOD,
     OFPUTIL_NXT_FLOW_REMOVED,
 
@@ -92,6 +92,7 @@ int ofputil_decode_msg_type(const struct ofp_header *,
                             const struct ofputil_msg_type **);
 enum ofputil_msg_code ofputil_msg_type_code(const struct ofputil_msg_type *);
 const char *ofputil_msg_type_name(const struct ofputil_msg_type *);
+int ofputil_check_output_port(uint16_t ofp_port, int max_ports);
 
 /* Converting OFPFW_NW_SRC_MASK and OFPFW_NW_DST_MASK wildcard bit counts to
  * and from IP bitmasks. */
@@ -99,14 +100,11 @@ ovs_be32 ofputil_wcbits_to_netmask(int wcbits);
 int ofputil_netmask_to_wcbits(ovs_be32 netmask);
 
 /* Work with OpenFlow 1.0 ofp_match. */
+void ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *);
 void ofputil_cls_rule_from_match(const struct ofp_match *,
-                                 unsigned int priority, enum nx_flow_format,
-                                 ovs_be64 cookie, struct cls_rule *);
-void ofputil_cls_rule_to_match(const struct cls_rule *, enum nx_flow_format,
-                               struct ofp_match *,
-                               ovs_be64 cookie_in, ovs_be64 *cookie_out);
-void normalize_match(struct ofp_match *);
-char *ofp_match_to_literal_string(const struct ofp_match *match);
+                                 unsigned int priority, struct cls_rule *);
+void ofputil_normalize_rule(struct cls_rule *, enum nx_flow_format);
+void ofputil_cls_rule_to_match(const struct cls_rule *, struct ofp_match *);
 
 /* dl_type translation between OpenFlow and 'struct flow' format. */
 ovs_be16 ofputil_dl_type_to_openflow(ovs_be16 flow_dl_type);
@@ -116,16 +114,18 @@ ovs_be16 ofputil_dl_type_from_openflow(ovs_be16 ofp_dl_type);
 bool ofputil_flow_format_is_valid(enum nx_flow_format);
 const char *ofputil_flow_format_to_string(enum nx_flow_format);
 int ofputil_flow_format_from_string(const char *);
-enum nx_flow_format ofputil_min_flow_format(const struct cls_rule *,
-                                            bool cookie_support,
-                                            ovs_be64 cookie);
+enum nx_flow_format ofputil_min_flow_format(const struct cls_rule *);
 
 struct ofpbuf *ofputil_make_set_flow_format(enum nx_flow_format);
+
+/* NXT_FLOW_MOD_TABLE_ID extension. */
+struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
 
 /* Flow format independent flow_mod. */
 struct flow_mod {
     struct cls_rule cr;
     ovs_be64 cookie;
+    uint8_t table_id;
     uint16_t command;
     uint16_t idle_timeout;
     uint16_t hard_timeout;
@@ -137,9 +137,10 @@ struct flow_mod {
 };
 
 int ofputil_decode_flow_mod(struct flow_mod *, const struct ofp_header *,
-                            enum nx_flow_format);
+                            bool flow_mod_table_id);
 struct ofpbuf *ofputil_encode_flow_mod(const struct flow_mod *,
-                                       enum nx_flow_format);
+                                       enum nx_flow_format,
+                                       bool flow_mod_table_id);
 
 /* Flow stats or aggregate stats request, independent of flow format. */
 struct flow_stats_request {
@@ -150,8 +151,7 @@ struct flow_stats_request {
 };
 
 int ofputil_decode_flow_stats_request(struct flow_stats_request *,
-                                      const struct ofp_header *,
-                                      enum nx_flow_format);
+                                      const struct ofp_header *);
 struct ofpbuf *ofputil_encode_flow_stats_request(
     const struct flow_stats_request *, enum nx_flow_format);
 
@@ -164,15 +164,27 @@ struct ofputil_flow_stats {
     uint32_t duration_nsec;
     uint16_t idle_timeout;
     uint16_t hard_timeout;
-    uint64_t packet_count;
-    uint64_t byte_count;
+    uint64_t packet_count;      /* Packet count, UINT64_MAX if unknown. */
+    uint64_t byte_count;        /* Byte count, UINT64_MAX if unknown. */
     union ofp_action *actions;
     size_t n_actions;
 };
 
 int ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *,
-                                    struct ofpbuf *msg,
-                                    enum nx_flow_format);
+                                    struct ofpbuf *msg);
+void ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *,
+                                     struct list *replies);
+
+/* Aggregate stats reply, independent of flow format. */
+struct ofputil_aggregate_stats {
+    uint64_t packet_count;      /* Packet count, UINT64_MAX if unknown. */
+    uint64_t byte_count;        /* Byte count, UINT64_MAX if unknown. */
+    uint32_t flow_count;
+};
+
+struct ofpbuf *ofputil_encode_aggregate_stats_reply(
+    const struct ofputil_aggregate_stats *stats,
+    const struct ofp_stats_msg *request);
 
 /* Flow removed message, independent of flow format. */
 struct ofputil_flow_removed {
@@ -182,13 +194,12 @@ struct ofputil_flow_removed {
     uint32_t duration_sec;
     uint32_t duration_nsec;
     uint16_t idle_timeout;
-    uint64_t packet_count;
-    uint64_t byte_count;
+    uint64_t packet_count;      /* Packet count, UINT64_MAX if unknown. */
+    uint64_t byte_count;        /* Byte count, UINT64_MAX if unknown. */
 };
 
 int ofputil_decode_flow_removed(struct ofputil_flow_removed *,
-                                const struct ofp_header *,
-                                enum nx_flow_format);
+                                const struct ofp_header *);
 struct ofpbuf *ofputil_encode_flow_removed(const struct ofputil_flow_removed *,
                                            enum nx_flow_format);
 
@@ -224,10 +235,16 @@ void *put_nxmsg_xid(size_t openflow_len, uint32_t subtype, ovs_be32 xid,
 
 void update_openflow_length(struct ofpbuf *);
 
-void *ofputil_make_stats_request(size_t body_len, uint16_t type,
-                                 struct ofpbuf **);
-void *ofputil_make_nxstats_request(size_t openflow_len, uint32_t subtype,
-                                   struct ofpbuf **);
+void *ofputil_make_stats_request(size_t openflow_len, uint16_t type,
+                                 uint32_t subtype, struct ofpbuf **);
+void *ofputil_make_stats_reply(size_t openflow_len,
+                               const struct ofp_stats_msg *request,
+                               struct ofpbuf **);
+
+void ofputil_start_stats_reply(const struct ofp_stats_msg *request,
+                               struct list *);
+struct ofpbuf *ofputil_reserve_stats_reply(size_t len, struct list *);
+void *ofputil_append_stats_reply(size_t len, struct list *);
 
 const void *ofputil_stats_body(const struct ofp_header *);
 size_t ofputil_stats_body_len(const struct ofp_header *);
@@ -256,27 +273,86 @@ struct ofpbuf *make_unbuffered_packet_out(const struct ofpbuf *packet,
                                           uint16_t in_port, uint16_t out_port);
 struct ofpbuf *make_echo_request(void);
 struct ofpbuf *make_echo_reply(const struct ofp_header *rq);
-
-void hton_ofp_phy_port(struct ofp_phy_port *);
 
 /* Actions. */
 
+enum ofputil_action_code {
+    /* OFPAT_* actions. */
+    OFPUTIL_OFPAT_OUTPUT,
+    OFPUTIL_OFPAT_SET_VLAN_VID,
+    OFPUTIL_OFPAT_SET_VLAN_PCP,
+    OFPUTIL_OFPAT_STRIP_VLAN,
+    OFPUTIL_OFPAT_SET_DL_SRC,
+    OFPUTIL_OFPAT_SET_DL_DST,
+    OFPUTIL_OFPAT_SET_NW_SRC,
+    OFPUTIL_OFPAT_SET_NW_DST,
+    OFPUTIL_OFPAT_SET_NW_TOS,
+    OFPUTIL_OFPAT_SET_TP_SRC,
+    OFPUTIL_OFPAT_SET_TP_DST,
+    OFPUTIL_OFPAT_ENQUEUE,
+
+    /* NXAST_* actions. */
+    OFPUTIL_NXAST_RESUBMIT,
+    OFPUTIL_NXAST_SET_TUNNEL,
+    OFPUTIL_NXAST_SET_QUEUE,
+    OFPUTIL_NXAST_POP_QUEUE,
+    OFPUTIL_NXAST_REG_MOVE,
+    OFPUTIL_NXAST_REG_LOAD,
+    OFPUTIL_NXAST_NOTE,
+    OFPUTIL_NXAST_SET_TUNNEL64,
+    OFPUTIL_NXAST_MULTIPATH,
+    OFPUTIL_NXAST_AUTOPATH,
+    OFPUTIL_NXAST_BUNDLE,
+    OFPUTIL_NXAST_BUNDLE_LOAD,
+};
+
+int ofputil_decode_action(const union ofp_action *);
+enum ofputil_action_code ofputil_decode_action_unsafe(
+    const union ofp_action *);
+
 #define OFP_ACTION_ALIGN 8      /* Alignment of ofp_actions. */
 
-struct actions_iterator {
-    const union ofp_action *pos, *end;
-};
-const union ofp_action *actions_first(struct actions_iterator *,
-                                      const union ofp_action *,
-                                      size_t n_actions);
-const union ofp_action *actions_next(struct actions_iterator *);
+static inline union ofp_action *
+ofputil_action_next(const union ofp_action *a)
+{
+    return (void *) ((uint8_t *) a + ntohs(a->header.len));
+}
+
+static inline bool
+ofputil_action_is_valid(const union ofp_action *a, size_t n_actions)
+{
+    uint16_t len = ntohs(a->header.len);
+    return (!(len % OFP_ACTION_ALIGN)
+            && len >= sizeof *a
+            && len / sizeof *a <= n_actions);
+}
+
+/* This macro is careful to check for actions with bad lengths. */
+#define OFPUTIL_ACTION_FOR_EACH(ITER, LEFT, ACTIONS, N_ACTIONS)         \
+    for ((ITER) = (ACTIONS), (LEFT) = (N_ACTIONS);                      \
+         (LEFT) > 0 && ofputil_action_is_valid(ITER, LEFT);             \
+         ((LEFT) -= ntohs((ITER)->header.len) / sizeof(union ofp_action), \
+          (ITER) = ofputil_action_next(ITER)))
+
+/* This macro does not check for actions with bad lengths.  It should only be
+ * used with actions from trusted sources or with actions that have already
+ * been validated (e.g. with OFPUTIL_ACTION_FOR_EACH).  */
+#define OFPUTIL_ACTION_FOR_EACH_UNSAFE(ITER, LEFT, ACTIONS, N_ACTIONS)  \
+    for ((ITER) = (ACTIONS), (LEFT) = (N_ACTIONS);                      \
+         (LEFT) > 0;                                                    \
+         ((LEFT) -= ntohs((ITER)->header.len) / sizeof(union ofp_action), \
+          (ITER) = ofputil_action_next(ITER)))
 
 int validate_actions(const union ofp_action *, size_t n_actions,
                      const struct flow *, int max_ports);
-bool action_outputs_to_port(const union ofp_action *, uint16_t port);
+bool action_outputs_to_port(const union ofp_action *, ovs_be16 port);
 
 int ofputil_pull_actions(struct ofpbuf *, unsigned int actions_len,
                          union ofp_action **, size_t *);
+
+bool ofputil_actions_equal(const union ofp_action *a, size_t n_a,
+                           const union ofp_action *b, size_t n_b);
+union ofp_action *ofputil_actions_clone(const union ofp_action *, size_t n);
 
 /* OpenFlow vendors.
  *

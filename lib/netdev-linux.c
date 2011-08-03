@@ -15,6 +15,9 @@
  */
 
 #include <config.h>
+
+#include "netdev-linux.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -65,6 +68,7 @@
 #include "socket-util.h"
 #include "shash.h"
 #include "sset.h"
+#include "timer.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(netdev_linux);
@@ -342,6 +346,11 @@ struct netdev_dev_linux {
 
     struct shash_node *shash_node;
     unsigned int cache_valid;
+    unsigned int change_seq;
+
+    bool miimon;                    /* Link status of last poll. */
+    long long int miimon_interval;  /* Miimon Poll rate. Disabled if <= 0. */
+    struct timer miimon_timer;
 
     /* The following are figured out "on demand" only.  They are only valid
      * when the corresponding VALID_* bit in 'cache_valid' is set. */
@@ -368,20 +377,11 @@ struct netdev_linux {
     int fd;
 };
 
-/* An AF_INET socket (used for ioctl operations). */
-static int af_inet_sock = -1;
+/* Sockets used for ioctl operations. */
+static int af_inet_sock = -1;   /* AF_INET, SOCK_DGRAM. */
 
 /* A Netlink routing socket that is not subscribed to any multicast groups. */
 static struct nl_sock *rtnl_sock;
-
-struct netdev_linux_notifier {
-    struct netdev_notifier notifier;
-    struct list node;
-};
-
-static struct shash netdev_linux_notifiers =
-    SHASH_INITIALIZER(&netdev_linux_notifiers);
-static struct rtnetlink_notifier netdev_linux_poll_notifier;
 
 /* This is set pretty low because we probably won't learn anything from the
  * additional log messages. */
@@ -407,6 +407,9 @@ static int set_etheraddr(const char *netdev_name, int hwaddr_family,
                          const uint8_t[ETH_ADDR_LEN]);
 static int get_stats_via_netlink(int ifindex, struct netdev_stats *stats);
 static int get_stats_via_proc(const char *netdev_name, struct netdev_stats *stats);
+static int af_packet_sock(void);
+static void netdev_linux_miimon_run(void);
+static void netdev_linux_miimon_wait(void);
 
 static bool
 is_netdev_linux_class(const struct netdev_class *netdev_class)
@@ -461,12 +464,24 @@ static void
 netdev_linux_run(void)
 {
     rtnetlink_link_notifier_run();
+    netdev_linux_miimon_run();
 }
 
 static void
 netdev_linux_wait(void)
 {
     rtnetlink_link_notifier_wait();
+    netdev_linux_miimon_wait();
+}
+
+static void
+netdev_dev_linux_changed(struct netdev_dev_linux *dev)
+{
+    dev->change_seq++;
+    if (!dev->change_seq) {
+        dev->change_seq++;
+    }
+    dev->cache_valid = 0;
 }
 
 static void
@@ -482,7 +497,7 @@ netdev_linux_cache_cb(const struct rtnetlink_link_change *change,
 
             if (is_netdev_linux_class(netdev_class)) {
                 dev = netdev_dev_linux_cast(base_dev);
-                dev->cache_valid = 0;
+                netdev_dev_linux_changed(dev);
             }
         }
     } else {
@@ -493,7 +508,7 @@ netdev_linux_cache_cb(const struct rtnetlink_link_change *change,
         netdev_dev_get_devices(&netdev_linux_class, &device_shash);
         SHASH_FOR_EACH (node, &device_shash) {
             dev = node->data;
-            dev->cache_valid = 0;
+            netdev_dev_linux_changed(dev);
         }
         shash_destroy(&device_shash);
     }
@@ -523,6 +538,7 @@ netdev_linux_create(const struct netdev_class *class,
     cache_notifier_refcount++;
 
     netdev_dev = xzalloc(sizeof *netdev_dev);
+    netdev_dev->change_seq = 1;
     netdev_dev_init(&netdev_dev->netdev_dev, name, args, class);
 
     *netdev_devp = &netdev_dev->netdev_dev;
@@ -669,7 +685,8 @@ netdev_linux_open(struct netdev_dev *netdev_dev_, int ethertype,
         protocol = (ethertype == NETDEV_ETH_TYPE_ANY ? ETH_P_ALL
                     : ethertype == NETDEV_ETH_TYPE_802_2 ? ETH_P_802_2
                     : ethertype);
-        netdev->fd = socket(PF_PACKET, SOCK_RAW, htons(protocol));
+        netdev->fd = socket(PF_PACKET, SOCK_RAW,
+                            (OVS_FORCE int) htons(protocol));
         if (netdev->fd < 0) {
             error = errno;
             goto error;
@@ -820,15 +837,54 @@ static int
 netdev_linux_send(struct netdev *netdev_, const void *data, size_t size)
 {
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
-
-    /* XXX should support sending even if 'ethertype' was NETDEV_ETH_TYPE_NONE.
-     */
-    if (netdev->fd < 0) {
-        return EPIPE;
-    }
-
     for (;;) {
-        ssize_t retval = write(netdev->fd, data, size);
+        ssize_t retval;
+
+        if (netdev->fd < 0) {
+            /* Use our AF_PACKET socket to send to this device. */
+            struct sockaddr_ll sll;
+            struct msghdr msg;
+            struct iovec iov;
+            int ifindex;
+            int error;
+            int sock;
+
+            sock = af_packet_sock();
+            if (sock < 0) {
+                return sock;
+            }
+
+            error = get_ifindex(netdev_, &ifindex);
+            if (error) {
+                return error;
+            }
+
+            /* We don't bother setting most fields in sockaddr_ll because the
+             * kernel ignores them for SOCK_RAW. */
+            memset(&sll, 0, sizeof sll);
+            sll.sll_family = AF_PACKET;
+            sll.sll_ifindex = ifindex;
+
+            iov.iov_base = (void *) data;
+            iov.iov_len = size;
+
+            msg.msg_name = &sll;
+            msg.msg_namelen = sizeof sll;
+            msg.msg_iov = &iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = NULL;
+            msg.msg_controllen = 0;
+            msg.msg_flags = 0;
+
+            retval = sendmsg(sock, &msg, 0);
+        } else {
+            /* Use the netdev's own fd to send to this device.  This is
+             * essential for tap devices, because packets sent to a tap device
+             * with an AF_PACKET socket will loop back to be *received* again
+             * on the tap device. */
+            retval = write(netdev->fd, data, size);
+        }
+
         if (retval < 0) {
             /* The Linux AF_PACKET implementation never blocks waiting for room
              * for packets, instead returning ENOBUFS.  Translate this into
@@ -960,6 +1016,11 @@ netdev_linux_get_carrier(const struct netdev *netdev_, bool *carrier)
     char *fn = NULL;
     int fd = -1;
 
+    if (netdev_dev->miimon_interval > 0) {
+        *carrier = netdev_dev->miimon;
+        return 0;
+    }
+
     if (!(netdev_dev->cache_valid & VALID_CARRIER)) {
         char line[8];
         int retval;
@@ -1010,36 +1071,34 @@ exit:
 }
 
 static int
-netdev_linux_do_miimon(const struct netdev *netdev, int cmd,
-                       const char *cmd_name, struct mii_ioctl_data *data)
+netdev_linux_do_miimon(const char *name, int cmd, const char *cmd_name,
+                       struct mii_ioctl_data *data)
 {
     struct ifreq ifr;
     int error;
 
     memset(&ifr, 0, sizeof ifr);
     memcpy(&ifr.ifr_data, data, sizeof *data);
-    error = netdev_linux_do_ioctl(netdev_get_name(netdev),
-                                  &ifr, cmd, cmd_name);
+    error = netdev_linux_do_ioctl(name, &ifr, cmd, cmd_name);
     memcpy(data, &ifr.ifr_data, sizeof *data);
 
     return error;
 }
 
 static int
-netdev_linux_get_miimon(const struct netdev *netdev, bool *miimon)
+netdev_linux_get_miimon(const char *name, bool *miimon)
 {
-    const char *name = netdev_get_name(netdev);
     struct mii_ioctl_data data;
     int error;
 
     *miimon = false;
 
     memset(&data, 0, sizeof data);
-    error = netdev_linux_do_miimon(netdev, SIOCGMIIPHY, "SIOCGMIIPHY", &data);
+    error = netdev_linux_do_miimon(name, SIOCGMIIPHY, "SIOCGMIIPHY", &data);
     if (!error) {
         /* data.phy_id is filled out by previous SIOCGMIIPHY miimon call. */
         data.reg_num = MII_BMSR;
-        error = netdev_linux_do_miimon(netdev, SIOCGMIIREG, "SIOCGMIIREG",
+        error = netdev_linux_do_miimon(name, SIOCGMIIREG, "SIOCGMIIREG",
                                        &data);
 
         if (!error) {
@@ -1067,6 +1126,69 @@ netdev_linux_get_miimon(const struct netdev *netdev, bool *miimon)
     }
 
     return error;
+}
+
+static int
+netdev_linux_set_miimon_interval(struct netdev *netdev_,
+                                 long long int interval)
+{
+    struct netdev_dev_linux *netdev_dev;
+
+    netdev_dev = netdev_dev_linux_cast(netdev_get_dev(netdev_));
+
+    interval = interval > 0 ? MAX(interval, 100) : 0;
+    if (netdev_dev->miimon_interval != interval) {
+        netdev_dev->miimon_interval = interval;
+        timer_set_expired(&netdev_dev->miimon_timer);
+    }
+
+    return 0;
+}
+
+static void
+netdev_linux_miimon_run(void)
+{
+    struct shash device_shash;
+    struct shash_node *node;
+
+    shash_init(&device_shash);
+    netdev_dev_get_devices(&netdev_linux_class, &device_shash);
+    SHASH_FOR_EACH (node, &device_shash) {
+        struct netdev_dev_linux *dev = node->data;
+        bool miimon;
+
+        if (dev->miimon_interval <= 0 || !timer_expired(&dev->miimon_timer)) {
+            continue;
+        }
+
+        netdev_linux_get_miimon(dev->netdev_dev.name, &miimon);
+        if (miimon != dev->miimon) {
+            dev->miimon = miimon;
+            netdev_dev_linux_changed(dev);
+        }
+
+        timer_set_duration(&dev->miimon_timer, dev->miimon_interval);
+    }
+
+    shash_destroy(&device_shash);
+}
+
+static void
+netdev_linux_miimon_wait(void)
+{
+    struct shash device_shash;
+    struct shash_node *node;
+
+    shash_init(&device_shash);
+    netdev_dev_get_devices(&netdev_linux_class, &device_shash);
+    SHASH_FOR_EACH (node, &device_shash) {
+        struct netdev_dev_linux *dev = node->data;
+
+        if (dev->miimon_interval > 0) {
+            timer_wait(&dev->miimon_timer);
+        }
+    }
+    shash_destroy(&device_shash);
 }
 
 /* Check whether we can we use RTM_GETLINK to get network device statistics.
@@ -1115,9 +1237,9 @@ netdev_linux_update_is_pseudo(struct netdev_dev_linux *netdev_dev)
 static void
 swap_uint64(uint64_t *a, uint64_t *b)
 {
-    *a ^= *b;
-    *b ^= *a;
-    *a ^= *b;
+    uint64_t tmp = *a;
+    *a = *b;
+    *b = tmp;
 }
 
 /* Retrieves current device stats for 'netdev'. */
@@ -1971,7 +2093,7 @@ netdev_linux_get_next_hop(const struct in_addr *host, struct in_addr *next_hop,
     while (fgets(line, sizeof line, stream)) {
         if (++ln >= 2) {
             char iface[17];
-            uint32_t dest, gateway, mask;
+            ovs_be32 dest, gateway, mask;
             int refcnt, metric, mtu;
             unsigned int flags, use, window, irtt;
 
@@ -2038,7 +2160,7 @@ netdev_linux_get_status(const struct netdev *netdev, struct shash *sh)
  * ENXIO indicates that there is not ARP table entry for 'ip' on 'netdev'. */
 static int
 netdev_linux_arp_lookup(const struct netdev *netdev,
-                        uint32_t ip, uint8_t mac[ETH_ADDR_LEN])
+                        ovs_be32 ip, uint8_t mac[ETH_ADDR_LEN])
 {
     struct arpreq r;
     struct sockaddr_in sin;
@@ -2108,88 +2230,10 @@ netdev_linux_update_flags(struct netdev *netdev, enum netdev_flags off,
     return error;
 }
 
-static void
-poll_notify(struct list *list)
+static unsigned int
+netdev_linux_change_seq(const struct netdev *netdev)
 {
-    struct netdev_linux_notifier *notifier;
-    LIST_FOR_EACH (notifier, node, list) {
-        struct netdev_notifier *n = &notifier->notifier;
-        n->cb(n);
-    }
-}
-
-static void
-netdev_linux_poll_cb(const struct rtnetlink_link_change *change,
-                     void *aux OVS_UNUSED)
-{
-    if (change) {
-        struct list *list = shash_find_data(&netdev_linux_notifiers,
-                                            change->ifname);
-        if (list) {
-            poll_notify(list);
-        }
-    } else {
-        struct shash_node *node;
-        SHASH_FOR_EACH (node, &netdev_linux_notifiers) {
-            poll_notify(node->data);
-        }
-    }
-}
-
-static int
-netdev_linux_poll_add(struct netdev *netdev,
-                      void (*cb)(struct netdev_notifier *), void *aux,
-                      struct netdev_notifier **notifierp)
-{
-    const char *netdev_name = netdev_get_name(netdev);
-    struct netdev_linux_notifier *notifier;
-    struct list *list;
-
-    if (shash_is_empty(&netdev_linux_notifiers)) {
-        int error;
-        error = rtnetlink_link_notifier_register(&netdev_linux_poll_notifier,
-                                                 netdev_linux_poll_cb, NULL);
-        if (error) {
-            return error;
-        }
-    }
-
-    list = shash_find_data(&netdev_linux_notifiers, netdev_name);
-    if (!list) {
-        list = xmalloc(sizeof *list);
-        list_init(list);
-        shash_add(&netdev_linux_notifiers, netdev_name, list);
-    }
-
-    notifier = xmalloc(sizeof *notifier);
-    netdev_notifier_init(&notifier->notifier, netdev, cb, aux);
-    list_push_back(list, &notifier->node);
-    *notifierp = &notifier->notifier;
-    return 0;
-}
-
-static void
-netdev_linux_poll_remove(struct netdev_notifier *notifier_)
-{
-    struct netdev_linux_notifier *notifier =
-        CONTAINER_OF(notifier_, struct netdev_linux_notifier, notifier);
-    struct list *list;
-
-    /* Remove 'notifier' from its list. */
-    list = list_remove(&notifier->node);
-    if (list_is_empty(list)) {
-        /* The list is now empty.  Remove it from the hash and free it. */
-        const char *netdev_name = netdev_get_name(notifier->notifier.netdev);
-        shash_delete(&netdev_linux_notifiers,
-                     shash_find(&netdev_linux_notifiers, netdev_name));
-        free(list);
-    }
-    free(notifier);
-
-    /* If that was the last notifier, unregister. */
-    if (shash_is_empty(&netdev_linux_notifiers)) {
-        rtnetlink_link_notifier_unregister(&netdev_linux_poll_notifier);
-    }
+    return netdev_dev_linux_cast(netdev_get_dev(netdev))->change_seq;
 }
 
 #define NETDEV_LINUX_CLASS(NAME, CREATE, ENUMERATE, SET_STATS)  \
@@ -2203,6 +2247,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
     CREATE,                                                     \
     netdev_linux_destroy,                                       \
     NULL,                       /* set_config */                \
+    NULL,                       /* config_equal */              \
                                                                 \
     netdev_linux_open,                                          \
     netdev_linux_close,                                         \
@@ -2221,7 +2266,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
     netdev_linux_get_mtu,                                       \
     netdev_linux_get_ifindex,                                   \
     netdev_linux_get_carrier,                                   \
-    netdev_linux_get_miimon,                                    \
+    netdev_linux_set_miimon_interval,                           \
     netdev_linux_get_stats,                                     \
     SET_STATS,                                                  \
                                                                 \
@@ -2251,8 +2296,7 @@ netdev_linux_poll_remove(struct netdev_notifier *notifier_)
                                                                 \
     netdev_linux_update_flags,                                  \
                                                                 \
-    netdev_linux_poll_add,                                      \
-    netdev_linux_poll_remove                                    \
+    netdev_linux_change_seq                                     \
 }
 
 const struct netdev_class netdev_linux_class =
@@ -3882,7 +3926,57 @@ tc_calc_buffer(unsigned int Bps, int mtu, uint64_t burst_bytes)
     unsigned int min_burst = tc_buffer_per_jiffy(Bps) + mtu;
     return tc_bytes_to_ticks(Bps, MAX(burst_bytes, min_burst));
 }
+
+/* Public utility functions. */
 
+#define COPY_NETDEV_STATS                                   \
+    dst->rx_packets = src->rx_packets;                      \
+    dst->tx_packets = src->tx_packets;                      \
+    dst->rx_bytes = src->rx_bytes;                          \
+    dst->tx_bytes = src->tx_bytes;                          \
+    dst->rx_errors = src->rx_errors;                        \
+    dst->tx_errors = src->tx_errors;                        \
+    dst->rx_dropped = src->rx_dropped;                      \
+    dst->tx_dropped = src->tx_dropped;                      \
+    dst->multicast = src->multicast;                        \
+    dst->collisions = src->collisions;                      \
+    dst->rx_length_errors = src->rx_length_errors;          \
+    dst->rx_over_errors = src->rx_over_errors;              \
+    dst->rx_crc_errors = src->rx_crc_errors;                \
+    dst->rx_frame_errors = src->rx_frame_errors;            \
+    dst->rx_fifo_errors = src->rx_fifo_errors;              \
+    dst->rx_missed_errors = src->rx_missed_errors;          \
+    dst->tx_aborted_errors = src->tx_aborted_errors;        \
+    dst->tx_carrier_errors = src->tx_carrier_errors;        \
+    dst->tx_fifo_errors = src->tx_fifo_errors;              \
+    dst->tx_heartbeat_errors = src->tx_heartbeat_errors;    \
+    dst->tx_window_errors = src->tx_window_errors
+
+/* Copies 'src' into 'dst', performing format conversion in the process. */
+void
+netdev_stats_from_rtnl_link_stats(struct netdev_stats *dst,
+                                  const struct rtnl_link_stats *src)
+{
+    COPY_NETDEV_STATS;
+}
+
+/* Copies 'src' into 'dst', performing format conversion in the process. */
+void
+netdev_stats_from_rtnl_link_stats64(struct netdev_stats *dst,
+                                    const struct rtnl_link_stats64 *src)
+{
+    COPY_NETDEV_STATS;
+}
+
+/* Copies 'src' into 'dst', performing format conversion in the process. */
+void
+netdev_stats_to_rtnl_link_stats64(struct rtnl_link_stats64 *dst,
+                                  const struct netdev_stats *src)
+{
+    COPY_NETDEV_STATS;
+    dst->rx_compressed = 0;
+    dst->tx_compressed = 0;
+}
 
 /* Utility functions. */
 
@@ -3902,7 +3996,6 @@ get_stats_via_netlink(int ifindex, struct netdev_stats *stats)
     struct ofpbuf request;
     struct ofpbuf *reply;
     struct ifinfomsg *ifi;
-    const struct rtnl_link_stats *rtnl_stats;
     struct nlattr *attrs[ARRAY_SIZE(rtnlgrp_link_policy)];
     int error;
 
@@ -3930,28 +4023,7 @@ get_stats_via_netlink(int ifindex, struct netdev_stats *stats)
         return EPROTO;
     }
 
-    rtnl_stats = nl_attr_get(attrs[IFLA_STATS]);
-    stats->rx_packets = rtnl_stats->rx_packets;
-    stats->tx_packets = rtnl_stats->tx_packets;
-    stats->rx_bytes = rtnl_stats->rx_bytes;
-    stats->tx_bytes = rtnl_stats->tx_bytes;
-    stats->rx_errors = rtnl_stats->rx_errors;
-    stats->tx_errors = rtnl_stats->tx_errors;
-    stats->rx_dropped = rtnl_stats->rx_dropped;
-    stats->tx_dropped = rtnl_stats->tx_dropped;
-    stats->multicast = rtnl_stats->multicast;
-    stats->collisions = rtnl_stats->collisions;
-    stats->rx_length_errors = rtnl_stats->rx_length_errors;
-    stats->rx_over_errors = rtnl_stats->rx_over_errors;
-    stats->rx_crc_errors = rtnl_stats->rx_crc_errors;
-    stats->rx_frame_errors = rtnl_stats->rx_frame_errors;
-    stats->rx_fifo_errors = rtnl_stats->rx_fifo_errors;
-    stats->rx_missed_errors = rtnl_stats->rx_missed_errors;
-    stats->tx_aborted_errors = rtnl_stats->tx_aborted_errors;
-    stats->tx_carrier_errors = rtnl_stats->tx_carrier_errors;
-    stats->tx_fifo_errors = rtnl_stats->tx_fifo_errors;
-    stats->tx_heartbeat_errors = rtnl_stats->tx_heartbeat_errors;
-    stats->tx_window_errors = rtnl_stats->tx_window_errors;
+    netdev_stats_from_rtnl_link_stats(stats, nl_attr_get(attrs[IFLA_STATS]));
 
     ofpbuf_delete(reply);
 
@@ -4080,8 +4152,12 @@ get_etheraddr(const char *netdev_name, uint8_t ea[ETH_ADDR_LEN])
     ovs_strzcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     COVERAGE_INC(netdev_get_hwaddr);
     if (ioctl(af_inet_sock, SIOCGIFHWADDR, &ifr) < 0) {
-        VLOG_ERR("ioctl(SIOCGIFHWADDR) on %s device failed: %s",
-                 netdev_name, strerror(errno));
+        /* ENODEV probably means that a vif disappeared asynchronously and
+         * hasn't been removed from the database yet, so reduce the log level
+         * to INFO for that case. */
+        VLOG(errno == ENODEV ? VLL_INFO : VLL_ERR,
+             "ioctl(SIOCGIFHWADDR) on %s device failed: %s",
+             netdev_name, strerror(errno));
         return errno;
     }
     hwaddr_family = ifr.ifr_hwaddr.sa_family;
@@ -4165,4 +4241,23 @@ netdev_linux_get_ipv4(const struct netdev *netdev, struct in_addr *ip,
         *ip = sin->sin_addr;
     }
     return error;
+}
+
+/* Returns an AF_PACKET raw socket or a negative errno value. */
+static int
+af_packet_sock(void)
+{
+    static int sock = INT_MIN;
+
+    if (sock == INT_MIN) {
+        sock = socket(AF_PACKET, SOCK_RAW, 0);
+        if (sock >= 0) {
+            set_nonblocking(sock);
+        } else {
+            sock = -errno;
+            VLOG_ERR("failed to create packet socket: %s", strerror(errno));
+        }
+    }
+
+    return sock;
 }

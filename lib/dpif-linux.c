@@ -34,7 +34,10 @@
 
 #include "bitmap.h"
 #include "dpif-provider.h"
+#include "dynamic-string.h"
+#include "flow.h"
 #include "netdev.h"
+#include "netdev-linux.h"
 #include "netdev-vport.h"
 #include "netlink-socket.h"
 #include "netlink.h"
@@ -286,6 +289,7 @@ static void
 dpif_linux_close(struct dpif *dpif_)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+    nl_sock_destroy(dpif->mc_sock);
     rtnetlink_link_notifier_unregister(&dpif->port_notifier);
     sset_destroy(&dpif->changed_ports);
     free(dpif->lru_bitmap);
@@ -431,6 +435,12 @@ dpif_linux_port_query__(const struct dpif *dpif, uint32_t port_no,
         dpif_port->name = xstrdup(reply.name);
         dpif_port->type = xstrdup(netdev_vport_get_netdev_type(&reply));
         dpif_port->port_no = reply.port_no;
+        if (reply.stats) {
+            netdev_stats_from_rtnl_link_stats64(&dpif_port->stats,
+                                                reply.stats);
+        } else {
+            memset(&dpif_port->stats, 0xff, sizeof dpif_port->stats);
+        }
         ofpbuf_delete(buf);
     }
     return error;
@@ -526,6 +536,11 @@ dpif_linux_port_dump_next(const struct dpif *dpif OVS_UNUSED, void *state_,
     dpif_port->name = (char *) vport.name;
     dpif_port->type = (char *) netdev_vport_get_netdev_type(&vport);
     dpif_port->port_no = vport.port_no;
+    if (vport.stats) {
+        netdev_stats_from_rtnl_link_stats64(&dpif_port->stats, vport.stats);
+    } else {
+        memset(&dpif_port->stats, 0xff, sizeof dpif_port->stats);
+    }
     return 0;
 }
 
@@ -771,11 +786,11 @@ dpif_linux_flow_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
 }
 
 static int
-dpif_linux_execute(struct dpif *dpif_,
-                   const struct nlattr *actions, size_t actions_len,
-                   const struct ofpbuf *packet)
+dpif_linux_execute__(int dp_ifindex,
+                     const struct nlattr *key, size_t key_len,
+                     const struct nlattr *actions, size_t actions_len,
+                     const struct ofpbuf *packet)
 {
-    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
     struct odp_header *execute;
     struct ofpbuf *buf;
     int error;
@@ -786,14 +801,27 @@ dpif_linux_execute(struct dpif *dpif_,
                           ODP_PACKET_CMD_EXECUTE, 1);
 
     execute = ofpbuf_put_uninit(buf, sizeof *execute);
-    execute->dp_ifindex = dpif->dp_ifindex;
+    execute->dp_ifindex = dp_ifindex;
 
     nl_msg_put_unspec(buf, ODP_PACKET_ATTR_PACKET, packet->data, packet->size);
+    nl_msg_put_unspec(buf, ODP_PACKET_ATTR_KEY, key, key_len);
     nl_msg_put_unspec(buf, ODP_PACKET_ATTR_ACTIONS, actions, actions_len);
 
     error = nl_sock_transact(genl_sock, buf, NULL);
     ofpbuf_delete(buf);
     return error;
+}
+
+static int
+dpif_linux_execute(struct dpif *dpif_,
+                   const struct nlattr *key, size_t key_len,
+                   const struct nlattr *actions, size_t actions_len,
+                   const struct ofpbuf *packet)
+{
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+
+    return dpif_linux_execute__(dpif->dp_ifindex, key, key_len,
+                                actions, actions_len, packet);
 }
 
 static int
@@ -1016,12 +1044,12 @@ dpif_linux_recv_purge(struct dpif *dpif_)
 
 const struct dpif_class dpif_linux_class = {
     "system",
-    NULL,                       /* run */
-    NULL,                       /* wait */
     dpif_linux_enumerate,
     dpif_linux_open,
     dpif_linux_close,
     dpif_linux_destroy,
+    NULL,                       /* run */
+    NULL,                       /* wait */
     dpif_linux_get_stats,
     dpif_linux_get_drop_frags,
     dpif_linux_set_drop_frags,
@@ -1100,6 +1128,28 @@ dpif_linux_is_internal_device(const char *name)
     }
 
     return reply.type == ODP_VPORT_TYPE_INTERNAL;
+}
+
+int
+dpif_linux_vport_send(int dp_ifindex, uint32_t port_no,
+                      const void *data, size_t size)
+{
+    struct ofpbuf actions, key, packet;
+    struct odputil_keybuf keybuf;
+    struct flow flow;
+    uint64_t action;
+
+    ofpbuf_use_const(&packet, data, size);
+    flow_extract(&packet, htonll(0), 0, &flow);
+
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&key, &flow);
+
+    ofpbuf_use_stack(&actions, &action, sizeof action);
+    nl_msg_put_u32(&actions, ODP_ACTION_ATTR_OUTPUT, port_no);
+
+    return dpif_linux_execute__(dp_ifindex, key.data, key.size,
+                                actions.data, actions.size, &packet);
 }
 
 static void
@@ -1433,7 +1483,7 @@ dpif_linux_dp_to_ofpbuf(const struct dpif_linux_dp *dp, struct ofpbuf *buf)
 }
 
 /* Clears 'dp' to "empty" values. */
-void
+static void
 dpif_linux_dp_init(struct dpif_linux_dp *dp)
 {
     memset(dp, 0, sizeof *dp);
@@ -1460,7 +1510,7 @@ dpif_linux_dp_dump_start(struct nl_dump *dump)
  * result of the command is expected to be of the same form, which is decoded
  * and stored in '*reply' and '*bufp'.  The caller must free '*bufp' when the
  * reply is no longer needed ('reply' will contain pointers into '*bufp'). */
-int
+static int
 dpif_linux_dp_transact(const struct dpif_linux_dp *request,
                        struct dpif_linux_dp *reply, struct ofpbuf **bufp)
 {
@@ -1490,7 +1540,7 @@ dpif_linux_dp_transact(const struct dpif_linux_dp *request,
 /* Obtains information about 'dpif_' and stores it into '*reply' and '*bufp'.
  * The caller must free '*bufp' when the reply is no longer needed ('reply'
  * will contain pointers into '*bufp').  */
-int
+static int
 dpif_linux_dp_get(const struct dpif *dpif_, struct dpif_linux_dp *reply,
                   struct ofpbuf **bufp)
 {
@@ -1600,7 +1650,7 @@ dpif_linux_flow_to_ofpbuf(const struct dpif_linux_flow *flow,
 }
 
 /* Clears 'flow' to "empty" values. */
-void
+static void
 dpif_linux_flow_init(struct dpif_linux_flow *flow)
 {
     memset(flow, 0, sizeof *flow);
@@ -1612,7 +1662,7 @@ dpif_linux_flow_init(struct dpif_linux_flow *flow)
  * result of the command is expected to be a flow also, which is decoded and
  * stored in '*reply' and '*bufp'.  The caller must free '*bufp' when the reply
  * is no longer needed ('reply' will contain pointers into '*bufp'). */
-int
+static int
 dpif_linux_flow_transact(const struct dpif_linux_flow *request,
                          struct dpif_linux_flow *reply, struct ofpbuf **bufp)
 {

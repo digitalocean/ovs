@@ -134,22 +134,42 @@ class IdlSchema(DbSchema):
         return IdlSchema(schema.name, schema.version, schema.tables,
                          idlPrefix, idlHeader)
 
+def column_set_from_json(json, columns):
+    if json is None:
+        return tuple(columns)
+    elif type(json) != list:
+        raise error.Error("array of distinct column names expected", json)
+    else:
+        for column_name in json:
+            if type(column_name) not in [str, unicode]:
+                raise error.Error("array of distinct column names expected",
+                                  json)
+            elif column_name not in columns:
+                raise error.Error("%s is not a valid column name"
+                                  % column_name, json)
+        if len(set(json)) != len(json):
+            # Duplicate.
+            raise error.Error("array of distinct column names expected", json)
+        return tuple([columns[column_name] for column_name in json])
+
 class TableSchema(object):
     def __init__(self, name, columns, mutable=True, max_rows=sys.maxint,
-                 is_root=True):
+                 is_root=True, indexes=[]):
         self.name = name
         self.columns = columns
         self.mutable = mutable
         self.max_rows = max_rows
         self.is_root = is_root
+        self.indexes = indexes
 
     @staticmethod
     def from_json(json, name):
         parser = ovs.db.parser.Parser(json, "table schema for table %s" % name)
-        columnsJson = parser.get("columns", [dict])
+        columns_json = parser.get("columns", [dict])
         mutable = parser.get_optional("mutable", [bool], True)
         max_rows = parser.get_optional("maxRows", [int])
         is_root = parser.get_optional("isRoot", [bool], False)
+        indexes_json = parser.get_optional("indexes", [list], [])
         parser.finish()
 
         if max_rows == None:
@@ -157,20 +177,33 @@ class TableSchema(object):
         elif max_rows <= 0:
             raise error.Error("maxRows must be at least 1", json)
 
-        if not columnsJson:
+        if not columns_json:
             raise error.Error("table must have at least one column", json)
 
         columns = {}
-        for columnName, columnJson in columnsJson.iteritems():
-            if columnName.startswith('_'):
+        for column_name, column_json in columns_json.iteritems():
+            if column_name.startswith('_'):
                 raise error.Error("names beginning with \"_\" are reserved",
                                   json)
-            elif not ovs.db.parser.is_identifier(columnName):
+            elif not ovs.db.parser.is_identifier(column_name):
                 raise error.Error("name must be a valid id", json)
-            columns[columnName] = ColumnSchema.from_json(columnJson,
-                                                         columnName)
+            columns[column_name] = ColumnSchema.from_json(column_json,
+                                                          column_name)
 
-        return TableSchema(name, columns, mutable, max_rows, is_root)
+        indexes = []
+        for index_json in indexes_json:
+            index = column_set_from_json(index_json, columns)
+            if not index:
+                raise error.Error("index must have at least one column", json)
+            elif len(index) == 1:
+                index[0].unique = True
+            for column in index:
+                if not column.persistent:
+                    raise error.Error("ephemeral columns (such as %s) may "
+                                      "not be indexed" % column.name, json)
+            indexes.append(index)
+
+        return TableSchema(name, columns, mutable, max_rows, is_root, indexes)
 
     def to_json(self, default_is_root=False):
         """Returns this table schema serialized into JSON.
@@ -198,6 +231,11 @@ class TableSchema(object):
         if self.max_rows != sys.maxint:
             json["maxRows"] = self.max_rows
 
+        if self.indexes:
+            json["indexes"] = []
+            for index in self.indexes:
+                json["indexes"].append([column.name for column in index])
+
         return json
 
 class ColumnSchema(object):
@@ -206,6 +244,7 @@ class ColumnSchema(object):
         self.mutable = mutable
         self.persistent = persistent
         self.type = type
+        self.unique = False
 
     @staticmethod
     def from_json(json, name):

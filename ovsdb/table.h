@@ -31,6 +31,8 @@ struct ovsdb_table_schema {
     struct shash columns;       /* Contains "struct ovsdb_column *"s. */
     unsigned int max_rows;      /* Maximum number of rows. */
     bool is_root;               /* Part of garbage collection root set? */
+    struct ovsdb_column_set *indexes;
+    size_t n_indexes;
 };
 
 struct ovsdb_table_schema *ovsdb_table_schema_create(
@@ -55,6 +57,11 @@ struct ovsdb_table {
     struct ovsdb_table_schema *schema;
     struct ovsdb_txn_table *txn_table; /* Only if table is in a transaction. */
     struct hmap rows;           /* Contains "struct ovsdb_row"s. */
+
+    /* An array of schema->n_indexes hmaps, each of which contains "struct
+     * ovsdb_row"s.  Each of the hmap_nodes in indexes[i] are at index 'i' at
+     * the end of struct ovsdb_row, following the 'fields' member. */
+    struct hmap *indexes;
 };
 
 struct ovsdb_table *ovsdb_table_create(struct ovsdb_table_schema *);
@@ -62,6 +69,5 @@ void ovsdb_table_destroy(struct ovsdb_table *);
 
 const struct ovsdb_row *ovsdb_table_get_row(const struct ovsdb_table *,
                                             const struct uuid *);
-bool ovsdb_table_put_row(struct ovsdb_table *, struct ovsdb_row *);
 
 #endif /* ovsdb/table.h */

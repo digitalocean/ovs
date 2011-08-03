@@ -60,11 +60,11 @@ static void
 parse_options(int argc, char *argv[])
 {
     static struct option long_options[] = {
-        {"more", no_argument, 0, 'm'},
-        {"verbose", optional_argument, 0, 'v'},
-        {"help", no_argument, 0, 'h'},
-        {"version", no_argument, 0, 'V'},
-        {0, 0, 0, 0},
+        {"more", no_argument, NULL, 'm'},
+        {"verbose", optional_argument, NULL, 'v'},
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'V'},
+        {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
 
@@ -228,7 +228,8 @@ compact_or_convert(const char *src_name, const char *dst_name,
 static void
 do_compact(int argc OVS_UNUSED, char *argv[])
 {
-    compact_or_convert(argv[1], argv[2], NULL, "compacted by ovsdb-tool");
+    compact_or_convert(argv[1], argv[2], NULL,
+                       "compacted by ovsdb-tool "VERSION BUILDNR);
 }
 
 static void
@@ -239,7 +240,7 @@ do_convert(int argc OVS_UNUSED, char *argv[])
 
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &new_schema));
     compact_or_convert(argv[1], argv[3], new_schema,
-                       "converted by ovsdb-tool");
+                       "converted by ovsdb-tool "VERSION BUILDNR);
     ovsdb_schema_destroy(new_schema);
 }
 
@@ -310,7 +311,7 @@ transact(bool read_only, const char *db_file_name, const char *transaction)
     check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL));
 
     request = parse_json(transaction);
-    result = ovsdb_execute(db, request, 0, NULL);
+    result = ovsdb_execute(db, NULL, request, 0, NULL);
     json_destroy(request);
 
     print_and_free_json(result);

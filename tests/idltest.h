@@ -131,7 +131,7 @@ struct idltest_simple {
 	bool b;
 
 	/* ba column. */
-	bool *ba;
+	const bool *ba;
 	size_t n_ba;
 
 	/* i column. */

@@ -34,12 +34,6 @@ ovsrec_interface_cast(const struct ovsdb_idl_row *row)
     return row ? CONTAINER_OF(row, struct ovsrec_interface, header_) : NULL;
 }
 
-static struct ovsrec_maintenance_point *
-ovsrec_maintenance_point_cast(const struct ovsdb_idl_row *row)
-{
-    return row ? CONTAINER_OF(row, struct ovsrec_maintenance_point, header_) : NULL;
-}
-
 static struct ovsrec_manager *
 ovsrec_manager_cast(const struct ovsdb_idl_row *row)
 {
@@ -50,12 +44,6 @@ static struct ovsrec_mirror *
 ovsrec_mirror_cast(const struct ovsdb_idl_row *row)
 {
     return row ? CONTAINER_OF(row, struct ovsrec_mirror, header_) : NULL;
-}
-
-static struct ovsrec_monitor *
-ovsrec_monitor_cast(const struct ovsdb_idl_row *row)
-{
-    return row ? CONTAINER_OF(row, struct ovsrec_monitor, header_) : NULL;
 }
 
 static struct ovsrec_netflow *
@@ -2405,6 +2393,62 @@ ovsrec_interface_parse_admin_state(struct ovsdb_idl_row *row_, const struct ovsd
 }
 
 static void
+ovsrec_interface_parse_cfm_fault(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        static const bool false_value = false;
+        static const bool true_value = true;
+
+        row->n_cfm_fault = 1;
+        row->cfm_fault = datum->keys[0].boolean ? &true_value : &false_value;
+    } else {
+        row->n_cfm_fault = 0;
+        row->cfm_fault = NULL;
+    }
+}
+
+static void
+ovsrec_interface_parse_cfm_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->cfm_mpid = NULL;
+    row->n_cfm_mpid = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_cfm_mpid) {
+            row->cfm_mpid = xmalloc(n * sizeof *row->cfm_mpid);
+        }
+        row->cfm_mpid[row->n_cfm_mpid] = datum->keys[i].integer;
+        row->n_cfm_mpid++;
+    }
+}
+
+static void
+ovsrec_interface_parse_cfm_remote_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->cfm_remote_mpid = NULL;
+    row->n_cfm_remote_mpid = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_cfm_remote_mpid) {
+            row->cfm_remote_mpid = xmalloc(n * sizeof *row->cfm_remote_mpid);
+        }
+        row->cfm_remote_mpid[row->n_cfm_remote_mpid] = datum->keys[i].integer;
+        row->n_cfm_remote_mpid++;
+    }
+}
+
+static void
 ovsrec_interface_parse_duplex(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2465,6 +2509,24 @@ ovsrec_interface_parse_ingress_policing_rate(struct ovsdb_idl_row *row_, const s
 }
 
 static void
+ovsrec_interface_parse_lacp_current(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        static const bool false_value = false;
+        static const bool true_value = true;
+
+        row->n_lacp_current = 1;
+        row->lacp_current = datum->keys[0].boolean ? &true_value : &false_value;
+    } else {
+        row->n_lacp_current = 0;
+        row->lacp_current = NULL;
+    }
+}
+
+static void
 ovsrec_interface_parse_link_speed(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2506,19 +2568,6 @@ ovsrec_interface_parse_mac(struct ovsdb_idl_row *row_, const struct ovsdb_datum 
         row->mac = datum->keys[0].string;
     } else {
         row->mac = NULL;
-    }
-}
-
-static void
-ovsrec_interface_parse_monitor(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->monitor = ovsrec_monitor_cast(ovsdb_idl_get_row_arc(row_, &ovsrec_table_classes[OVSREC_TABLE_MONITOR], &datum->keys[0].uuid));
-    } else {
-        row->monitor = NULL;
     }
 }
 
@@ -2677,6 +2726,30 @@ ovsrec_interface_unparse_admin_state(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
+ovsrec_interface_unparse_cfm_fault(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+ovsrec_interface_unparse_cfm_mpid(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    free(row->cfm_mpid);
+}
+
+static void
+ovsrec_interface_unparse_cfm_remote_mpid(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    free(row->cfm_remote_mpid);
+}
+
+static void
 ovsrec_interface_unparse_duplex(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -2705,6 +2778,12 @@ ovsrec_interface_unparse_ingress_policing_rate(struct ovsdb_idl_row *row OVS_UNU
 }
 
 static void
+ovsrec_interface_unparse_lacp_current(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_interface_unparse_link_speed(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
@@ -2721,12 +2800,6 @@ ovsrec_interface_unparse_link_state(struct ovsdb_idl_row *row OVS_UNUSED)
 
 static void
 ovsrec_interface_unparse_mac(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-static void
-ovsrec_interface_unparse_monitor(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
 }
@@ -2834,6 +2907,27 @@ ovsrec_interface_verify_admin_state(const struct ovsrec_interface *row)
 }
 
 void
+ovsrec_interface_verify_cfm_fault(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_FAULT]);
+}
+
+void
+ovsrec_interface_verify_cfm_mpid(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_MPID]);
+}
+
+void
+ovsrec_interface_verify_cfm_remote_mpid(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPID]);
+}
+
+void
 ovsrec_interface_verify_duplex(const struct ovsrec_interface *row)
 {
     assert(inited);
@@ -2862,6 +2956,13 @@ ovsrec_interface_verify_ingress_policing_rate(const struct ovsrec_interface *row
 }
 
 void
+ovsrec_interface_verify_lacp_current(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LACP_CURRENT]);
+}
+
+void
 ovsrec_interface_verify_link_speed(const struct ovsrec_interface *row)
 {
     assert(inited);
@@ -2880,13 +2981,6 @@ ovsrec_interface_verify_mac(const struct ovsrec_interface *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MAC]);
-}
-
-void
-ovsrec_interface_verify_monitor(const struct ovsrec_interface *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MONITOR]);
 }
 
 void
@@ -2966,6 +3060,75 @@ ovsrec_interface_get_admin_state(const struct ovsrec_interface *row,
 {
     assert(key_type == OVSDB_TYPE_STRING);
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_admin_state);
+}
+
+/* Returns the cfm_fault column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_BOOLEAN.
+ * (This helps to avoid silent bugs if someone changes cfm_fault's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_cfm_fault(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_fault);
+}
+
+/* Returns the cfm_mpid column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes cfm_mpid's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_cfm_mpid(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_mpid);
+}
+
+/* Returns the cfm_remote_mpid column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes cfm_remote_mpid's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_cfm_remote_mpid(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_remote_mpid);
 }
 
 /* Returns the duplex column's value in 'row' as a struct ovsdb_datum.
@@ -3063,6 +3226,29 @@ ovsrec_interface_get_ingress_policing_rate(const struct ovsrec_interface *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_ingress_policing_rate);
 }
 
+/* Returns the lacp_current column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_BOOLEAN.
+ * (This helps to avoid silent bugs if someone changes lacp_current's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_lacp_current(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_lacp_current);
+}
+
 /* Returns the link_speed column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -3130,29 +3316,6 @@ ovsrec_interface_get_mac(const struct ovsrec_interface *row,
 {
     assert(key_type == OVSDB_TYPE_STRING);
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_mac);
-}
-
-/* Returns the monitor column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_UUID.
- * (This helps to avoid silent bugs if someone changes monitor's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_interface_get_monitor(const struct ovsrec_interface *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_UUID);
-    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_monitor);
 }
 
 /* Returns the mtu column's value in 'row' as a struct ovsdb_datum.
@@ -3370,6 +3533,57 @@ ovsrec_interface_set_admin_state(const struct ovsrec_interface *row, const char 
 }
 
 void
+ovsrec_interface_set_cfm_fault(const struct ovsrec_interface *row, const bool *cfm_fault, size_t n_cfm_fault)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_cfm_fault;
+    datum.keys = xmalloc(n_cfm_fault * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_cfm_fault; i++) {
+        datum.keys[i].boolean = cfm_fault[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_FAULT], &datum);
+}
+
+void
+ovsrec_interface_set_cfm_mpid(const struct ovsrec_interface *row, const int64_t *cfm_mpid, size_t n_cfm_mpid)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_cfm_mpid;
+    datum.keys = xmalloc(n_cfm_mpid * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_cfm_mpid; i++) {
+        datum.keys[i].integer = cfm_mpid[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_MPID], &datum);
+}
+
+void
+ovsrec_interface_set_cfm_remote_mpid(const struct ovsrec_interface *row, const int64_t *cfm_remote_mpid, size_t n_cfm_remote_mpid)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_cfm_remote_mpid;
+    datum.keys = xmalloc(n_cfm_remote_mpid * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_cfm_remote_mpid; i++) {
+        datum.keys[i].integer = cfm_remote_mpid[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPID], &datum);
+}
+
+void
 ovsrec_interface_set_duplex(const struct ovsrec_interface *row, const char *duplex)
 {
     struct ovsdb_datum datum;
@@ -3432,6 +3646,23 @@ ovsrec_interface_set_ingress_policing_rate(const struct ovsrec_interface *row, i
 }
 
 void
+ovsrec_interface_set_lacp_current(const struct ovsrec_interface *row, const bool *lacp_current, size_t n_lacp_current)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_lacp_current;
+    datum.keys = xmalloc(n_lacp_current * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_lacp_current; i++) {
+        datum.keys[i].boolean = lacp_current[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LACP_CURRENT], &datum);
+}
+
+void
 ovsrec_interface_set_link_speed(const struct ovsrec_interface *row, const int64_t *link_speed, size_t n_link_speed)
 {
     struct ovsdb_datum datum;
@@ -3482,24 +3713,6 @@ ovsrec_interface_set_mac(const struct ovsrec_interface *row, const char *mac)
     }
     datum.values = NULL;
     ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MAC], &datum);
-}
-
-void
-ovsrec_interface_set_monitor(const struct ovsrec_interface *row, const struct ovsrec_monitor *monitor)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    if (monitor) {
-        datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].uuid = monitor->header_.uuid;
-    } else {
-        datum.n = 0;
-        datum.keys = NULL;
-    }
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_MONITOR], &datum);
 }
 
 void
@@ -3659,6 +3872,40 @@ ovsrec_interface_columns_init(void)
     c->parse = ovsrec_interface_parse_admin_state;
     c->unparse = ovsrec_interface_unparse_admin_state;
 
+    /* Initialize ovsrec_interface_col_cfm_fault. */
+    c = &ovsrec_interface_col_cfm_fault;
+    c->name = "cfm_fault";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_cfm_fault;
+    c->unparse = ovsrec_interface_unparse_cfm_fault;
+
+    /* Initialize ovsrec_interface_col_cfm_mpid. */
+    c = &ovsrec_interface_col_cfm_mpid;
+    c->name = "cfm_mpid";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    c->type.key.u.integer.min = INT64_C(1);
+    c->type.key.u.integer.max = INT64_C(8191);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_cfm_mpid;
+    c->unparse = ovsrec_interface_unparse_cfm_mpid;
+
+    /* Initialize ovsrec_interface_col_cfm_remote_mpid. */
+    c = &ovsrec_interface_col_cfm_remote_mpid;
+    c->name = "cfm_remote_mpid";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    c->type.key.u.integer.min = INT64_C(1);
+    c->type.key.u.integer.max = INT64_C(8191);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_cfm_remote_mpid;
+    c->unparse = ovsrec_interface_unparse_cfm_remote_mpid;
+
     /* Initialize ovsrec_interface_col_duplex. */
     c = &ovsrec_interface_col_duplex;
     c->name = "duplex";
@@ -3711,6 +3958,16 @@ ovsrec_interface_columns_init(void)
     c->parse = ovsrec_interface_parse_ingress_policing_rate;
     c->unparse = ovsrec_interface_unparse_ingress_policing_rate;
 
+    /* Initialize ovsrec_interface_col_lacp_current. */
+    c = &ovsrec_interface_col_lacp_current;
+    c->name = "lacp_current";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_lacp_current;
+    c->unparse = ovsrec_interface_unparse_lacp_current;
+
     /* Initialize ovsrec_interface_col_link_speed. */
     c = &ovsrec_interface_col_link_speed;
     c->name = "link_speed";
@@ -3749,18 +4006,6 @@ ovsrec_interface_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_interface_parse_mac;
     c->unparse = ovsrec_interface_unparse_mac;
-
-    /* Initialize ovsrec_interface_col_monitor. */
-    c = &ovsrec_interface_col_monitor;
-    c->name = "monitor";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
-    c->type.key.u.uuid.refTableName = "Monitor";
-    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_interface_parse_monitor;
-    c->unparse = ovsrec_interface_unparse_monitor;
 
     /* Initialize ovsrec_interface_col_mtu. */
     c = &ovsrec_interface_col_mtu;
@@ -3850,200 +4095,6 @@ ovsrec_interface_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_interface_parse_type;
     c->unparse = ovsrec_interface_unparse_type;
-}
-
-/* Maintenance_Point table. */
-
-static void
-ovsrec_maintenance_point_parse_fault(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_maintenance_point *row = ovsrec_maintenance_point_cast(row_);
-    size_t n = MIN(1, datum->n);
-    size_t i;
-
-    assert(inited);
-    row->fault = NULL;
-    row->n_fault = 0;
-    for (i = 0; i < n; i++) {
-        if (!row->n_fault) {
-            row->fault = xmalloc(n * sizeof *row->fault);
-        }
-        row->fault[row->n_fault] = datum->keys[i].boolean;
-        row->n_fault++;
-    }
-}
-
-static void
-ovsrec_maintenance_point_parse_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_maintenance_point *row = ovsrec_maintenance_point_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->mpid = datum->keys[0].integer;
-    } else {
-        row->mpid = 0;
-    }
-}
-
-static void
-ovsrec_maintenance_point_unparse_fault(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_maintenance_point *row = ovsrec_maintenance_point_cast(row_);
-
-    assert(inited);
-    free(row->fault);
-}
-
-static void
-ovsrec_maintenance_point_unparse_mpid(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-const struct ovsrec_maintenance_point *
-ovsrec_maintenance_point_first(const struct ovsdb_idl *idl)
-{
-    return ovsrec_maintenance_point_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_MAINTENANCE_POINT]));
-}
-
-const struct ovsrec_maintenance_point *
-ovsrec_maintenance_point_next(const struct ovsrec_maintenance_point *row)
-{
-    return ovsrec_maintenance_point_cast(ovsdb_idl_next_row(&row->header_));
-}
-
-void
-ovsrec_maintenance_point_delete(const struct ovsrec_maintenance_point *row)
-{
-    ovsdb_idl_txn_delete(&row->header_);
-}
-
-struct ovsrec_maintenance_point *
-ovsrec_maintenance_point_insert(struct ovsdb_idl_txn *txn)
-{
-    return ovsrec_maintenance_point_cast(ovsdb_idl_txn_insert(txn, &ovsrec_table_classes[OVSREC_TABLE_MAINTENANCE_POINT], NULL));
-}
-
-
-void
-ovsrec_maintenance_point_verify_fault(const struct ovsrec_maintenance_point *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_maintenance_point_columns[OVSREC_MAINTENANCE_POINT_COL_FAULT]);
-}
-
-void
-ovsrec_maintenance_point_verify_mpid(const struct ovsrec_maintenance_point *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_maintenance_point_columns[OVSREC_MAINTENANCE_POINT_COL_MPID]);
-}
-
-/* Returns the fault column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_BOOLEAN.
- * (This helps to avoid silent bugs if someone changes fault's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_maintenance_point_get_fault(const struct ovsrec_maintenance_point *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_BOOLEAN);
-    return ovsdb_idl_read(&row->header_, &ovsrec_maintenance_point_col_fault);
-}
-
-/* Returns the mpid column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_INTEGER.
- * (This helps to avoid silent bugs if someone changes mpid's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_maintenance_point_get_mpid(const struct ovsrec_maintenance_point *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_INTEGER);
-    return ovsdb_idl_read(&row->header_, &ovsrec_maintenance_point_col_mpid);
-}
-
-void
-ovsrec_maintenance_point_set_fault(const struct ovsrec_maintenance_point *row, const bool *fault, size_t n_fault)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_fault;
-    datum.keys = xmalloc(n_fault * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_fault; i++) {
-        datum.keys[i].boolean = fault[i];
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_maintenance_point_columns[OVSREC_MAINTENANCE_POINT_COL_FAULT], &datum);
-}
-
-void
-ovsrec_maintenance_point_set_mpid(const struct ovsrec_maintenance_point *row, int64_t mpid)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].integer = mpid;
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_maintenance_point_columns[OVSREC_MAINTENANCE_POINT_COL_MPID], &datum);
-}
-
-struct ovsdb_idl_column ovsrec_maintenance_point_columns[OVSREC_MAINTENANCE_POINT_N_COLUMNS];
-
-static void
-ovsrec_maintenance_point_columns_init(void)
-{
-    struct ovsdb_idl_column *c;
-
-    /* Initialize ovsrec_maintenance_point_col_fault. */
-    c = &ovsrec_maintenance_point_col_fault;
-    c->name = "fault";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_maintenance_point_parse_fault;
-    c->unparse = ovsrec_maintenance_point_unparse_fault;
-
-    /* Initialize ovsrec_maintenance_point_col_mpid. */
-    c = &ovsrec_maintenance_point_col_mpid;
-    c->name = "mpid";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    c->type.key.u.integer.min = INT64_C(1);
-    c->type.key.u.integer.max = INT64_C(8191);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 1;
-    c->type.n_max = 1;
-    c->parse = ovsrec_maintenance_point_parse_mpid;
-    c->unparse = ovsrec_maintenance_point_unparse_mpid;
 }
 
 /* Manager table. */
@@ -5375,533 +5426,6 @@ ovsrec_mirror_columns_init(void)
     c->unparse = ovsrec_mirror_unparse_select_vlan;
 }
 
-/* Monitor table. */
-
-static void
-ovsrec_monitor_parse_fault(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-    size_t n = MIN(1, datum->n);
-    size_t i;
-
-    assert(inited);
-    row->fault = NULL;
-    row->n_fault = 0;
-    for (i = 0; i < n; i++) {
-        if (!row->n_fault) {
-            row->fault = xmalloc(n * sizeof *row->fault);
-        }
-        row->fault[row->n_fault] = datum->keys[i].boolean;
-        row->n_fault++;
-    }
-}
-
-static void
-ovsrec_monitor_parse_interval(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-    size_t n = MIN(1, datum->n);
-    size_t i;
-
-    assert(inited);
-    row->interval = NULL;
-    row->n_interval = 0;
-    for (i = 0; i < n; i++) {
-        if (!row->n_interval) {
-            row->interval = xmalloc(n * sizeof *row->interval);
-        }
-        row->interval[row->n_interval] = datum->keys[i].integer;
-        row->n_interval++;
-    }
-}
-
-static void
-ovsrec_monitor_parse_ma_name(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->ma_name = datum->keys[0].string;
-    } else {
-        row->ma_name = NULL;
-    }
-}
-
-static void
-ovsrec_monitor_parse_md_name(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->md_name = datum->keys[0].string;
-    } else {
-        row->md_name = NULL;
-    }
-}
-
-static void
-ovsrec_monitor_parse_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    if (datum->n >= 1) {
-        row->mpid = datum->keys[0].integer;
-    } else {
-        row->mpid = 0;
-    }
-}
-
-static void
-ovsrec_monitor_parse_remote_mps(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-    size_t i;
-
-    assert(inited);
-    row->remote_mps = NULL;
-    row->n_remote_mps = 0;
-    for (i = 0; i < datum->n; i++) {
-        struct ovsrec_maintenance_point *keyRow = ovsrec_maintenance_point_cast(ovsdb_idl_get_row_arc(row_, &ovsrec_table_classes[OVSREC_TABLE_MAINTENANCE_POINT], &datum->keys[i].uuid));
-        if (keyRow) {
-            if (!row->n_remote_mps) {
-                row->remote_mps = xmalloc(datum->n * sizeof *row->remote_mps);
-            }
-            row->remote_mps[row->n_remote_mps] = keyRow;
-            row->n_remote_mps++;
-        }
-    }
-}
-
-static void
-ovsrec_monitor_unparse_fault(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    free(row->fault);
-}
-
-static void
-ovsrec_monitor_unparse_interval(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    free(row->interval);
-}
-
-static void
-ovsrec_monitor_unparse_ma_name(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-static void
-ovsrec_monitor_unparse_md_name(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-static void
-ovsrec_monitor_unparse_mpid(struct ovsdb_idl_row *row OVS_UNUSED)
-{
-    /* Nothing to do. */
-}
-
-static void
-ovsrec_monitor_unparse_remote_mps(struct ovsdb_idl_row *row_)
-{
-    struct ovsrec_monitor *row = ovsrec_monitor_cast(row_);
-
-    assert(inited);
-    free(row->remote_mps);
-}
-
-const struct ovsrec_monitor *
-ovsrec_monitor_first(const struct ovsdb_idl *idl)
-{
-    return ovsrec_monitor_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_MONITOR]));
-}
-
-const struct ovsrec_monitor *
-ovsrec_monitor_next(const struct ovsrec_monitor *row)
-{
-    return ovsrec_monitor_cast(ovsdb_idl_next_row(&row->header_));
-}
-
-void
-ovsrec_monitor_delete(const struct ovsrec_monitor *row)
-{
-    ovsdb_idl_txn_delete(&row->header_);
-}
-
-struct ovsrec_monitor *
-ovsrec_monitor_insert(struct ovsdb_idl_txn *txn)
-{
-    return ovsrec_monitor_cast(ovsdb_idl_txn_insert(txn, &ovsrec_table_classes[OVSREC_TABLE_MONITOR], NULL));
-}
-
-
-void
-ovsrec_monitor_verify_fault(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_FAULT]);
-}
-
-void
-ovsrec_monitor_verify_interval(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_INTERVAL]);
-}
-
-void
-ovsrec_monitor_verify_ma_name(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MA_NAME]);
-}
-
-void
-ovsrec_monitor_verify_md_name(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MD_NAME]);
-}
-
-void
-ovsrec_monitor_verify_mpid(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MPID]);
-}
-
-void
-ovsrec_monitor_verify_remote_mps(const struct ovsrec_monitor *row)
-{
-    assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_REMOTE_MPS]);
-}
-
-/* Returns the fault column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_BOOLEAN.
- * (This helps to avoid silent bugs if someone changes fault's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_fault(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_BOOLEAN);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_fault);
-}
-
-/* Returns the interval column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_INTEGER.
- * (This helps to avoid silent bugs if someone changes interval's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_interval(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_INTEGER);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_interval);
-}
-
-/* Returns the ma_name column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes ma_name's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_ma_name(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_ma_name);
-}
-
-/* Returns the md_name column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes md_name's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_md_name(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_md_name);
-}
-
-/* Returns the mpid column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_INTEGER.
- * (This helps to avoid silent bugs if someone changes mpid's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_mpid(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_INTEGER);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_mpid);
-}
-
-/* Returns the remote_mps column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_UUID.
- * (This helps to avoid silent bugs if someone changes remote_mps's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsrec_monitor_get_remote_mps(const struct ovsrec_monitor *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED)
-{
-    assert(key_type == OVSDB_TYPE_UUID);
-    return ovsdb_idl_read(&row->header_, &ovsrec_monitor_col_remote_mps);
-}
-
-void
-ovsrec_monitor_set_fault(const struct ovsrec_monitor *row, const bool *fault, size_t n_fault)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_fault;
-    datum.keys = xmalloc(n_fault * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_fault; i++) {
-        datum.keys[i].boolean = fault[i];
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_FAULT], &datum);
-}
-
-void
-ovsrec_monitor_set_interval(const struct ovsrec_monitor *row, const int64_t *interval, size_t n_interval)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_interval;
-    datum.keys = xmalloc(n_interval * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_interval; i++) {
-        datum.keys[i].integer = interval[i];
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_INTERVAL], &datum);
-}
-
-void
-ovsrec_monitor_set_ma_name(const struct ovsrec_monitor *row, const char *ma_name)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    if (ma_name) {
-        datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].string = xstrdup(ma_name);
-    } else {
-        datum.n = 0;
-        datum.keys = NULL;
-    }
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MA_NAME], &datum);
-}
-
-void
-ovsrec_monitor_set_md_name(const struct ovsrec_monitor *row, const char *md_name)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    if (md_name) {
-        datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].string = xstrdup(md_name);
-    } else {
-        datum.n = 0;
-        datum.keys = NULL;
-    }
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MD_NAME], &datum);
-}
-
-void
-ovsrec_monitor_set_mpid(const struct ovsrec_monitor *row, int64_t mpid)
-{
-    struct ovsdb_datum datum;
-
-    assert(inited);
-    datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].integer = mpid;
-    datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_MPID], &datum);
-}
-
-void
-ovsrec_monitor_set_remote_mps(const struct ovsrec_monitor *row, struct ovsrec_maintenance_point **remote_mps, size_t n_remote_mps)
-{
-    struct ovsdb_datum datum;
-    size_t i;
-
-    assert(inited);
-    datum.n = n_remote_mps;
-    datum.keys = xmalloc(n_remote_mps * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_remote_mps; i++) {
-        datum.keys[i].uuid = remote_mps[i]->header_.uuid;
-    }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_UUID, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_monitor_columns[OVSREC_MONITOR_COL_REMOTE_MPS], &datum);
-}
-
-struct ovsdb_idl_column ovsrec_monitor_columns[OVSREC_MONITOR_N_COLUMNS];
-
-static void
-ovsrec_monitor_columns_init(void)
-{
-    struct ovsdb_idl_column *c;
-
-    /* Initialize ovsrec_monitor_col_fault. */
-    c = &ovsrec_monitor_col_fault;
-    c->name = "fault";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_monitor_parse_fault;
-    c->unparse = ovsrec_monitor_unparse_fault;
-
-    /* Initialize ovsrec_monitor_col_interval. */
-    c = &ovsrec_monitor_col_interval;
-    c->name = "interval";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    c->type.key.u.integer.min = INT64_C(100);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_monitor_parse_interval;
-    c->unparse = ovsrec_monitor_unparse_interval;
-
-    /* Initialize ovsrec_monitor_col_ma_name. */
-    c = &ovsrec_monitor_col_ma_name;
-    c->name = "ma_name";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 1;
-    c->type.key.u.string.maxLen = 43;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_monitor_parse_ma_name;
-    c->unparse = ovsrec_monitor_unparse_ma_name;
-
-    /* Initialize ovsrec_monitor_col_md_name. */
-    c = &ovsrec_monitor_col_md_name;
-    c->name = "md_name";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 1;
-    c->type.key.u.string.maxLen = 43;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_monitor_parse_md_name;
-    c->unparse = ovsrec_monitor_unparse_md_name;
-
-    /* Initialize ovsrec_monitor_col_mpid. */
-    c = &ovsrec_monitor_col_mpid;
-    c->name = "mpid";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    c->type.key.u.integer.min = INT64_C(1);
-    c->type.key.u.integer.max = INT64_C(8191);
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 1;
-    c->type.n_max = 1;
-    c->parse = ovsrec_monitor_parse_mpid;
-    c->unparse = ovsrec_monitor_unparse_mpid;
-
-    /* Initialize ovsrec_monitor_col_remote_mps. */
-    c = &ovsrec_monitor_col_remote_mps;
-    c->name = "remote_mps";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
-    c->type.key.u.uuid.refTableName = "Maintenance_Point";
-    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->parse = ovsrec_monitor_parse_remote_mps;
-    c->unparse = ovsrec_monitor_unparse_remote_mps;
-}
-
 /* NetFlow table. */
 
 static void
@@ -6564,6 +6088,27 @@ ovsrec_open_vswitch_parse_next_cfg(struct ovsdb_idl_row *row_, const struct ovsd
 }
 
 static void
+ovsrec_open_vswitch_parse_other_config(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_other_config = NULL;
+    row->value_other_config = NULL;
+    row->n_other_config = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_other_config) {
+            row->key_other_config = xmalloc(datum->n * sizeof *row->key_other_config);
+            row->value_other_config = xmalloc(datum->n * sizeof *row->value_other_config);
+        }
+        row->key_other_config[row->n_other_config] = datum->keys[i].string;
+        row->value_other_config[row->n_other_config] = datum->values[i].string;
+        row->n_other_config++;
+    }
+}
+
+static void
 ovsrec_open_vswitch_parse_ovs_version(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
@@ -6693,6 +6238,16 @@ ovsrec_open_vswitch_unparse_next_cfg(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
+ovsrec_open_vswitch_unparse_other_config(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_open_vswitch *row = ovsrec_open_vswitch_cast(row_);
+
+    assert(inited);
+    free(row->key_other_config);
+    free(row->value_other_config);
+}
+
+static void
 ovsrec_open_vswitch_unparse_ovs_version(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -6798,6 +6353,13 @@ ovsrec_open_vswitch_verify_next_cfg(const struct ovsrec_open_vswitch *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_NEXT_CFG]);
+}
+
+void
+ovsrec_open_vswitch_verify_other_config(const struct ovsrec_open_vswitch *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_OTHER_CONFIG]);
 }
 
 void
@@ -7000,6 +6562,32 @@ ovsrec_open_vswitch_get_next_cfg(const struct ovsrec_open_vswitch *row,
 {
     assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &ovsrec_open_vswitch_col_next_cfg);
+}
+
+/* Returns the other_config column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes other_config's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_open_vswitch_get_other_config(const struct ovsrec_open_vswitch *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_open_vswitch_col_other_config);
 }
 
 /* Returns the ovs_version column's value in 'row' as a struct ovsdb_datum.
@@ -7235,6 +6823,24 @@ ovsrec_open_vswitch_set_next_cfg(const struct ovsrec_open_vswitch *row, int64_t 
 }
 
 void
+ovsrec_open_vswitch_set_other_config(const struct ovsrec_open_vswitch *row, char **key_other_config, char **value_other_config, size_t n_other_config)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_other_config;
+    datum.keys = xmalloc(n_other_config * sizeof *datum.keys);
+    datum.values = xmalloc(n_other_config * sizeof *datum.values);
+    for (i = 0; i < n_other_config; i++) {
+        datum.keys[i].string = xstrdup(key_other_config[i]);
+        datum.values[i].string = xstrdup(value_other_config[i]);
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_COL_OTHER_CONFIG], &datum);
+}
+
+void
 ovsrec_open_vswitch_set_ovs_version(const struct ovsrec_open_vswitch *row, const char *ovs_version)
 {
     struct ovsdb_datum datum;
@@ -7410,6 +7016,18 @@ ovsrec_open_vswitch_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_open_vswitch_parse_next_cfg;
     c->unparse = ovsrec_open_vswitch_unparse_next_cfg;
+
+    /* Initialize ovsrec_open_vswitch_col_other_config. */
+    c = &ovsrec_open_vswitch_col_other_config;
+    c->name = "other_config";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_open_vswitch_parse_other_config;
+    c->unparse = ovsrec_open_vswitch_unparse_other_config;
 
     /* Initialize ovsrec_open_vswitch_col_ovs_version. */
     c = &ovsrec_open_vswitch_col_ovs_version;
@@ -8497,11 +8115,12 @@ ovsrec_port_columns_init(void)
     c->name = "bond_mode";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
-    c->type.key.enum_->n = 3;
-    c->type.key.enum_->keys = xmalloc(3 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->n = 4;
+    c->type.key.enum_->keys = xmalloc(4 * sizeof *c->type.key.enum_->keys);
     c->type.key.enum_->keys[0].string = xstrdup("active-backup");
     c->type.key.enum_->keys[1].string = xstrdup("balance-slb");
     c->type.key.enum_->keys[2].string = xstrdup("balance-tcp");
+    c->type.key.enum_->keys[3].string = xstrdup("stable");
     c->type.key.enum_->values = NULL;
     ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
@@ -10243,18 +9862,12 @@ struct ovsdb_idl_table_class ovsrec_table_classes[OVSREC_N_TABLES] = {
     {"Interface", false,
      ovsrec_interface_columns, ARRAY_SIZE(ovsrec_interface_columns),
      sizeof(struct ovsrec_interface)},
-    {"Maintenance_Point", false,
-     ovsrec_maintenance_point_columns, ARRAY_SIZE(ovsrec_maintenance_point_columns),
-     sizeof(struct ovsrec_maintenance_point)},
     {"Manager", false,
      ovsrec_manager_columns, ARRAY_SIZE(ovsrec_manager_columns),
      sizeof(struct ovsrec_manager)},
     {"Mirror", false,
      ovsrec_mirror_columns, ARRAY_SIZE(ovsrec_mirror_columns),
      sizeof(struct ovsrec_mirror)},
-    {"Monitor", false,
-     ovsrec_monitor_columns, ARRAY_SIZE(ovsrec_monitor_columns),
-     sizeof(struct ovsrec_monitor)},
     {"NetFlow", false,
      ovsrec_netflow_columns, ARRAY_SIZE(ovsrec_netflow_columns),
      sizeof(struct ovsrec_netflow)},
@@ -10294,10 +9907,8 @@ ovsrec_init(void)
     ovsrec_capability_columns_init();
     ovsrec_controller_columns_init();
     ovsrec_interface_columns_init();
-    ovsrec_maintenance_point_columns_init();
     ovsrec_manager_columns_init();
     ovsrec_mirror_columns_init();
-    ovsrec_monitor_columns_init();
     ovsrec_netflow_columns_init();
     ovsrec_open_vswitch_columns_init();
     ovsrec_port_columns_init();

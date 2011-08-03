@@ -10,10 +10,16 @@ noinst_LIBRARIES += lib/libopenvswitch.a
 lib_libopenvswitch_a_SOURCES = \
 	lib/aes128.c \
 	lib/aes128.h \
+	lib/autopath.c \
+	lib/autopath.h \
 	lib/backtrace.c \
 	lib/backtrace.h \
 	lib/bitmap.c \
 	lib/bitmap.h \
+	lib/bond.c \
+	lib/bond.h \
+	lib/bundle.c \
+	lib/bundle.h \
 	lib/byte-order.h \
 	lib/byteq.c \
 	lib/byteq.h \
@@ -51,6 +57,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/hash.h \
 	lib/hmap.c \
 	lib/hmap.h \
+	lib/hmapx.c \
+	lib/hmapx.h \
 	lib/json.c \
 	lib/json.h \
 	lib/jsonrpc.c \
@@ -165,6 +173,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/vconn-stream.c \
 	lib/vconn.c \
 	lib/vconn.h \
+	lib/vlan-bitmap.c \
+	lib/vlan-bitmap.h \
 	lib/vlog.c \
 	lib/vlog.h
 nodist_lib_libopenvswitch_a_SOURCES = \
@@ -192,6 +202,7 @@ lib_libopenvswitch_a_SOURCES += \
 	lib/dpif-linux.c \
 	lib/dpif-linux.h \
 	lib/netdev-linux.c \
+	lib/netdev-linux.h \
 	lib/netdev-vport.c \
 	lib/netdev-vport.h \
 	lib/netlink-protocol.h \
@@ -215,6 +226,8 @@ lib/dhparams.c: lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem
 	 openssl dhparam -C -in $(srcdir)/lib/dh4096.pem -noout)	\
 	| sed 's/\(get_dh[0-9]*\)()/\1(void)/' > lib/dhparams.c.tmp
 	mv lib/dhparams.c.tmp lib/dhparams.c
+else
+lib_libopenvswitch_a_SOURCES += lib/stream-nossl.c
 endif
 
 EXTRA_DIST += \
@@ -250,6 +263,7 @@ lib/dirs.c: lib/dirs.c.in Makefile
 		-e 's,[@]LOGDIR[@],"$(LOGDIR)",g' \
 		-e 's,[@]RUNDIR[@],"$(RUNDIR)",g' \
 		-e 's,[@]bindir[@],"$(bindir)",g' \
+		-e 's,[@]sysconfdir[@],"$(sysconfdir)",g' \
 		-e 's,[@]pkgdatadir[@],"$(pkgdatadir)",g') \
 	     > lib/dirs.c.tmp
 	mv lib/dirs.c.tmp lib/dirs.c
@@ -262,7 +276,7 @@ $(srcdir)/lib/ofp-errors.c: \
 		openflow/openflow.h openflow/nicira-ext.h > ../lib/ofp-errors.c
 EXTRA_DIST += build-aux/extract-ofp-errors
 
-install-data-local: lib-install-data-local
+INSTALL_DATA_LOCAL += lib-install-data-local
 lib-install-data-local:
 	$(MKDIR_P) $(DESTDIR)$(RUNDIR)
 	$(MKDIR_P) $(DESTDIR)$(PKIDIR)

@@ -29,6 +29,7 @@
 #include "dirs.h"
 #include "dynamic-string.h"
 #include "sat-math.h"
+#include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
@@ -185,7 +186,7 @@ update_min_level(struct vlog_module *module)
 {
     enum vlog_facility facility;
 
-    module->min_level = VLL_EMER;
+    module->min_level = VLL_OFF;
     for (facility = 0; facility < VLF_N_FACILITIES; facility++) {
         if (log_file || facility != VLF_FILE) {
             enum vlog_level level = module->levels[facility];
@@ -484,17 +485,27 @@ vlog_get_levels(void)
 {
     struct ds s = DS_EMPTY_INITIALIZER;
     struct vlog_module **mp;
+    struct svec lines = SVEC_EMPTY_INITIALIZER;
+    char *line;
+    size_t i;
 
     ds_put_format(&s, "                 console    syslog    file\n");
     ds_put_format(&s, "                 -------    ------    ------\n");
 
     for (mp = vlog_modules; mp < &vlog_modules[n_vlog_modules]; mp++) {
-        ds_put_format(&s, "%-16s  %4s       %4s       %4s\n",
+        line = xasprintf("%-16s  %4s       %4s       %4s\n",
            vlog_get_module_name(*mp),
            vlog_get_level_name(vlog_get_level(*mp, VLF_CONSOLE)),
            vlog_get_level_name(vlog_get_level(*mp, VLF_SYSLOG)),
            vlog_get_level_name(vlog_get_level(*mp, VLF_FILE)));
+        svec_add_nocopy(&lines, line);
     }
+
+    svec_sort(&lines);
+    SVEC_FOR_EACH (i, line, &lines) {
+        ds_put_cstr(&s, line);
+    }
+    svec_destroy(&lines);
 
     return ds_cstr(&s);
 }
@@ -681,27 +692,26 @@ vlog(const struct vlog_module *module, enum vlog_level level,
 }
 
 void
-vlog_fatal_valist(const struct vlog_module *module_, enum vlog_level level,
+vlog_fatal_valist(const struct vlog_module *module_,
                   const char *message, va_list args)
 {
     struct vlog_module *module = (struct vlog_module *) module_;
 
     /* Don't log this message to the console to avoid redundancy with the
      * message written by the later ovs_fatal_valist(). */
-    module->levels[VLF_CONSOLE] = VLL_EMER;
+    module->levels[VLF_CONSOLE] = VLL_OFF;
 
-    vlog_valist(module, level, message, args);
+    vlog_valist(module, VLL_EMER, message, args);
     ovs_fatal_valist(0, message, args);
 }
 
 void
-vlog_fatal(const struct vlog_module *module, enum vlog_level level,
-           const char *message, ...)
+vlog_fatal(const struct vlog_module *module, const char *message, ...)
 {
     va_list args;
 
     va_start(args, message);
-    vlog_fatal_valist(module, level, message, args);
+    vlog_fatal_valist(module, message, args);
     va_end(args);
 }
 
@@ -729,6 +739,7 @@ vlog_should_drop(const struct vlog_module *module, enum vlog_level level,
             if (!rl->n_dropped) {
                 rl->first_dropped = now;
             }
+            rl->last_dropped = now;
             rl->n_dropped++;
             return true;
         }
@@ -736,10 +747,15 @@ vlog_should_drop(const struct vlog_module *module, enum vlog_level level,
     rl->tokens -= VLOG_MSG_TOKENS;
 
     if (rl->n_dropped) {
+        time_t now = time_now();
+        unsigned int first_dropped_elapsed = now - rl->first_dropped;
+        unsigned int last_dropped_elapsed = now - rl->last_dropped;
+
         vlog(module, level,
-             "Dropped %u log messages in last %u seconds "
-             "due to excessive rate",
-             rl->n_dropped, (unsigned int) (time_now() - rl->first_dropped));
+             "Dropped %u log messages in last %u seconds (most recently, "
+             "%u seconds ago) due to excessive rate",
+             rl->n_dropped, first_dropped_elapsed, last_dropped_elapsed);
+
         rl->n_dropped = 0;
     }
     return false;

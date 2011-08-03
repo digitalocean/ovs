@@ -52,6 +52,8 @@ def inlineXmlToNroff(node, font):
             s = r'\fB'
             if node.hasAttribute('column'):
                 s += node.attributes['column'].nodeValue
+                if node.hasAttribute('key'):
+                    s += ':' + node.attributes['key'].nodeValue
             elif node.hasAttribute('table'):
                 s += node.attributes['table'].nodeValue
             elif node.hasAttribute('group'):
@@ -136,6 +138,8 @@ def typeAndConstraintsToNroff(column):
     constraints = column.type.constraintsToEnglish(escapeNroffLiteral)
     if constraints:
         type += ", " + constraints
+    if column.unique:
+        type += " (must be unique within table)"
     return type
 
 def columnToNroff(columnName, column, node):
@@ -237,7 +241,8 @@ def docsToNroff(schemaFile, xmlFile, erFile, title=None):
 .de TQ
 .  br
 .  ns
-.  TP "\\$1"
+.  TP
+\\$1
 ..
 .de ST
 .  PP
@@ -286,6 +291,7 @@ Table	Purpose
 
     if erFile:
         s += """
+.if !'\*[.T]'ascii' \{
 .sp 1
 .SH "TABLE RELATIONSHIPS"
 .PP
@@ -293,7 +299,9 @@ The following diagram shows the relationship among tables in the
 database.  Each node represents a table.  Tables that are part of the
 ``root set'' are shown with double borders.  Each edge leads from the
 table that contains it and points to the table that its value
-represents.  Edges are labeled with their column names.  Thick lines
+represents.  Edges are labeled with their column names, followed by a
+constraint on the number of allowed values: \\fB?\\fR for zero or one,
+\\fB*\\fR for zero or more, \\fB+\\fR for one or more.  Thick lines
 represent strong references; thin lines represent weak references.
 .RS -1in
 """
@@ -301,7 +309,7 @@ represent strong references; thin lines represent weak references.
         for line in erStream:
             s += line + '\n'
         erStream.close()
-        s += ".RE\n"
+        s += ".RE\\}\n"
 
     for node in tableNodes:
         s += tableToNroff(schema, node) + "\n"

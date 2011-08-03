@@ -34,7 +34,7 @@ EXTRA_DIST = \
 	DESIGN \
 	INSTALL.KVM \
 	INSTALL.Linux \
-	INSTALL.OpenFlow \
+	INSTALL.RHEL \
 	INSTALL.SSL \
 	INSTALL.XenServer \
 	INSTALL.bridge \
@@ -54,15 +54,23 @@ dist_man_MANS =
 dist_pkgdata_DATA =
 dist_pkgdata_SCRIPTS =
 dist_sbin_SCRIPTS =
+dist_scripts_SCRIPTS =
+INSTALL_DATA_LOCAL =
 man_MANS =
 noinst_DATA =
 noinst_HEADERS =
 noinst_LIBRARIES =
+noinst_man_MANS =
 noinst_PROGRAMS =
 noinst_SCRIPTS =
 OVSIDL_BUILT =
+pkgdata_DATA =
+sbin_SCRIPTS =
+scripts_SCRIPTS =
 SUFFIXES =
 check_DATA =
+
+scriptsdir = $(pkgdatadir)/scripts
 
 # This ensures that files added to EXTRA_DIST are always distributed,
 # even if they are inside an Automake if...endif conditional block that is
@@ -74,6 +82,7 @@ EXTRA_DIST += \
 	soexpand.pl
 
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
+ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
 
 SUFFIXES += .in
 .in:
@@ -85,9 +94,12 @@ SUFFIXES += .in
                 -e 's,[@]PYTHON[@],$(PYTHON),g' \
                 -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
                 -e 's,[@]VERSION[@],$(VERSION),g' \
+                -e 's,[@]BUILDNR[@],$(BUILDNR),g' \
                 -e 's,[@]localstatedir[@],$(localstatedir),g' \
                 -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
                 -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
+                -e 's,[@]bindir[@],$(bindir),g' \
+                -e 's,[@]sbindir[@],$(sbindir),g' \
                 -e 's,[@]abs_top_srcdir[@],$(abs_top_srcdir),g' \
                 -e 's,[@]ovsdbmonitordir[@],$(ovsdbmonitordir),g' \
             > $@.tmp
@@ -139,7 +151,8 @@ rate-limit-check:
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
 clean-local: $(CLEAN_LOCAL)
-.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL)
+install-data-local: $(INSTALL_DATA_LOCAL)
+.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL)
 
 include lib/automake.mk
 include ofproto/automake.mk
@@ -150,5 +163,6 @@ include third-party/automake.mk
 include debian/automake.mk
 include vswitchd/automake.mk
 include ovsdb/automake.mk
+include rhel/automake.mk
 include xenserver/automake.mk
 include python/ovs/automake.mk

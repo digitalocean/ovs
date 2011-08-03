@@ -114,7 +114,7 @@ struct dp_netdev_flow {
     long long int used;         /* Last used time, in monotonic msecs. */
     long long int packet_count; /* Number of packets matched. */
     long long int byte_count;   /* Number of bytes matched. */
-    uint16_t tcp_ctl;           /* Bitwise-OR of seen tcp_ctl values. */
+    ovs_be16 tcp_ctl;           /* Bitwise-OR of seen tcp_ctl values. */
 
     /* Actions. */
     struct nlattr *actions;
@@ -146,7 +146,7 @@ static int do_add_port(struct dp_netdev *, const char *devname,
 static int do_del_port(struct dp_netdev *, uint16_t port_no);
 static int dpif_netdev_open(const struct dpif_class *, const char *name,
                             bool create, struct dpif **);
-static int dp_netdev_output_control(struct dp_netdev *, const struct ofpbuf *,
+static int dp_netdev_output_userspace(struct dp_netdev *, const struct ofpbuf *,
                                     int queue_no, const struct flow *,
                                     uint64_t arg);
 static int dp_netdev_execute_actions(struct dp_netdev *,
@@ -707,8 +707,7 @@ dpif_netdev_validate_actions(const struct nlattr *actions,
             }
             break;
 
-        case ODP_ACTION_ATTR_CONTROLLER:
-        case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
+        case ODP_ACTION_ATTR_USERSPACE:
             break;
 
         case ODP_ACTION_ATTR_SET_DL_TCI:
@@ -944,6 +943,7 @@ dpif_netdev_flow_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
 
 static int
 dpif_netdev_execute(struct dpif *dpif,
+                    const struct nlattr *key_attrs, size_t key_len,
                     const struct nlattr *actions, size_t actions_len,
                     const struct ofpbuf *packet)
 {
@@ -975,7 +975,10 @@ dpif_netdev_execute(struct dpif *dpif,
          * if we don't. */
         copy = *packet;
     }
+
     flow_extract(&copy, 0, -1, &key);
+    dpif_netdev_flow_from_nlattrs(key_attrs, key_len, &key);
+
     error = dp_netdev_execute_actions(dp, &copy, &key, actions, actions_len);
     if (mutates) {
         ofpbuf_uninit(&copy);
@@ -1085,84 +1088,46 @@ dp_netdev_port_input(struct dp_netdev *dp, struct dp_netdev_port *port,
         dp->n_hit++;
     } else {
         dp->n_missed++;
-        dp_netdev_output_control(dp, packet, DPIF_UC_MISS, &key, 0);
+        dp_netdev_output_userspace(dp, packet, DPIF_UC_MISS, &key, 0);
     }
 }
 
 static void
-dp_netdev_run(void)
+dpif_netdev_run(struct dpif *dpif)
 {
-    struct shash_node *node;
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+    struct dp_netdev_port *port;
     struct ofpbuf packet;
 
     ofpbuf_init(&packet, DP_NETDEV_HEADROOM + VLAN_ETH_HEADER_LEN + max_mtu);
-    SHASH_FOR_EACH (node, &dp_netdevs) {
-        struct dp_netdev *dp = node->data;
-        struct dp_netdev_port *port;
 
-        LIST_FOR_EACH (port, node, &dp->port_list) {
-            int error;
+    LIST_FOR_EACH (port, node, &dp->port_list) {
+        int error;
 
-            /* Reset packet contents. */
-            ofpbuf_clear(&packet);
-            ofpbuf_reserve(&packet, DP_NETDEV_HEADROOM);
+        /* Reset packet contents. */
+        ofpbuf_clear(&packet);
+        ofpbuf_reserve(&packet, DP_NETDEV_HEADROOM);
 
-            error = netdev_recv(port->netdev, &packet);
-            if (!error) {
-                dp_netdev_port_input(dp, port, &packet);
-            } else if (error != EAGAIN && error != EOPNOTSUPP) {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-                VLOG_ERR_RL(&rl, "error receiving data from %s: %s",
-                            netdev_get_name(port->netdev), strerror(error));
-            }
+        error = netdev_recv(port->netdev, &packet);
+        if (!error) {
+            dp_netdev_port_input(dp, port, &packet);
+        } else if (error != EAGAIN && error != EOPNOTSUPP) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_ERR_RL(&rl, "error receiving data from %s: %s",
+                        netdev_get_name(port->netdev), strerror(error));
         }
     }
     ofpbuf_uninit(&packet);
 }
 
 static void
-dp_netdev_wait(void)
+dpif_netdev_wait(struct dpif *dpif)
 {
-    struct shash_node *node;
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+    struct dp_netdev_port *port;
 
-    SHASH_FOR_EACH (node, &dp_netdevs) {
-        struct dp_netdev *dp = node->data;
-        struct dp_netdev_port *port;
-
-        LIST_FOR_EACH (port, node, &dp->port_list) {
-            netdev_recv_wait(port->netdev);
-        }
-    }
-}
-
-
-/* Modify the TCI field of 'packet'.  If a VLAN tag is present, its TCI field
- * is replaced by 'tci'.  If a VLAN tag is not present, one is added with the
- * TCI field set to 'tci'.
- */
-static void
-dp_netdev_set_dl_tci(struct ofpbuf *packet, uint16_t tci)
-{
-    struct vlan_eth_header *veh;
-    struct eth_header *eh;
-
-    eh = packet->l2;
-    if (packet->size >= sizeof(struct vlan_eth_header)
-        && eh->eth_type == htons(ETH_TYPE_VLAN)) {
-        veh = packet->l2;
-        veh->veth_tci = tci;
-    } else {
-        /* Insert new 802.1Q header. */
-        struct vlan_eth_header tmp;
-        memcpy(tmp.veth_dst, eh->eth_dst, ETH_ADDR_LEN);
-        memcpy(tmp.veth_src, eh->eth_src, ETH_ADDR_LEN);
-        tmp.veth_type = htons(ETH_TYPE_VLAN);
-        tmp.veth_tci = tci;
-        tmp.veth_next_type = eh->eth_type;
-
-        veh = ofpbuf_push_uninit(packet, VLAN_HEADER_LEN);
-        memcpy(veh, &tmp, sizeof tmp);
-        packet->l2 = (char*)packet->l2 - VLAN_HEADER_LEN;
+    LIST_FOR_EACH (port, node, &dp->port_list) {
+        netdev_recv_wait(port->netdev);
     }
 }
 
@@ -1212,7 +1177,7 @@ dp_netdev_set_nw_addr(struct ofpbuf *packet, const struct flow *key,
         struct ip_header *nh = packet->l3;
         ovs_be32 ip = nl_attr_get_be32(a);
         uint16_t type = nl_attr_type(a);
-        uint32_t *field;
+        ovs_be32 *field;
 
         field = type == ODP_ACTION_ATTR_SET_NW_SRC ? &nh->ip_src : &nh->ip_dst;
         if (key->nw_proto == IPPROTO_TCP && packet->l7) {
@@ -1223,7 +1188,7 @@ dp_netdev_set_nw_addr(struct ofpbuf *packet, const struct flow *key,
             if (uh->udp_csum) {
                 uh->udp_csum = recalc_csum32(uh->udp_csum, *field, ip);
                 if (!uh->udp_csum) {
-                    uh->udp_csum = 0xffff;
+                    uh->udp_csum = htons(0xffff);
                 }
             }
         }
@@ -1256,7 +1221,7 @@ dp_netdev_set_tp_port(struct ofpbuf *packet, const struct flow *key,
 	if (is_ip(packet, key)) {
         uint16_t type = nl_attr_type(a);
         ovs_be16 port = nl_attr_get_be16(a);
-        uint16_t *field;
+        ovs_be16 *field;
 
         if (key->nw_proto == IPPROTO_TCP && packet->l7) {
             struct tcp_header *th = packet->l4;
@@ -1287,7 +1252,7 @@ dp_netdev_output_port(struct dp_netdev *dp, struct ofpbuf *packet,
 }
 
 static int
-dp_netdev_output_control(struct dp_netdev *dp, const struct ofpbuf *packet,
+dp_netdev_output_userspace(struct dp_netdev *dp, const struct ofpbuf *packet,
                          int queue_no, const struct flow *flow, uint64_t arg)
 {
     struct dp_netdev_queue *q = &dp->queues[queue_no];
@@ -1319,34 +1284,6 @@ dp_netdev_output_control(struct dp_netdev *dp, const struct ofpbuf *packet,
     return 0;
 }
 
-/* Returns true if 'packet' is an invalid Ethernet+IPv4 ARP packet: one with
- * screwy or truncated header fields or one whose inner and outer Ethernet
- * address differ. */
-static bool
-dp_netdev_is_spoofed_arp(struct ofpbuf *packet, const struct flow *key)
-{
-    struct arp_eth_header *arp;
-    struct eth_header *eth;
-    ptrdiff_t l3_size;
-
-    if (key->dl_type != htons(ETH_TYPE_ARP)) {
-        return false;
-    }
-
-    l3_size = (char *) ofpbuf_end(packet) - (char *) packet->l3;
-    if (l3_size < sizeof(struct arp_eth_header)) {
-        return true;
-    }
-
-    eth = packet->l2;
-    arp = packet->l3;
-    return (arp->ar_hrd != htons(ARP_HRD_ETHERNET)
-            || arp->ar_pro != htons(ARP_PRO_IP)
-            || arp->ar_hln != ETH_HEADER_LEN
-            || arp->ar_pln != 4
-            || !eth_addr_equals(arp->ar_sha, eth->eth_src));
-}
-
 static int
 dp_netdev_execute_actions(struct dp_netdev *dp,
                           struct ofpbuf *packet, struct flow *key,
@@ -1362,13 +1299,13 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
             dp_netdev_output_port(dp, packet, nl_attr_get_u32(a));
             break;
 
-        case ODP_ACTION_ATTR_CONTROLLER:
-            dp_netdev_output_control(dp, packet, DPIF_UC_ACTION,
+        case ODP_ACTION_ATTR_USERSPACE:
+            dp_netdev_output_userspace(dp, packet, DPIF_UC_ACTION,
                                      key, nl_attr_get_u64(a));
             break;
 
         case ODP_ACTION_ATTR_SET_DL_TCI:
-            dp_netdev_set_dl_tci(packet, nl_attr_get_be16(a));
+            eth_set_vlan_tci(packet, nl_attr_get_be16(a));
             break;
 
         case ODP_ACTION_ATTR_STRIP_VLAN:
@@ -1396,11 +1333,6 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
         case ODP_ACTION_ATTR_SET_TP_DST:
             dp_netdev_set_tp_port(packet, key, a);
             break;
-
-        case ODP_ACTION_ATTR_DROP_SPOOFED_ARP:
-            if (dp_netdev_is_spoofed_arp(packet, key)) {
-                return 0;
-            }
         }
     }
     return 0;
@@ -1408,12 +1340,12 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
 
 const struct dpif_class dpif_netdev_class = {
     "netdev",
-    dp_netdev_run,
-    dp_netdev_wait,
     NULL,                       /* enumerate */
     dpif_netdev_open,
     dpif_netdev_close,
     dpif_netdev_destroy,
+    dpif_netdev_run,
+    dpif_netdev_wait,
     dpif_netdev_get_stats,
     dpif_netdev_get_drop_frags,
     dpif_netdev_set_drop_frags,

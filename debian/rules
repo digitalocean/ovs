@@ -36,7 +36,7 @@ configure-stamp:
 	cd _debian && ( \
 		test -e Makefile || \
 		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
-			--with-build-number=$(BUILD_NUMBER) \
+			--sysconfdir=/etc --with-build-number=$(BUILD_NUMBER) \
 			CFLAGS="$(CFLAGS)" $(DATAPATH_CONFIGURE_OPTS))
 	touch configure-stamp
 
@@ -72,8 +72,9 @@ install: install-indep install-arch
 install-indep: build-indep
 	dh_testdir
 	dh_testroot
-	dh_clean -k -i 
+	dh_prep -i
 	dh_installdirs -i
+	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/tmp install
 	dh_install -i
 	sed 's/^BUILD_NUMBER = .*/BUILD_NUMBER = $(BUILD_NUMBER)/' \
 		< debian/rules.modules \
@@ -84,9 +85,9 @@ install-indep: build-indep
 install-arch: build-arch
 	dh_testdir
 	dh_testroot
-	dh_clean -k -s 
+	dh_prep -s
 	dh_installdirs -s
-	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/openvswitch install
+	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/tmp install
 	cp debian/openvswitch-switch.template debian/openvswitch-switch/usr/share/openvswitch/switch/default.template
 	dh_install -s
 
@@ -107,7 +108,7 @@ binary-common:
 	dh_link
 	dh_strip --dbg-package=openvswitch-dbg
 	dh_compress 
-	dh_fixperms -X var/log/core
+	dh_fixperms
 	dh_pysupport
 	dh_perl
 	dh_makeshlibs

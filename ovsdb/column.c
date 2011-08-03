@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <stdlib.h>
 
 #include "column.h"
+#include "dynamic-string.h"
 #include "json.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
@@ -136,14 +137,14 @@ ovsdb_column_set_clone(struct ovsdb_column_set *new,
 
 struct ovsdb_error *
 ovsdb_column_set_from_json(const struct json *json,
-                           const struct ovsdb_table *table,
+                           const struct ovsdb_table_schema *schema,
                            struct ovsdb_column_set *set)
 {
     ovsdb_column_set_init(set);
     if (!json) {
         struct shash_node *node;
 
-        SHASH_FOR_EACH (node, &table->schema->columns) {
+        SHASH_FOR_EACH (node, &schema->columns) {
             const struct ovsdb_column *column = node->data;
             ovsdb_column_set_add(set, column);
         }
@@ -167,7 +168,7 @@ ovsdb_column_set_from_json(const struct json *json,
             }
 
             s = json->u.array.elems[i]->u.string;
-            column = shash_find_data(&table->schema->columns, s);
+            column = shash_find_data(&schema->columns, s);
             if (!column) {
                 error = ovsdb_syntax_error(json, NULL, "%s is not a valid "
                                            "column name", s);
@@ -201,6 +202,27 @@ ovsdb_column_set_to_json(const struct ovsdb_column_set *set)
         json_array_add(json, json_string_create(set->columns[i]->name));
     }
     return json;
+}
+
+/* Returns an English string listing the contents of 'set', e.g. "columns
+ * \"a\", \"b\", and \"c\"".  The caller must free the string. */
+char *
+ovsdb_column_set_to_string(const struct ovsdb_column_set *set)
+{
+    if (!set->n_columns) {
+        return xstrdup("no columns");
+    } else {
+        struct ds s;
+        size_t i;
+
+        ds_init(&s);
+        ds_put_format(&s, "column%s ", set->n_columns > 1 ? "s" : "");
+        for (i = 0; i < set->n_columns; i++) {
+            const char *delimiter = english_list_delimiter(i, set->n_columns);
+            ds_put_format(&s, "%s\"%s\"", delimiter, set->columns[i]->name);
+        }
+        return ds_steal_cstr(&s);
+    }
 }
 
 void

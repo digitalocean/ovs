@@ -33,7 +33,10 @@
 #endif
 #endif
 
-#ifndef __cplusplus
+#ifdef __CHECKER__
+#define BUILD_ASSERT(EXPR) ((void) 0)
+#define BUILD_ASSERT_DECL(EXPR) extern int (*build_assert(void))[1]
+#elif !defined(__cplusplus)
 /* Build-time assertion building block. */
 #define BUILD_ASSERT__(EXPR) \
         sizeof(struct { unsigned int build_assert_failed : (EXPR) ? 1 : -1; })
@@ -76,6 +79,14 @@ extern const char *program_name;
 #endif
 
 #define NOT_REACHED() abort()
+
+/* Expands to a string that looks like "<file>:<line>", e.g. "tmp.c:10".
+ *
+ * See http://c-faq.com/ansi/stringize.html for an explanation of STRINGIZE and
+ * STRINGIZE2. */
+#define SOURCE_LOCATOR __FILE__ ":" STRINGIZE(__LINE__)
+#define STRINGIZE(ARG) STRINGIZE2(ARG)
+#define STRINGIZE2(ARG) #ARG
 
 /* Given a pointer-typed lvalue OBJECT, expands to a pointer type that may be
  * assigned to OBJECT. */
@@ -175,12 +186,15 @@ bool str_to_double(const char *, double *);
 int hexit_value(int c);
 unsigned int hexits_value(const char *s, size_t n, bool *ok);
 
+const char *english_list_delimiter(size_t index, size_t total);
+
 char *get_cwd(void);
 char *dir_name(const char *file_name);
 char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
 
 void ignore(bool x OVS_UNUSED);
+int log_2_floor(uint32_t n);
 
 #ifdef  __cplusplus
 }

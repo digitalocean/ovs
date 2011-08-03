@@ -26,6 +26,7 @@
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "ofproto.h"
+#include "ofproto-provider.h"
 #include "pktbuf.h"
 #include "poll-loop.h"
 #include "rconn.h"

@@ -44,11 +44,6 @@ controller will remain in the switch's flow table without any matching
 packets being seen.  If \fBpermanent\fR is specified, which is not
 recommended, flows will never expire.  The default is 60 seconds.
 .IP
-This option affects only flows set up by the OpenFlow controller.  In
-some configurations, the switch can set up some flows
-on its own.  To set the idle time for those flows, pass
-\fB\-\-max\-idle\fR to \fBovs\-openflowd\fR (on the switch).
-.IP
 This option has no effect when \fB\-n\fR (or \fB\-\-noflow\fR) is in use
 (because the controller does not set up flows in that case).
 .
@@ -65,12 +60,19 @@ through the controller and every packet is flooded.
 This option is most useful for debugging.  It reduces switching
 performance, so it should not be used in production.
 .
-.IP "\fB\-w\fR"
-.IQ "\fB\-\-wildcard\fR"
+.IP "\fB\-w\fR[\fIwildcard_mask\fR]"
+.IQ "\fB\-\-wildcards\fR[\fB=\fIwildcard_mask\fR]\fR"
 By default, \fBovs\-controller\fR sets up exact-match flows.  This
 option allows it to set up wildcarded flows, which may reduce
-flow-setup latency by causing less traffic to be sent up to the
+flow setup latency by causing less traffic to be sent up to the
 controller.
+.IP
+The optional \fIwildcard_mask\fR is an OpenFlow wildcard bitmask in
+hexadecimal that specifies the fields to wildcard.  If no
+\fIwildcard_mask\fR is specified, the default value 0x2820F0 is used
+which specifies L2-only switching and wildcards L3 and L4 fields.
+Another interesting value is 0x2000EC, which specifies L3-only
+switching and wildcards L2 and L4 fields.
 .IP
 This option has no effect when \fB\-n\fR (or \fB\-\-noflow\fR) is in use
 (because the controller does not set up flows in that case).
@@ -133,6 +135,7 @@ Use this option more than once to add flows from multiple files.
 .SS "Public Key Infrastructure Options"
 .so lib/ssl.man
 .so lib/ssl-peer-ca-cert.man
+.ds DD
 .so lib/daemon.man
 .so lib/vlog.man
 .so lib/unixctl.man
@@ -161,7 +164,6 @@ connection and set the controller, e.g.:
 \-\-peer\-ca\-cert=cacert.pem set\-controller ssl:\fIip\fR
 .SH "SEE ALSO"
 .
-.BR ovs\-openflowd (8),
 .BR ovs\-appctl (8),
 .BR ovs\-ofctl (8),
 .BR ovs\-dpctl (8)

@@ -29,6 +29,7 @@
 #include "tag.h"
 #include "timeval.h"
 #include "util.h"
+#include "vlan-bitmap.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(mac_learning);
@@ -45,9 +46,10 @@ mac_entry_age(const struct mac_entry *e)
 }
 
 static uint32_t
-mac_table_hash(const uint8_t mac[ETH_ADDR_LEN], uint16_t vlan)
+mac_table_hash(const struct mac_learning *ml, const uint8_t mac[ETH_ADDR_LEN],
+               uint16_t vlan)
 {
-    return hash_bytes(mac, ETH_ADDR_LEN, vlan);
+    return hash_bytes(mac, ETH_ADDR_LEN, vlan ^ ml->secret);
 }
 
 static struct mac_entry *
@@ -63,27 +65,18 @@ static tag_type
 make_unknown_mac_tag(const struct mac_learning *ml,
                      const uint8_t mac[ETH_ADDR_LEN], uint16_t vlan)
 {
-    uint32_t h = hash_int(ml->secret, mac_table_hash(mac, vlan));
-    return tag_create_deterministic(h);
-}
-
-static struct list *
-mac_table_bucket(const struct mac_learning *ml,
-                 const uint8_t mac[ETH_ADDR_LEN],
-                 uint16_t vlan)
-{
-    uint32_t hash = mac_table_hash(mac, vlan);
-    const struct list *list = &ml->table[hash & MAC_HASH_BITS];
-    return (struct list *) list;
+    return tag_create_deterministic(mac_table_hash(ml, mac, vlan));
 }
 
 static struct mac_entry *
-search_bucket(struct list *bucket, const uint8_t mac[ETH_ADDR_LEN],
-              uint16_t vlan)
+mac_entry_lookup(const struct mac_learning *ml,
+                 const uint8_t mac[ETH_ADDR_LEN], uint16_t vlan)
 {
     struct mac_entry *e;
-    LIST_FOR_EACH (e, hash_node, bucket) {
-        if (eth_addr_equals(e->mac, mac) && e->vlan == vlan) {
+
+    HMAP_FOR_EACH_WITH_HASH (e, hmap_node, mac_table_hash(ml, mac, vlan),
+                             &ml->table) {
+        if (e->vlan == vlan && eth_addr_equals(e->mac, mac)) {
             return e;
         }
     }
@@ -110,18 +103,10 @@ struct mac_learning *
 mac_learning_create(void)
 {
     struct mac_learning *ml;
-    int i;
 
     ml = xmalloc(sizeof *ml);
     list_init(&ml->lrus);
-    list_init(&ml->free);
-    for (i = 0; i < MAC_HASH_SIZE; i++) {
-        list_init(&ml->table[i]);
-    }
-    for (i = 0; i < MAC_MAX; i++) {
-        struct mac_entry *s = &ml->entries[i];
-        list_push_front(&ml->free, &s->lru_node);
-    }
+    hmap_init(&ml->table);
     ml->secret = random_uint32();
     ml->flood_vlans = NULL;
     return ml;
@@ -132,32 +117,39 @@ void
 mac_learning_destroy(struct mac_learning *ml)
 {
     if (ml) {
+        struct mac_entry *e, *next;
+
+        HMAP_FOR_EACH_SAFE (e, next, hmap_node, &ml->table) {
+            hmap_remove(&ml->table, &e->hmap_node);
+            free(e);
+        }
+        hmap_destroy(&ml->table);
+
         bitmap_free(ml->flood_vlans);
+        free(ml);
     }
-    free(ml);
 }
 
 /* Provides a bitmap of VLANs which have learning disabled, that is, VLANs on
- * which all packets are flooded.  It takes ownership of the bitmap.  Returns
- * true if the set has changed from the previous value. */
+ * which all packets are flooded.  Returns true if the set has changed from the
+ * previous value. */
 bool
-mac_learning_set_flood_vlans(struct mac_learning *ml, unsigned long *bitmap)
+mac_learning_set_flood_vlans(struct mac_learning *ml,
+                             const unsigned long *bitmap)
 {
-    bool ret = (bitmap == NULL
-                ? ml->flood_vlans != NULL
-                : (ml->flood_vlans == NULL
-                   || !bitmap_equal(bitmap, ml->flood_vlans, 4096)));
-
-    bitmap_free(ml->flood_vlans);
-    ml->flood_vlans = bitmap;
-
-    return ret;
+    if (vlan_bitmap_equal(ml->flood_vlans, bitmap)) {
+        return false;
+    } else {
+        bitmap_free(ml->flood_vlans);
+        ml->flood_vlans = vlan_bitmap_clone(bitmap);
+        return true;
+    }
 }
 
 static bool
 is_learning_vlan(const struct mac_learning *ml, uint16_t vlan)
 {
-    return !(ml->flood_vlans && bitmap_is_set(ml->flood_vlans, vlan));
+    return !ml->flood_vlans || !bitmap_is_set(ml->flood_vlans, vlan);
 }
 
 /* Returns true if 'src_mac' may be learned on 'vlan' for 'ml'.
@@ -185,26 +177,27 @@ mac_learning_insert(struct mac_learning *ml,
                     const uint8_t src_mac[ETH_ADDR_LEN], uint16_t vlan)
 {
     struct mac_entry *e;
-    struct list *bucket;
 
-    bucket = mac_table_bucket(ml, src_mac, vlan);
-    e = search_bucket(bucket, src_mac, vlan);
+    e = mac_entry_lookup(ml, src_mac, vlan);
     if (!e) {
-        if (!list_is_empty(&ml->free)) {
-            e = mac_entry_from_lru_node(ml->free.next);
-        } else {
-            e = mac_entry_from_lru_node(ml->lrus.next);
-            list_remove(&e->hash_node);
+        uint32_t hash = mac_table_hash(ml, src_mac, vlan);
+
+        if (hmap_count(&ml->table) >= MAC_MAX) {
+            get_lru(ml, &e);
+            mac_learning_expire(ml, e);
         }
-        list_push_front(bucket, &e->hash_node);
+
+        e = xmalloc(sizeof *e);
+        hmap_insert(&ml->table, &e->hmap_node, hash);
         memcpy(e->mac, src_mac, ETH_ADDR_LEN);
         e->vlan = vlan;
         e->tag = 0;
         e->grat_arp_lock = TIME_MIN;
+    } else {
+        list_remove(&e->lru_node);
     }
 
     /* Mark 'e' as recently used. */
-    list_remove(&e->lru_node);
     list_push_back(&ml->lrus, &e->lru_node);
     e->expires = time_now() + MAC_ENTRY_IDLE_TIME;
 
@@ -247,8 +240,8 @@ mac_learning_lookup(const struct mac_learning *ml,
          * rarely that we revalidate every flow when it changes. */
         return NULL;
     } else {
-        struct mac_entry *e = search_bucket(mac_table_bucket(ml, dst, vlan),
-                                            dst, vlan);
+        struct mac_entry *e = mac_entry_lookup(ml, dst, vlan);
+
         assert(e == NULL || e->tag != 0);
         if (tag) {
             /* Tag either the learned port or the lack thereof. */
@@ -258,14 +251,13 @@ mac_learning_lookup(const struct mac_learning *ml,
     }
 }
 
-/* Expires 'e' from the 'ml' hash table.  'e' must not already be on the free
- * list. */
+/* Expires 'e' from the 'ml' hash table. */
 void
 mac_learning_expire(struct mac_learning *ml, struct mac_entry *e)
 {
-    list_remove(&e->hash_node);
+    hmap_remove(&ml->table, &e->hmap_node);
     list_remove(&e->lru_node);
-    list_push_front(&ml->free, &e->lru_node);
+    free(e);
 }
 
 /* Expires all the mac-learning entries in 'ml'.  The tags in 'ml' are
@@ -278,6 +270,7 @@ mac_learning_flush(struct mac_learning *ml)
     while (get_lru(ml, &e)){
         mac_learning_expire(ml, e);
     }
+    hmap_shrink(&ml->table);
 }
 
 void

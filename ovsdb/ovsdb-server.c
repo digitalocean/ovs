@@ -15,8 +15,7 @@
 
 #include <config.h>
 
-#include "ovsdb.h"
-
+#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
@@ -25,12 +24,15 @@
 #include "column.h"
 #include "command-line.h"
 #include "daemon.h"
+#include "dirs.h"
 #include "file.h"
+#include "hash.h"
 #include "json.h"
 #include "jsonrpc.h"
 #include "jsonrpc-server.h"
 #include "leak-checker.h"
 #include "list.h"
+#include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-types.h"
 #include "ovsdb-error.h"
@@ -51,13 +53,11 @@
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_server);
 
-#if HAVE_OPENSSL
 /* SSL configuration. */
 static char *private_key_file;
 static char *certificate_file;
 static char *ca_cert_file;
 static bool bootstrap_ca_cert;
-#endif
 
 static unixctl_cb_func ovsdb_server_exit;
 static unixctl_cb_func ovsdb_server_compact;
@@ -107,6 +107,7 @@ main(int argc, char *argv[])
     if (error) {
         ovs_fatal(0, "%s", ovsdb_error_to_string(error));
     }
+    free(file_name);
 
     jsonrpc = ovsdb_jsonrpc_server_create(db);
     reconfigure_from_db(jsonrpc, db, &remotes);
@@ -346,7 +347,7 @@ read_string_column(const struct ovsdb_row *row, const char *column_name,
     const union ovsdb_atom *atom;
 
     atom = read_column(row, column_name, OVSDB_TYPE_STRING);
-    *stringp = atom ? atom->string : 0;
+    *stringp = atom ? atom->string : NULL;
     return atom != NULL;
 }
 
@@ -463,12 +464,12 @@ query_db_remotes(const char *name, const struct ovsdb *db,
 
 static void
 update_remote_row(const struct ovsdb_row *row, struct ovsdb_txn *txn,
-                  const struct shash *statuses)
+                  const struct ovsdb_jsonrpc_server *jsonrpc)
 {
+    struct ovsdb_jsonrpc_remote_status status;
     struct ovsdb_row *rw_row;
     const char *target;
-    const struct ovsdb_jsonrpc_remote_status *status;
-    char *keys[4], *values[4];
+    char *keys[8], *values[8];
     size_t n = 0;
 
     /* Get the "target" (protocol/host/port) spec. */
@@ -476,43 +477,54 @@ update_remote_row(const struct ovsdb_row *row, struct ovsdb_txn *txn,
         /* Bad remote spec or incorrect schema. */
         return;
     }
-
-    /* Prepare to modify this row. */
     rw_row = ovsdb_txn_row_modify(txn, row);
-
-    /* Find status information for this target. */
-    status = shash_find_data(statuses, target);
-    if (!status) {
-        /* Should never happen, but just in case... */
-        return;
-    }
+    ovsdb_jsonrpc_server_get_remote_status(jsonrpc, target, &status);
 
     /* Update status information columns. */
+    write_bool_column(rw_row, "is_connected", status.is_connected);
 
-    write_bool_column(rw_row, "is_connected",
-                      status->is_connected);
-
-    keys[n] = xstrdup("state");
-    values[n++] = xstrdup(status->state);
-    if (status->sec_since_connect != UINT_MAX) {
+    if (status.state) {
+        keys[n] = xstrdup("state");
+        values[n++] = xstrdup(status.state);
+    }
+    if (status.sec_since_connect != UINT_MAX) {
         keys[n] = xstrdup("sec_since_connect");
-        values[n++] = xasprintf("%u", status->sec_since_connect);
+        values[n++] = xasprintf("%u", status.sec_since_connect);
     }
-    if (status->sec_since_disconnect != UINT_MAX) {
+    if (status.sec_since_disconnect != UINT_MAX) {
         keys[n] = xstrdup("sec_since_disconnect");
-        values[n++] = xasprintf("%u", status->sec_since_disconnect);
+        values[n++] = xasprintf("%u", status.sec_since_disconnect);
     }
-    if (status->last_error) {
+    if (status.last_error) {
         keys[n] = xstrdup("last_error");
         values[n++] =
-            xstrdup(ovs_retval_to_string(status->last_error));
+            xstrdup(ovs_retval_to_string(status.last_error));
+    }
+    if (status.locks_held && status.locks_held[0]) {
+        keys[n] = xstrdup("locks_held");
+        values[n++] = xstrdup(status.locks_held);
+    }
+    if (status.locks_waiting && status.locks_waiting[0]) {
+        keys[n] = xstrdup("locks_waiting");
+        values[n++] = xstrdup(status.locks_waiting);
+    }
+    if (status.locks_lost && status.locks_lost[0]) {
+        keys[n] = xstrdup("locks_lost");
+        values[n++] = xstrdup(status.locks_lost);
+    }
+    if (status.n_connections > 1) {
+        keys[n] = xstrdup("n_connections");
+        values[n++] = xasprintf("%d", status.n_connections);
     }
     write_string_string_column(rw_row, "status", keys, values, n);
+
+    ovsdb_jsonrpc_server_free_remote_status(&status);
 }
 
 static void
 update_remote_rows(const struct ovsdb *db, struct ovsdb_txn *txn,
-                   const char *remote_name, const struct shash *statuses)
+                   const char *remote_name,
+                   const struct ovsdb_jsonrpc_server *jsonrpc)
 {
     const struct ovsdb_table *table, *ref_table;
     const struct ovsdb_column *column;
@@ -542,7 +554,7 @@ update_remote_rows(const struct ovsdb *db, struct ovsdb_txn *txn,
 
             ref_row = ovsdb_table_get_row(ref_table, &datum->keys[i].uuid);
             if (ref_row) {
-                update_remote_row(ref_row, txn, statuses);
+                update_remote_row(ref_row, txn, jsonrpc);
             }
         }
     }
@@ -553,20 +565,16 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
                      const struct sset *remotes, struct ovsdb *db)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-    struct shash statuses;
     struct ovsdb_txn *txn;
     const bool durable_txn = false;
     struct ovsdb_error *error;
     const char *remote;
 
-    /* Get status of current connections. */
-    ovsdb_jsonrpc_server_get_remote_status(jsonrpc, &statuses);
-
     txn = ovsdb_txn_create(db);
 
     /* Iterate over --remote arguments given on command line. */
     SSET_FOR_EACH (remote, remotes) {
-        update_remote_rows(db, txn, remote, &statuses);
+        update_remote_rows(db, txn, remote, jsonrpc);
     }
 
     error = ovsdb_txn_commit(txn, durable_txn);
@@ -574,8 +582,6 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
         VLOG_ERR_RL(&rl, "Failed to update remote status: %s",
                     ovsdb_error_to_string(error));
     }
-
-    shash_destroy_free_data(&statuses);
 }
 
 /* Reconfigures ovsdb-server based on information in the database. */
@@ -598,13 +604,11 @@ reconfigure_from_db(struct ovsdb_jsonrpc_server *jsonrpc,
     ovsdb_jsonrpc_server_set_remotes(jsonrpc, &resolved_remotes);
     shash_destroy_free_data(&resolved_remotes);
 
-#if HAVE_OPENSSL
     /* Configure SSL. */
     stream_ssl_set_key_and_cert(query_db_string(db, private_key_file),
                                 query_db_string(db, certificate_file));
     stream_ssl_set_ca_cert_file(query_db_string(db, ca_cert_file),
                                 bootstrap_ca_cert);
-#endif
 }
 
 static void
@@ -663,21 +667,19 @@ parse_options(int argc, char *argv[], char **file_namep,
         DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
-        {"remote",      required_argument, 0, OPT_REMOTE},
-        {"unixctl",     required_argument, 0, OPT_UNIXCTL},
-        {"run",         required_argument, 0, OPT_RUN},
-        {"help",        no_argument, 0, 'h'},
-        {"version",     no_argument, 0, 'V'},
+        {"remote",      required_argument, NULL, OPT_REMOTE},
+        {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
+        {"run",         required_argument, NULL, OPT_RUN},
+        {"help",        no_argument, NULL, 'h'},
+        {"version",     no_argument, NULL, 'V'},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         LEAK_CHECKER_LONG_OPTIONS,
-#ifdef HAVE_OPENSSL
-        {"bootstrap-ca-cert", required_argument, 0, OPT_BOOTSTRAP_CA_CERT},
-        {"private-key", required_argument, 0, 'p'},
-        {"certificate", required_argument, 0, 'c'},
-        {"ca-cert",     required_argument, 0, 'C'},
-#endif
-        {0, 0, 0, 0},
+        {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"private-key", required_argument, NULL, 'p'},
+        {"certificate", required_argument, NULL, 'c'},
+        {"ca-cert",     required_argument, NULL, 'C'},
+        {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
 
@@ -714,7 +716,6 @@ parse_options(int argc, char *argv[], char **file_namep,
         DAEMON_OPTION_HANDLERS
         LEAK_CHECKER_OPTION_HANDLERS
 
-#ifdef HAVE_OPENSSL
         case 'p':
             private_key_file = optarg;
             break;
@@ -732,7 +733,6 @@ parse_options(int argc, char *argv[], char **file_namep,
             ca_cert_file = optarg;
             bootstrap_ca_cert = true;
             break;
-#endif
 
         case '?':
             exit(EXIT_FAILURE);
@@ -746,14 +746,19 @@ parse_options(int argc, char *argv[], char **file_namep,
     argc -= optind;
     argv += optind;
 
-    if (argc > 1) {
+    switch (argc) {
+    case 0:
+        *file_namep = xasprintf("%s/openvswitch/conf.db", ovs_sysconfdir());
+        break;
+
+    case 1:
+        *file_namep = xstrdup(argv[0]);
+        break;
+
+    default:
         ovs_fatal(0, "database file is only non-option argument; "
                 "use --help for usage");
-    } else if (argc < 1) {
-        ovs_fatal(0, "missing database file argument; use --help for usage");
     }
-
-    *file_namep = argv[0];
 }
 
 static void

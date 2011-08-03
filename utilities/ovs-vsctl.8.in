@@ -153,6 +153,9 @@ Any successful \fBovs\-vsctl\fR command automatically initializes the
 Open vSwitch database if it is empty.  This command is provided to
 initialize the database without executing any other command.
 .
+.IP "\fBshow\fR"
+Prints a brief overview of the database contents.
+.
 .IP "\fBemer\-reset\fR"
 Reset the configuration into a clean state.  It deconfigures OpenFlow
 controllers, OVSDB servers, and SSL, and deletes port mirroring,
@@ -169,8 +172,8 @@ Creates a new bridge named \fIbridge\fR.  Initially the bridge will
 have no ports (other than \fIbridge\fR itself).
 .IP
 Without \fB\-\-may\-exist\fR, attempting to create a bridge that
-exists is an error.  With \fB\-\-may\-exist\fR, \fIbridge\fR may
-already exist (but it must be a real bridge, not a VLAN bridge).
+exists is an error.  With \fB\-\-may\-exist\fR, this command does
+nothing if \fIbridge\fR already exists as a real bridge.
 .
 .IP "[\fB\-\-may\-exist\fR] \fBadd\-br \fIbridge parent vlan\fR"
 Creates a ``fake bridge'' named \fIbridge\fR within the existing Open
@@ -180,9 +183,9 @@ itself be a fake bridge.  The new fake bridge will be on 802.1Q VLAN
 \fIbridge\fR will have no ports (other than \fIbridge\fR itself).
 .IP
 Without \fB\-\-may\-exist\fR, attempting to create a bridge that
-exists is an error.  With \fB\-\-may\-exist\fR, \fIbridge\fR may
-already exist (but it must have the specified \fIvlan\fR and
-\fIparent\fR).
+exists is an error.  With \fB\-\-may\-exist\fR, this command does
+nothing if \fIbridge\fR already exists as a VLAN bridge under
+\fIparent\fR for \fIvlan\fR.
 .
 .IP "[\fB\-\-if\-exists\fR] \fBdel\-br \fIbridge\fR"
 Deletes \fIbridge\fR and all of its ports.  If \fIbridge\fR is a real
@@ -258,8 +261,8 @@ port for VLAN 9.  The syntax is the same as that for the \fBset\fR
 command (see \fBDatabase Commands\fR below).
 .IP
 Without \fB\-\-may\-exist\fR, attempting to create a port that exists
-is an error.  With \fB\-\-may\-exist\fR, \fIport\fR may already exist
-(but it must be on \fIbridge\fR and not be a bonded port).
+is an error.  With \fB\-\-may\-exist\fR, this command does nothing if
+\fIport\fR already exists on \fIbridge\fR and is not a bonded port.
 .
 .IP "[\fB\-\-fake\-iface\fR] \fBadd\-bond \fIbridge port iface\fR\&... [\fIcolumn\fR[\fB:\fIkey\fR]\fR=\fIvalue\fR]\&...\fR"
 Creates on \fIbridge\fR a new port named \fIport\fR that bonds
@@ -275,9 +278,9 @@ created.  This should only be used for compatibility with legacy
 software that requires it.
 .IP
 Without \fB\-\-may\-exist\fR, attempting to create a port that exists
-is an error.  With \fB\-\-may\-exist\fR, \fIport\fR may already exist
-(but it must be on \fIbridge\fR and bond together exactly the
-specified interface).
+is an error.  With \fB\-\-may\-exist\fR, this command does nothing if
+\fIport\fR already exists on \fIbridge\fR and bonds together exactly
+the specified interfaces.
 .
 .IP "[\fB\-\-if\-exists\fR] \fBdel\-port \fR[\fIbridge\fR] \fIport\fR"
 Deletes \fIport\fR.  If \fIbridge\fR is omitted, \fIport\fR is removed
@@ -483,11 +486,6 @@ identified by port name.
 .IP "\fBQueue\fR"
 Configuration for one queue within a \fBQoS\fR configuration.  Records
 may only be identified by UUID.
-.IP "\fBMonitor\fR"
-Connectivity Monitoring attached to an \fBInterface\fR.  Records may be
-identified by \fBInterface\fR name.
-.IP "\fBMaintenance_Point\fR"
-Maintenance Point managed by a \fBMonitor\fR.
 .IP "\fBMirror\fR"
 A port mirroring configuration attached to a bridge.  Records may be
 identified by mirror name.
@@ -596,6 +594,11 @@ For a map column, without \fB\-\-if\-exists\fR it is an error if
 If \fB@\fIname\fR is specified, then the UUID for \fIrecord\fR may be
 referred to by that name later in the same \fBovs\-vsctl\fR
 invocation in contexts where a UUID is expected.
+.IP
+Both \fB\-\-id\fR and the \fIcolumn\fR arguments are optional, but
+usually at least one or the other should be specified.  If both are
+omitted, then \fBget\fR has no effect except to verify that
+\fIrecord\fR exists in \fItable\fR.
 .
 .IP "\fBset \fItable record column\fR[\fB:\fIkey\fR]\fB=\fIvalue\fR..."
 Sets the value of each specified \fIcolumn\fR in the given
@@ -691,6 +694,9 @@ initially connects to the database.
 Consider specifying \fB\-\-timeout=0\fR along with
 \fB\-\-wait\-until\fR, to prevent \fBovs\-vsctl\fR from terminating
 after waiting only at most 5 seconds.
+.IP "\fBcomment \fR[\fIarg\fR]..."
+This command has no effect on behavior, but any database log record
+created by the command will include the command and its arguments.
 .SH "EXAMPLES"
 Create a new bridge named br0 and add port eth0 to it:
 .IP
@@ -778,19 +784,13 @@ their UUIDs, then "\fBovs\-vsctl destroy Queue \fIuuid1\fR
 \fIuuid2\fR" to destroy each of them.)
 .SS "Connectivity Monitoring"
 .PP
-Create a Monitor which manages a couple of remote Maintenance Points on eth0.
+Monitor connectivity to a remote maintenance point on eth0.
 .IP
-.B "ovs\-vsctl \-\- set Interface eth0 Monitor=@newmon \(rs"
-.IP
-.B "\-\- \-\-id=@newmon create Monitor mpid=1 remote_mps=@mp2,@mp3 \(rs"
-.IP
-.B "\-\- \-\-id=@mp2 create Maintenance_Point mpid=2 \(rs"
-.IP
-.B "\-\- \-\-id=@mp3 create Maintenance_Point mpid=3"
+.B "ovs\-vsctl set Interface eth0 cfm_mpid=1 cfm_remote_mpid=2"
 .PP
-Deconfigure the Monitor record from above:
+Deconfigure connectivity monitoring from above:
 .IP
-.B "ovs\-vsctl clear Interface eth0 Monitor"
+.B "ovs\-vsctl clear Interface eth0 cfm_mpid cfm_remote_mpid"
 .SS "NetFlow"
 .PP
 Configure bridge \fBbr0\fR to send NetFlow records to UDP port 5566 on

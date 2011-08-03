@@ -6,6 +6,9 @@ EXTRA_DIST += \
 	debian/copyright \
 	debian/copyright.in \
 	debian/dirs \
+	debian/openvswitch-brcompat.install \
+	debian/openvswitch-brcompat.manpages \
+	debian/openvswitch-brcompat.postinst \
 	debian/openvswitch-common.dirs \
 	debian/openvswitch-common.install \
 	debian/openvswitch-common.manpages \
@@ -34,13 +37,14 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
 	debian/openvswitch-switch.template \
-	debian/ovs-bugtool \
-	debian/ovs-bugtool.8 \
+	debian/ovsdbmonitor.install \
+	debian/ovsdbmonitor.manpages \
 	debian/ovs-monitor-ipsec \
 	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install \
 	debian/rules \
-	debian/rules.modules
+	debian/rules.modules \
+	debian/source/format
 
 check-debian-changelog-version:
 	@DEB_VERSION=`echo '$(VERSION)' | sed 's/pre/~pre/'`;		     \

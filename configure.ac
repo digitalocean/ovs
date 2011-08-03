@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.1.1, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 1.2.0, ovs-bugs@openvswitch.org)
 NX_BUILDNR
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -61,6 +61,7 @@ AC_CHECK_HEADERS([mntent.h sys/statvfs.h])
 
 OVS_CHECK_PKIDIR
 OVS_CHECK_RUNDIR
+OVS_CHECK_BACKTRACE
 OVS_CHECK_MALLOC_HOOKS
 OVS_CHECK_VALGRIND
 OVS_CHECK_SOCKET_LIBS
@@ -84,21 +85,24 @@ OVS_ENABLE_OPTION([-Wmissing-field-initializers])
 OVS_ENABLE_OPTION([-Wno-override-init])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused], [HAVE_WNO_UNUSED])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused-parameter], [HAVE_WNO_UNUSED_PARAMETER])
+OVS_ENABLE_WERROR
+OVS_ENABLE_SPARSE
 
 AC_ARG_VAR(KARCH, [Kernel Architecture String])
 AC_SUBST(KARCH)
-OVS_CHECK_LINUX26
+OVS_CHECK_LINUX
 
 AC_CONFIG_FILES([Makefile 
 datapath/Makefile 
-datapath/linux-2.6/Kbuild
-datapath/linux-2.6/Makefile
-datapath/linux-2.6/Makefile.main
+datapath/linux/Kbuild
+datapath/linux/Makefile
+datapath/linux/Makefile.main
 tests/atlocal])
 
 dnl This makes sure that include/openflow gets created in the build directory.
 AC_CONFIG_COMMANDS([include/openflow/openflow.h.stamp])
 
 AC_CONFIG_COMMANDS([ovsdb/ovsdbmonitor/dummy], [:])
+AC_CONFIG_COMMANDS([utilities/bugtool/dummy], [:])
 
 AC_OUTPUT

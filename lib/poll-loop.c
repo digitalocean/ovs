@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,13 +22,18 @@
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
-#include "backtrace.h"
 #include "coverage.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "list.h"
+#include "socket-util.h"
 #include "timeval.h"
 #include "vlog.h"
+
+#undef poll_fd_wait
+#undef poll_timer_wait
+#undef poll_timer_wait_until
+#undef poll_immediate_wake
 
 VLOG_DEFINE_THIS_MODULE(poll_loop);
 
@@ -41,7 +46,7 @@ struct poll_waiter {
     struct list node;           /* Element in global waiters list. */
     int fd;                     /* File descriptor. */
     short int events;           /* Events to wait for (POLLIN, POLLOUT). */
-    struct backtrace *backtrace; /* Optionally, event that created waiter. */
+    const char *where;          /* Where the waiter was created. */
 
     /* Set only when poll_block() is called. */
     struct pollfd *pollfd;      /* Pointer to element of the pollfds array. */
@@ -57,10 +62,11 @@ static size_t n_waiters;
  * wait forever. */
 static int timeout = -1;
 
-/* Backtrace of 'timeout''s registration, if debugging is enabled. */
-static struct backtrace timeout_backtrace;
+/* Location where waiter created. */
+static const char *timeout_where;
 
-static struct poll_waiter *new_waiter(int fd, short int events);
+static struct poll_waiter *new_waiter(int fd, short int events,
+                                      const char *where);
 
 /* Registers 'fd' as waiting for the specified 'events' (which should be POLLIN
  * or POLLOUT or POLLIN | POLLOUT).  The following call to poll_block() will
@@ -68,23 +74,24 @@ static struct poll_waiter *new_waiter(int fd, short int events);
  *
  * The event registration is one-shot: only the following call to poll_block()
  * is affected.  The event will need to be re-registered after poll_block() is
- * called if it is to persist. */
+ * called if it is to persist.
+ *
+ * Ordinarily the 'where' argument is supplied automatically; see poll-loop.h
+ * for more information. */
 struct poll_waiter *
-poll_fd_wait(int fd, short int events)
+poll_fd_wait(int fd, short int events, const char *where)
 {
     COVERAGE_INC(poll_fd_wait);
-    return new_waiter(fd, events);
+    return new_waiter(fd, events, where);
 }
 
 /* The caller must ensure that 'msec' is not negative. */
 static void
-poll_timer_wait__(int msec)
+poll_timer_wait__(int msec, const char *where)
 {
     if (timeout < 0 || msec < timeout) {
         timeout = msec;
-        if (VLOG_IS_DBG_ENABLED()) {
-            backtrace_capture(&timeout_backtrace);
-        }
+        timeout_where = where;
     }
 }
 
@@ -94,13 +101,17 @@ poll_timer_wait__(int msec)
  *
  * The timer registration is one-shot: only the following call to poll_block()
  * is affected.  The timer will need to be re-registered after poll_block() is
- * called if it is to persist. */
+ * called if it is to persist.
+ *
+ * Ordinarily the 'where' argument is supplied automatically; see poll-loop.h
+ * for more information. */
 void
-poll_timer_wait(long long int msec)
+poll_timer_wait(long long int msec, const char *where)
 {
-    poll_timer_wait__(msec < 0 ? 0
-                      : msec > INT_MAX ? INT_MAX
-                      : msec);
+    poll_timer_wait__((msec < 0 ? 0
+                       : msec > INT_MAX ? INT_MAX
+                       : msec),
+                      where);
 }
 
 /* Causes the following call to poll_block() to wake up when the current time,
@@ -110,45 +121,90 @@ poll_timer_wait(long long int msec)
  *
  * The timer registration is one-shot: only the following call to poll_block()
  * is affected.  The timer will need to be re-registered after poll_block() is
- * called if it is to persist. */
+ * called if it is to persist.
+ *
+ * Ordinarily the 'where' argument is supplied automatically; see poll-loop.h
+ * for more information. */
 void
-poll_timer_wait_until(long long int msec)
+poll_timer_wait_until(long long int msec, const char *where)
 {
     long long int now = time_msec();
-    poll_timer_wait__(msec <= now ? 0
-                      : msec < now + INT_MAX ? msec - now
-                      : INT_MAX);
+    poll_timer_wait__((msec <= now ? 0
+                       : msec < now + INT_MAX ? msec - now
+                       : INT_MAX),
+                      where);
 }
 
 /* Causes the following call to poll_block() to wake up immediately, without
- * blocking. */
+ * blocking.
+ *
+ * Ordinarily the 'where' argument is supplied automatically; see poll-loop.h
+ * for more information. */
 void
-poll_immediate_wake(void)
+poll_immediate_wake(const char *where)
 {
-    poll_timer_wait(0);
+    poll_timer_wait(0, where);
 }
 
-static void PRINTF_FORMAT(2, 3)
-log_wakeup(const struct backtrace *backtrace, const char *format, ...)
+/* Logs, if appropriate, that the poll loop was awakened by an event
+ * registered at 'where' (typically a source file and line number).  The other
+ * arguments have two possible interpretations:
+ *
+ *   - If 'pollfd' is nonnull then it should be the "struct pollfd" that caused
+ *     the wakeup.  'timeout' is ignored.
+ *
+ *   - If 'pollfd' is NULL then 'timeout' is the number of milliseconds after
+ *     which the poll loop woke up.
+ */
+static void
+log_wakeup(const char *where, const struct pollfd *pollfd, int timeout)
 {
-    struct ds ds;
-    va_list args;
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(120, 120);
+    enum vlog_level level;
+    int cpu_usage;
+    struct ds s;
 
-    ds_init(&ds);
-    va_start(args, format);
-    ds_put_format_valist(&ds, format, args);
-    va_end(args);
-
-    if (backtrace) {
-        int i;
-
-        ds_put_char(&ds, ':');
-        for (i = 0; i < backtrace->n_frames; i++) {
-            ds_put_format(&ds, " 0x%"PRIxPTR, backtrace->frames[i]);
-        }
+    cpu_usage = get_cpu_usage();
+    if (VLOG_IS_DBG_ENABLED()) {
+        level = VLL_DBG;
+    } else if (cpu_usage > 50 && !VLOG_DROP_WARN(&rl)) {
+        level = VLL_WARN;
+    } else {
+        return;
     }
-    VLOG_DBG("%s", ds_cstr(&ds));
-    ds_destroy(&ds);
+
+    ds_init(&s);
+    ds_put_cstr(&s, "wakeup due to ");
+    if (pollfd) {
+        char *description = describe_fd(pollfd->fd);
+        if (pollfd->revents & POLLIN) {
+            ds_put_cstr(&s, "[POLLIN]");
+        }
+        if (pollfd->revents & POLLOUT) {
+            ds_put_cstr(&s, "[POLLOUT]");
+        }
+        if (pollfd->revents & POLLERR) {
+            ds_put_cstr(&s, "[POLLERR]");
+        }
+        if (pollfd->revents & POLLHUP) {
+            ds_put_cstr(&s, "[POLLHUP]");
+        }
+        if (pollfd->revents & POLLNVAL) {
+            ds_put_cstr(&s, "[POLLNVAL]");
+        }
+        ds_put_format(&s, " on fd %d (%s)", pollfd->fd, description);
+        free(description);
+    } else {
+        ds_put_format(&s, "%d-ms timeout", timeout);
+    }
+    if (where) {
+        ds_put_format(&s, " at %s", where);
+    }
+    if (cpu_usage >= 0) {
+        ds_put_format(&s, " (%d%% CPU usage)", cpu_usage);
+    }
+    VLOG(level, "%s", ds_cstr(&s));
+    ds_destroy(&s);
 }
 
 /* Blocks until one or more of the events registered with poll_fd_wait()
@@ -189,25 +245,19 @@ poll_block(void)
     if (retval < 0) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_ERR_RL(&rl, "poll: %s", strerror(-retval));
-    } else if (!retval && VLOG_IS_DBG_ENABLED()) {
-        log_wakeup(&timeout_backtrace, "%d-ms timeout", timeout);
+    } else if (!retval) {
+        log_wakeup(timeout_where, NULL, timeout);
     }
 
     LIST_FOR_EACH_SAFE (pw, next, node, &waiters) {
-        if (pw->pollfd->revents && VLOG_IS_DBG_ENABLED()) {
-            log_wakeup(pw->backtrace, "%s%s%s%s%s on fd %d",
-                       pw->pollfd->revents & POLLIN ? "[POLLIN]" : "",
-                       pw->pollfd->revents & POLLOUT ? "[POLLOUT]" : "",
-                       pw->pollfd->revents & POLLERR ? "[POLLERR]" : "",
-                       pw->pollfd->revents & POLLHUP ? "[POLLHUP]" : "",
-                       pw->pollfd->revents & POLLNVAL ? "[POLLNVAL]" : "",
-                       pw->fd);
+        if (pw->pollfd->revents) {
+            log_wakeup(pw->where, pw->pollfd, 0);
         }
         poll_cancel(pw);
     }
 
     timeout = -1;
-    timeout_backtrace.n_frames = 0;
+    timeout_where = NULL;
 
     /* Handle any pending signals before doing anything else. */
     fatal_signal_run();
@@ -224,7 +274,6 @@ poll_cancel(struct poll_waiter *pw)
 {
     if (pw) {
         list_remove(&pw->node);
-        free(pw->backtrace);
         free(pw);
         n_waiters--;
     }
@@ -232,16 +281,13 @@ poll_cancel(struct poll_waiter *pw)
 
 /* Creates and returns a new poll_waiter for 'fd' and 'events'. */
 static struct poll_waiter *
-new_waiter(int fd, short int events)
+new_waiter(int fd, short int events, const char *where)
 {
     struct poll_waiter *waiter = xzalloc(sizeof *waiter);
     assert(fd >= 0);
     waiter->fd = fd;
     waiter->events = events;
-    if (VLOG_IS_DBG_ENABLED()) {
-        waiter->backtrace = xmalloc(sizeof *waiter->backtrace);
-        backtrace_capture(waiter->backtrace);
-    }
+    waiter->where = where;
     list_push_back(&waiters, &waiter->node);
     n_waiters++;
     return waiter;

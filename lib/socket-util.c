@@ -19,6 +19,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <poll.h>
 #include <stddef.h>
@@ -30,9 +31,18 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include "dynamic-string.h"
 #include "fatal-signal.h"
+#include "packets.h"
 #include "util.h"
 #include "vlog.h"
+#if AF_PACKET && __linux__
+#include <linux/if_packet.h>
+#endif
+#ifdef HAVE_NETLINK
+#include "netlink-protocol.h"
+#include "netlink-socket.h"
+#endif
 
 VLOG_DEFINE_THIS_MODULE(socket_util);
 
@@ -133,6 +143,37 @@ lookup_ipv6(const char *host_name, struct in6_addr *addr)
         return ENOENT;
     }
     return 0;
+}
+
+/* Translates 'host_name', which must be a host name or a string representation
+ * of an IP address, into a numeric IP address in '*addr'.  Returns 0 if
+ * successful, otherwise a positive errno value.
+ *
+ * Most Open vSwitch code should not use this because it causes deadlocks:
+ * gethostbyname() sends out a DNS request but that starts a new flow for which
+ * OVS must set up a flow, but it can't because it's waiting for a DNS reply.
+ * The synchronous lookup also delays other activty.  (Of course we can solve
+ * this but it doesn't seem worthwhile quite yet.)  */
+int
+lookup_hostname(const char *host_name, struct in_addr *addr)
+{
+    struct hostent *h;
+
+    if (inet_aton(host_name, addr)) {
+        return 0;
+    }
+
+    h = gethostbyname(host_name);
+    if (h) {
+        *addr = *(struct in_addr *) h->h_addr;
+        return 0;
+    }
+
+    return (h_errno == HOST_NOT_FOUND ? ENOENT
+            : h_errno == TRY_AGAIN ? EAGAIN
+            : h_errno == NO_RECOVERY ? EIO
+            : h_errno == NO_ADDRESS ? ENXIO
+            : EINVAL);
 }
 
 /* Returns the error condition associated with socket 'fd' and resets the
@@ -420,10 +461,10 @@ get_unix_name_len(socklen_t sun_len)
             : 0);
 }
 
-uint32_t
-guess_netmask(uint32_t ip)
+ovs_be32
+guess_netmask(ovs_be32 ip_)
 {
-    ip = ntohl(ip);
+    uint32_t ip = ntohl(ip_);
     return ((ip >> 31) == 0 ? htonl(0xff000000)   /* Class A */
             : (ip >> 30) == 2 ? htonl(0xffff0000) /* Class B */
             : (ip >> 29) == 6 ? htonl(0xffffff00) /* Class C */
@@ -544,9 +585,7 @@ exit:
     return error;
 }
 
-/* Opens a non-blocking IPv4 socket of the specified 'style', binds to
- * 'target', and listens for incoming connections.  'target' should be a string
- * in the format "[<port>][:<ip>]":
+/* Parses 'target', which should be a string in the format "[<port>][:<ip>]":
  *
  *      - If 'default_port' is -1, then <port> is required.  Otherwise, if
  *        <port> is omitted, then 'default_port' is used instead.
@@ -555,6 +594,55 @@ exit:
  *        and the TCP/IP stack will select a port.
  *
  *      - If <ip> is omitted then the IP address is wildcarded.
+ *
+ * If successful, stores the address into '*sinp' and returns true; otherwise
+ * zeros '*sinp' and returns false. */
+bool
+inet_parse_passive(const char *target_, uint16_t default_port,
+                   struct sockaddr_in *sinp)
+{
+    char *target = xstrdup(target_);
+    char *string_ptr = target;
+    const char *host_name;
+    const char *port_string;
+    bool ok = false;
+    int port;
+
+    /* Address defaults. */
+    memset(sinp, 0, sizeof *sinp);
+    sinp->sin_family = AF_INET;
+    sinp->sin_addr.s_addr = htonl(INADDR_ANY);
+    sinp->sin_port = htons(default_port);
+
+    /* Parse optional port number. */
+    port_string = strsep(&string_ptr, ":");
+    if (port_string && str_to_int(port_string, 10, &port)) {
+        sinp->sin_port = htons(port);
+    } else if (default_port < 0) {
+        VLOG_ERR("%s: port number must be specified", target_);
+        goto exit;
+    }
+
+    /* Parse optional bind IP. */
+    host_name = strsep(&string_ptr, ":");
+    if (host_name && host_name[0] && lookup_ip(host_name, &sinp->sin_addr)) {
+        goto exit;
+    }
+
+    ok = true;
+
+exit:
+    if (!ok) {
+        memset(sinp, 0, sizeof *sinp);
+    }
+    free(target);
+    return ok;
+}
+
+
+/* Opens a non-blocking IPv4 socket of the specified 'style', binds to
+ * 'target', and listens for incoming connections.  Parses 'target' in the same
+ * way was inet_parse_passive().
  *
  * 'style' should be SOCK_STREAM (for TCP) or SOCK_DGRAM (for UDP).
  *
@@ -566,96 +654,68 @@ exit:
  * If 'sinp' is non-null, then on success the bound address is stored into
  * '*sinp'. */
 int
-inet_open_passive(int style, const char *target_, int default_port,
+inet_open_passive(int style, const char *target, int default_port,
                   struct sockaddr_in *sinp)
 {
-    char *target = xstrdup(target_);
-    char *string_ptr = target;
     struct sockaddr_in sin;
-    const char *host_name;
-    const char *port_string;
-    int fd = 0, error, port;
-    unsigned int yes  = 1;
+    int fd = 0, error;
+    unsigned int yes = 1;
 
-    /* Address defaults. */
-    memset(&sin, 0, sizeof sin);
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    sin.sin_port = htons(default_port);
-
-    /* Parse optional port number. */
-    port_string = strsep(&string_ptr, ":");
-    if (port_string && str_to_int(port_string, 10, &port)) {
-        sin.sin_port = htons(port);
-    } else if (default_port < 0) {
-        VLOG_ERR("%s: port number must be specified", target_);
-        error = EAFNOSUPPORT;
-        goto exit;
-    }
-
-    /* Parse optional bind IP. */
-    host_name = strsep(&string_ptr, ":");
-    if (host_name && host_name[0]) {
-        error = lookup_ip(host_name, &sin.sin_addr);
-        if (error) {
-            goto exit;
-        }
+    if (!inet_parse_passive(target, default_port, &sin)) {
+        return EAFNOSUPPORT;
     }
 
     /* Create non-blocking socket, set SO_REUSEADDR. */
     fd = socket(AF_INET, style, 0);
     if (fd < 0) {
         error = errno;
-        VLOG_ERR("%s: socket: %s", target_, strerror(error));
-        goto exit;
+        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        return error;
     }
     error = set_nonblocking(fd);
     if (error) {
-        goto exit_close;
+        goto error;
     }
     if (style == SOCK_STREAM
         && setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0) {
         error = errno;
-        VLOG_ERR("%s: setsockopt(SO_REUSEADDR): %s", target_, strerror(error));
-        goto exit_close;
+        VLOG_ERR("%s: setsockopt(SO_REUSEADDR): %s", target, strerror(error));
+        goto error;
     }
 
     /* Bind. */
     if (bind(fd, (struct sockaddr *) &sin, sizeof sin) < 0) {
         error = errno;
-        VLOG_ERR("%s: bind: %s", target_, strerror(error));
-        goto exit_close;
+        VLOG_ERR("%s: bind: %s", target, strerror(error));
+        goto error;
     }
 
     /* Listen. */
     if (listen(fd, 10) < 0) {
         error = errno;
-        VLOG_ERR("%s: listen: %s", target_, strerror(error));
-        goto exit_close;
+        VLOG_ERR("%s: listen: %s", target, strerror(error));
+        goto error;
     }
 
     if (sinp) {
         socklen_t sin_len = sizeof sin;
         if (getsockname(fd, (struct sockaddr *) &sin, &sin_len) < 0){
             error = errno;
-            VLOG_ERR("%s: getsockname: %s", target_, strerror(error));
-            goto exit_close;
+            VLOG_ERR("%s: getsockname: %s", target, strerror(error));
+            goto error;
         }
         if (sin.sin_family != AF_INET || sin_len != sizeof sin) {
-            VLOG_ERR("%s: getsockname: invalid socket name", target_);
-            goto exit_close;
+            VLOG_ERR("%s: getsockname: invalid socket name", target);
+            goto error;
         }
         *sinp = sin;
     }
 
-    error = 0;
-    goto exit;
+    return fd;
 
-exit_close:
+error:
     close(fd);
-exit:
-    free(target);
-    return error ? -error : fd;
+    return error;
 }
 
 /* Returns a readable and writable fd for /dev/null, if successful, otherwise
@@ -783,4 +843,149 @@ xpipe(int fds[2])
     if (pipe(fds)) {
         VLOG_FATAL("failed to create pipe (%s)", strerror(errno));
     }
+}
+
+static int
+getsockopt_int(int fd, int level, int optname, int *valuep)
+{
+    socklen_t len = sizeof *valuep;
+
+    return (getsockopt(fd, level, optname, valuep, &len) ? errno
+            : len == sizeof *valuep ? 0
+            : EINVAL);
+}
+
+static void
+describe_sockaddr(struct ds *string, int fd,
+                  int (*getaddr)(int, struct sockaddr *, socklen_t *))
+{
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof ss;
+
+    if (!getaddr(fd, (struct sockaddr *) &ss, &len)) {
+        if (ss.ss_family == AF_INET) {
+            struct sockaddr_in sin;
+
+            memcpy(&sin, &ss, sizeof sin);
+            ds_put_format(string, IP_FMT":%"PRIu16,
+                          IP_ARGS(&sin.sin_addr.s_addr), ntohs(sin.sin_port));
+        } else if (ss.ss_family == AF_UNIX) {
+            struct sockaddr_un sun;
+            const char *null;
+            size_t maxlen;
+
+            memcpy(&sun, &ss, sizeof sun);
+            maxlen = len - offsetof(struct sockaddr_un, sun_path);
+            null = memchr(sun.sun_path, '\0', maxlen);
+            ds_put_buffer(string, sun.sun_path,
+                          null ? null - sun.sun_path : maxlen);
+        }
+#ifdef HAVE_NETLINK
+        else if (ss.ss_family == AF_NETLINK) {
+            int protocol;
+
+/* SO_PROTOCOL was introduced in 2.6.32.  Support it regardless of the version
+ * of the Linux kernel headers in use at build time. */
+#ifndef SO_PROTOCOL
+#define SO_PROTOCOL 38
+#endif
+
+            if (!getsockopt_int(fd, SOL_SOCKET, SO_PROTOCOL, &protocol)) {
+                switch (protocol) {
+                case NETLINK_ROUTE:
+                    ds_put_cstr(string, "NETLINK_ROUTE");
+                    break;
+
+                case NETLINK_GENERIC:
+                    ds_put_cstr(string, "NETLINK_GENERIC");
+                    break;
+
+                default:
+                    ds_put_format(string, "AF_NETLINK family %d", protocol);
+                    break;
+                }
+            } else {
+                ds_put_cstr(string, "AF_NETLINK");
+            }
+        }
+#endif
+#if AF_PACKET && __linux__
+        else if (ss.ss_family == AF_PACKET) {
+            struct sockaddr_ll sll;
+
+            memcpy(&sll, &ss, sizeof sll);
+            ds_put_cstr(string, "AF_PACKET");
+            if (sll.sll_ifindex) {
+                char name[IFNAMSIZ];
+
+                if (if_indextoname(sll.sll_ifindex, name)) {
+                    ds_put_format(string, "(%s)", name);
+                } else {
+                    ds_put_format(string, "(ifindex=%d)", sll.sll_ifindex);
+                }
+            }
+            if (sll.sll_protocol) {
+                ds_put_format(string, "(protocol=0x%"PRIu16")",
+                              ntohs(sll.sll_protocol));
+            }
+        }
+#endif
+        else if (ss.ss_family == AF_UNSPEC) {
+            ds_put_cstr(string, "AF_UNSPEC");
+        } else {
+            ds_put_format(string, "AF_%d", (int) ss.ss_family);
+        }
+    }
+}
+
+
+#ifdef __linux__
+static void
+put_fd_filename(struct ds *string, int fd)
+{
+    char buf[1024];
+    char *linkname;
+    int n;
+
+    linkname = xasprintf("/proc/self/fd/%d", fd);
+    n = readlink(linkname, buf, sizeof buf);
+    if (n > 0) {
+        ds_put_char(string, ' ');
+        ds_put_buffer(string, buf, n);
+        if (n > sizeof buf) {
+            ds_put_cstr(string, "...");
+        }
+    }
+    free(linkname);
+}
+#endif
+
+/* Returns a malloc()'d string describing 'fd', for use in logging. */
+char *
+describe_fd(int fd)
+{
+    struct ds string;
+    struct stat s;
+
+    ds_init(&string);
+    if (fstat(fd, &s)) {
+        ds_put_format(&string, "fstat failed (%s)", strerror(errno));
+    } else if (S_ISSOCK(s.st_mode)) {
+        describe_sockaddr(&string, fd, getsockname);
+        ds_put_cstr(&string, "<->");
+        describe_sockaddr(&string, fd, getpeername);
+    } else {
+        ds_put_cstr(&string, (isatty(fd) ? "tty"
+                              : S_ISDIR(s.st_mode) ? "directory"
+                              : S_ISCHR(s.st_mode) ? "character device"
+                              : S_ISBLK(s.st_mode) ? "block device"
+                              : S_ISREG(s.st_mode) ? "file"
+                              : S_ISFIFO(s.st_mode) ? "FIFO"
+                              : S_ISLNK(s.st_mode) ? "symbolic link"
+                              : "unknown"));
+#ifdef __linux__
+        put_fd_filename(&string, fd);
+#endif
+    }
+    return ds_steal_cstr(&string);
 }

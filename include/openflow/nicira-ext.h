@@ -108,9 +108,7 @@ enum nx_flow_mod_failed_code {
     NXFMFC_HARDWARE = 0x100,
 
     /* A nonexistent table ID was specified in the "command" field of struct
-     * ofp_flow_mod, when the nxt_flow_mod_table_id extension is enabled.
-     * (This extension is not yet implemented on this branch of Open
-     * vSwitch.) */
+     * ofp_flow_mod, when the nxt_flow_mod_table_id extension is enabled. */
     NXFMFC_BAD_TABLE_ID = 0x101
 };
 
@@ -127,37 +125,36 @@ OFP_ASSERT(sizeof(struct nicira_header) == 16);
 /* Values for the 'subtype' member of struct nicira_header. */
 enum nicira_type {
     /* No longer used. */
-    NXT_STATUS_REQUEST__OBSOLETE,
-    NXT_STATUS_REPLY__OBSOLETE,
-    NXT_ACT_SET_CONFIG__OBSOLETE,
-    NXT_ACT_GET_CONFIG__OBSOLETE,
-    NXT_COMMAND_REQUEST__OBSOLETE,
-    NXT_COMMAND_REPLY__OBSOLETE,
-    NXT_FLOW_END_CONFIG__OBSOLETE,
-    NXT_FLOW_END__OBSOLETE,
-    NXT_MGMT__OBSOLETE,
-
-    /* Use the high 32 bits of the cookie field as the tunnel ID in the flow
-     * match. */
-    NXT_TUN_ID_FROM_COOKIE,
+    NXT_STATUS_REQUEST__OBSOLETE = 0,
+    NXT_STATUS_REPLY__OBSOLETE = 1,
+    NXT_ACT_SET_CONFIG__OBSOLETE = 2,
+    NXT_ACT_GET_CONFIG__OBSOLETE = 3,
+    NXT_COMMAND_REQUEST__OBSOLETE = 4,
+    NXT_COMMAND_REPLY__OBSOLETE = 5,
+    NXT_FLOW_END_CONFIG__OBSOLETE = 6,
+    NXT_FLOW_END__OBSOLETE = 7,
+    NXT_MGMT__OBSOLETE = 8,
+    NXT_TUN_ID_FROM_COOKIE__OBSOLETE = 9,
 
     /* Controller role support.  The request body is struct nx_role_request.
      * The reply echos the request. */
-    NXT_ROLE_REQUEST,
-    NXT_ROLE_REPLY,
+    NXT_ROLE_REQUEST = 10,
+    NXT_ROLE_REPLY = 11,
 
     /* Flexible flow specification (aka NXM = Nicira Extended Match). */
-    NXT_SET_FLOW_FORMAT,        /* Set flow format. */
-    NXT_FLOW_MOD,               /* Analogous to OFPT_FLOW_MOD. */
-    NXT_FLOW_REMOVED            /* Analogous to OFPT_FLOW_REMOVED. */
+    NXT_SET_FLOW_FORMAT = 12,   /* Set flow format. */
+    NXT_FLOW_MOD = 13,          /* Analogous to OFPT_FLOW_MOD. */
+    NXT_FLOW_REMOVED = 14,      /* Analogous to OFPT_FLOW_REMOVED. */
+
+    /* Use the upper 8 bits of the 'command' member in struct ofp_flow_mod to
+     * designate the table to which a flow is to be added?  See the big comment
+     * on struct nxt_flow_mod_table_id for more information. */
+    NXT_FLOW_MOD_TABLE_ID = 15
 };
 
 /* Header for Nicira vendor stats request and reply messages. */
 struct nicira_stats_msg {
-    struct ofp_header header;   /* OFPT_STATS_REQUEST or OFPT_STATS_REPLY. */
-    ovs_be16 type;              /* OFPST_VENDOR. */
-    ovs_be16 flags;             /* OFPSF_{REQ,REPLY}_*. */
-    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    struct ofp_vendor_stats_msg vsm; /* Vendor NX_VENDOR_ID. */
     ovs_be32 subtype;           /* One of NXST_* below. */
     uint8_t pad[4];             /* Align to 64-bits. */
 };
@@ -170,15 +167,71 @@ enum nicira_stats_type {
     NXST_AGGREGATE              /* Analogous to OFPST_AGGREGATE. */
 };
 
-/* NXT_TUN_ID_FROM_COOKIE request. */
-struct nxt_tun_id_cookie {
+/* Fields to use when hashing flows. */
+enum nx_hash_fields {
+    /* Ethernet source address (NXM_OF_ETH_SRC) only. */
+    NX_HASH_FIELDS_ETH_SRC,
+
+    /* L2 through L4, symmetric across src/dst.  Specifically, each of the
+     * following fields, if present, is hashed (slashes separate symmetric
+     * pairs):
+     *
+     *  - NXM_OF_ETH_DST / NXM_OF_ETH_SRC
+     *  - NXM_OF_ETH_TYPE
+     *  - The VID bits from NXM_OF_VLAN_TCI, ignoring PCP and CFI.
+     *  - NXM_OF_IP_PROTO
+     *  - NXM_OF_IP_SRC / NXM_OF_IP_DST
+     *  - NXM_OF_TCP_SRC / NXM_OF_TCP_DST
+     */
+    NX_HASH_FIELDS_SYMMETRIC_L4
+};
+
+/* This command enables or disables an Open vSwitch extension that allows a
+ * controller to specify the OpenFlow table to which a flow should be added,
+ * instead of having the switch decide which table is most appropriate as
+ * required by OpenFlow 1.0.  By default, the extension is disabled.
+ *
+ * When this feature is enabled, Open vSwitch treats struct ofp_flow_mod's
+ * 16-bit 'command' member as two separate fields.  The upper 8 bits are used
+ * as the table ID, the lower 8 bits specify the command as usual.  A table ID
+ * of 0xff is treated like a wildcarded table ID.
+ *
+ * The specific treatment of the table ID depends on the type of flow mod:
+ *
+ *    - OFPFC_ADD: Given a specific table ID, the flow is always placed in that
+ *      table.  If an identical flow already exists in that table only, then it
+ *      is replaced.  If the flow cannot be placed in the specified table,
+ *      either because the table is full or because the table cannot support
+ *      flows of the given type, the switch replies with an
+ *      OFPFMFC_ALL_TABLES_FULL error.  (A controller can distinguish these
+ *      cases by comparing the current and maximum number of entries reported
+ *      in ofp_table_stats.)
+ *
+ *      If the table ID is wildcarded, the switch picks an appropriate table
+ *      itself.  If an identical flow already exist in the selected flow table,
+ *      then it is replaced.  The choice of table might depend on the flows
+ *      that are already in the switch; for example, if one table fills up then
+ *      the switch might fall back to another one.
+ *
+ *    - OFPFC_MODIFY, OFPFC_DELETE: Given a specific table ID, only flows
+ *      within that table are matched and modified or deleted.  If the table ID
+ *      is wildcarded, flows within any table may be matched and modified or
+ *      deleted.
+ *
+ *    - OFPFC_MODIFY_STRICT, OFPFC_DELETE_STRICT: Given a specific table ID,
+ *      only a flow within that table may be matched and modified or deleted.
+ *      If the table ID is wildcarded and exactly one flow within any table
+ *      matches, then it is modified or deleted; if flows in more than one
+ *      table match, then none is modified or deleted.
+ */
+struct nxt_flow_mod_table_id {
     struct ofp_header header;
-    ovs_be32 vendor;            /* NX_VENDOR_ID. */
-    ovs_be32 subtype;           /* NXT_TUN_ID_FROM_COOKIE */
+    uint32_t vendor;            /* NX_VENDOR_ID. */
+    uint32_t subtype;           /* NXT_FLOW_MOD_TABLE_ID. */
     uint8_t set;                /* Nonzero to enable, zero to disable. */
     uint8_t pad[7];
 };
-OFP_ASSERT(sizeof(struct nxt_tun_id_cookie) == 24);
+OFP_ASSERT(sizeof(struct nxt_flow_mod_table_id) == 24);
 
 /* Configures the "role" of the sending controller.  The default role is:
  *
@@ -216,14 +269,17 @@ enum nx_action_subtype {
     NXAST_SNAT__OBSOLETE,       /* No longer used. */
     NXAST_RESUBMIT,             /* struct nx_action_resubmit */
     NXAST_SET_TUNNEL,           /* struct nx_action_set_tunnel */
-    NXAST_DROP_SPOOFED_ARP,     /* struct nx_action_drop_spoofed_arp */
+    NXAST_DROP_SPOOFED_ARP__OBSOLETE,
     NXAST_SET_QUEUE,            /* struct nx_action_set_queue */
     NXAST_POP_QUEUE,            /* struct nx_action_pop_queue */
     NXAST_REG_MOVE,             /* struct nx_action_reg_move */
     NXAST_REG_LOAD,             /* struct nx_action_reg_load */
     NXAST_NOTE,                 /* struct nx_action_note */
     NXAST_SET_TUNNEL64,         /* struct nx_action_set_tunnel64 */
-    NXAST_MULTIPATH             /* struct nx_action_multipath */
+    NXAST_MULTIPATH,            /* struct nx_action_multipath */
+    NXAST_AUTOPATH,             /* struct nx_action_autopath */
+    NXAST_BUNDLE,               /* struct nx_action_bundle */
+    NXAST_BUNDLE_LOAD           /* struct nx_action_bundle */
 };
 
 /* Header for Nicira-defined actions. */
@@ -299,24 +355,6 @@ struct nx_action_set_tunnel64 {
 };
 OFP_ASSERT(sizeof(struct nx_action_set_tunnel64) == 24);
 
-/* Action structure for NXAST_DROP_SPOOFED_ARP.
- *
- * Stops processing further actions, if the packet being processed is an
- * Ethernet+IPv4 ARP packet for which the source Ethernet address inside the
- * ARP packet differs from the source Ethernet address in the Ethernet header.
- *
- * (This  action  is  deprecated in  favor of defining flows using the
- * NXM_NX_ARP_SHA flow match and will likely be removed in a future version
- * of Open vSwitch.) */
-struct nx_action_drop_spoofed_arp {
-    ovs_be16 type;                  /* OFPAT_VENDOR. */
-    ovs_be16 len;                   /* Length is 16. */
-    ovs_be32 vendor;                /* NX_VENDOR_ID. */
-    ovs_be16 subtype;               /* NXAST_DROP_SPOOFED_ARP. */
-    uint8_t pad[6];
-};
-OFP_ASSERT(sizeof(struct nx_action_drop_spoofed_arp) == 16);
-
 /* Action structure for NXAST_SET_QUEUE.
  *
  * Set the queue that should be used when packets are output.  This is similar
@@ -388,6 +426,18 @@ OFP_ASSERT(sizeof(struct nx_action_pop_queue) == 16);
  *   - NXM_NX_REG(idx) for idx in the switch's accepted range.
  *
  * The following nxm_header values are potentially acceptable as 'dst':
+ *
+ *   - NXM_OF_ETH_DST
+ *   - NXM_OF_ETH_SRC
+ *   - NXM_OF_IP_TOS
+ *   - NXM_OF_IP_SRC
+ *   - NXM_OF_IP_DST
+ *   - NXM_OF_TCP_SRC
+ *   - NXM_OF_TCP_DST
+ *   - NXM_OF_UDP_SRC
+ *   - NXM_OF_UDP_DST
+ *     Modifying any of the above fields changes the corresponding packet
+ *     header.
  *
  *   - NXM_NX_REG(idx) for idx in the switch's accepted range.
  *
@@ -481,7 +531,7 @@ OFP_ASSERT(sizeof(struct nx_action_note) == 16);
  *
  * This action performs the following steps in sequence:
  *
- *    1. Hashes the fields designated by 'fields', one of NX_MP_FIELDS_*.
+ *    1. Hashes the fields designated by 'fields', one of NX_HASH_FIELDS_*.
  *       Refer to the definition of "enum nx_mp_fields" for details.
  *
  *       The 'basis' value is used as a universal hash parameter, that is,
@@ -503,8 +553,7 @@ OFP_ASSERT(sizeof(struct nx_action_note) == 16);
  *
  *    3. Stores 'link' in dst[ofs:ofs+n_bits].  The format and semantics of
  *       'dst' and 'ofs_nbits' are similar to those for the NXAST_REG_LOAD
- *       action, except that 'dst' must be NXM_NX_REG(idx) for 'idx' in the
- *       switch's supported range.
+ *       action.
  *
  * The switch will reject actions that have an unknown 'fields', or an unknown
  * 'algorithm', or in which ofs+n_bits is greater than the width of 'dst', or
@@ -518,7 +567,7 @@ struct nx_action_multipath {
     ovs_be16 subtype;           /* NXAST_MULTIPATH. */
 
     /* What fields to hash and how. */
-    ovs_be16 fields;            /* One of NX_MP_FIELDS_*. */
+    ovs_be16 fields;            /* One of NX_HASH_FIELDS_*. */
     ovs_be16 basis;             /* Universal hash parameter. */
     ovs_be16 pad0;
 
@@ -530,29 +579,9 @@ struct nx_action_multipath {
 
     /* Where to store the result. */
     ovs_be16 ofs_nbits;         /* (ofs << 6) | (n_bits - 1). */
-    ovs_be32 dst;               /* Destination register. */
+    ovs_be32 dst;               /* Destination. */
 };
 OFP_ASSERT(sizeof(struct nx_action_multipath) == 32);
-
-/* NXAST_MULTIPATH: Fields to hash. */
-enum nx_mp_fields {
-    /* Ethernet source address (NXM_OF_ETH_SRC) only. */
-    NX_MP_FIELDS_ETH_SRC,
-
-    /* L2 through L4, symmetric across src/dst.  Specifically, each of the
-     * following fields, if present, is hashed (slashes separate symmetric
-     * pairs):
-     *
-     *  - NXM_OF_ETH_DST / NXM_OF_ETH_SRC
-     *  - NXM_OF_ETH_TYPE
-     *  - The VID bits from NXM_OF_VLAN_TCI, ignoring PCP and CFI.
-     *  - NXM_OF_IP_PROTO
-     *  - NXM_OF_IP_SRC / NXM_OF_IP_DST
-     *  - NXM_OF_TCP_SRC / NXM_OF_TCP_DST
-     *  - NXM_OF_UDP_SRC / NXM_OF_UDP_DST
-     */
-    NX_MP_FIELDS_SYMMETRIC_L4
-};
 
 /* NXAST_MULTIPATH: Multipath link choice algorithm to apply.
  *
@@ -603,12 +632,132 @@ enum nx_mp_algorithm {
      */
     NX_MP_ALG_ITER_HASH         /* Iterative Hash. */
 };
+
+/* Action structure for NXAST_AUTOPATH.
+ *
+ * This action performs the following steps in sequence:
+ *
+ *    1. Hashes the flow using an implementation-defined hash function.
+ *
+ *       The hashed fields' values are drawn from the current state of the
+ *       flow, including all modifications that have been made by actions up to
+ *       this point.
+ *
+ *    2. Selects an OpenFlow 'port'.
+ *
+ *       'port' is selected in an implementation-defined manner, taking into
+ *       account 'id' and the hash value calculated in step 1.
+ *
+ *       Generally a switch will have been configured with a set of ports that
+ *       may be chosen given 'id'.  The switch may take into account any number
+ *       of factors when choosing 'port' from its configured set.  Factors may
+ *       include carrier, load, and the results of configuration protocols such
+ *       as LACP.
+ *
+ *    3. Stores 'port' in dst[ofs:ofs+n_bits].
+ *
+ *       The format and semantics of 'dst' and 'ofs_nbits' are similar to those
+ *       for the NXAST_REG_LOAD action.
+ *
+ * The switch will reject actions in which ofs+n_bits is greater than the width
+ * of 'dst', with error type OFPET_BAD_ACTION, code OFPBAC_BAD_ARGUMENT.
+ */
+struct nx_action_autopath {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* Length is 20. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_AUTOPATH. */
 
-/* Wildcard for tunnel ID. */
-#define NXFW_TUN_ID  (1 << 25)
+    /* Where to store the result. */
+    ovs_be16 ofs_nbits;         /* (ofs << 6) | (n_bits - 1). */
+    ovs_be32 dst;               /* Destination. */
 
-#define NXFW_ALL NXFW_TUN_ID
-#define OVSFW_ALL (OFPFW_ALL | NXFW_ALL)
+    ovs_be32 id;                /* Autopath ID. */
+    ovs_be32 pad;
+};
+OFP_ASSERT(sizeof(struct nx_action_autopath) == 24);
+
+/* Action structure for NXAST_BUNDLE and NXAST_BUNDLE_LOAD.
+ *
+ * The bundle actions choose a slave from a supplied list of options.
+ * NXAST_BUNDLE outputs to its selection.  NXAST_BUNDLE_LOAD writes its
+ * selection to a register.
+ *
+ * The list of possible slaves follows the nx_action_bundle structure. The size
+ * of each slave is governed by its type as indicated by the 'slave_type'
+ * parameter. The list of slaves should be padded at its end with zeros to make
+ * the total length of the action a multiple of 8.
+ *
+ * Switches infer from the 'slave_type' parameter the size of each slave.  All
+ * implementations must support the NXM_OF_IN_PORT 'slave_type' which indicates
+ * that the slaves are OpenFlow port numbers with NXM_LENGTH(NXM_OF_IN_PORT) ==
+ * 2 byte width.  Switches should reject actions which indicate unknown or
+ * unsupported slave types.
+ *
+ * Switches use a strategy dictated by the 'algorithm' parameter to choose a
+ * slave.  If the switch does not support the specified 'algorithm' parameter,
+ * it should reject the action.
+ *
+ * Some slave selection strategies require the use of a hash function, in which
+ * case the 'fields' and 'basis' parameters should be populated.  The 'fields'
+ * parameter (one of NX_HASH_FIELDS_*) designates which parts of the flow to
+ * hash.  Refer to the definition of "enum nx_hash_fields" for details.  The
+ * 'basis' parameter is used as a universal hash parameter.  Different values
+ * of 'basis' yield different hash results.
+ *
+ * The 'zero' parameter at the end of the action structure is reserved for
+ * future use.  Switches are required to reject actions which have nonzero
+ * bytes in the 'zero' field.
+ *
+ * NXAST_BUNDLE actions should have 'ofs_nbits' and 'dst' zeroed.  Switches
+ * should reject actions which have nonzero bytes in either of these fields.
+ *
+ * NXAST_BUNDLE_LOAD stores the OpenFlow port number of the selected slave in
+ * dst[ofs:ofs+n_bits].  The format and semantics of 'dst' and 'ofs_nbits' are
+ * similar to those for the NXAST_REG_LOAD action. */
+struct nx_action_bundle {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* Length including slaves. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_BUNDLE. */
+
+    /* Slave choice algorithm to apply to hash value. */
+    ovs_be16 algorithm;         /* One of NX_BD_ALG_*. */
+
+    /* What fields to hash and how. */
+    ovs_be16 fields;            /* One of NX_BD_FIELDS_*. */
+    ovs_be16 basis;             /* Universal hash parameter. */
+
+    ovs_be32 slave_type;        /* NXM_OF_IN_PORT. */
+    ovs_be16 n_slaves;          /* Number of slaves. */
+
+    ovs_be16 ofs_nbits;         /* (ofs << 6) | (n_bits - 1). */
+    ovs_be32 dst;               /* Destination. */
+
+    uint8_t zero[4];            /* Reserved. Must be zero. */
+};
+OFP_ASSERT(sizeof(struct nx_action_bundle) == 32);
+
+/* NXAST_BUNDLE: Bundle slave choice algorithm to apply.
+ *
+ * In the descriptions below, 'slaves' is the list of possible slaves in the
+ * order they appear in the OpenFlow action. */
+enum nx_bd_algorithm {
+    /* Chooses the first live slave listed in the bundle.
+     *
+     * O(n_slaves) performance. */
+    NX_BD_ALG_ACTIVE_BACKUP,
+
+    /* for i in [0,n_slaves):
+     *   weights[i] = hash(flow, i)
+     * slave = { slaves[i] such that weights[i] >= weights[j] for all j != i }
+     *
+     * Redistributes 1/n_slaves of traffic when a slave's liveness changes.
+     * O(n_slaves) performance.
+     *
+     * Uses the 'fields' and 'basis' parameters. */
+    NX_BD_ALG_HRW /* Highest Random Weight. */
+};
 
 /* Flexible flow specifications (aka NXM = Nicira Extended Match).
  *
@@ -1119,8 +1268,6 @@ enum nx_mp_algorithm {
 
 enum nx_flow_format {
     NXFF_OPENFLOW10 = 0,         /* Standard OpenFlow 1.0 compatible. */
-    NXFF_TUN_ID_FROM_COOKIE = 1, /* OpenFlow 1.0, plus obtain tunnel ID from
-                                  * cookie. */
     NXFF_NXM = 2                 /* Nicira extended match. */
 };
 
@@ -1217,8 +1364,8 @@ struct nx_flow_stats {
     ovs_be16 match_len;       /* Length of nx_match. */
     uint8_t pad2[4];          /* Align to 64 bits. */
     ovs_be64 cookie;          /* Opaque controller-issued identifier. */
-    ovs_be64 packet_count;    /* Number of packets in flow. */
-    ovs_be64 byte_count;      /* Number of bytes in flow. */
+    ovs_be64 packet_count;    /* Number of packets, UINT64_MAX if unknown. */
+    ovs_be64 byte_count;      /* Number of bytes, UINT64_MAX if unknown. */
     /* Followed by:
      *   - Exactly match_len (possibly 0) bytes containing the nx_match, then
      *   - Exactly (match_len + 7)/8*8 - match_len (between 0 and 7) bytes of
@@ -1250,14 +1397,13 @@ struct nx_aggregate_stats_request {
 OFP_ASSERT(sizeof(struct nx_aggregate_stats_request) == 32);
 
 /* Body for nicira_stats_msg reply of type NXST_AGGREGATE (analogous to
- * OFPST_AGGREGATE reply).
- *
- * ofp_aggregate_stats_reply does not contain an ofp_match structure, so we
- * reuse it entirely.  (It would be very odd to use OFPST_AGGREGATE to reply to
- * an NXST_AGGREGATE request, so we don't do that.) */
+ * OFPST_AGGREGATE reply). */
 struct nx_aggregate_stats_reply {
     struct nicira_stats_msg nsm;
-    struct ofp_aggregate_stats_reply asr;
+    ovs_be64 packet_count;     /* Number of packets, UINT64_MAX if unknown. */
+    ovs_be64 byte_count;       /* Number of bytes, UINT64_MAX if unknown. */
+    ovs_be32 flow_count;       /* Number of flows. */
+    uint8_t pad[4];            /* Align to 64 bits. */
 };
 OFP_ASSERT(sizeof(struct nx_aggregate_stats_reply) == 48);
 

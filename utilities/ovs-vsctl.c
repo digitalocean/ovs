@@ -26,6 +26,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "command-line.h"
 #include "compiler.h"
@@ -206,21 +207,19 @@ parse_options(int argc, char *argv[])
         TABLE_OPTION_ENUMS
     };
     static struct option long_options[] = {
-        {"db", required_argument, 0, OPT_DB},
-        {"no-syslog", no_argument, 0, OPT_NO_SYSLOG},
-        {"no-wait", no_argument, 0, OPT_NO_WAIT},
-        {"dry-run", no_argument, 0, OPT_DRY_RUN},
-        {"oneline", no_argument, 0, OPT_ONELINE},
-        {"timeout", required_argument, 0, 't'},
-        {"help", no_argument, 0, 'h'},
-        {"version", no_argument, 0, 'V'},
+        {"db", required_argument, NULL, OPT_DB},
+        {"no-syslog", no_argument, NULL, OPT_NO_SYSLOG},
+        {"no-wait", no_argument, NULL, OPT_NO_WAIT},
+        {"dry-run", no_argument, NULL, OPT_DRY_RUN},
+        {"oneline", no_argument, NULL, OPT_ONELINE},
+        {"timeout", required_argument, NULL, 't'},
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'V'},
         VLOG_LONG_OPTIONS,
         TABLE_LONG_OPTIONS,
-#ifdef HAVE_OPENSSL
-        STREAM_SSL_LONG_OPTIONS
-        {"peer-ca-cert", required_argument, 0, OPT_PEER_CA_CERT},
-#endif
-        {0, 0, 0, 0},
+        STREAM_SSL_LONG_OPTIONS,
+        {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
+        {NULL, 0, NULL, 0},
     };
     char *tmp, *short_options;
 
@@ -277,13 +276,11 @@ parse_options(int argc, char *argv[])
         VLOG_OPTION_HANDLERS
         TABLE_OPTION_HANDLERS(&table_style)
 
-#ifdef HAVE_OPENSSL
         STREAM_SSL_OPTION_HANDLERS
 
         case OPT_PEER_CA_CERT:
             stream_ssl_set_peer_ca_cert_file(optarg);
             break;
-#endif
 
         case '?':
             exit(EXIT_FAILURE);
@@ -447,7 +444,7 @@ vsctl_fatal(const char *format, ...)
     message = xvasprintf(format, args);
     va_end(args);
 
-    vlog_set_levels(&VLM_vsctl, VLF_CONSOLE, VLL_EMER);
+    vlog_set_levels(&VLM_vsctl, VLF_CONSOLE, VLL_OFF);
     VLOG_ERR("%s", message);
     ovs_error(0, "%s", message);
     vsctl_exit(EXIT_FAILURE);
@@ -479,6 +476,7 @@ usage: %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 Open vSwitch commands:\n\
   init                        initialize database, if not yet initialized\n\
+  show                        print overview of database contents\n\
   emer-reset                  reset configuration to clean state\n\
 \n\
 Bridge commands:\n\
@@ -787,8 +785,7 @@ get_info(struct vsctl_context *ctx, struct vsctl_info *info)
             struct ovsrec_port *port_cfg = br_cfg->ports[j];
 
             if (!sset_add(&ports, port_cfg->name)) {
-                VLOG_WARN("%s: database contains duplicate port name",
-                          port_cfg->name);
+                /* Duplicate port name.  (We will warn about that later.) */
                 continue;
             }
 
@@ -802,7 +799,6 @@ get_info(struct vsctl_context *ctx, struct vsctl_info *info)
     sset_destroy(&ports);
 
     sset_init(&bridges);
-    sset_init(&ports);
     for (i = 0; i < ovs->n_bridges; i++) {
         struct ovsrec_bridge *br_cfg = ovs->bridges[i];
         struct vsctl_bridge *br;
@@ -817,7 +813,18 @@ get_info(struct vsctl_context *ctx, struct vsctl_info *info)
             struct vsctl_port *port;
             size_t k;
 
-            if (!sset_add(&ports, port_cfg->name)) {
+            port = shash_find_data(&info->ports, port_cfg->name);
+            if (port) {
+                if (port_cfg == port->port_cfg) {
+                    VLOG_WARN("%s: port is in multiple bridges (%s and %s)",
+                              port_cfg->name, br->name, port->bridge->name);
+                } else {
+                    /* Log as an error because this violates the database's
+                     * uniqueness constraints, so the database server shouldn't
+                     * have allowed it. */
+                    VLOG_ERR("%s: database contains duplicate port name",
+                             port_cfg->name);
+                }
                 continue;
             }
 
@@ -843,9 +850,21 @@ get_info(struct vsctl_context *ctx, struct vsctl_info *info)
                 struct ovsrec_interface *iface_cfg = port_cfg->interfaces[k];
                 struct vsctl_iface *iface;
 
-                if (shash_find(&info->ifaces, iface_cfg->name)) {
-                    VLOG_WARN("%s: database contains duplicate interface name",
-                              iface_cfg->name);
+                iface = shash_find_data(&info->ifaces, iface_cfg->name);
+                if (iface) {
+                    if (iface_cfg == iface->iface_cfg) {
+                        VLOG_WARN("%s: interface is in multiple ports "
+                                  "(%s and %s)",
+                                  iface_cfg->name,
+                                  iface->port->port_cfg->name,
+                                  port->port_cfg->name);
+                    } else {
+                        /* Log as an error because this violates the database's
+                         * uniqueness constraints, so the database server
+                         * shouldn't have allowed it. */
+                        VLOG_ERR("%s: database contains duplicate interface "
+                                 "name", iface_cfg->name);
+                    }
                     continue;
                 }
 
@@ -857,7 +876,6 @@ get_info(struct vsctl_context *ctx, struct vsctl_info *info)
         }
     }
     sset_destroy(&bridges);
-    sset_destroy(&ports);
 }
 
 static void
@@ -1007,6 +1025,186 @@ cmd_init(struct vsctl_context *ctx OVS_UNUSED)
 {
 }
 
+struct cmd_show_table {
+    const struct ovsdb_idl_table_class *table;
+    const struct ovsdb_idl_column *name_column;
+    const struct ovsdb_idl_column *columns[3];
+    bool recurse;
+};
+
+static struct cmd_show_table cmd_show_tables[] = {
+    {&ovsrec_table_open_vswitch,
+     NULL,
+     {&ovsrec_open_vswitch_col_manager_options,
+      &ovsrec_open_vswitch_col_bridges,
+      &ovsrec_open_vswitch_col_ovs_version},
+     false},
+
+    {&ovsrec_table_bridge,
+     &ovsrec_bridge_col_name,
+     {&ovsrec_bridge_col_controller,
+      &ovsrec_bridge_col_fail_mode,
+      &ovsrec_bridge_col_ports},
+     false},
+
+    {&ovsrec_table_port,
+     &ovsrec_port_col_name,
+     {&ovsrec_port_col_tag,
+      &ovsrec_port_col_trunks,
+      &ovsrec_port_col_interfaces},
+     false},
+
+    {&ovsrec_table_interface,
+     &ovsrec_interface_col_name,
+     {&ovsrec_interface_col_type,
+      &ovsrec_interface_col_options,
+      NULL},
+     false},
+
+    {&ovsrec_table_controller,
+     &ovsrec_controller_col_target,
+     {&ovsrec_controller_col_is_connected,
+      NULL,
+      NULL},
+     false},
+
+    {&ovsrec_table_manager,
+     &ovsrec_manager_col_target,
+     {&ovsrec_manager_col_is_connected,
+      NULL,
+      NULL},
+     false},
+};
+
+static void
+pre_cmd_show(struct vsctl_context *ctx)
+{
+    struct cmd_show_table *show;
+
+    for (show = cmd_show_tables;
+         show < &cmd_show_tables[ARRAY_SIZE(cmd_show_tables)];
+         show++) {
+        size_t i;
+
+        ovsdb_idl_add_table(ctx->idl, show->table);
+        if (show->name_column) {
+            ovsdb_idl_add_column(ctx->idl, show->name_column);
+        }
+        for (i = 0; i < ARRAY_SIZE(show->columns); i++) {
+            const struct ovsdb_idl_column *column = show->columns[i];
+            if (column) {
+                ovsdb_idl_add_column(ctx->idl, column);
+            }
+        }
+    }
+}
+
+static struct cmd_show_table *
+cmd_show_find_table_by_row(const struct ovsdb_idl_row *row)
+{
+    struct cmd_show_table *show;
+
+    for (show = cmd_show_tables;
+         show < &cmd_show_tables[ARRAY_SIZE(cmd_show_tables)];
+         show++) {
+        if (show->table == row->table->class) {
+            return show;
+        }
+    }
+    return NULL;
+}
+
+static struct cmd_show_table *
+cmd_show_find_table_by_name(const char *name)
+{
+    struct cmd_show_table *show;
+
+    for (show = cmd_show_tables;
+         show < &cmd_show_tables[ARRAY_SIZE(cmd_show_tables)];
+         show++) {
+        if (!strcmp(show->table->name, name)) {
+            return show;
+        }
+    }
+    return NULL;
+}
+
+static void
+cmd_show_row(struct vsctl_context *ctx, const struct ovsdb_idl_row *row,
+             int level)
+{
+    struct cmd_show_table *show = cmd_show_find_table_by_row(row);
+    size_t i;
+
+    ds_put_char_multiple(&ctx->output, ' ', level * 4);
+    if (show && show->name_column) {
+        const struct ovsdb_datum *datum;
+
+        ds_put_format(&ctx->output, "%s ", show->table->name);
+        datum = ovsdb_idl_read(row, show->name_column);
+        ovsdb_datum_to_string(datum, &show->name_column->type, &ctx->output);
+    } else {
+        ds_put_format(&ctx->output, UUID_FMT, UUID_ARGS(&row->uuid));
+    }
+    ds_put_char(&ctx->output, '\n');
+
+    if (!show || show->recurse) {
+        return;
+    }
+
+    show->recurse = true;
+    for (i = 0; i < ARRAY_SIZE(show->columns); i++) {
+        const struct ovsdb_idl_column *column = show->columns[i];
+        const struct ovsdb_datum *datum;
+
+        if (!column) {
+            break;
+        }
+
+        datum = ovsdb_idl_read(row, column);
+        if (column->type.key.type == OVSDB_TYPE_UUID &&
+            column->type.key.u.uuid.refTableName) {
+            struct cmd_show_table *ref_show;
+            size_t j;
+
+            ref_show = cmd_show_find_table_by_name(
+                column->type.key.u.uuid.refTableName);
+            if (ref_show) {
+                for (j = 0; j < datum->n; j++) {
+                    const struct ovsdb_idl_row *ref_row;
+
+                    ref_row = ovsdb_idl_get_row_for_uuid(ctx->idl,
+                                                         ref_show->table,
+                                                         &datum->keys[j].uuid);
+                    if (ref_row) {
+                        cmd_show_row(ctx, ref_row, level + 1);
+                    }
+                }
+                continue;
+            }
+        }
+
+        if (!ovsdb_datum_is_default(datum, &column->type)) {
+            ds_put_char_multiple(&ctx->output, ' ', (level + 1) * 4);
+            ds_put_format(&ctx->output, "%s: ", column->name);
+            ovsdb_datum_to_string(datum, &column->type, &ctx->output);
+            ds_put_char(&ctx->output, '\n');
+        }
+    }
+    show->recurse = false;
+}
+
+static void
+cmd_show(struct vsctl_context *ctx)
+{
+    const struct ovsdb_idl_row *row;
+
+    for (row = ovsdb_idl_first_row(ctx->idl, cmd_show_tables[0].table);
+         row; row = ovsdb_idl_next_row(row)) {
+        cmd_show_row(ctx, row, 0);
+    }
+}
+
 static void
 pre_cmd_emer_reset(struct vsctl_context *ctx)
 {
@@ -1114,7 +1312,7 @@ cmd_emer_reset(struct vsctl_context *ctx)
 static void
 cmd_add_br(struct vsctl_context *ctx)
 {
-    bool may_exist = shash_find(&ctx->options, "--may-exist") != 0;
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     const char *br_name, *parent_name;
     struct vsctl_info info;
     int vlan;
@@ -1566,7 +1764,7 @@ add_port(struct vsctl_context *ctx,
 static void
 cmd_add_port(struct vsctl_context *ctx)
 {
-    bool may_exist = shash_find(&ctx->options, "--may-exist") != 0;
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
 
     add_port(ctx, ctx->argv[1], ctx->argv[2], may_exist, false,
              &ctx->argv[2], 1, &ctx->argv[3], ctx->argc - 3);
@@ -1575,7 +1773,7 @@ cmd_add_port(struct vsctl_context *ctx)
 static void
 cmd_add_bond(struct vsctl_context *ctx)
 {
-    bool may_exist = shash_find(&ctx->options, "--may-exist") != 0;
+    bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     bool fake_iface = shash_find(&ctx->options, "--fake-iface");
     int n_ifaces;
     int i;
@@ -2118,16 +2316,6 @@ static const struct vsctl_table_class tables[] = {
      {{&ovsrec_table_port, &ovsrec_port_col_name, &ovsrec_port_col_qos},
       {NULL, NULL, NULL}}},
 
-    {&ovsrec_table_monitor,
-     {{&ovsrec_table_interface,
-       &ovsrec_interface_col_name,
-       &ovsrec_interface_col_monitor},
-      {NULL, NULL, NULL}}},
-
-    {&ovsrec_table_maintenance_point,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
-
     {&ovsrec_table_queue,
      {{NULL, NULL, NULL},
       {NULL, NULL, NULL}}},
@@ -2547,9 +2735,19 @@ pre_parse_column_key_value(struct vsctl_context *ctx,
 static void
 pre_cmd_get(struct vsctl_context *ctx)
 {
+    const char *id = shash_find_data(&ctx->options, "--id");
     const char *table_name = ctx->argv[1];
     const struct vsctl_table_class *table;
     int i;
+
+    /* Using "get" without --id or a column name could possibly make sense.
+     * Maybe, for example, a ovs-vsctl run wants to assert that a row exists.
+     * But it is unlikely that an interactive user would want to do that, so
+     * issue a warning if we're running on a terminal. */
+    if (!id && ctx->argc <= 3 && isatty(STDOUT_FILENO)) {
+        VLOG_WARN("\"get\" command without row arguments or \"--id\" is "
+                  "possibly erroneous");
+    }
 
     table = pre_get_table(ctx, table_name);
     for (i = 3; i < ctx->argc; i++) {
@@ -3414,7 +3612,9 @@ do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
         struct vsctl_context ctx;
 
         vsctl_context_init(&ctx, c, idl, txn, ovs, symtab);
-        (c->syntax->run)(&ctx);
+        if (c->syntax->run) {
+            (c->syntax->run)(&ctx);
+        }
         vsctl_context_done(&ctx, c);
 
         if (ctx.try_again) {
@@ -3462,6 +3662,7 @@ do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
     txn = the_idl_txn = NULL;
 
     switch (status) {
+    case TXN_UNCOMMITTED:
     case TXN_INCOMPLETE:
         NOT_REACHED();
 
@@ -3478,6 +3679,10 @@ do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
 
     case TXN_ERROR:
         vsctl_fatal("transaction error: %s", error);
+
+    case TXN_NOT_LOCKED:
+        /* Should not happen--we never call ovsdb_idl_set_lock(). */
+        vsctl_fatal("database not locked");
 
     default:
         NOT_REACHED();
@@ -3558,6 +3763,7 @@ try_again:
 static const struct vsctl_command_syntax all_commands[] = {
     /* Open vSwitch commands. */
     {"init", 0, 0, NULL, cmd_init, NULL, "", RW},
+    {"show", 0, 0, pre_cmd_show, cmd_show, NULL, "", RO},
 
     /* Bridge commands. */
     {"add-br", 1, 3, pre_get_info, cmd_add_br, NULL, "--may-exist", RW},
@@ -3607,7 +3813,8 @@ static const struct vsctl_command_syntax all_commands[] = {
     /* Switch commands. */
     {"emer-reset", 0, 0, pre_cmd_emer_reset, cmd_emer_reset, NULL, "", RW},
 
-    /* Parameter commands. */
+    /* Database commands. */
+    {"comment", 0, INT_MAX, NULL, NULL, NULL, "", RO},
     {"get", 2, INT_MAX, pre_cmd_get, cmd_get, NULL, "--if-exists,--id=", RO},
     {"list", 1, INT_MAX, pre_cmd_list, cmd_list, NULL, "--columns=", RO},
     {"find", 1, INT_MAX, pre_cmd_find, cmd_find, NULL, "--columns=", RO},

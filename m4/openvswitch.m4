@@ -92,8 +92,7 @@ AC_DEFUN([OVS_CHECK_OPENSSL],
      [ssl=check])
 
    if test "$ssl" != false; then
-       dnl Make sure that pkg-config is installed.
-       m4_pattern_forbid([PKG_CHECK_MODULES])
+       m4_ifndef([PKG_CHECK_MODULES], [m4_fatal([Please install pkg-config.])])
        PKG_CHECK_MODULES([SSL], [openssl], 
          [HAVE_OPENSSL=yes],
          [HAVE_OPENSSL=no
@@ -151,6 +150,11 @@ AC_DEFUN([OVS_CHECK_LOGDIR],
      [LOGDIR=$withval],
      [LOGDIR='${localstatedir}/log/${PACKAGE}'])
    AC_SUBST([LOGDIR])])
+
+dnl Defines HAVE_BACKTRACE if backtrace() is declared in <execinfo.h>
+dnl and exists in libc.
+AC_DEFUN([OVS_CHECK_BACKTRACE],
+  [AC_CHECK_HEADER([execinfo.h], [AC_CHECK_FUNCS([backtrace])])])
 
 dnl Checks for __malloc_hook, etc., supported by glibc.
 AC_DEFUN([OVS_CHECK_MALLOC_HOOKS],

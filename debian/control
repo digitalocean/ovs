@@ -6,7 +6,8 @@ Uploaders: Ben Pfaff <pfaffben@debian.org>, Simon Horman <horms@debian.org>
 Build-Depends:
  debhelper (>= 5), autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
  libssl-dev, pkg-config (>= 0.21), po-debconf, bzip2, openssl, python,
- python-support (>= 0.8.4), procps
+ python-support (>= 0.8.4), procps, python-qt4,
+ python-zopeinterface, python-twisted-conch
 Standards-Version: 3.9.2
 Homepage: http://openvswitch.org/
 
@@ -35,7 +36,7 @@ Description: Open vSwitch common components
 Package: openvswitch-switch
 Architecture: linux-any
 Suggests: openvswitch-datapath-module
-Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), module-init-tools, procps, uuid-runtime
 Description: Open vSwitch switch implementations
  openvswitch-switch provides the userspace components and utilities for
  the Open vSwitch kernel-based switch.  
@@ -80,6 +81,21 @@ Description: Open vSwitch controller implementation
  .
  Open vSwitch is a full-featured software-based Ethernet switch.
 
+Package: openvswitch-brcompat
+Architecture: linux-any
+Depends: ${shlibs:Depends}, openvswitch-switch (= ${binary:Version})
+Recommends: bridge-utils
+Description: Open vSwitch bridge compatibility support
+ openvswitch-brcompat provides a way for applications that use the
+ Linux bridge to gradually migrate to Open vSwitch.  Programs that
+ ordinarily control the Linux bridge module, such as "brctl", instead
+ control the Open vSwitch kernel-based switch.
+ .
+ Once this package is installed, adding BRCOMPAT=yes in
+ /etc/default/openvswitch-switch enables bridge compatibility.
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.
+
 Package: openvswitch-dbg
 Section: debug
 Architecture: linux-any
@@ -97,8 +113,21 @@ Description: Debug symbols for Open vSwitch packages
 Package: python-openvswitch
 Architecture: all
 Section: python
-Depends:
- ${misc:Depends}, ${python:Depends}, openvswitch-switch (>= ${source:Version})
+Depends: ${misc:Depends}, ${python:Depends}
 Provides: ${python:Provides}
 Description: Python bindings for Open vSwitch
  This package contains the full Python bindings for Open vSwitch database.
+
+Package: ovsdbmonitor
+Architecture: all
+Section: utils
+Depends: ${python:Depends}, python-openvswitch
+Provides: ${python:Provides}
+Description: Open vSwitch graphical monitoring tool
+ This package is a GUI tool for monitoring and troubleshooting local
+ or remote Open vSwitch installations.  It presents GUI tables that
+ graphically represent an Open vSwitch kernel flow table (similar to
+ "ovs-dpctl dump-flows") and Open vSwitch database contents (similar
+ to "ovs-vsctl list <table>").
+ .
+ Open vSwitch is a full-featured software-based Ethernet switch.

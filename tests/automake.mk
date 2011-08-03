@@ -8,6 +8,7 @@ TESTSUITE_AT = \
 	tests/testsuite.at \
 	tests/ovsdb-macros.at \
 	tests/library.at \
+	tests/bundle.at \
 	tests/classifier.at \
 	tests/check-structs.at \
 	tests/daemon.at \
@@ -15,6 +16,7 @@ TESTSUITE_AT = \
 	tests/ofp-print.at \
 	tests/ovs-ofctl.at \
 	tests/multipath.at \
+	tests/autopath.at \
 	tests/vconn.at \
 	tests/file_name.at \
 	tests/aes128.at \
@@ -65,6 +67,7 @@ lcov_wrappers = \
 	tests/lcov/ovsdb-server \
 	tests/lcov/ovsdb-tool \
 	tests/lcov/test-aes128 \
+	tests/lcov/test-bundle \
 	tests/lcov/test-byte-order \
 	tests/lcov/test-classifier \
 	tests/lcov/test-csum \
@@ -117,6 +120,7 @@ valgrind_wrappers = \
 	tests/valgrind/ovsdb-server \
 	tests/valgrind/ovsdb-tool \
 	tests/valgrind/test-aes128 \
+	tests/valgrind/test-bundle \
 	tests/valgrind/test-byte-order \
 	tests/valgrind/test-classifier \
 	tests/valgrind/test-csum \
@@ -129,6 +133,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-list \
 	tests/valgrind/test-lockfile \
 	tests/valgrind/test-multipath \
+	tests/valgrind/test-openflowd \
 	tests/valgrind/test-ovsdb \
 	tests/valgrind/test-packets \
 	tests/valgrind/test-random \
@@ -183,6 +188,10 @@ noinst_PROGRAMS += tests/test-aes128
 tests_test_aes128_SOURCES = tests/test-aes128.c
 tests_test_aes128_LDADD = lib/libopenvswitch.a
 
+noinst_PROGRAMS += tests/test-bundle
+tests_test_bundle_SOURCES = tests/test-bundle.c
+tests_test_bundle_LDADD = lib/libopenvswitch.a
+
 noinst_PROGRAMS += tests/test-classifier
 tests_test_classifier_SOURCES = tests/test-classifier.c
 tests_test_classifier_LDADD = lib/libopenvswitch.a
@@ -227,6 +236,18 @@ tests_test_lockfile_LDADD = lib/libopenvswitch.a
 noinst_PROGRAMS += tests/test-multipath
 tests_test_multipath_SOURCES = tests/test-multipath.c
 tests_test_multipath_LDADD = lib/libopenvswitch.a
+
+noinst_PROGRAMS += tests/test-openflowd
+EXTRA_DIST += tests/test-openflowd.8.in
+DISTCLEANFILES += tests/test-openflowd.8
+noinst_man_MANS += tests/ovs-openflowd.8
+tests_test_openflowd_SOURCES = tests/test-openflowd.c
+tests_test_openflowd_LDADD = \
+	ofproto/libofproto.a \
+	lib/libsflow.a \
+	lib/libopenvswitch.a \
+	$(SSL_LIBS)
+
 
 noinst_PROGRAMS += tests/test-packets
 tests_test_packets_SOURCES = tests/test-packets.c
@@ -275,6 +296,10 @@ tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
 
 noinst_PROGRAMS += tests/test-type-props
 tests_test_type_props_SOURCES = tests/test-type-props.c
+
+noinst_PROGRAMS += tests/test-util
+tests_test_util_SOURCES = tests/test-util.c
+tests_test_util_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-uuid
 tests_test_uuid_SOURCES = tests/test-uuid.c

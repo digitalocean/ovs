@@ -25,6 +25,19 @@
         SSL used globally by the daemon.
       </column>
 
+      <column name="other_config">
+        Key-value pairs for configuring rarely used Open vSwitch features.  The
+        currently defined key-value pairs are:
+        <dl>
+          <dt><code>enable-statistics</code></dt>
+          <dd>
+            Set to <code>true</code> to enable populating the <ref
+            column="statistics"/> column or <code>false</code> (the default)
+            disable populating it.
+          </dd>
+        </dl>
+      </column>
+
       <column name="external_ids">
         Key-value pairs for use by external frameworks that integrate
         with Open vSwitch, rather than by Open vSwitch itself.  System
@@ -37,7 +50,7 @@
           <dd>A unique identifier for the Open vSwitch's physical host.
             The form of the identifier depends on the type of the host.
             On a Citrix XenServer, this will likely be the same as
-            <code>xs-system-uuid</code>.</dd>
+            <ref column="external_ids" key="xs-system-uuid"/>.</dd>
           <dt><code>xs-system-uuid</code></dt>
           <dd>The Citrix XenServer universally unique identifier for the
             physical host as displayed by <code>xe host-list</code>.</dd>
@@ -73,6 +86,11 @@
           vSwitch.  These are updated periodically (currently, every 5
           seconds).  Key-value pairs that cannot be determined or that do not
           apply to a platform are omitted.
+        </p>
+
+        <p>
+          Statistics are disabled unless <ref column="other-config"
+          key="enable-statistics"/> is set to <code>true</code>.
         </p>
 
         <dl>
@@ -363,10 +381,9 @@
       </column>
 
       <column name="datapath_id">
-        Reports the OpenFlow datapath ID in use.  Exactly 16 hex
-        digits.  (Setting this column will have no useful effect.  Set
-        <ref column="other_config"/>:<code>other-config</code>
-        instead.)
+        Reports the OpenFlow datapath ID in use.  Exactly 16 hex digits.
+        (Setting this column has no useful effect.  Set <ref
+        column="other-config" key="datapath-id"/> instead.)
       </column>
     </group>
 
@@ -386,8 +403,9 @@
         defined key-value pairs are:
         <dl>
           <dt><code>bridge-id</code></dt>
-          <dd>A unique identifier of the bridge.  On Citrix XenServer this
-            will commonly be the same as <code>xs-network-uuids</code>.</dd>
+          <dd>A unique identifier of the bridge.  On Citrix XenServer this will
+            commonly be the same as
+            <ref column="external_ids" key="xs-network-uuids"/>.</dd>
           <dt><code>xs-network-uuids</code></dt>
           <dd>Semicolon-delimited set of universally unique identifier(s) for
             the network with which this bridge is associated on a Citrix
@@ -419,6 +437,21 @@
             bridge.  If unset, or if the port used by an in-band control flow
             does not have QoS configured, or if the port does not have a queue
             with the specified ID, the default queue is used instead.
+          </dd>
+          <dt><code>flow-eviction-threshold</code></dt>
+          <dd>
+            A number of flows as a nonnegative integer.  This sets number
+            of flows at which eviction from the kernel flow table will
+            be triggered.
+            If there are a large number of flows then increasing this
+            value to around the number of flows present
+            can result in reduced CPU usage and packet loss.
+	  </dd>
+	  <dd>
+            The default is 1000.
+	  </dd>
+	  <dd>
+            Values below 100 will be rounded up to 100.
           </dd>
         </dl>
       </column>
@@ -516,9 +549,9 @@
       </dl>
 
       <p>
-        The following mode requires the upstream switch to support 802.3ad with
+        The following modes require the upstream switch to support 802.3ad with
         successful LACP negotiation.  If LACP negotiation fails then
-        <code>balance-slb</code> mode is used as a fallback:
+        <code>balance-slb</code> style flow hashing is used as a fallback:
       </p>
 
       <dl>
@@ -527,6 +560,23 @@
           Balances flows among slaves based on L2, L3, and L4 protocol
           information such as destination MAC address, IP address, and TCP
           port.
+        </dd>
+      </dl>
+
+      <dl>
+        <dt><code>stable</code></dt>
+        <dd>
+          <p>Attempts to always assign a given flow to the same slave
+            consistently.  In an effort to maintain stability, no load
+            balancing is done.  Uses a similar hashing strategy to
+            <code>balance-tcp</code>, always taking into account L3 and L4
+            fields even if LACP negotiations are unsuccessful. </p>
+          <p>Slave selection decisions are made based on <ref table="Interface"
+            column="other_config" key="bond-stable-id"/> if set.  Otherwise,
+            OpenFlow port number is used.  Decisions are consistent across all
+            <code>ovs-vswitchd</code> instances with equivalent
+            <ref table="Interface" column="other_config" key="bond-stable-id"/>
+            values.</p>
         </dd>
       </dl>
 
@@ -632,18 +682,41 @@
           <dd> The number of milliseconds between successive attempts to
             poll each interface's MII.  Only relevant on ports which use
             <code>miimon</code> to detect failures. </dd>
+          <dt><code>bond-hash-basis</code></dt>
+          <dd> An integer hashed along with flows when choosing output slaves.
+            When changed, all flows will be assigned different hash values
+            possibly causing slave selection decisions to change.</dd>
+          <dt><code>lacp-system-id</code></dt>
+          <dd> The LACP system ID of this <ref table="Port"/>.  The system ID
+            of a LACP bond is used to identify itself to its partners.  Must
+            be a nonzero MAC address.</dd>
           <dt><code>lacp-system-priority</code></dt>
           <dd> The LACP system priority of this <ref table="Port"/>.  In
             LACP negotiations, link status decisions are made by the system
             with the numerically lower priority.  Must be a number between 1
             and 65535.</dd>
           <dt><code>lacp-time</code></dt>
-          <dd> The LACP timing which should be used on this
-            <ref table="Port"/>.  Possible values are <code>fast</code> and
-            <code>slow</code>.  By default <code>slow</code> is used.  When
-            configured to be <code>fast</code> more frequent LACP heartbeats
-            will be requested causing connectivity problems to be detected more
-            quickly.</dd>
+          <dd>
+            <p>The LACP timing which should be used on this
+              <ref table="Port"/>.  Possible values are <code>fast</code>,
+              <code>slow</code> and a positive number of milliseconds.  By
+              default <code>slow</code> is used.  When configured to be
+              <code>fast</code> LACP heartbeats are requested at a rate of once
+              per second causing connectivity problems to be detected more
+              quickly.  In <code>slow</code> mode, heartbeats are requested at
+              a rate of once every 30 seconds.</p>
+
+            <p>Users may manually set a heartbeat transmission rate to increase
+              the fault detection speed further.  When manually set, OVS
+              expects the partner switch to be configured with the same
+              transmission rate.  Manually setting <code>lacp-time</code> to
+              something other than <code>fast</code> or <code>slow</code> is
+              not supported by the LACP specification.</p>
+          </dd>
+          <dt><code>lacp-heartbeat</code></dt>
+          <dd> Treats LACP like a simple heartbeat protocol for link state
+            monitoring.  Most features of the LACP protocol are disabled when
+            this mode is in use.</dd>
         </dl>
       </column>
     </group>
@@ -716,14 +789,16 @@
           <dd>A TUN/TAP device managed by Open vSwitch.</dd>
           <dt><code>gre</code></dt>
           <dd>An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
-             tunnel.  Each tunnel must be uniquely identified by the
-             combination of <code>remote_ip</code>, <code>local_ip</code>, and
-             <code>in_key</code>.  Note that if two ports are defined that are
-             the same except one has an optional identifier and the other does
-             not, the more specific one is matched first.  <code>in_key</code>
-             is considered more specific than <code>local_ip</code> if a port
-             defines one and another port defines the other.  The following
-             options may be specified in the <ref column="options"/> column:
+            tunnel.  Each tunnel must be uniquely identified by the
+            combination of <ref column="options" key="remote_ip"/>,
+            <ref column="options" key="local_ip"/>, and
+            <ref column="options" key="in_key"/>.  Note that if two ports
+            are defined that are the same except one has an optional
+            identifier and the other does not, the more specific one is
+            matched first.  <ref column="options" key="in_key"/> is considered
+            more specific than <ref column="options" key="local_ip"/> if a port
+            defines one and another port defines the other.  The following
+            options may be specified in the <ref column="options"/> column:
             <dl>
               <dt><code>remote_ip</code></dt>
               <dd>Required.  The tunnel endpoint.</dd>
@@ -788,18 +863,30 @@
                 Default is disabled, set to <code>true</code> to enable.</dd>
             </dl>
             <dl>
+              <dt><code>df_inherit</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be copied
+                from the inner IP headers (those of the encapsulated traffic)
+                to the outer (tunnel) headers.  Default is disabled; set to
+                <code>true</code> to enable.</dd>
+            </dl>
+            <dl>
+              <dt><code>df_default</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be set by
+                default on tunnel headers if the <code>df_inherit</code> option
+                is not set, or if the encapsulated packet is not IP.  Default
+                is enabled; set to <code>false</code> to disable.</dd>
+            </dl>
+            <dl>
               <dt><code>pmtud</code></dt>
               <dd>Optional.  Enable tunnel path MTU discovery.  If enabled
-                ``ICMP destination unreachable - fragmentation'' needed
+                ``ICMP Destination Unreachable - Fragmentation Needed''
                 messages will be generated for IPv4 packets with the DF bit set
                 and IPv6 packets above the minimum MTU if the packet size
-                exceeds the path MTU minus the size of the tunnel headers.  It
-                also forces the encapsulating packet DF bit to be set (it is
-                always set if the inner packet implies path MTU discovery).
+                exceeds the path MTU minus the size of the tunnel headers.
                 Note that this option causes behavior that is typically
                 reserved for routers and therefore is not entirely in
                 compliance with the IEEE 802.1D specification for bridges.
-                Default is enabled, set to <code>false</code> to disable.</dd>
+                Default is enabled; set to <code>false</code> to disable.</dd>
             </dl>
             <dl>
               <dt><code>header_cache</code></dt>
@@ -817,13 +904,14 @@
           <dd>An Ethernet over RFC 2890 Generic Routing Encapsulation
             over IPv4 IPsec tunnel.  Each tunnel (including those of type
             <code>gre</code>) must be uniquely identified by the
-            combination of <code>remote_ip</code> and
-            <code>local_ip</code>.  Note that if two ports are defined
-            that are the same except one has an optional identifier and
+            combination of <ref column="options" key="remote_ip"/> and
+            <ref column="options" key="local_ip"/>.  Note that if two ports are
+            defined that are the same except one has an optional identifier and
             the other does not, the more specific one is matched first.
-            An authentication method of <code>peer_cert</code> or
-            <code>psk</code> must be defined.  The following options may
-            be specified in the <ref column="options"/> column:
+            An authentication method of <ref column="options" key="peer_cert"/>
+            or <ref column="options" key="psk"/> must be defined.  The
+            following options may be specified in the <ref column="options"/>
+            column:
             <dl>
               <dt><code>remote_ip</code></dt>
               <dd>Required.  The tunnel endpoint.</dd>
@@ -914,18 +1002,30 @@
                 Default is disabled, set to <code>true</code> to enable.</dd>
             </dl>
             <dl>
+              <dt><code>df_inherit</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be copied
+                from the inner IP headers (those of the encapsulated traffic)
+                to the outer (tunnel) headers.  Default is disabled; set to
+                <code>true</code> to enable.</dd>
+            </dl>
+            <dl>
+              <dt><code>df_default</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be set by
+                default on tunnel headers if the <code>df_inherit</code> option
+                is not set, or if the encapsulated packet is not IP.  Default
+                is enabled; set to <code>false</code> to disable.</dd>
+            </dl>
+            <dl>
               <dt><code>pmtud</code></dt>
               <dd>Optional.  Enable tunnel path MTU discovery.  If enabled
-                ``ICMP destination unreachable - fragmentation'' needed
+                ``ICMP Destination Unreachable - Fragmentation Needed''
                 messages will be generated for IPv4 packets with the DF bit set
                 and IPv6 packets above the minimum MTU if the packet size
-                exceeds the path MTU minus the size of the tunnel headers.  It
-                also forces the encapsulating packet DF bit to be set (it is
-                always set if the inner packet implies path MTU discovery).
+                exceeds the path MTU minus the size of the tunnel headers.
                 Note that this option causes behavior that is typically
                 reserved for routers and therefore is not entirely in
                 compliance with the IEEE 802.1D specification for bridges.
-                Default is enabled, set to <code>false</code> to disable.</dd>
+                Default is enabled; set to <code>false</code> to disable.</dd>
             </dl>
           </dd>
           <dt><code>capwap</code></dt>
@@ -935,10 +1035,12 @@
              of the protocol is implemented.  Due to the non-standard use of
              CAPWAP, UDP ports 58881 and 58882 are used as the source and
              destination ports respectively.  Each tunnel must be uniquely
-             identified by the combination of <code>remote_ip</code> and
-             <code>local_ip</code>.  If two ports are defined that are the same
-             except one includes <code>local_ip</code> and the other does not,
-             the more specific one is matched first.  CAPWAP support is not
+             identified by the combination of
+             <ref column="options" key="remote_ip"/> and
+             <ref column="options" key="local_ip"/>.  If two ports are defined
+             that are the same except one includes
+             <ref column="options" key="local_ip"/> and the other does not, the
+             more specific one is matched first.  CAPWAP support is not
              available on all platforms.  Currently it is only supported in the
              Linux kernel module with kernel versions >= 2.6.25.  The following
              options may be specified in the <ref column="options"/> column:
@@ -969,18 +1071,30 @@
                 Default is the system default TTL.</dd>
             </dl>
             <dl>
+              <dt><code>df_inherit</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be copied
+                from the inner IP headers (those of the encapsulated traffic)
+                to the outer (tunnel) headers.  Default is disabled; set to
+                <code>true</code> to enable.</dd>
+            </dl>
+            <dl>
+              <dt><code>df_default</code></dt>
+              <dd>Optional.  If enabled, the Don't Fragment bit will be set by
+                default on tunnel headers if the <code>df_inherit</code> option
+                is not set, or if the encapsulated packet is not IP.  Default
+                is enabled; set to <code>false</code> to disable.</dd>
+            </dl>
+            <dl>
               <dt><code>pmtud</code></dt>
               <dd>Optional.  Enable tunnel path MTU discovery.  If enabled
-                ``ICMP destination unreachable - fragmentation'' needed
+                ``ICMP Destination Unreachable - Fragmentation Needed''
                 messages will be generated for IPv4 packets with the DF bit set
                 and IPv6 packets above the minimum MTU if the packet size
-                exceeds the path MTU minus the size of the tunnel headers.  It
-                also forces the encapsulating packet DF bit to be set (it is
-                always set if the inner packet implies path MTU discovery).
+                exceeds the path MTU minus the size of the tunnel headers.
                 Note that this option causes behavior that is typically
                 reserved for routers and therefore is not entirely in
                 compliance with the IEEE 802.1D specification for bridges.
-                Default is enabled, set to <code>false</code> to disable.</dd>
+                Default is enabled; set to <code>false</code> to disable.</dd>
             </dl>
             <dl>
               <dt><code>header_cache</code></dt>
@@ -1012,6 +1126,8 @@
               </dd>
             </dl>
           </dd>
+          <dt><code>null</code></dt>
+          <dd>An ignored interface.</dd>
         </dl>
       </column>
 
@@ -1072,9 +1188,9 @@
 
       <column name="status">
         <p>
-          Key-value pairs that report port status.  Supported status
-          values are <code>type</code>-dependent; some interfaces may not have
-          a valid <code>driver_name</code>, for example.
+          Key-value pairs that report port status.  Supported status values are
+          <ref column="type"/>-dependent; some interfaces may not have a valid
+          <ref column="status" key="driver_name"/>, for example.
         </p>
         <p>The currently defined key-value pairs are:</p>
         <dl>
@@ -1102,14 +1218,15 @@
             <dd>Egress interface for tunnels.  Currently only relevant for GRE
                 and CAPWAP tunnels.  On Linux systems, this column will show
                 the name of the interface which is responsible for routing
-                traffic destined for the configured <code>remote_ip</code>.
-                This could be an internal interface such as a bridge port.</dd>
+                traffic destined for the configured
+                <ref column="options" key="remote_ip"/>.  This could be an
+                internal interface such as a bridge port.</dd>
         </dl>
         <dl>
             <dt><code>tunnel_egress_iface_carrier</code></dt>
-            <dd>Whether a carrier is detected on <ref
-            column="tunnel_egress_iface"/>.  Valid values are <code>down</code>
-            and <code>up</code>.</dd>
+            <dd>Whether a carrier is detected on
+              <ref column="status" key="tunnel_egress_iface"/>.  Valid values
+              are <code>down</code> and <code>up</code>.</dd>
         </dl>
       </column>
     </group>
@@ -1190,10 +1307,46 @@
       </column>
     </group>
 
+    <group title="Connectivity Fault Management">
+      <p>
+        802.1ag Connectivity Fault Management (CFM) allows a group of
+        Maintenance Points (MPs) called a Maintenance Association (MA) to
+        detect connectivity problems with each other.  MPs within a MA should
+        have complete and exclusive interconnectivity.  This is verified by
+        occasionally broadcasting Continuity Check Messages (CCMs) at a
+        configurable transmission interval.
+      </p>
+
+      <column name="cfm_mpid">
+        A Maintenance Point ID (MPID) uniquely identifies each endpoint within
+        a Maintenance Association.  The MPID is used to identify this endpoint
+        to other Maintenance Points in the MA.  Each end of a link being
+        monitored should have a different MPID.  Must be configured to enable
+        CFM on this <ref table="Interface"/>.
+      </column>
+
+      <column name="cfm_remote_mpid">
+        The MPID of the remote endpoint being monitored.  If this
+        <ref table="Interface"/> does not have connectivity to an endpoint
+        advertising the configured MPID, a fault is signalled.  Must be
+        configured to enable CFM on this <ref table="Interface"/>
+      </column>
+
+      <column name="cfm_fault">
+        Indicates a connectivity fault triggered by an inability to receive
+        heartbeats from the remote endpoint.  When a fault is triggered on
+        <ref table="Interface"/>s participating in bonds, they will be
+        disabled.
+      </column>
+    </group>
+
     <group title="Other Features">
 
-      <column name="monitor">
-        Connectivity monitor configuration for this interface.
+      <column name="lacp_current">
+        Boolean value indicating LACP status for this interface.  If true, this
+        interface has current LACP information about its LACP partner.  This
+        information may be used to monitor the health of interfaces in a LACP
+        enabled port. This column will be empty if LACP is not enabled.
       </column>
 
       <column name="external_ids">
@@ -1213,7 +1366,8 @@
             field in the VIF record for this interface.</dd>
           <dt><code>iface-id</code></dt>
           <dd>A system-unique identifier for the interface.  On XenServer,
-            this will commonly be the same as <code>xs-vif-uuid</code>.</dd>
+            this will commonly be the same as
+            <ref column="external_ids" key="xs-vif-uuid"/>.</dd>
         </dl>
         <p>
           Additionally the following key-value pairs specifically
@@ -1239,11 +1393,33 @@
       <column name="other_config">
         Key-value pairs for rarely used interface features.
         <dl>
+          <dt><code>cfm_interval</code></dt>
+          <dd> The transmission interval of CFM heartbeats in milliseconds.
+            Three missed heartbeat receptions indicate a connectivity fault.
+            Defaults to 1000ms. </dd>
+          <dt><code>bond-stable-id</code></dt>
+          <dd> A positive integer using in <code>stable</code> bond mode to
+            make slave selection decisions.  Allocating
+            <ref column="other_config" key="bond-stable-id"/> values
+            consistently across interfaces participating in a bond will
+            guarantee consistent slave selection decisions across
+            <code>ovs-vswitchd</code> instances when using <code>stable</code>
+            bonding mode.</dd>
+          <dt><code>lacp-port-id</code></dt>
+          <dd> The LACP port ID of this <ref table="Interface"/>.  Port IDs are
+            used in LACP negotiations to identify individual ports
+            participating in a bond.  Must be a number between 1 and
+            65535.</dd>
           <dt><code>lacp-port-priority</code></dt>
           <dd> The LACP port priority of this <ref table="Interface"/>.  In
             LACP negotiations <ref table="Interface"/>s with numerically lower
             priorities are preferred for aggregation.  Must be a number between
             1 and 65535.</dd>
+          <dt><code>lacp-aggregation-key</code></dt>
+          <dd> The LACP aggregation key of this <ref table="Interface"/>.
+            <ref table="Interface"/>s with different aggregation keys may not
+            be active within a given <ref table="Port"/> at the same time. Must
+            be a number between 1 and 65535.</dd>
         </dl>
       </column>
 
@@ -1434,82 +1610,6 @@
     </column>
   </table>
 
-  <table name="Monitor" title="Connectivity Monitor configuration">
-    <p>
-      A <ref table="Monitor"/> attaches to an <ref table="Interface"/> to
-      implement 802.1ag Connectivity Fault Management (CFM).  CFM allows a
-      group of Maintenance Points (MPs) called a Maintenance Association (MA)
-      to detect connectivity problems with each other.  MPs within a MA should
-      have complete and exclusive interconnectivity.  This is verified by
-      occasionally broadcasting Continuity Check Messages (CCMs) at a
-      configurable transmission interval.  A <ref table="Monitor"/> is
-      responsible for collecting data about other MPs in its MA and
-      broadcasting CCMs.
-    </p>
-
-    <group title="Monitor Configuration">
-      <column name="mpid">
-        A Maintenance Point ID (MPID) uniquely identifies each endpoint within
-        a Maintenance Association (see <ref column="ma_name"/>).  The MPID is
-        used to identify this <ref table="Monitor"/> to other endpoints in the
-        MA.
-      </column>
-
-      <column name="remote_mps">
-        A set of <ref table="Maintenance_Points"/> which this
-        <ref table="Monitor"/> should have connectivity to.  If this
-        <ref table="Monitor"/> does not have connectivity to any MPs in this
-        set, or has connectivity to any MPs not in this set, a fault is
-        signaled.
-      </column>
-
-      <column name="ma_name">
-        A Maintenance Association (MA) name pairs with a Maintenance Domain
-        (MD) name to uniquely identify a MA.  A MA is a group of endpoints who
-        have complete and exclusive interconnectivity. Defaults to
-        <code>ovs</code> if unset.
-      </column>
-
-      <column name="md_name">
-        A Maintenance Domain name pairs with a Maintenance Association name to
-        uniquely identify a MA. Defaults to <code>ovs</code> if unset.
-      </column>
-
-      <column name="interval">
-        The transmission interval of CCMs in milliseconds.  Three missed CCMs
-        indicate a connectivity fault.  Defaults to 1000ms.
-      </column>
-    </group>
-
-    <group title="Monitor Status">
-      <column name="fault">
-        Indicates a Connectivity Fault caused by a configuration error, a down
-        remote MP, or unexpected connectivity to a remote MAID or remote MP.
-      </column>
-    </group>
-  </table>
-
-  <table name="Maintenance_Point" title="Maintenance Point configuration">
-    <p>
-      A <ref table="Maintenance_Point"/> represents a MP which a
-      <ref table="Monitor"/> has or should have connectivity to.
-    </p>
-
-    <group title="Maintenance_Point Configuration">
-      <column name="mpid">
-        A Maintenance Point ID (MPID) uniquely identifies each endpoint within
-        a Maintenance Association. All MPs within a MA should have a unique
-        MPID.
-      </column>
-    </group>
-
-    <group title="Maintenance_Point Status">
-      <column name="fault">
-        Indicates a connectivity fault.
-      </column>
-    </group>
-  </table>
-
   <table name="Mirror" title="Port mirroring (SPAN/RSPAN).">
     <p>A port mirror within a <ref table="Bridge"/>.</p>
     <p>A port mirror configures a bridge to send selected frames to special
@@ -1571,6 +1671,37 @@
           <ref column="output_vlan"/>, replacing any existing tag; when it is
           sent out an implicit VLAN port, the frame will not be tagged.  This
           type of mirroring is sometimes called RSPAN.</p>
+        <p>
+          The following destination MAC addresses will not be mirrored to a
+          VLAN to avoid confusing switches that interpret the protocols that
+          they represent:
+        </p>
+        <dl>
+          <dt><code>01:80:c2:00:00:00</code></dt>
+          <dd>IEEE 802.1D Spanning Tree Protocol (STP).</dd>
+
+          <dt><code>01:80:c2:00:00:01</code></dt>
+          <dd>IEEE Pause frame.</dd>
+
+          <dt><code>01:80:c2:00:00:0<var>x</var></code></dt>
+          <dd>Other reserved protocols.</dd>
+
+          <dt><code>01:00:0c:cc:cc:cc</code></dt>
+          <dd>
+            Cisco Discovery Protocol (CDP), VLAN Trunking Protocol (VTP),
+            Dynamic Trunking Protocol (DTP), Port Aggregation Protocol (PAgP),
+            and others.
+          </dd>
+
+          <dt><code>01:00:0c:cc:cc:cd</code></dt>
+          <dd>Cisco Shared Spanning Tree Protocol PVSTP+.</dd>
+
+          <dt><code>01:00:0c:cd:cd:cd</code></dt>
+          <dd>Cisco STP Uplink Fast.</dd>
+
+          <dt><code>01:00:0c:00:00:00</code></dt>
+          <dd>Cisco Inter Switch Link.</dd>
+        </dl>
         <p><em>Please note:</em> Mirroring to a VLAN can disrupt a network that
           contains unmanaged switches.  Consider an unmanaged physical switch
           with two ports: port 1, connected to an end host, and port 2,
@@ -2074,6 +2205,34 @@
           <dd>The amount of time since this manager last disconnected from the
             database (in seconds). Value is empty if manager has never
             disconnected.</dd>
+        </dl>
+        <dl>
+          <dt><code>locks_held</code></dt>
+          <dt><code>locks_waiting</code></dt>
+          <dt><code>locks_lost</code></dt>
+          <dd>
+            Space-separated lists of the names of OVSDB locks that the
+            connection holds, is currently waiting to acquire, or has had
+            stolen by another OVSDB client, respectively.  Key-value pairs for
+            lists that would be empty are omitted.
+          </dd>
+        </dl>
+        <dl>
+          <dt><code>n_connections</code></dt>
+          <dd>
+            <p>
+              When <ref column="target"/> specifies a connection method that
+              listens for inbound connections (e.g. <code>ptcp:</code> or
+              <code>pssl:</code>) and more than one connection is actually
+              active, the value is the number of active connections.
+              Otherwise, this key-value pair is omitted.
+            </p>
+            <p>
+              When multiple connections are active, status columns and
+              key-value pairs (other than this one) report the status of one
+              arbitrarily chosen connection.
+            </p>
+          </dd>
         </dl>
       </column>
     </group>

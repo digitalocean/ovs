@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include "openflow/openflow.h"
 #include "openvswitch/datapath-protocol.h"
+#include "netdev.h"
 #include "util.h"
 
 #ifdef  __cplusplus
@@ -31,18 +32,15 @@ extern "C" {
 
 struct dpif;
 struct ds;
-struct netdev;
 struct nlattr;
 struct ofpbuf;
 struct sset;
 struct dpif_class;
 
-void dp_run(void);
-void dp_wait(void);
-
 int dp_register_provider(const struct dpif_class *);
 int dp_unregister_provider(const char *type);
 void dp_enumerate_types(struct sset *types);
+const char *dpif_normalize_type(const char *);
 
 int dp_enumerate_names(const char *type, struct sset *names);
 void dp_parse_name(const char *datapath_name, char **name, char **type);
@@ -51,6 +49,9 @@ int dpif_open(const char *name, const char *type, struct dpif **);
 int dpif_create(const char *name, const char *type, struct dpif **);
 int dpif_create_and_open(const char *name, const char *type, struct dpif **);
 void dpif_close(struct dpif *);
+
+void dpif_run(struct dpif *);
+void dpif_wait(struct dpif *);
 
 const char *dpif_name(const struct dpif *);
 const char *dpif_base_name(const struct dpif *);
@@ -71,6 +72,7 @@ struct dpif_port {
     char *name;                 /* Network device name, e.g. "eth0". */
     char *type;                 /* Network device type, e.g. "system". */
     uint32_t port_no;           /* Port number within datapath. */
+    struct netdev_stats stats;  /* Port statistics. */
 };
 void dpif_port_clone(struct dpif_port *, const struct dpif_port *);
 void dpif_port_destroy(struct dpif_port *);
@@ -146,15 +148,19 @@ bool dpif_flow_dump_next(struct dpif_flow_dump *,
                          const struct dpif_flow_stats **);
 int dpif_flow_dump_done(struct dpif_flow_dump *);
 
-int dpif_execute(struct dpif *, const struct nlattr *actions,
-                 size_t actions_len, const struct ofpbuf *);
+int dpif_execute(struct dpif *,
+                 const struct nlattr *key, size_t key_len,
+                 const struct nlattr *actions, size_t actions_len,
+                 const struct ofpbuf *);
 
 enum dpif_upcall_type {
     DPIF_UC_MISS,               /* Miss in flow table. */
-    DPIF_UC_ACTION,             /* ODP_ACTION_ATTR_CONTROLLER action. */
+    DPIF_UC_ACTION,             /* ODP_ACTION_ATTR_USERSPACE action. */
     DPIF_UC_SAMPLE,             /* Packet sampling. */
     DPIF_N_UC_TYPES
 };
+
+const char *dpif_upcall_type_to_string(enum dpif_upcall_type);
 
 /* A packet passed up from the datapath to userspace.
  *
@@ -171,7 +177,7 @@ struct dpif_upcall {
     size_t key_len;             /* Length of 'key' in bytes. */
 
     /* DPIF_UC_ACTION only. */
-    uint64_t userdata;          /* Argument to ODP_ACTION_ATTR_CONTROLLER. */
+    uint64_t userdata;          /* Argument to ODP_ACTION_ATTR_USERSPACE. */
 
     /* DPIF_UC_SAMPLE only. */
     uint32_t sample_pool;       /* # of sampling candidate packets so far. */

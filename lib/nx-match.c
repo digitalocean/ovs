@@ -78,16 +78,6 @@ static struct nxm_field nxm_fields[N_NXM_FIELDS] = {
 /* Hash table of 'nxm_fields'. */
 static struct hmap all_nxm_fields = HMAP_INITIALIZER(&all_nxm_fields);
 
-/* Possible masks for NXM_OF_ETH_DST_W. */
-static const uint8_t eth_all_0s[ETH_ADDR_LEN]
-    = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-static const uint8_t eth_all_1s[ETH_ADDR_LEN]
-    = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-static const uint8_t eth_mcast_1[ETH_ADDR_LEN]
-    = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
-static const uint8_t eth_mcast_0[ETH_ADDR_LEN]
-    = {0xfe, 0xff, 0xff, 0xff, 0xff, 0xff};
-
 static void
 nxm_init(void)
 {
@@ -176,9 +166,6 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         /* Metadata. */
     case NFI_NXM_OF_IN_PORT:
         flow->in_port = ntohs(get_unaligned_be16(value));
-        if (flow->in_port == OFPP_LOCAL) {
-            flow->in_port = ODPP_LOCAL;
-        }
         return 0;
 
         /* Ethernet header. */
@@ -195,20 +182,8 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         if ((wc->wildcards & (FWW_DL_DST | FWW_ETH_MCAST))
             != (FWW_DL_DST | FWW_ETH_MCAST)) {
             return NXM_DUP_TYPE;
-        } else if (eth_addr_equals(mask, eth_mcast_1)) {
-            wc->wildcards &= ~FWW_ETH_MCAST;
-            flow->dl_dst[0] = *(uint8_t *) value & 0x01;
-            return 0;
-        } else if (eth_addr_equals(mask, eth_mcast_0)) {
-            wc->wildcards &= ~FWW_DL_DST;
-            memcpy(flow->dl_dst, value, ETH_ADDR_LEN);
-            flow->dl_dst[0] &= 0xfe;
-            return 0;
-        } else if (eth_addr_equals(mask, eth_all_0s)) {
-            return 0;
-        } else if (eth_addr_equals(mask, eth_all_1s)) {
-            wc->wildcards &= ~(FWW_DL_DST | FWW_ETH_MCAST);
-            memcpy(flow->dl_dst, value, ETH_ADDR_LEN);
+        } else if (flow_wildcards_is_dl_dst_mask_valid(mask)) {
+            cls_rule_set_dl_dst_masked(rule, value, mask);
             return 0;
         } else {
             return NXM_BAD_MASK;
@@ -370,7 +345,7 @@ parse_nxm_entry(struct cls_rule *rule, const struct nxm_field *f,
         /* IPv6 Neighbor Discovery. */
     case NFI_NXM_NX_ND_TARGET:
         /* We've already verified that it's an ICMPv6 message. */
-        if ((flow->tp_src != htons(ND_NEIGHBOR_SOLICIT)) 
+        if ((flow->tp_src != htons(ND_NEIGHBOR_SOLICIT))
                     && (flow->tp_src != htons(ND_NEIGHBOR_ADVERT))) {
             return NXM_BAD_PREREQ;
         }
@@ -680,20 +655,15 @@ nxm_put_eth(struct ofpbuf *b, uint32_t header,
 
 static void
 nxm_put_eth_dst(struct ofpbuf *b,
-                uint32_t wc, const uint8_t value[ETH_ADDR_LEN])
+                flow_wildcards_t wc, const uint8_t value[ETH_ADDR_LEN])
 {
     switch (wc & (FWW_DL_DST | FWW_ETH_MCAST)) {
     case FWW_DL_DST | FWW_ETH_MCAST:
         break;
-    case FWW_DL_DST:
+    default:
         nxm_put_header(b, NXM_OF_ETH_DST_W);
         ofpbuf_put(b, value, ETH_ADDR_LEN);
-        ofpbuf_put(b, eth_mcast_1, ETH_ADDR_LEN);
-        break;
-    case FWW_ETH_MCAST:
-        nxm_put_header(b, NXM_OF_ETH_DST_W);
-        ofpbuf_put(b, value, ETH_ADDR_LEN);
-        ofpbuf_put(b, eth_mcast_0, ETH_ADDR_LEN);
+        ofpbuf_put(b, flow_wildcards_to_dl_dst_mask(wc), ETH_ADDR_LEN);
         break;
     case 0:
         nxm_put_eth(b, NXM_OF_ETH_DST, value);
@@ -739,9 +709,6 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
     /* Metadata. */
     if (!(wc & FWW_IN_PORT)) {
         uint16_t in_port = flow->in_port;
-        if (in_port == ODPP_LOCAL) {
-            in_port = OFPP_LOCAL;
-        }
         nxm_put_16(b, NXM_OF_IN_PORT, htons(in_port));
     }
 
@@ -839,19 +806,25 @@ nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
             case IPPROTO_ICMPV6:
                 if (!(wc & FWW_TP_SRC)) {
                     nxm_put_8(b, NXM_NX_ICMPV6_TYPE, ntohs(flow->tp_src));
+
+                    if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
+                        flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
+                        if (!(wc & FWW_ND_TARGET)) {
+                            nxm_put_ipv6(b, NXM_NX_ND_TARGET, &flow->nd_target,
+                                         &in6addr_exact);
+                        }
+                        if (!(wc & FWW_ARP_SHA)
+                            && flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)) {
+                            nxm_put_eth(b, NXM_NX_ND_SLL, flow->arp_sha);
+                        }
+                        if (!(wc & FWW_ARP_THA)
+                            && flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
+                            nxm_put_eth(b, NXM_NX_ND_TLL, flow->arp_tha);
+                        }
+                    }
                 }
                 if (!(wc & FWW_TP_DST)) {
                     nxm_put_8(b, NXM_NX_ICMPV6_CODE, ntohs(flow->tp_dst));
-                }
-                if (!(wc & FWW_ND_TARGET)) {
-                    nxm_put_ipv6(b, NXM_NX_ND_TARGET, &flow->nd_target,
-                            &in6addr_exact);
-                }
-                if (!(wc & FWW_ARP_SHA)) {
-                    nxm_put_eth(b, NXM_NX_ND_SLL, flow->arp_sha);
-                }
-                if (!(wc & FWW_ARP_THA)) {
-                    nxm_put_eth(b, NXM_NX_ND_TLL, flow->arp_tha);
                 }
                 break;
             }
@@ -1238,27 +1211,48 @@ nxm_check_reg_move(const struct nx_action_reg_move *action,
     return 0;
 }
 
+/* Given a flow, checks that the destination field represented by 'dst_header'
+ * and 'ofs_nbits' is valid and large enough for 'min_n_bits' bits of data. */
 int
-nxm_check_reg_load(const struct nx_action_reg_load *action,
-                   const struct flow *flow)
+nxm_dst_check(ovs_be32 dst_header, ovs_be16 ofs_nbits, size_t min_n_bits,
+              const struct flow *flow)
 {
     const struct nxm_field *dst;
     int ofs, n_bits;
 
-    ofs = nxm_decode_ofs(action->ofs_nbits);
-    n_bits = nxm_decode_n_bits(action->ofs_nbits);
-    dst = nxm_field_lookup(ntohl(action->dst));
+    ofs = nxm_decode_ofs(ofs_nbits);
+    n_bits = nxm_decode_n_bits(ofs_nbits);
+    dst = nxm_field_lookup(ntohl(dst_header));
+
     if (!field_ok(dst, flow, ofs + n_bits)) {
-        return BAD_ARGUMENT;
+        VLOG_WARN_RL(&rl, "invalid destination field");
+    } else if (!dst->writable) {
+        VLOG_WARN_RL(&rl, "destination field is not writable");
+    } else if (n_bits < min_n_bits) {
+        VLOG_WARN_RL(&rl, "insufficient bits in destination");
+    } else {
+        return 0;
+    }
+
+    return BAD_ARGUMENT;
+}
+
+int
+nxm_check_reg_load(const struct nx_action_reg_load *action,
+                   const struct flow *flow)
+{
+    int n_bits;
+    int error;
+
+    error = nxm_dst_check(action->dst, action->ofs_nbits, 0, flow);
+    if (error) {
+        return error;
     }
 
     /* Reject 'action' if a bit numbered 'n_bits' or higher is set to 1 in
      * action->value. */
+    n_bits = nxm_decode_n_bits(action->ofs_nbits);
     if (n_bits < 64 && ntohll(action->value) >> n_bits) {
-        return BAD_ARGUMENT;
-    }
-
-    if (!dst->writable) {
         return BAD_ARGUMENT;
     }
 
@@ -1272,7 +1266,7 @@ nxm_read_field(const struct nxm_field *src, const struct flow *flow)
 {
     switch (src->index) {
     case NFI_NXM_OF_IN_PORT:
-        return flow->in_port == ODPP_LOCAL ? OFPP_LOCAL : flow->in_port;
+        return flow->in_port;
 
     case NFI_NXM_OF_ETH_DST:
         return eth_addr_to_uint64(flow->dl_dst);
@@ -1372,6 +1366,14 @@ nxm_write_field(const struct nxm_field *dst, struct flow *flow,
                 uint64_t new_value)
 {
     switch (dst->index) {
+    case NFI_NXM_OF_ETH_DST:
+        eth_addr_from_uint64(new_value, flow->dl_dst);
+        break;
+
+    case NFI_NXM_OF_ETH_SRC:
+        eth_addr_from_uint64(new_value, flow->dl_src);
+        break;
+
     case NFI_NXM_OF_VLAN_TCI:
         flow->vlan_tci = htons(new_value);
         break;
@@ -1401,21 +1403,34 @@ nxm_write_field(const struct nxm_field *dst, struct flow *flow,
 #error
 #endif
 
-    case NFI_NXM_OF_IN_PORT:
-    case NFI_NXM_OF_ETH_DST:
-    case NFI_NXM_OF_ETH_SRC:
-    case NFI_NXM_OF_ETH_TYPE:
     case NFI_NXM_OF_IP_TOS:
-    case NFI_NXM_OF_IP_PROTO:
-    case NFI_NXM_OF_ARP_OP:
+        flow->nw_tos = new_value & IP_DSCP_MASK;
+        break;
+
     case NFI_NXM_OF_IP_SRC:
-    case NFI_NXM_OF_ARP_SPA:
+        flow->nw_src = htonl(new_value);
+        break;
+
     case NFI_NXM_OF_IP_DST:
-    case NFI_NXM_OF_ARP_TPA:
+        flow->nw_dst = htonl(new_value);
+        break;
+
     case NFI_NXM_OF_TCP_SRC:
     case NFI_NXM_OF_UDP_SRC:
+        flow->tp_src = htons(new_value);
+        break;
+
     case NFI_NXM_OF_TCP_DST:
     case NFI_NXM_OF_UDP_DST:
+        flow->tp_dst = htons(new_value);
+        break;
+
+    case NFI_NXM_OF_IN_PORT:
+    case NFI_NXM_OF_ETH_TYPE:
+    case NFI_NXM_OF_IP_PROTO:
+    case NFI_NXM_OF_ARP_OP:
+    case NFI_NXM_OF_ARP_SPA:
+    case NFI_NXM_OF_ARP_TPA:
     case NFI_NXM_OF_ICMP_TYPE:
     case NFI_NXM_OF_ICMP_CODE:
     case NFI_NXM_NX_TUN_ID_W:
@@ -1454,31 +1469,30 @@ nxm_execute_reg_move(const struct nx_action_reg_move *action,
     int src_ofs = ntohs(action->src_ofs);
     uint64_t src_data = nxm_read_field(src, flow) & (mask << src_ofs);
 
-    /* Get the remaining bits of the destination field. */
-    const struct nxm_field *dst = nxm_field_lookup(ntohl(action->dst));
-    int dst_ofs = ntohs(action->dst_ofs);
-    uint64_t dst_data = nxm_read_field(dst, flow) & ~(mask << dst_ofs);
-
-    /* Get the final value. */
-    uint64_t new_data = dst_data | ((src_data >> src_ofs) << dst_ofs);
-
-    nxm_write_field(dst, flow, new_data);
+    nxm_reg_load(action->dst,
+                 nxm_encode_ofs_nbits(ntohs(action->dst_ofs), n_bits),
+                 src_data, flow);
 }
 
 void
 nxm_execute_reg_load(const struct nx_action_reg_load *action,
                      struct flow *flow)
 {
-    /* Preparation. */
-    int n_bits = nxm_decode_n_bits(action->ofs_nbits);
+    nxm_reg_load(action->dst, action->ofs_nbits, ntohll(action->value), flow);
+}
+
+/* Calculates ofs and n_bits from the given 'ofs_nbits' parameter, and copies
+ * 'src_data'[0:n_bits] to 'dst_header'[ofs:ofs+n_bits] in the given 'flow'. */
+void
+nxm_reg_load(ovs_be32 dst_header, ovs_be16 ofs_nbits, uint64_t src_data,
+             struct flow *flow)
+{
+    int n_bits = nxm_decode_n_bits(ofs_nbits);
+    int dst_ofs = nxm_decode_ofs(ofs_nbits);
     uint64_t mask = n_bits == 64 ? UINT64_MAX : (UINT64_C(1) << n_bits) - 1;
 
-    /* Get source data. */
-    uint64_t src_data = ntohll(action->value);
-
     /* Get remaining bits of the destination field. */
-    const struct nxm_field *dst = nxm_field_lookup(ntohl(action->dst));
-    int dst_ofs = nxm_decode_ofs(action->ofs_nbits);
+    const struct nxm_field *dst = nxm_field_lookup(ntohl(dst_header));
     uint64_t dst_data = nxm_read_field(dst, flow) & ~(mask << dst_ofs);
 
     /* Get the final value. */

@@ -69,14 +69,6 @@ struct dpif_class {
      * the type assumed if no type is specified when opening a dpif. */
     const char *type;
 
-    /* Performs periodic work needed by dpifs of this class, if any is
-     * necessary. */
-    void (*run)(void);
-
-    /* Arranges for poll_block() to wake up if the "run" member function needs
-     * to be called. */
-    void (*wait)(void);
-
     /* Enumerates the names of all known created datapaths, if possible, into
      * 'all_dps'.  The caller has already initialized 'all_dps' and other dpif
      * classes might already have added names to it.
@@ -107,6 +99,13 @@ struct dpif_class {
      * If successful, 'dpif' will not be used again except as an argument for
      * the 'close' member function. */
     int (*destroy)(struct dpif *dpif);
+
+    /* Performs periodic work needed by 'dpif', if any is necessary. */
+    void (*run)(struct dpif *dpif);
+
+    /* Arranges for poll_block() to wake up if the "run" member function needs
+     * to be called for 'dpif'. */
+    void (*wait)(struct dpif *dpif);
 
     /* Retrieves statistics for 'dpif' into 'stats'. */
     int (*get_stats)(const struct dpif *dpif, struct odp_stats *stats);
@@ -283,9 +282,14 @@ struct dpif_class {
     int (*flow_dump_done)(const struct dpif *dpif, void *state);
 
     /* Performs the 'actions_len' bytes of actions in 'actions' on the Ethernet
-     * frame specified in 'packet'. */
-    int (*execute)(struct dpif *dpif, const struct nlattr *actions,
-                   size_t actions_len, const struct ofpbuf *packet);
+     * frame specified in 'packet' taken from the flow specified in the
+     * 'key_len' bytes of 'key'.  ('key' is mostly redundant with 'packet', but
+     * it contains some metadata that cannot be recovered from 'packet', such
+     * as tun_id and in_port.) */
+    int (*execute)(struct dpif *dpif,
+                   const struct nlattr *key, size_t key_len,
+                   const struct nlattr *actions, size_t actions_len,
+                   const struct ofpbuf *packet);
 
     /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  A 1-bit of value
      * 2**X set in '*listen_mask' indicates that 'dpif' will receive messages

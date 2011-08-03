@@ -18,14 +18,11 @@
 #define MAC_LEARNING_H 1
 
 #include <time.h>
+#include "hmap.h"
 #include "list.h"
 #include "packets.h"
 #include "tag.h"
 #include "timeval.h"
-
-#define MAC_HASH_BITS 10
-#define MAC_HASH_MASK (MAC_HASH_SIZE - 1)
-#define MAC_HASH_SIZE (1u << MAC_HASH_BITS)
 
 #define MAC_MAX 2048
 
@@ -38,8 +35,8 @@
 
 /* A MAC learning table entry. */
 struct mac_entry {
-    struct list hash_node;      /* Element in a mac_learning 'table' list. */
-    struct list lru_node;       /* Element in 'lrus' or 'free' list. */
+    struct hmap_node hmap_node; /* Node in a mac_learning hmap. */
+    struct list lru_node;       /* Element in 'lrus' list. */
     time_t expires;             /* Expiration time. */
     time_t grat_arp_lock;       /* Gratuitous ARP lock expiration time. */
     uint8_t mac[ETH_ADDR_LEN];  /* Known MAC address. */
@@ -78,11 +75,9 @@ static inline bool mac_entry_is_grat_arp_locked(const struct mac_entry *mac)
 
 /* MAC learning table. */
 struct mac_learning {
-    struct list free;           /* Not-in-use entries. */
+    struct hmap table;          /* Learning table. */
     struct list lrus;           /* In-use entries, least recently used at the
                                    front, most recently used at the back. */
-    struct list table[MAC_HASH_SIZE]; /* Hash table. */
-    struct mac_entry entries[MAC_MAX]; /* All entries. */
     uint32_t secret;            /* Secret for randomizing hash table. */
     unsigned long *flood_vlans; /* Bitmap of learning disabled VLANs. */
 };
@@ -96,7 +91,7 @@ void mac_learning_wait(struct mac_learning *);
 
 /* Configuration. */
 bool mac_learning_set_flood_vlans(struct mac_learning *,
-                                  unsigned long *bitmap);
+                                  const unsigned long *bitmap);
 
 /* Learning. */
 bool mac_learning_may_learn(const struct mac_learning *,

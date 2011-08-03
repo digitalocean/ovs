@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -81,22 +81,23 @@ main(int argc, char *argv[])
 static void
 usage(void)
 {
-    printf("%s, for querying and controlling Open vSwitch daemon\n"
-           "usage: %s [TARGET] COMMAND [ARG...]\n"
-           "Targets:\n"
-           "  -t, --target=TARGET  pidfile or socket to contact\n"
-           "Common commands:"
-           "  help               List commands supported by the target\n"
-           "  vlog/list          List current logging levels\n"
-           "  vlog/set MODULE[:FACILITY[:LEVEL]]\n"
-           "        Set MODULE and FACILITY log level to LEVEL\n"
-           "        MODULE may be any valid module name or 'ANY'\n"
-           "        FACILITY may be 'syslog', 'console', 'file', or 'ANY' (default)\n"
-           "        LEVEL may be 'emer', 'err', 'warn', 'info', or 'dbg' (default)\n"
-           "  vlog/reopen        Make the program reopen its log file\n"
-           "Other options:\n"
-           "  -h, --help         Print this helpful information\n"
-           "  -V, --version      Display version information\n",
+    printf("\
+%s, for querying and controlling Open vSwitch daemon\n\
+usage: %s [TARGET] COMMAND [ARG...]\n\
+Targets:\n\
+  -t, --target=TARGET  pidfile or socket to contact\n\
+Common commands:\n\
+  help               List commands supported by the target\n\
+  vlog/list          List current logging levels\n\
+  vlog/set MODULE[:FACILITY[:LEVEL]]\n\
+      Set MODULE and FACILITY log level to LEVEL\n\
+      MODULE may be any valid module name or 'ANY'\n\
+      FACILITY may be 'syslog', 'console', 'file', or 'ANY' (default)\n\
+      LEVEL may be 'off', 'emer', 'err', 'warn', 'info', or 'dbg' (default)\n\
+  vlog/reopen        Make the program reopen its log file\n\
+Other options:\n\
+  -h, --help         Print this helpful information\n\
+  -V, --version      Display version information\n",
            program_name, program_name);
     exit(EXIT_SUCCESS);
 }
@@ -109,7 +110,7 @@ parse_command_line(int argc, char *argv[])
         {"execute", no_argument, NULL, 'e'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
-        {0, 0, 0, 0},
+        {NULL, 0, NULL, 0},
     };
     const char *target;
     int e_options;

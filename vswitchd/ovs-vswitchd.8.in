@@ -14,17 +14,15 @@
 ovs\-vswitchd \- Open vSwitch daemon
 .
 .SH SYNOPSIS
-.B ovs\-vswitchd
-\fIdatabase\fR
+\fBovs\-vswitchd \fR[\fIdatabase\fR]
 .
 .SH DESCRIPTION
 A daemon that manages and controls any number of Open vSwitch switches
 on the local machine.
 .PP
-The mandatory \fIdatabase\fR argument normally takes the form
-\fBunix:\fIfile\fR, where \fIfile\fR is the name of a Unix domain
-socket on which \fBovsdb\-server\fR is listening.  However, all of the
-following forms are accepted:
+The \fIdatabase\fR argument specifies how \fBovs\-vswitchd\fR connects
+to \fBovsdb\-server\fR.  The default is \fBunix:@RUNDIR@/db.sock\fR.
+The following forms are accepted:
 .so ovsdb/remote-active.man
 .so ovsdb/remote-passive.man
 .PP
@@ -66,9 +64,6 @@ Connectivity to an external OpenFlow controller, such as NOX.
 Only a single instance of \fBovs\-vswitchd\fR is intended to run at a time.
 A single \fBovs\-vswitchd\fR can manage any number of switch instances, up
 to the maximum number of supported Open vSwitch datapaths.
-.PP
-\fBovs\-vswitchd\fR provides all the features of \fBovs-openflowd\fR,
-and more.  Do not run both daemons at the same time.
 .PP
 \fBovs\-vswitchd\fR does all the necessary management of Open vSwitch datapaths
 itself.  Thus, external tools, such \fBovs\-dpctl\fR(8), are not needed for
@@ -182,9 +177,9 @@ updelay (or downdelay).
 .IP
 This setting is not permanent: it persists only until the carrier
 status of \fIslave\fR changes.
-.IP "\fBbond/hash\fR \fImac\fR [\fIvlan\fR]"
+.IP "\fBbond/hash\fR \fImac\fR [\fIvlan\fR] [\fIbasis\fR]"
 Returns the hash value which would be used for \fImac\fR with \fIvlan\fR
-if specified.
+and \fIbasis\fR if specified.
 .
 .IP "\fBlacp/show\fR \fIport\fR"
 Lists all of the LACP related information about the given \fIport\fR:

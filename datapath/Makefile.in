@@ -31,9 +31,9 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-@L26_ENABLED_TRUE@am__append_1 = linux-2.6
+@LINUX_ENABLED_TRUE@am__append_1 = linux
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
-	$(srcdir)/Modules.mk $(srcdir)/linux-2.6/Modules.mk
+	$(srcdir)/Modules.mk $(srcdir)/linux/Modules.mk
 subdir = datapath
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/nx-build.m4 \
@@ -61,7 +61,7 @@ AM_RECURSIVE_TARGETS = $(RECURSIVE_TARGETS:-recursive=) \
 	distdir
 ETAGS = etags
 CTAGS = ctags
-DIST_SUBDIRS = linux-2.6
+DIST_SUBDIRS = linux
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 am__relativize = \
   dir0=`pwd`; \
@@ -98,6 +98,7 @@ BUILDNR = @BUILDNR@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
+CGCCFLAGS = @CGCCFLAGS@
 CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
@@ -118,7 +119,7 @@ INSTALL_PROGRAM = @INSTALL_PROGRAM@
 INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 KARCH = @KARCH@
-KBUILD26 = @KBUILD26@
+KBUILD = @KBUILD@
 LDFLAGS = @LDFLAGS@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
@@ -137,6 +138,8 @@ PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PERL = @PERL@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 PKIDIR = @PKIDIR@
 PYTHON = @PYTHON@
 PYUIC4 = @PYUIC4@
@@ -144,6 +147,8 @@ RANLIB = @RANLIB@
 RUNDIR = @RUNDIR@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
+SPARSE = @SPARSE@
+SPARSEFLAGS = @SPARSEFLAGS@
 SSL_CFLAGS = @SSL_CFLAGS@
 SSL_LIBS = @SSL_LIBS@
 STRIP = @STRIP@
@@ -211,78 +216,78 @@ openvswitch_sources = actions.c checksum.c datapath.c dp_notify.c \
 	dp_sysfs_dp.c dp_sysfs_if.c flow.c loop_counter.c table.c \
 	tunnel.c vlan.c vport.c vport-capwap.c vport-generic.c \
 	vport-gre.c vport-internal_dev.c vport-netdev.c vport-patch.c \
-	linux-2.6/compat-2.6/addrconf_core-openvswitch.c \
-	linux-2.6/compat-2.6/dev-openvswitch.c \
-	linux-2.6/compat-2.6/genetlink-openvswitch.c \
-	linux-2.6/compat-2.6/ip_output-openvswitch.c \
-	linux-2.6/compat-2.6/kmemdup.c \
-	linux-2.6/compat-2.6/netdevice.c \
-	linux-2.6/compat-2.6/skbuff-openvswitch.c \
-	linux-2.6/compat-2.6/time.c
+	linux/compat/addrconf_core-openvswitch.c \
+	linux/compat/dev-openvswitch.c linux/compat/flex_array.c \
+	linux/compat/genetlink-openvswitch.c \
+	linux/compat/ip_output-openvswitch.c linux/compat/kmemdup.c \
+	linux/compat/netdevice.c linux/compat/reciprocal_div.c \
+	linux/compat/skbuff-openvswitch.c linux/compat/time.c
 openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	dp_sysfs.h flow.h loop_counter.h table.h tunnel.h vlan.h \
 	vport.h vport-generic.h vport-internal_dev.h vport-netdev.h \
-	linux-2.6/compat-2.6/include/asm-generic/bug.h \
-	linux-2.6/compat-2.6/include/linux/bottom_half.h \
-	linux-2.6/compat-2.6/include/linux/compiler.h \
-	linux-2.6/compat-2.6/include/linux/compiler-gcc.h \
-	linux-2.6/compat-2.6/include/linux/cpumask.h \
-	linux-2.6/compat-2.6/include/linux/dmi.h \
-	linux-2.6/compat-2.6/include/linux/err.h \
-	linux-2.6/compat-2.6/include/linux/genetlink.h \
-	linux-2.6/compat-2.6/include/linux/icmp.h \
-	linux-2.6/compat-2.6/include/linux/icmpv6.h \
-	linux-2.6/compat-2.6/include/linux/if.h \
-	linux-2.6/compat-2.6/include/linux/if_arp.h \
-	linux-2.6/compat-2.6/include/linux/if_ether.h \
-	linux-2.6/compat-2.6/include/linux/if_vlan.h \
-	linux-2.6/compat-2.6/include/linux/in.h \
-	linux-2.6/compat-2.6/include/linux/inetdevice.h \
-	linux-2.6/compat-2.6/include/linux/ip.h \
-	linux-2.6/compat-2.6/include/linux/ipv6.h \
-	linux-2.6/compat-2.6/include/linux/jiffies.h \
-	linux-2.6/compat-2.6/include/linux/kernel.h \
-	linux-2.6/compat-2.6/include/linux/kobject.h \
-	linux-2.6/compat-2.6/include/linux/lockdep.h \
-	linux-2.6/compat-2.6/include/linux/log2.h \
-	linux-2.6/compat-2.6/include/linux/mutex.h \
-	linux-2.6/compat-2.6/include/linux/netdevice.h \
-	linux-2.6/compat-2.6/include/linux/netfilter_bridge.h \
-	linux-2.6/compat-2.6/include/linux/netfilter_ipv4.h \
-	linux-2.6/compat-2.6/include/linux/netlink.h \
-	linux-2.6/compat-2.6/include/linux/rculist.h \
-	linux-2.6/compat-2.6/include/linux/rcupdate.h \
-	linux-2.6/compat-2.6/include/linux/rtnetlink.h \
-	linux-2.6/compat-2.6/include/linux/skbuff.h \
-	linux-2.6/compat-2.6/include/linux/slab.h \
-	linux-2.6/compat-2.6/include/linux/stddef.h \
-	linux-2.6/compat-2.6/include/linux/tcp.h \
-	linux-2.6/compat-2.6/include/linux/timer.h \
-	linux-2.6/compat-2.6/include/linux/types.h \
-	linux-2.6/compat-2.6/include/linux/udp.h \
-	linux-2.6/compat-2.6/include/linux/workqueue.h \
-	linux-2.6/compat-2.6/include/net/checksum.h \
-	linux-2.6/compat-2.6/include/net/dst.h \
-	linux-2.6/compat-2.6/include/net/genetlink.h \
-	linux-2.6/compat-2.6/include/net/ip.h \
-	linux-2.6/compat-2.6/include/net/net_namespace.h \
-	linux-2.6/compat-2.6/include/net/netlink.h \
-	linux-2.6/compat-2.6/include/net/protocol.h \
-	linux-2.6/compat-2.6/include/net/route.h \
-	linux-2.6/compat-2.6/genetlink.inc
+	linux/compat/include/asm-generic/bug.h \
+	linux/compat/include/linux/bottom_half.h \
+	linux/compat/include/linux/compiler.h \
+	linux/compat/include/linux/compiler-gcc.h \
+	linux/compat/include/linux/cpumask.h \
+	linux/compat/include/linux/dmi.h \
+	linux/compat/include/linux/err.h \
+	linux/compat/include/linux/flex_array.h \
+	linux/compat/include/linux/genetlink.h \
+	linux/compat/include/linux/icmp.h \
+	linux/compat/include/linux/icmpv6.h \
+	linux/compat/include/linux/if.h \
+	linux/compat/include/linux/if_arp.h \
+	linux/compat/include/linux/if_ether.h \
+	linux/compat/include/linux/if_vlan.h \
+	linux/compat/include/linux/in.h \
+	linux/compat/include/linux/inetdevice.h \
+	linux/compat/include/linux/ip.h \
+	linux/compat/include/linux/ipv6.h \
+	linux/compat/include/linux/jiffies.h \
+	linux/compat/include/linux/kernel.h \
+	linux/compat/include/linux/kobject.h \
+	linux/compat/include/linux/lockdep.h \
+	linux/compat/include/linux/log2.h \
+	linux/compat/include/linux/mutex.h \
+	linux/compat/include/linux/netdevice.h \
+	linux/compat/include/linux/netfilter_bridge.h \
+	linux/compat/include/linux/netfilter_ipv4.h \
+	linux/compat/include/linux/netlink.h \
+	linux/compat/include/linux/poison.h \
+	linux/compat/include/linux/rculist.h \
+	linux/compat/include/linux/rcupdate.h \
+	linux/compat/include/linux/reciprocal_div.h \
+	linux/compat/include/linux/rtnetlink.h \
+	linux/compat/include/linux/skbuff.h \
+	linux/compat/include/linux/slab.h \
+	linux/compat/include/linux/stddef.h \
+	linux/compat/include/linux/tcp.h \
+	linux/compat/include/linux/timer.h \
+	linux/compat/include/linux/types.h \
+	linux/compat/include/linux/udp.h \
+	linux/compat/include/linux/workqueue.h \
+	linux/compat/include/net/checksum.h \
+	linux/compat/include/net/dst.h \
+	linux/compat/include/net/genetlink.h \
+	linux/compat/include/net/ip.h \
+	linux/compat/include/net/net_namespace.h \
+	linux/compat/include/net/netlink.h \
+	linux/compat/include/net/protocol.h \
+	linux/compat/include/net/route.h linux/compat/genetlink.inc
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
 dist_headers = $(foreach module,$(dist_modules),$($(module)_headers))
 build_sources = $(foreach module,$(build_modules),$($(module)_sources))
 build_headers = $(foreach module,$(build_modules),$($(module)_headers))
 build_links = $(notdir $(build_sources))
 build_objects = $(notdir $(patsubst %.c,%.o,$(build_sources)))
-brcompat_sources = linux-2.6/compat-2.6/genetlink-brcompat.c brcompat.c
+brcompat_sources = linux/compat/genetlink-brcompat.c brcompat.c
 brcompat_headers = 
 CLEANFILES = distfiles
 all: all-recursive
 
 .SUFFIXES:
-$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/linux-2.6/Modules.mk $(am__configure_deps)
+$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/linux/Modules.mk $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
 	    *$$dep*) \

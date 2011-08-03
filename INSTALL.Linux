@@ -172,17 +172,17 @@ Prerequisites section, follow the procedure below to build.
    To build the Linux kernel module, so that you can run the
    kernel-based switch, pass the location of the kernel build
    directory on --with-l26.  For example, to build for a running
-   instance of Linux 2.6:
+   instance of Linux:
 
-      % ./configure --with-l26=/lib/modules/`uname -r`/build
+      % ./configure --with-linux=/lib/modules/`uname -r`/build
 
    If you wish to build the kernel module for an architecture other
    than the architecture of the machine used for the build, you may
    specify the kernel architecture string using the KARCH variable
    when invoking the configure script.  For example, to build for MIPS
-   with Linux 2.6:
+   with Linux:
 
-      % ./configure --with-l26=/path/to/linux-2.6 KARCH=mips
+      % ./configure --with-linux=/path/to/linux KARCH=mips
 
    The configure script accepts a number of other options and honors
    additional environment variables.  For a full list, invoke
@@ -199,7 +199,7 @@ Prerequisites section, follow the procedure below to build.
 
 6. If you built kernel modules, you may load them with "insmod", e.g.:
 
-      % insmod datapath/linux-2.6/openvswitch_mod.ko
+      % insmod datapath/linux/openvswitch_mod.ko
 
    You may need to specify a full path to insmod, e.g. /sbin/insmod.
    To verify that the modules have been loaded, run "/sbin/lsmod" and
@@ -268,13 +268,12 @@ installation, above, to listen on a Unix domain socket, to connect to
 any managers specified in the database itself, and to use the SSL
 configuration in the database:
 
-      % ovsdb-server /usr/local/etc/openvswitch/conf.db \
-                      --remote=punix:/usr/local/var/run/openvswitch/db.sock \
-                      --remote=db:Open_vSwitch,manager_options \
-                      --private-key=db:SSL,private_key \
-                      --certificate=db:SSL,certificate \
-                      --bootstrap-ca-cert=db:SSL,ca_cert \
-                      --pidfile --detach
+      % ovsdb-server --remote=punix:/usr/local/var/run/openvswitch/db.sock \
+                     --remote=db:Open_vSwitch,manager_options \
+                     --private-key=db:SSL,private_key \
+                     --certificate=db:SSL,certificate \
+                     --bootstrap-ca-cert=db:SSL,ca_cert \
+                     --pidfile --detach
 
 (If you built Open vSwitch without SSL support, then omit
 --private-key, --certificate, and --bootstrap-ca-cert.)
@@ -288,8 +287,7 @@ ovsdb-tool (but running it at any time is harmless):
 Then start the main Open vSwitch daemon, telling it to connect to the
 same Unix domain socket:
 
-      % ovs-vswitchd unix:/usr/local/var/run/openvswitch/db.sock \
-            --pidfile --detach 
+      % ovs-vswitchd --pidfile --detach
 
 Now you may use ovs-vsctl to set up bridges and other Open vSwitch
 features.  For example, to create a bridge named br0 and add ports

@@ -32,6 +32,7 @@
 #include "odp-util.h"
 #include "ofproto.h"
 #include "ofpbuf.h"
+#include "ofproto-provider.h"
 #include "openflow/openflow.h"
 #include "packets.h"
 #include "poll-loop.h"
@@ -39,166 +40,6 @@
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(in_band);
-
-/* In-band control allows a single network to be used for OpenFlow traffic and
- * other data traffic.  See ovs-vswitchd.conf.db(5) for a description of
- * configuring in-band control.
- *
- * This comment is an attempt to describe how in-band control works at a
- * wire- and implementation-level.  Correctly implementing in-band
- * control has proven difficult due to its many subtleties, and has thus
- * gone through many iterations.  Please read through and understand the
- * reasoning behind the chosen rules before making modifications.
- *
- * In Open vSwitch, in-band control is implemented as "hidden" flows (in that
- * they are not visible through OpenFlow) and at a higher priority than
- * wildcarded flows can be set up by through OpenFlow.  This is done so that
- * the OpenFlow controller cannot interfere with them and possibly break
- * connectivity with its switches.  It is possible to see all flows, including
- * in-band ones, with the ovs-appctl "bridge/dump-flows" command.
- *
- * The Open vSwitch implementation of in-band control can hide traffic to
- * arbitrary "remotes", where each remote is one TCP port on one IP address.
- * Currently the remotes are automatically configured as the in-band OpenFlow
- * controllers plus the OVSDB managers, if any.  (The latter is a requirement
- * because OVSDB managers are responsible for configuring OpenFlow controllers,
- * so if the manager cannot be reached then OpenFlow cannot be reconfigured.)
- *
- * The following rules (with the OFPP_NORMAL action) are set up on any bridge
- * that has any remotes:
- *
- *    (a) DHCP requests sent from the local port.
- *    (b) ARP replies to the local port's MAC address.
- *    (c) ARP requests from the local port's MAC address.
- *
- * In-band also sets up the following rules for each unique next-hop MAC
- * address for the remotes' IPs (the "next hop" is either the remote
- * itself, if it is on a local subnet, or the gateway to reach the remote):
- *
- *    (d) ARP replies to the next hop's MAC address.
- *    (e) ARP requests from the next hop's MAC address.
- *
- * In-band also sets up the following rules for each unique remote IP address:
- *
- *    (f) ARP replies containing the remote's IP address as a target.
- *    (g) ARP requests containing the remote's IP address as a source.
- *
- * In-band also sets up the following rules for each unique remote (IP,port)
- * pair:
- *
- *    (h) TCP traffic to the remote's IP and port.
- *    (i) TCP traffic from the remote's IP and port.
- *
- * The goal of these rules is to be as narrow as possible to allow a
- * switch to join a network and be able to communicate with the
- * remotes.  As mentioned earlier, these rules have higher priority
- * than the controller's rules, so if they are too broad, they may
- * prevent the controller from implementing its policy.  As such,
- * in-band actively monitors some aspects of flow and packet processing
- * so that the rules can be made more precise.
- *
- * In-band control monitors attempts to add flows into the datapath that
- * could interfere with its duties.  The datapath only allows exact
- * match entries, so in-band control is able to be very precise about
- * the flows it prevents.  Flows that miss in the datapath are sent to
- * userspace to be processed, so preventing these flows from being
- * cached in the "fast path" does not affect correctness.  The only type
- * of flow that is currently prevented is one that would prevent DHCP
- * replies from being seen by the local port.  For example, a rule that
- * forwarded all DHCP traffic to the controller would not be allowed,
- * but one that forwarded to all ports (including the local port) would.
- *
- * As mentioned earlier, packets that miss in the datapath are sent to
- * the userspace for processing.  The userspace has its own flow table,
- * the "classifier", so in-band checks whether any special processing
- * is needed before the classifier is consulted.  If a packet is a DHCP
- * response to a request from the local port, the packet is forwarded to
- * the local port, regardless of the flow table.  Note that this requires
- * L7 processing of DHCP replies to determine whether the 'chaddr' field
- * matches the MAC address of the local port.
- *
- * It is interesting to note that for an L3-based in-band control
- * mechanism, the majority of rules are devoted to ARP traffic.  At first
- * glance, some of these rules appear redundant.  However, each serves an
- * important role.  First, in order to determine the MAC address of the
- * remote side (controller or gateway) for other ARP rules, we must allow
- * ARP traffic for our local port with rules (b) and (c).  If we are
- * between a switch and its connection to the remote, we have to
- * allow the other switch's ARP traffic to through.  This is done with
- * rules (d) and (e), since we do not know the addresses of the other
- * switches a priori, but do know the remote's or gateway's.  Finally,
- * if the remote is running in a local guest VM that is not reached
- * through the local port, the switch that is connected to the VM must
- * allow ARP traffic based on the remote's IP address, since it will
- * not know the MAC address of the local port that is sending the traffic
- * or the MAC address of the remote in the guest VM.
- *
- * With a few notable exceptions below, in-band should work in most
- * network setups.  The following are considered "supported' in the
- * current implementation:
- *
- *    - Locally Connected.  The switch and remote are on the same
- *      subnet.  This uses rules (a), (b), (c), (h), and (i).
- *
- *    - Reached through Gateway.  The switch and remote are on
- *      different subnets and must go through a gateway.  This uses
- *      rules (a), (b), (c), (h), and (i).
- *
- *    - Between Switch and Remote.  This switch is between another
- *      switch and the remote, and we want to allow the other
- *      switch's traffic through.  This uses rules (d), (e), (h), and
- *      (i).  It uses (b) and (c) indirectly in order to know the MAC
- *      address for rules (d) and (e).  Note that DHCP for the other
- *      switch will not work unless an OpenFlow controller explicitly lets this
- *      switch pass the traffic.
- *
- *    - Between Switch and Gateway.  This switch is between another
- *      switch and the gateway, and we want to allow the other switch's
- *      traffic through.  This uses the same rules and logic as the
- *      "Between Switch and Remote" configuration described earlier.
- *
- *    - Remote on Local VM.  The remote is a guest VM on the
- *      system running in-band control.  This uses rules (a), (b), (c),
- *      (h), and (i).
- *
- *    - Remote on Local VM with Different Networks.  The remote
- *      is a guest VM on the system running in-band control, but the
- *      local port is not used to connect to the remote.  For
- *      example, an IP address is configured on eth0 of the switch.  The
- *      remote's VM is connected through eth1 of the switch, but an
- *      IP address has not been configured for that port on the switch.
- *      As such, the switch will use eth0 to connect to the remote,
- *      and eth1's rules about the local port will not work.  In the
- *      example, the switch attached to eth0 would use rules (a), (b),
- *      (c), (h), and (i) on eth0.  The switch attached to eth1 would use
- *      rules (f), (g), (h), and (i).
- *
- * The following are explicitly *not* supported by in-band control:
- *
- *    - Specify Remote by Name.  Currently, the remote must be
- *      identified by IP address.  A naive approach would be to permit
- *      all DNS traffic.  Unfortunately, this would prevent the
- *      controller from defining any policy over DNS.  Since switches
- *      that are located behind us need to connect to the remote,
- *      in-band cannot simply add a rule that allows DNS traffic from
- *      the local port.  The "correct" way to support this is to parse
- *      DNS requests to allow all traffic related to a request for the
- *      remote's name through.  Due to the potential security
- *      problems and amount of processing, we decided to hold off for
- *      the time-being.
- *
- *    - Differing Remotes for Switches.  All switches must know
- *      the L3 addresses for all the remotes that other switches
- *      may use, since rules need to be set up to allow traffic related
- *      to those remotes through.  See rules (f), (g), (h), and (i).
- *
- *    - Differing Routes for Switches.  In order for the switch to
- *      allow other switches to connect to a remote through a
- *      gateway, it allows the gateway's traffic through with rules (d)
- *      and (e).  If the routes to the remote differ for the two
- *      switches, we will not know the MAC address of the alternate
- *      gateway.
- */
 
 /* Priorities used in classifier for in-band rules.  These values are higher
  * than any that may be set with OpenFlow, and "18" kind of looks like "IB".
@@ -232,9 +73,21 @@ struct in_band_remote {
     struct netdev *remote_netdev; /* Device to send to next-hop MAC. */
 };
 
+/* What to do to an in_band_rule. */
+enum in_band_op {
+    ADD,                       /* Add the rule to ofproto's flow table. */
+    DELETE                     /* Delete the rule from ofproto's flow table. */
+};
+
+/* A rule to add to or delete from ofproto's flow table.  */
+struct in_band_rule {
+    struct cls_rule cls_rule;
+    enum in_band_op op;
+};
+
 struct in_band {
     struct ofproto *ofproto;
-    int queue_id, prev_queue_id;
+    int queue_id;
 
     /* Remote information. */
     time_t next_remote_refresh; /* Refresh timer. */
@@ -246,12 +99,8 @@ struct in_band {
     uint8_t local_mac[ETH_ADDR_LEN]; /* Current MAC. */
     struct netdev *local_netdev;     /* Local port's network device. */
 
-    /* Local and remote addresses that are installed as flows. */
-    uint8_t installed_local_mac[ETH_ADDR_LEN];
-    struct sockaddr_in *remote_addrs;
-    size_t n_remote_addrs;
-    uint8_t *remote_macs;
-    size_t n_remote_macs;
+    /* Flow tracking. */
+    struct hmap rules;          /* Contains "struct in_band_rule"s. */
 };
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(60, 60);
@@ -430,47 +279,68 @@ in_band_rule_check(const struct flow *flow,
 }
 
 static void
-make_rules(struct in_band *ib,
-           void (*cb)(struct in_band *, const struct cls_rule *))
+add_rule(struct in_band *ib, const struct cls_rule *cls_rule)
 {
-    struct cls_rule rule;
-    size_t i;
+    uint32_t hash = cls_rule_hash(cls_rule, 0);
+    struct in_band_rule *rule;
 
-    if (!eth_addr_is_zero(ib->installed_local_mac)) {
+    HMAP_FOR_EACH_WITH_HASH (rule, cls_rule.hmap_node, hash, &ib->rules) {
+        if (cls_rule_equal(&rule->cls_rule, cls_rule)) {
+            rule->op = ADD;
+            return;
+        }
+    }
+
+    rule = xmalloc(sizeof *rule);
+    rule->cls_rule = *cls_rule;
+    rule->op = ADD;
+    hmap_insert(&ib->rules, &rule->cls_rule.hmap_node, hash);
+}
+
+static void
+update_rules(struct in_band *ib)
+{
+    struct in_band_rule *ib_rule;
+    struct in_band_remote *r;
+    struct cls_rule rule;
+
+    /* Mark all the existing rules for deletion.  (Afterward we will re-add any
+     * rules that are still valid.) */
+    HMAP_FOR_EACH (ib_rule, cls_rule.hmap_node, &ib->rules) {
+        ib_rule->op = DELETE;
+    }
+
+    if (!eth_addr_is_zero(ib->local_mac)) {
         /* (a) Allow DHCP requests sent from the local port. */
         cls_rule_init_catchall(&rule, IBR_FROM_LOCAL_DHCP);
         cls_rule_set_in_port(&rule, ODPP_LOCAL);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
-        cls_rule_set_dl_src(&rule, ib->installed_local_mac);
+        cls_rule_set_dl_src(&rule, ib->local_mac);
         cls_rule_set_nw_proto(&rule, IPPROTO_UDP);
         cls_rule_set_tp_src(&rule, htons(DHCP_CLIENT_PORT));
         cls_rule_set_tp_dst(&rule, htons(DHCP_SERVER_PORT));
-        cb(ib, &rule);
+        add_rule(ib, &rule);
 
         /* (b) Allow ARP replies to the local port's MAC address. */
         cls_rule_init_catchall(&rule, IBR_TO_LOCAL_ARP);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        cls_rule_set_dl_dst(&rule, ib->installed_local_mac);
+        cls_rule_set_dl_dst(&rule, ib->local_mac);
         cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
-        cb(ib, &rule);
+        add_rule(ib, &rule);
 
         /* (c) Allow ARP requests from the local port's MAC address.  */
         cls_rule_init_catchall(&rule, IBR_FROM_LOCAL_ARP);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
-        cls_rule_set_dl_src(&rule, ib->installed_local_mac);
+        cls_rule_set_dl_src(&rule, ib->local_mac);
         cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
-        cb(ib, &rule);
+        add_rule(ib, &rule);
     }
 
-    for (i = 0; i < ib->n_remote_macs; i++) {
-        const uint8_t *remote_mac = &ib->remote_macs[i * ETH_ADDR_LEN];
+    for (r = ib->remotes; r < &ib->remotes[ib->n_remotes]; r++) {
+        const uint8_t *remote_mac = r->remote_mac;
 
-        if (i > 0) {
-            const uint8_t *prev_mac = &ib->remote_macs[(i - 1) * ETH_ADDR_LEN];
-            if (eth_addr_equals(remote_mac, prev_mac)) {
-                /* Skip duplicates. */
-                continue;
-            }
+        if (eth_addr_is_zero(remote_mac)) {
+            continue;
         }
 
         /* (d) Allow ARP replies to the next hop's MAC address. */
@@ -478,185 +348,104 @@ make_rules(struct in_band *ib,
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
         cls_rule_set_dl_dst(&rule, remote_mac);
         cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
-        cb(ib, &rule);
+        add_rule(ib, &rule);
 
         /* (e) Allow ARP requests from the next hop's MAC address. */
         cls_rule_init_catchall(&rule, IBR_FROM_NEXT_HOP_ARP);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
         cls_rule_set_dl_src(&rule, remote_mac);
         cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
-        cb(ib, &rule);
+        add_rule(ib, &rule);
     }
 
-    for (i = 0; i < ib->n_remote_addrs; i++) {
-        const struct sockaddr_in *a = &ib->remote_addrs[i];
+    for (r = ib->remotes; r < &ib->remotes[ib->n_remotes]; r++) {
+        const struct sockaddr_in *a = &r->remote_addr;
 
-        if (!i || a->sin_addr.s_addr != a[-1].sin_addr.s_addr) {
-            /* (f) Allow ARP replies containing the remote's IP address as a
-             * target. */
-            cls_rule_init_catchall(&rule, IBR_TO_REMOTE_ARP);
-            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
-            cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
-            cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
-            cb(ib, &rule);
+        /* (f) Allow ARP replies containing the remote's IP address as a
+         * target. */
+        cls_rule_init_catchall(&rule, IBR_TO_REMOTE_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_nw_proto(&rule, ARP_OP_REPLY);
+        cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
+        add_rule(ib, &rule);
 
-            /* (g) Allow ARP requests containing the remote's IP address as a
-             * source. */
-            cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_ARP);
-            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
-            cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
-            cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
-            cb(ib, &rule);
-        }
+        /* (g) Allow ARP requests containing the remote's IP address as a
+         * source. */
+        cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_ARP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_ARP));
+        cls_rule_set_nw_proto(&rule, ARP_OP_REQUEST);
+        cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
+        add_rule(ib, &rule);
 
-        if (!i
-            || a->sin_addr.s_addr != a[-1].sin_addr.s_addr
-            || a->sin_port != a[-1].sin_port) {
-            /* (h) Allow TCP traffic to the remote's IP and port. */
-            cls_rule_init_catchall(&rule, IBR_TO_REMOTE_TCP);
-            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
-            cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
-            cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
-            cls_rule_set_tp_dst(&rule, a->sin_port);
-            cb(ib, &rule);
+        /* (h) Allow TCP traffic to the remote's IP and port. */
+        cls_rule_init_catchall(&rule, IBR_TO_REMOTE_TCP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
+        cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
+        cls_rule_set_nw_dst(&rule, a->sin_addr.s_addr);
+        cls_rule_set_tp_dst(&rule, a->sin_port);
+        add_rule(ib, &rule);
 
-            /* (i) Allow TCP traffic from the remote's IP and port. */
-            cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_TCP);
-            cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
-            cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
-            cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
-            cls_rule_set_tp_src(&rule, a->sin_port);
-            cb(ib, &rule);
-        }
+        /* (i) Allow TCP traffic from the remote's IP and port. */
+        cls_rule_init_catchall(&rule, IBR_FROM_REMOTE_TCP);
+        cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
+        cls_rule_set_nw_proto(&rule, IPPROTO_TCP);
+        cls_rule_set_nw_src(&rule, a->sin_addr.s_addr);
+        cls_rule_set_tp_src(&rule, a->sin_port);
+        add_rule(ib, &rule);
     }
 }
 
-static void
-drop_rule(struct in_band *ib, const struct cls_rule *rule)
-{
-    ofproto_delete_flow(ib->ofproto, rule);
-}
-
-/* Drops from the flow table all of the flows set up by 'ib', then clears out
- * the information about the installed flows so that they can be filled in
- * again if necessary. */
-static void
-drop_rules(struct in_band *ib)
-{
-    /* Drop rules. */
-    make_rules(ib, drop_rule);
-
-    /* Clear out state. */
-    memset(ib->installed_local_mac, 0, sizeof ib->installed_local_mac);
-
-    free(ib->remote_addrs);
-    ib->remote_addrs = NULL;
-    ib->n_remote_addrs = 0;
-
-    free(ib->remote_macs);
-    ib->remote_macs = NULL;
-    ib->n_remote_macs = 0;
-}
-
-static void
-add_rule(struct in_band *ib, const struct cls_rule *rule)
+void
+in_band_run(struct in_band *ib)
 {
     struct {
         struct nx_action_set_queue nxsq;
-        struct ofp_action_output oao;
+        union ofp_action oa;
     } actions;
+    const void *a;
+    size_t na;
+
+    struct in_band_rule *rule, *next;
 
     memset(&actions, 0, sizeof actions);
-
-    actions.oao.type = htons(OFPAT_OUTPUT);
-    actions.oao.len = htons(sizeof actions.oao);
-    actions.oao.port = htons(OFPP_NORMAL);
-    actions.oao.max_len = htons(0);
-
+    actions.oa.output.type = htons(OFPAT_OUTPUT);
+    actions.oa.output.len = htons(sizeof actions.oa);
+    actions.oa.output.port = htons(OFPP_NORMAL);
+    actions.oa.output.max_len = htons(0);
     if (ib->queue_id < 0) {
-        ofproto_add_flow(ib->ofproto, rule,
-                         (union ofp_action *) &actions.oao, 1);
+        a = &actions.oa;
+        na = sizeof actions.oa / sizeof(union ofp_action);
     } else {
         actions.nxsq.type = htons(OFPAT_VENDOR);
         actions.nxsq.len = htons(sizeof actions.nxsq);
         actions.nxsq.vendor = htonl(NX_VENDOR_ID);
         actions.nxsq.subtype = htons(NXAST_SET_QUEUE);
         actions.nxsq.queue_id = htonl(ib->queue_id);
-
-        ofproto_add_flow(ib->ofproto, rule, (union ofp_action *) &actions,
-                         sizeof actions / sizeof(union ofp_action));
+        a = &actions;
+        na = sizeof actions / sizeof(union ofp_action);
     }
-}
 
-/* Inserts flows into the flow table for the current state of 'ib'. */
-static void
-add_rules(struct in_band *ib)
-{
-    make_rules(ib, add_rule);
-}
+    refresh_local(ib);
+    refresh_remotes(ib);
 
-static int
-compare_addrs(const void *a_, const void *b_)
-{
-    const struct sockaddr_in *a = a_;
-    const struct sockaddr_in *b = b_;
-    int cmp;
+    update_rules(ib);
 
-    cmp = memcmp(&a->sin_addr.s_addr,
-                 &b->sin_addr.s_addr,
-                 sizeof a->sin_addr.s_addr);
-    if (cmp) {
-        return cmp;
-    }
-    return memcmp(&a->sin_port, &b->sin_port, sizeof a->sin_port);
-}
+    HMAP_FOR_EACH_SAFE (rule, next, cls_rule.hmap_node, &ib->rules) {
+        switch (rule->op) {
+        case ADD:
+            ofproto_add_flow(ib->ofproto, &rule->cls_rule, a, na);
+            break;
 
-static int
-compare_macs(const void *a, const void *b)
-{
-    return eth_addr_compare_3way(a, b);
-}
-
-void
-in_band_run(struct in_band *ib)
-{
-    bool local_change, remote_change, queue_id_change;
-    struct in_band_remote *r;
-
-    local_change = refresh_local(ib);
-    remote_change = refresh_remotes(ib);
-    queue_id_change = ib->queue_id != ib->prev_queue_id;
-    if (!local_change && !remote_change && !queue_id_change) {
-        /* Nothing changed, nothing to do. */
-        return;
-    }
-    ib->prev_queue_id = ib->queue_id;
-
-    /* Drop old rules. */
-    drop_rules(ib);
-
-    /* Figure out new rules. */
-    memcpy(ib->installed_local_mac, ib->local_mac, ETH_ADDR_LEN);
-    ib->remote_addrs = xmalloc(ib->n_remotes * sizeof *ib->remote_addrs);
-    ib->n_remote_addrs = 0;
-    ib->remote_macs = xmalloc(ib->n_remotes * ETH_ADDR_LEN);
-    ib->n_remote_macs = 0;
-    for (r = ib->remotes; r < &ib->remotes[ib->n_remotes]; r++) {
-        ib->remote_addrs[ib->n_remote_addrs++] = r->remote_addr;
-        if (!eth_addr_is_zero(r->remote_mac)) {
-            memcpy(&ib->remote_macs[ib->n_remote_macs * ETH_ADDR_LEN],
-                   r->remote_mac, ETH_ADDR_LEN);
-            ib->n_remote_macs++;
+        case DELETE:
+            if (ofproto_delete_flow(ib->ofproto, &rule->cls_rule)) {
+                /* ofproto doesn't have the rule anymore so there's no reason
+                 * for us to track it any longer. */
+                hmap_remove(&ib->rules, &rule->cls_rule.hmap_node);
+                free(rule);
+            }
+            break;
         }
     }
-
-    /* Sort, to allow make_rules() to easily skip duplicates. */
-    qsort(ib->remote_addrs, ib->n_remote_addrs, sizeof *ib->remote_addrs,
-          compare_addrs);
-    qsort(ib->remote_macs, ib->n_remote_macs, ETH_ADDR_LEN, compare_macs);
-
-    /* Add new rules. */
-    add_rules(ib);
 }
 
 void
@@ -665,14 +454,6 @@ in_band_wait(struct in_band *in_band)
     long long int wakeup
             = MIN(in_band->next_remote_refresh, in_band->next_local_refresh);
     poll_timer_wait_until(wakeup * 1000);
-}
-
-/* ofproto has flushed all flows from the flow table and it is calling us back
- * to allow us to reinstall the ones that are important to us. */
-void
-in_band_flushed(struct in_band *in_band)
-{
-    add_rules(in_band);
 }
 
 int
@@ -693,10 +474,11 @@ in_band_create(struct ofproto *ofproto, const char *local_name,
 
     in_band = xzalloc(sizeof *in_band);
     in_band->ofproto = ofproto;
-    in_band->queue_id = in_band->prev_queue_id = -1;
+    in_band->queue_id = -1;
     in_band->next_remote_refresh = TIME_MIN;
     in_band->next_local_refresh = TIME_MIN;
     in_band->local_netdev = local_netdev;
+    hmap_init(&in_band->rules);
 
     *in_bandp = in_band;
 
@@ -707,7 +489,13 @@ void
 in_band_destroy(struct in_band *ib)
 {
     if (ib) {
-        drop_rules(ib);
+        struct in_band_rule *rule, *next;
+
+        HMAP_FOR_EACH_SAFE (rule, next, cls_rule.hmap_node, &ib->rules) {
+            hmap_remove(&ib->rules, &rule->cls_rule.hmap_node);
+            free(rule);
+        }
+        hmap_destroy(&ib->rules);
         in_band_set_remotes(ib, NULL, 0);
         netdev_close(ib->local_netdev);
         free(ib);

@@ -30,7 +30,7 @@
 #include "command-line.h"
 #include "compiler.h"
 #include "daemon.h"
-#include "dpif.h"
+#include "dirs.h"
 #include "dummy.h"
 #include "leak-checker.h"
 #include "netdev.h"
@@ -53,7 +53,7 @@ VLOG_DEFINE_THIS_MODULE(vswitchd);
 
 static unixctl_cb_func ovs_vswitchd_exit;
 
-static const char *parse_options(int argc, char *argv[]);
+static char *parse_options(int argc, char *argv[]);
 static void usage(void) NO_RETURN;
 
 int
@@ -61,7 +61,7 @@ main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
     struct signal *sighup;
-    const char *remote;
+    char *remote;
     bool exiting;
     int retval;
 
@@ -83,6 +83,8 @@ main(int argc, char *argv[])
     unixctl_command_register("exit", ovs_vswitchd_exit, &exiting);
 
     bridge_init(remote);
+    free(remote);
+
     exiting = false;
     while (!exiting) {
         if (signal_poll(sighup)) {
@@ -90,13 +92,11 @@ main(int argc, char *argv[])
         }
         bridge_run();
         unixctl_server_run(unixctl);
-        dp_run();
         netdev_run();
 
         signal_wait(sighup);
         bridge_wait();
         unixctl_server_wait(unixctl);
-        dp_wait();
         netdev_wait();
         if (exiting) {
             poll_immediate_wake();
@@ -105,11 +105,12 @@ main(int argc, char *argv[])
     }
     bridge_exit();
     unixctl_server_destroy(unixctl);
+    signal_unregister(sighup);
 
     return 0;
 }
 
-static const char *
+static char *
 parse_options(int argc, char *argv[])
 {
     enum {
@@ -122,19 +123,17 @@ parse_options(int argc, char *argv[])
         DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
-        {"help",        no_argument, 0, 'h'},
-        {"version",     no_argument, 0, 'V'},
-        {"mlockall",    no_argument, 0, OPT_MLOCKALL},
+        {"help",        no_argument, NULL, 'h'},
+        {"version",     no_argument, NULL, 'V'},
+        {"mlockall",    no_argument, NULL, OPT_MLOCKALL},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         LEAK_CHECKER_LONG_OPTIONS,
-#ifdef HAVE_OPENSSL
-        STREAM_SSL_LONG_OPTIONS
-        {"peer-ca-cert", required_argument, 0, OPT_PEER_CA_CERT},
-        {"bootstrap-ca-cert", required_argument, 0, OPT_BOOTSTRAP_CA_CERT},
-#endif
-        {"enable-dummy", no_argument, 0, OPT_ENABLE_DUMMY},
-        {0, 0, 0, 0},
+        STREAM_SSL_LONG_OPTIONS,
+        {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
+        {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"enable-dummy", no_argument, NULL, OPT_ENABLE_DUMMY},
+        {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
 
@@ -168,8 +167,6 @@ parse_options(int argc, char *argv[])
         VLOG_OPTION_HANDLERS
         DAEMON_OPTION_HANDLERS
         LEAK_CHECKER_OPTION_HANDLERS
-
-#ifdef HAVE_OPENSSL
         STREAM_SSL_OPTION_HANDLERS
 
         case OPT_PEER_CA_CERT:
@@ -179,7 +176,6 @@ parse_options(int argc, char *argv[])
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(optarg, true);
             break;
-#endif
 
         case OPT_ENABLE_DUMMY:
             dummy_enable();
@@ -197,21 +193,27 @@ parse_options(int argc, char *argv[])
     argc -= optind;
     argv += optind;
 
-    if (argc != 1) {
-        VLOG_FATAL("database socket is only non-option argument; "
+    switch (argc) {
+    case 0:
+        return xasprintf("unix:%s/db.sock", ovs_rundir());
+
+    case 1:
+        return xstrdup(argv[0]);
+
+    default:
+        VLOG_FATAL("at most one non-option argument accepted; "
                    "use --help for usage");
     }
-
-    return argv[0];
 }
 
 static void
 usage(void)
 {
     printf("%s: Open vSwitch daemon\n"
-           "usage: %s [OPTIONS] DATABASE\n"
-           "where DATABASE is a socket on which ovsdb-server is listening.\n",
-           program_name, program_name);
+           "usage: %s [OPTIONS] [DATABASE]\n"
+           "where DATABASE is a socket on which ovsdb-server is listening\n"
+           "      (default: \"unix:%s/db.sock\").\n",
+           program_name, program_name, ovs_rundir());
     stream_usage("DATABASE", true, false, true);
     daemon_usage();
     vlog_usage();

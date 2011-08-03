@@ -21,34 +21,18 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <time.h>
+#include "compiler.h"
 #include "util.h"
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
 
-/* Logging importance levels.
+/* Logging severity levels.
  *
- * The following log levels, in descending order of importance, are enabled by
- * default:
- *
- *   - EMER: Not currently used.
- *
- *   - ERR: A high-level operation or a subsystem failed.  Attention is
- *     warranted.
- *
- *   - WARN: A low-level operation failed, but higher-level subsystems may be
- *     able to recover.
- *
- *   - INFO: Information that may be useful in retrospect when investigating
- *     a problem.
- *
- * The lowest log level is not enabled by default:
- *
- *   - DBG: Information useful only to someone with intricate knowledge of the
- *     system, or that would commonly cause too-voluminous log output.
- */
+ * ovs-appctl(8) defines each of the log levels. */
 #define VLOG_LEVELS                             \
+    VLOG_LEVEL(OFF, LOG_ALERT)                  \
     VLOG_LEVEL(EMER, LOG_ALERT)                 \
     VLOG_LEVEL(ERR, LOG_ERR)                    \
     VLOG_LEVEL(WARN, LOG_WARNING)               \
@@ -91,6 +75,7 @@ struct vlog_module {
 #if USE_LINKER_SECTIONS
 #define VLOG_DEFINE_MODULE(MODULE)                                      \
         VLOG_DEFINE_MODULE__(MODULE)                                    \
+        extern struct vlog_module *vlog_module_ptr_##MODULE;            \
         struct vlog_module *vlog_module_ptr_##MODULE                    \
             __attribute__((section("vlog_modules"))) = &VLM_##MODULE
 #else
@@ -110,6 +95,7 @@ struct vlog_rate_limit {
     unsigned int tokens;        /* Current number of tokens. */
     time_t last_fill;           /* Last time tokens added. */
     time_t first_dropped;       /* Time first message was dropped. */
+    time_t last_dropped;        /* Time of most recent message drop. */
     unsigned int n_dropped;     /* Number of messages dropped. */
 };
 
@@ -128,6 +114,7 @@ struct vlog_rate_limit {
             0,                              /* tokens */    \
             0,                              /* last_fill */ \
             0,                              /* first_dropped */ \
+            0,                              /* last_dropped */ \
             0,                              /* n_dropped */ \
         }
 
@@ -154,21 +141,19 @@ void vlog_exit(void);
 
 /* Functions for actual logging. */
 void vlog(const struct vlog_module *, enum vlog_level, const char *format, ...)
-    __attribute__((format(printf, 3, 4)));
+    PRINTF_FORMAT (3, 4);
 void vlog_valist(const struct vlog_module *, enum vlog_level,
                  const char *, va_list)
-    __attribute__((format(printf, 3, 0)));
+    PRINTF_FORMAT (3, 0);
 
-void vlog_fatal(const struct vlog_module *, enum vlog_level,
-                const char *format, ...)
-    PRINTF_FORMAT (3, 4) NO_RETURN;
-void vlog_fatal_valist(const struct vlog_module *, enum vlog_level,
-                       const char *, va_list)
-    PRINTF_FORMAT (3, 0) NO_RETURN;
+void vlog_fatal(const struct vlog_module *, const char *format, ...)
+    PRINTF_FORMAT (2, 3) NO_RETURN;
+void vlog_fatal_valist(const struct vlog_module *, const char *format, va_list)
+    PRINTF_FORMAT (2, 0) NO_RETURN;
 
 void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
                      struct vlog_rate_limit *, const char *, ...)
-    __attribute__((format(printf, 4, 5)));
+    PRINTF_FORMAT (4, 5);
 
 /* Creates and initializes a global instance of a module named MODULE, and
  * defines a static variable named THIS_MODULE that points to it, for use with
@@ -183,7 +168,7 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
  *
  * Guaranteed to preserve errno.
  */
-#define VLOG_FATAL(...) vlog_fatal(THIS_MODULE, VLL_ERR, __VA_ARGS__)
+#define VLOG_FATAL(...) vlog_fatal(THIS_MODULE, __VA_ARGS__)
 #define VLOG_EMER(...) VLOG(VLL_EMER, __VA_ARGS__)
 #define VLOG_ERR(...) VLOG(VLL_ERR, __VA_ARGS__)
 #define VLOG_WARN(...) VLOG(VLL_WARN, __VA_ARGS__)
@@ -193,8 +178,7 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
 /* More convenience macros, for testing whether a given level is enabled in
  * THIS_MODULE.  When constructing a log message is expensive, this enables it
  * to be skipped. */
-#define VLOG_IS_EMER_ENABLED() true
-#define VLOG_IS_ERR_ENABLED() vlog_is_enabled(THIS_MODULE, VLL_EMER)
+#define VLOG_IS_ERR_ENABLED() vlog_is_enabled(THIS_MODULE, VLL_ERR)
 #define VLOG_IS_WARN_ENABLED() vlog_is_enabled(THIS_MODULE, VLL_WARN)
 #define VLOG_IS_INFO_ENABLED() vlog_is_enabled(THIS_MODULE, VLL_INFO)
 #define VLOG_IS_DBG_ENABLED() vlog_is_enabled(THIS_MODULE, VLL_DBG)
@@ -221,8 +205,8 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
 /* Command line processing. */
 #define VLOG_OPTION_ENUMS OPT_LOG_FILE
 #define VLOG_LONG_OPTIONS                                   \
-        {"verbose",     optional_argument, 0, 'v'},         \
-        {"log-file",    optional_argument, 0, OPT_LOG_FILE}
+        {"verbose",     optional_argument, NULL, 'v'},         \
+        {"log-file",    optional_argument, NULL, OPT_LOG_FILE}
 #define VLOG_OPTION_HANDLERS                    \
         case 'v':                               \
             vlog_set_verbosity(optarg);         \
@@ -233,16 +217,18 @@ void vlog_rate_limit(const struct vlog_module *, enum vlog_level,
 void vlog_usage(void);
 
 /* Implementation details. */
-#define VLOG(LEVEL, ...)                            \
-    do {                                            \
-        if (THIS_MODULE->min_level >= LEVEL) {      \
-            vlog(THIS_MODULE, LEVEL, __VA_ARGS__);  \
-        }                                           \
+#define VLOG(LEVEL, ...)                                \
+    do {                                                \
+        enum vlog_level level__ = LEVEL;                \
+        if (THIS_MODULE->min_level >= level__) {        \
+            vlog(THIS_MODULE, level__, __VA_ARGS__);    \
+        }                                               \
     } while (0)
 #define VLOG_RL(RL, LEVEL, ...)                                     \
     do {                                                            \
-        if (THIS_MODULE->min_level >= LEVEL) {                      \
-            vlog_rate_limit(THIS_MODULE, LEVEL, RL, __VA_ARGS__);   \
+        enum vlog_level level__ = LEVEL;                            \
+        if (THIS_MODULE->min_level >= level__) {                    \
+            vlog_rate_limit(THIS_MODULE, level__, RL, __VA_ARGS__); \
         }                                                           \
     } while (0)
 #define VLOG_ONCE(LEVEL, ...)                       \
@@ -255,6 +241,7 @@ void vlog_usage(void);
     } while (0)
 
 #define VLOG_DEFINE_MODULE__(MODULE)                                    \
+        extern struct vlog_module VLM_##MODULE;                         \
         struct vlog_module VLM_##MODULE =                               \
         {                                                               \
             #MODULE,                                      /* name */    \

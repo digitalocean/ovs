@@ -16,6 +16,7 @@
 #include <config.h>
 #include <sys/types.h>
 #include "flow.h"
+#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
@@ -306,7 +307,7 @@ invalid:
 
 }
 
-/* Initializes 'flow' members from 'packet', 'tun_id', and 'in_port.
+/* Initializes 'flow' members from 'packet', 'tun_id', and 'ofp_in_port'.
  * Initializes 'packet' header pointers as follows:
  *
  *    - packet->l2 to the start of the Ethernet header.
@@ -322,7 +323,7 @@ invalid:
  *      present and has a correct length, and otherwise NULL.
  */
 int
-flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t in_port,
+flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t ofp_in_port,
              struct flow *flow)
 {
     struct ofpbuf b = *packet;
@@ -333,7 +334,7 @@ flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t in_port,
 
     memset(flow, 0, sizeof *flow);
     flow->tun_id = tun_id;
-    flow->in_port = in_port;
+    flow->in_port = ofp_in_port;
 
     packet->l2 = b.data;
     packet->l3 = NULL;
@@ -456,7 +457,7 @@ void
 flow_format(struct ds *ds, const struct flow *flow)
 {
     ds_put_format(ds, "tunnel%#"PRIx64":in_port%04"PRIx16":tci(",
-                  flow->tun_id, flow->in_port);
+                  ntohll(flow->tun_id), flow->in_port);
     if (flow->vlan_tci) {
         ds_put_format(ds, "vlan%"PRIu16",pcp%d",
                       vlan_tci_to_vid(flow->vlan_tci),
@@ -556,7 +557,7 @@ flow_wildcards_is_exact(const struct flow_wildcards *wc)
     }
 
     for (i = 0; i < FLOW_N_REGS; i++) {
-        if (wc->reg_masks[i] != htonl(UINT32_MAX)) {
+        if (wc->reg_masks[i] != UINT32_MAX) {
             return false;
         }
     }
@@ -590,13 +591,13 @@ flow_wildcards_combine(struct flow_wildcards *dst,
 
 /* Returns a hash of the wildcards in 'wc'. */
 uint32_t
-flow_wildcards_hash(const struct flow_wildcards *wc)
+flow_wildcards_hash(const struct flow_wildcards *wc, uint32_t basis)
 {
     /* If you change struct flow_wildcards and thereby trigger this
      * assertion, please check that the new struct flow_wildcards has no holes
      * in it before you update the assertion. */
     BUILD_ASSERT_DECL(sizeof *wc == 56 + FLOW_N_REGS * 4);
-    return hash_bytes(wc, sizeof *wc, 0);
+    return hash_bytes(wc, sizeof *wc, basis);
 }
 
 /* Returns true if 'a' and 'b' represent the same wildcards, false if they are
@@ -726,6 +727,83 @@ flow_wildcards_set_reg_mask(struct flow_wildcards *wc, int idx, uint32_t mask)
     wc->reg_masks[idx] = mask;
 }
 
+/* Returns the wildcard bitmask for the Ethernet destination address
+ * that 'wc' specifies.  The bitmask has a 0 in each bit that is wildcarded
+ * and a 1 in each bit that must match.  */
+const uint8_t *
+flow_wildcards_to_dl_dst_mask(flow_wildcards_t wc)
+{
+    static const uint8_t    no_wild[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    static const uint8_t  addr_wild[] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static const uint8_t mcast_wild[] = {0xfe, 0xff, 0xff, 0xff, 0xff, 0xff};
+    static const uint8_t   all_wild[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    switch (wc & (FWW_DL_DST | FWW_ETH_MCAST)) {
+    case 0:                             return no_wild;
+    case FWW_DL_DST:                    return addr_wild;
+    case FWW_ETH_MCAST:                 return mcast_wild;
+    case FWW_DL_DST | FWW_ETH_MCAST:    return all_wild;
+    }
+    NOT_REACHED();
+}
+
+/* Returns true if 'mask' is a valid wildcard bitmask for the Ethernet
+ * destination address.  Valid bitmasks are either all-bits-0 or all-bits-1,
+ * except that the multicast bit may differ from the rest of the bits.  So,
+ * there are four possible valid bitmasks:
+ *
+ *  - 00:00:00:00:00:00
+ *  - 01:00:00:00:00:00
+ *  - fe:ff:ff:ff:ff:ff
+ *  - ff:ff:ff:ff:ff:ff
+ *
+ * All other bitmasks are invalid. */
+bool
+flow_wildcards_is_dl_dst_mask_valid(const uint8_t mask[ETH_ADDR_LEN])
+{
+    switch (mask[0]) {
+    case 0x00:
+    case 0x01:
+        return (mask[1] | mask[2] | mask[3] | mask[4] | mask[5]) == 0x00;
+
+    case 0xfe:
+    case 0xff:
+        return (mask[1] & mask[2] & mask[3] & mask[4] & mask[5]) == 0xff;
+
+    default:
+        return false;
+    }
+}
+
+/* Returns 'wc' with the FWW_DL_DST and FWW_ETH_MCAST bits modified
+ * appropriately to match 'mask'.
+ *
+ * This function will assert-fail if 'mask' is invalid.  Only 'mask' values
+ * accepted by flow_wildcards_is_dl_dst_mask_valid() are allowed. */
+flow_wildcards_t
+flow_wildcards_set_dl_dst_mask(flow_wildcards_t wc,
+                               const uint8_t mask[ETH_ADDR_LEN])
+{
+    assert(flow_wildcards_is_dl_dst_mask_valid(mask));
+
+    switch (mask[0]) {
+    case 0x00:
+        return wc | FWW_DL_DST | FWW_ETH_MCAST;
+
+    case 0x01:
+        return (wc | FWW_DL_DST) & ~FWW_ETH_MCAST;
+
+    case 0xfe:
+        return (wc & ~FWW_DL_DST) | FWW_ETH_MCAST;
+
+    case 0xff:
+        return wc & ~(FWW_DL_DST | FWW_ETH_MCAST);
+
+    default:
+        NOT_REACHED();
+    }
+}
+
 /* Hashes 'flow' based on its L2 through L4 protocol information. */
 uint32_t
 flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis)
@@ -750,10 +828,13 @@ flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis)
     }
     fields.vlan_tci = flow->vlan_tci & htons(VLAN_VID_MASK);
     fields.eth_type = flow->dl_type;
+
+    /* UDP source and destination port are not taken into account because they
+     * will not necessarily be symmetric in a bidirectional flow. */
     if (fields.eth_type == htons(ETH_TYPE_IP)) {
         fields.ipv4_addr = flow->nw_src ^ flow->nw_dst;
         fields.ip_proto = flow->nw_proto;
-        if (fields.ip_proto == IPPROTO_TCP || fields.ip_proto == IPPROTO_UDP) {
+        if (fields.ip_proto == IPPROTO_TCP) {
             fields.tp_addr = flow->tp_src ^ flow->tp_dst;
         }
     } else if (fields.eth_type == htons(ETH_TYPE_IPV6)) {
@@ -765,9 +846,45 @@ flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis)
             ipv6_addr[i] = a[i] ^ b[i];
         }
         fields.ip_proto = flow->nw_proto;
-        if (fields.ip_proto == IPPROTO_TCP || fields.ip_proto == IPPROTO_UDP) {
+        if (fields.ip_proto == IPPROTO_TCP) {
             fields.tp_addr = flow->tp_src ^ flow->tp_dst;
         }
     }
     return hash_bytes(&fields, sizeof fields, basis);
+}
+
+/* Hashes the portions of 'flow' designated by 'fields'. */
+uint32_t
+flow_hash_fields(const struct flow *flow, enum nx_hash_fields fields,
+                 uint16_t basis)
+{
+    switch (fields) {
+
+    case NX_HASH_FIELDS_ETH_SRC:
+        return hash_bytes(flow->dl_src, sizeof flow->dl_src, basis);
+
+    case NX_HASH_FIELDS_SYMMETRIC_L4:
+        return flow_hash_symmetric_l4(flow, basis);
+    }
+
+    NOT_REACHED();
+}
+
+/* Returns a string representation of 'fields'. */
+const char *
+flow_hash_fields_to_str(enum nx_hash_fields fields)
+{
+    switch (fields) {
+    case NX_HASH_FIELDS_ETH_SRC: return "eth_src";
+    case NX_HASH_FIELDS_SYMMETRIC_L4: return "symmetric_l4";
+    default: return "<unknown>";
+    }
+}
+
+/* Returns true if the value of 'fields' is supported. Otherwise false. */
+bool
+flow_hash_fields_valid(enum nx_hash_fields fields)
+{
+    return fields == NX_HASH_FIELDS_ETH_SRC
+        || fields == NX_HASH_FIELDS_SYMMETRIC_L4;
 }

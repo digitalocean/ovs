@@ -1,10 +1,11 @@
 '\" pt
-.TH Open_vSwitch 5 "May 2011" "Open vSwitch" "Open vSwitch Manual"
+.TH Open_vSwitch 5 "August 2011" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
 .  ns
-.  TP "\\$1"
+.  TP
+\\$1
 ..
 .de ST
 .  PP
@@ -36,8 +37,6 @@ Port	Port configuration.
 Interface	One physical network device in a Port.
 QoS	Quality of Service configuration
 Queue	QoS output queue.
-Monitor	Connectivity Monitor configuration
-Maintenance_Point	Maintenance Point configuration
 Mirror	Port mirroring (SPAN/RSPAN).
 Controller	OpenFlow controller configuration.
 Manager	OVSDB management connection.
@@ -46,6 +45,7 @@ SSL	SSL configuration.
 sFlow	sFlow configuration.
 Capability	Capability configuration.
 .TE
+.if !'\*[.T]'ascii' \{
 .sp 1
 .SH "TABLE RELATIONSHIPS"
 .PP
@@ -53,98 +53,90 @@ The following diagram shows the relationship among tables in the
 database.  Each node represents a table.  Tables that are part of the
 ``root set'' are shown with double borders.  Each edge leads from the
 table that contains it and points to the table that its value
-represents.  Edges are labeled with their column names.  Thick lines
+represents.  Edges are labeled with their column names, followed by a
+constraint on the number of allowed values: \fB?\fR for zero or one,
+\fB*\fR for zero or more, \fB+\fR for one or more.  Thick lines
 represent strong references; thin lines represent weak references.
 .RS -1in
-.\" Generated from vswitch.gv with cksum "1443954516 1149"
+.\" Generated from vswitch.gv with cksum "3079400319 1035"
 .PS
 linethick = 1;
 linethick = 1;
-box at 2.320997253,3.1110975 wid 0.5020540998 height 0.296295 "Bridge"
+box at 2.691279811,2.68196 wid 0.5680525378 height 0.335245 "Bridge"
 linethick = 1;
-box at 0.2304523251,2.37036 wid 0.4609046502 height 0.296295 "sFlow"
+box at 0.2607468561,1.8438475 wid 0.5214937122 height 0.335245 "sFlow"
 linethick = 1;
-box at 0.847759254,2.37036 wid 0.4855919496 height 0.296295 "Mirror"
+box at 0.959202994,1.8438475 wid 0.5494263256 height 0.335245 "Mirror"
 linethick = 1;
-box at 2.320997253,2.37036 wid 0.4444425 height 0.296295 "Port"
+box at 2.691279811,1.8438475 wid 0.5028675 height 0.335245 "Port"
 linethick = 1;
-box at 3.045260751,2.37036 wid 0.707789496 height 0.296295 "Controller"
+box at 3.510752689,1.8438475 wid 0.800833256 height 0.335245 "Controller"
 linethick = 1;
-box at 3.851835,2.37036 wid 0.609064002 height 0.296295 "NetFlow"
+box at 4.423356628,1.8438475 wid 0.689129622 height 0.335245 "NetFlow"
 linethick = 0.5;
-box at 2.057590998,1.6296225 wid 0.4444425 height 0.296295 "QoS"
-box at 2.057590998,1.6296225 wid 0.388886944444444 height 0.240739444444444
+box at 2.160452878,1.005735 wid 0.5028675 height 0.335245 "QoS"
+box at 2.160452878,1.005735 wid 0.447311944444444 height 0.279689444444444
 linethick = 0.5;
-box at 1.991754249,0.888885 wid 0.5102851749 height 0.296295 "Queue"
-box at 1.991754249,0.888885 wid 0.454729619344444 height 0.240739444444444
-linethick = 1;
-box at 2.938238997,0.888885 wid 0.5761278498 height 0.296295 "Monitor"
-linethick = 1;
-box at 2.938238997,0.1481475 wid 1.218128004 height 0.296295 "Maintenance_Point"
+box at 2.160452878,0.1676225 wid 0.5773656439 height 0.335245 "Queue"
+box at 2.160452878,0.1676225 wid 0.521810088344444 height 0.279689444444444
 linethick = 0.5;
-box at 3.637850751,3.851835 wid 0.954721749 height 0.296295 "Open_vSwitch"
-box at 3.637850751,3.851835 wid 0.899166193444444 height 0.240739444444444
+box at 4.218521933,3.5200725 wid 1.080226439 height 0.335245 "Open_vSwitch"
+box at 4.218521933,3.5200725 wid 1.02467088344444 height 0.279689444444444
 linethick = 1;
-box at 3.061734753,3.1110975 wid 0.699611754 height 0.296295 "Capability"
+box at 3.529392311,2.68196 wid 0.791580494 height 0.335245 "Capability"
 linethick = 1;
-box at 4.22220375,3.1110975 wid 0.4444425 height 0.296295 "SSL"
+box at 4.916904317,2.68196 wid 0.5028675 height 0.335245 "SSL"
 linethick = 1;
-box at 4.905341502,3.1110975 wid 0.633715746 height 0.296295 "Manager"
+box at 5.689845189,2.68196 wid 0.717022006 height 0.335245 "Manager"
 linethick = 1;
-box at 2.872402248,1.6296225 wid 0.641952747 height 0.296295 "Interface"
+box at 2.942713561,1.005735 wid 0.726341817 height 0.335245 "Interface"
 linethick = 1;
-spline -> from 2.072227971,3.066534732 to 2.072227971,3.066534732 to 1.825829049,3.018534942 to 1.439934441,2.932787169 to 1.119343251,2.8148025 to 0.887818338,2.729588058 to 0.637567581,2.60087751 to 0.4617876093,2.503870527
-"sflow" at 1.271579622,2.74072875
+spline -> from 2.411216138,2.64038962 to 2.411216138,2.64038962 to 2.110501373,2.590639262 to 1.621781212,2.494960339 to 1.219889506,2.346715 to 0.974758362,2.256265899 to 0.712999066,2.115798244 to 0.5250137847,2.006240178
+"sflow?" at 1.429417631,2.26290375
 linethick = 1;
-spline -> from 2.071042791,2.98546842 to 2.071042791,2.98546842 to 1.796021772,2.847157914 to 1.357208877,2.626536657 to 1.086632283,2.490477993
-"mirrors" at 1.9259175,2.74072875
+spline -> from 2.409137619,2.545448236 to 2.409137619,2.545448236 to 2.08321243,2.387748988 to 1.550776321,2.130079681 to 1.229812758,1.974794197
+"mirrors*" at 2.253583939,2.26290375
 linethick = 1;
-spline -> from 2.320997253,2.96117223 to 2.320997253,2.96117223 to 2.320997253,2.832698718 to 2.320997253,2.648462487 to 2.320997253,2.520048234
-"ports" at 2.469144753,2.74072875
+spline -> from 2.691279811,2.51232603 to 2.691279811,2.51232603 to 2.691279811,2.366963798 to 2.691279811,2.158508457 to 2.691279811,2.013213274
+"ports*" at 2.891488125,2.26290375
 linethick = 1;
-spline -> from 2.495218713,2.960816676 to 2.495218713,2.960816676 to 2.546240712,2.915068728 to 2.601410841,2.863868952 to 2.650180998,2.8148025 to 2.743336146,2.721054762 to 2.842120899,2.609944137 to 2.917557606,2.522300076
-"controller" at 3.065823624,2.74072875
+spline -> from 2.937148494,2.511990785 to 2.937148494,2.511990785 to 3.002387171,2.46203928 to 3.0708442,2.40504763 to 3.128975683,2.346715 to 3.230286722,2.244934618 to 3.327910066,2.115664146 to 3.399049055,2.013682617
+"controller*" at 3.613203561,2.26290375
 linethick = 1;
-spline -> from 2.571070233,2.988964701 to 2.571070233,2.988964701 to 2.594773833,2.979424002 to 2.61865521,2.970594411 to 2.641943997,2.96295 to 2.957675949,2.859720822 to 3.079038381,2.966624058 to 3.374444496,2.8148025 to 3.514473513,2.742862074 to 3.643184061,2.618003361 to 3.731598489,2.518922313
-"netflow" at 3.802472253,2.74072875
+spline -> from 2.974025444,2.543101521 to 2.974025444,2.543101521 to 3.000845044,2.532507779 to 3.02793284,2.522651576 to 3.054484244,2.5143375 to 3.459527253,2.387078498 to 3.62668041,2.557986399 to 3.994980567,2.346715 to 4.133302654,2.267396033 to 4.247688248,2.125989692 to 4.323386569,2.013213274
+"netflow?" at 4.474582064,2.26290375
 linethick = 0.5;
-spline -> from 1.091017449,2.37036 to 1.091017449,2.37036 to 1.370542152,2.37036 to 1.825414236,2.37036 to 2.096701938,2.37036
-"select_src_port" at 1.588496754,2.44443375
+spline -> from 1.237456344,1.8438475 to 1.237456344,1.8438475 to 1.569281845,1.8438475 to 2.119083645,1.8438475 to 2.439041473,1.8438475
+"select_src_port*" at 1.834527689,1.92765875
 linethick = 0.5;
-spline -> from 1.067787921,2.221501392 to 1.067787921,2.221501392 to 1.095284097,2.208345894 to 1.123787676,2.197086684 to 1.152231996,2.189264496 to 1.526156286,2.08650939 to 1.651429812,2.084257548 to 2.024702253,2.189264496 to 2.052553983,2.197145943 to 2.080346454,2.208405153 to 2.107190781,2.221501392
-"output_port" at 1.588496754,2.263338246
+spline -> from 1.215196076,1.675420412 to 1.215196076,1.675420412 to 1.2471114,1.660535534 to 1.280166557,1.647796224 to 1.313020567,1.638945756 to 1.76070674,1.518726899 to 1.909823716,1.513430028 to 2.356034811,1.638945756 to 2.387547841,1.647863273 to 2.419060871,1.660602583 to 2.449367019,1.675420412
+"output_port?" at 1.834527689,1.722757006
 linethick = 0.5;
-spline -> from 0.905240484,2.221264356 to 0.905240484,2.221264356 to 0.953892123,2.117798142 to 1.034780658,1.987843155 to 1.152231996,1.9259175 to 1.495282347,1.745118291 to 1.682837082,1.742984967 to 2.024702253,1.9259175 to 2.140790634,1.988080191 to 2.21924955,2.117975919 to 2.266123419,2.221442133
-"select_dst_port" at 1.588496754,1.99999125
+spline -> from 1.027123631,1.675018118 to 1.027123631,1.675018118 to 1.084316428,1.557883515 to 1.178520273,1.410845058 to 1.313020567,1.34098 to 1.724433231,1.127428935 to 1.947304107,1.122266162 to 2.356034811,1.34098 to 2.487383802,1.411314401 to 2.576156678,1.558285809 to 2.629192437,1.675353363
+"select_dst_port*" at 1.834527689,1.42479125
 linethick = 1;
-spline -> from 2.267664153,2.22043473 to 2.267664153,2.22043473 to 2.221975464,2.091961218 to 2.156494269,1.907724987 to 2.11080558,1.779310734
-"qos" at 2.312760252,1.99999125
+spline -> from 2.582124039,1.673408942 to 2.582124039,1.673408942 to 2.548331343,1.620641379 to 2.511119148,1.5622417 to 2.477058256,1.5086025 to 2.40638861,1.397100013 to 2.327203741,1.271383138 to 2.265719808,1.173558647
+"qos?" at 2.621414753,1.42479125
 linethick = 1;
-spline -> from 2.43258195,2.22043473 to 2.43258195,2.22043473 to 2.528225976,2.091961218 to 2.665351302,1.907724987 to 2.760995328,1.779310734
-"interfaces" at 2.930001996,1.99999125
+spline -> from 2.742170002,1.67421353 to 2.742170002,1.67421353 to 2.785751852,1.528851298 to 2.848308569,1.320395957 to 2.891890419,1.175100774
+"interfaces+" at 3.212786933,1.42479125
 linethick = 1;
-spline -> from 2.023220778,1.479637971 to 2.023220778,1.479637971 to 2.013917115,1.433001138 to 2.005028265,1.381268031 to 1.99999125,1.3333275 to 1.989620925,1.235076078 to 1.98754686,1.123965453 to 1.988080191,1.037447313
-"queues value" at 2.378597001,1.25925375
+spline -> from 2.160452878,0.83610103 to 2.160452878,0.83610103 to 2.160452878,0.690738798 to 2.160452878,0.4823102766 to 2.160452878,0.3369748642
+"queues value*" at 2.626108183,0.58667875
 linethick = 1;
-spline -> from 2.938238997,0.73895973 to 2.938238997,0.73895973 to 2.938238997,0.610486218 to 2.938238997,0.4262736906 to 2.938238997,0.2978238822
-"remote_mps" at 3.288044874,0.51851625
+spline -> from 3.676631915,3.429757497 to 3.676631915,3.429757497 to 3.372899945,3.369815691 to 3.032089878,3.28406002 to 2.914754128,3.1848275 to 2.814113579,3.09967527 to 2.75705488,2.96021335 to 2.725810046,2.849716598
+"bridges*" at 3.1848275,3.10101625
 linethick = 1;
-spline -> from 3.159808398,3.796309317 to 3.159808398,3.796309317 to 2.96591295,3.754828017 to 2.749321305,3.682295001 to 2.584344249,3.55554 to 2.486211345,3.480162552 to 2.417352387,3.356903832 to 2.374685907,3.259245
-"bridges" at 2.790091497,3.48146625
+spline -> from 3.710961003,3.350840824 to 3.710961003,3.350840824 to 3.642839219,3.307124876 to 3.581690531,3.252614039 to 3.538712122,3.1848275 to 3.47649065,3.086801862 to 3.476356552,2.95484943 to 3.490637989,2.850789382
+"capabilities value*" at 4.125390872,3.10101625
 linethick = 1;
-spline -> from 3.219067398,3.702146766 to 3.219067398,3.702146766 to 3.159926916,3.663332121 to 3.106830852,3.615095295 to 3.069971754,3.55554 to 3.015927546,3.468251493 to 3.015809028,3.35168904 to 3.028194159,3.25983759
-"capabilities value" at 3.55554,3.48146625
+spline -> from 4.526209794,3.352114755 to 4.526209794,3.352114755 to 4.593862235,3.304711112 to 4.66057599,3.248457001 to 4.712069622,3.1848275 to 4.790919246,3.087405303 to 4.843150417,2.955452871 to 4.87513279,2.851191676
+"ssl?" at 4.930917558,3.10101625
 linethick = 1;
-spline -> from 3.884901522,3.703568982 to 3.884901522,3.703568982 to 3.941612385,3.661080279 to 3.997849176,3.611065683 to 4.041108246,3.55554 to 4.109256096,3.468132975 to 4.155478116,3.351570522 to 4.184159472,3.259778331
-"ssl" at 4.205729748,3.48146625
-linethick = 1;
-spline -> from 4.020249078,3.702146766 to 4.020249078,3.702146766 to 4.117848651,3.659065473 to 4.22101857,3.609110136 to 4.312751502,3.55554 to 4.46042493,3.469258896 to 4.614616848,3.352696443 to 4.728690423,3.260548698
-"manager_options" at 5.024689128,3.48146625
-linethick = 1;
-spline -> from 2.885735523,1.47969723 to 2.885735523,1.47969723 to 2.89717251,1.351223718 to 2.913527994,1.166987487 to 2.924964981,1.038573234
-"monitor" at 3.139897374,1.25925375
+spline -> from 4.735067429,3.351645412 to 4.735067429,3.351645412 to 4.853341865,3.304577014 to 4.976108584,3.24852405 to 5.084526817,3.1848275 to 5.243567045,3.091361194 to 5.403210714,2.956659753 to 5.518602043,2.850185941
+"manager_options*" at 5.908693125,3.10101625
 .PE
-.RE
+.RE\}
 .bp
 .SS "Open_vSwitch Table"
 Configuration for an Open vSwitch daemon.  There must be exactly
@@ -167,6 +159,9 @@ set of \fBBridge\fRs
 T}
 \ \ \fBssl\fR	T{
 optional \fBSSL\fR
+T}
+\ \ \fBother_config\fR	T{
+map of string-string pairs
 T}
 \ \ \fBexternal_ids\fR	T{
 map of string-string pairs
@@ -222,6 +217,15 @@ T}
 Set of bridges managed by the daemon.
 .IP "\fBssl\fR: optional \fBSSL\fR"
 SSL used globally by the daemon.
+.IP "\fBother_config\fR: map of string-string pairs"
+Key-value pairs for configuring rarely used Open vSwitch features.  The
+currently defined key-value pairs are:
+.RS
+.TP
+\fBenable\-statistics\fR
+Set to \fBtrue\fR to enable populating the \fBstatistics\fR column or \fBfalse\fR (the default)
+disable populating it.
+.RE
 .IP "\fBexternal_ids\fR: map of string-string pairs"
 Key-value pairs for use by external frameworks that integrate
 with Open vSwitch, rather than by Open vSwitch itself.  System
@@ -235,7 +239,7 @@ defined common key-value pairs are:
 A unique identifier for the Open vSwitch\(cqs physical host.
 The form of the identifier depends on the type of the host.
 On a Citrix XenServer, this will likely be the same as
-\fBxs\-system\-uuid\fR\.
+\fBexternal_ids:xs-system-uuid\fR\.
 .TP
 \fBxs\-system\-uuid\fR
 The Citrix XenServer universally unique identifier for the
@@ -262,6 +266,8 @@ Key-value pairs that report statistics about a system running an Open
 vSwitch.  These are updated periodically (currently, every 5
 seconds).  Key-value pairs that cannot be determined or that do not
 apply to a platform are omitted.
+.IP
+Statistics are disabled unless \fBother-config:enable-statistics\fR is set to \fBtrue\fR\.
 .RS
 .TP
 \fBcpu\fR
@@ -435,7 +441,7 @@ l | l.
 Core Features
 _
 \ \ \fBname\fR	T{
-string
+string (must be unique within table)
 T}
 \ \ \fBports\fR	T{
 set of \fBPort\fRs
@@ -484,7 +490,7 @@ map of string-string pairs
 T}
 .TE
 .ST "Core Features:"
-.IP "\fBname\fR: string"
+.IP "\fBname\fR: string (must be unique within table)"
 Bridge identifier.  Should be alphanumeric and no more than about 8
 bytes long.  Must be unique among the names of ports, interfaces, and
 bridges on a host.
@@ -540,10 +546,8 @@ When more than one controller is configured,
 \fBfail_mode\fR is considered only when none of the
 configured controllers can be contacted.
 .IP "\fBdatapath_id\fR: optional string"
-Reports the OpenFlow datapath ID in use.  Exactly 16 hex
-digits.  (Setting this column will have no useful effect.  Set
-\fBother_config\fR:\fBother\-config\fR
-instead.)
+Reports the OpenFlow datapath ID in use.  Exactly 16 hex digits.
+(Setting this column has no useful effect.  Set \fBother-config:datapath-id\fR instead.)
 .ST "Other Features:"
 .IP "\fBdatapath_type\fR: string"
 Name of datapath provider.  The kernel datapath has
@@ -559,8 +563,9 @@ defined key-value pairs are:
 .RS
 .TP
 \fBbridge\-id\fR
-A unique identifier of the bridge.  On Citrix XenServer this
-will commonly be the same as \fBxs\-network\-uuids\fR\.
+A unique identifier of the bridge.  On Citrix XenServer this will
+commonly be the same as
+\fBexternal_ids:xs-network-uuids\fR\.
 .TP
 \fBxs\-network\-uuids\fR
 Semicolon-delimited set of universally unique identifier(s) for
@@ -594,6 +599,18 @@ ID that will be used by flows set up by in-band control on this
 bridge.  If unset, or if the port used by an in-band control flow
 does not have QoS configured, or if the port does not have a queue
 with the specified ID, the default queue is used instead.
+.TP
+\fBflow\-eviction\-threshold\fR
+A number of flows as a nonnegative integer.  This sets number
+of flows at which eviction from the kernel flow table will
+be triggered.
+If there are a large number of flows then increasing this
+value to around the number of flows present
+can result in reduced CPU usage and packet loss.
+.IP
+The default is 1000.
+.IP
+Values below 100 will be rounded up to 100.
 .RE
 .bp
 .SS "Port Table"
@@ -616,7 +633,7 @@ l | l.
 Column	Type
 =
 \fBname\fR	T{
-string
+string (must be unique within table)
 T}
 \fBinterfaces\fR	T{
 set of 1 or more \fBInterface\fRs
@@ -640,7 +657,7 @@ l | l.
 Bonding Configuration
 _
 \ \ \fBbond_mode\fR	T{
-optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR
+optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, \fBbalance\-slb\fR, or \fBstable\fR
 T}
 \ \ \fBbond_updelay\fR	T{
 integer
@@ -676,7 +693,7 @@ T}
 map of string-string pairs
 T}
 .TE
-.IP "\fBname\fR: string"
+.IP "\fBname\fR: string (must be unique within table)"
 Port name.  Should be alphanumeric and no more than about 8
 bytes long.  May be the same as the interface name, for
 non-bonded ports.  Must otherwise be unique among the names of
@@ -735,9 +752,9 @@ Assigns all flows to one slave, failing over to a backup slave when
 the active slave is disabled.
 .RE
 .PP
-The following mode requires the upstream switch to support 802.3ad with
+The following modes require the upstream switch to support 802.3ad with
 successful LACP negotiation.  If LACP negotiation fails then
-\fBbalance\-slb\fR mode is used as a fallback:
+\fBbalance\-slb\fR style flow hashing is used as a fallback:
 .RS
 .TP
 \fBbalance\-tcp\fR
@@ -745,10 +762,25 @@ Balances flows among slaves based on L2, L3, and L4 protocol
 information such as destination MAC address, IP address, and TCP
 port.
 .RE
+.RS
+.TP
+\fBstable\fR
+Attempts to always assign a given flow to the same slave
+consistently.  In an effort to maintain stability, no load
+balancing is done.  Uses a similar hashing strategy to
+\fBbalance\-tcp\fR, always taking into account L3 and L4
+fields even if LACP negotiations are unsuccessful.
+.IP
+Slave selection decisions are made based on \fBother_config:bond-stable-id\fR if set.  Otherwise,
+OpenFlow port number is used.  Decisions are consistent across all
+\fBovs\-vswitchd\fR instances with equivalent
+\fBother_config:bond-stable-id\fR
+values.
+.RE
 .PP
 These columns apply only to bonded ports.  Their values are
 otherwise ignored.
-.IP "\fBbond_mode\fR: optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR"
+.IP "\fBbond_mode\fR: optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, \fBbalance\-slb\fR, or \fBstable\fR"
 The type of bonding used for a bonded port.  Defaults to
 \fBbalance\-slb\fR if unset.
 .IP "\fBbond_updelay\fR: integer"
@@ -828,6 +860,16 @@ The number of milliseconds between successive attempts to
 poll each interface\(cqs MII.  Only relevant on ports which use
 \fBmiimon\fR to detect failures.
 .TP
+\fBbond\-hash\-basis\fR
+An integer hashed along with flows when choosing output slaves.
+When changed, all flows will be assigned different hash values
+possibly causing slave selection decisions to change.
+.TP
+\fBlacp\-system\-id\fR
+The LACP system ID of this \fBPort\fR\.  The system ID
+of a LACP bond is used to identify itself to its partners.  Must
+be a nonzero MAC address.
+.TP
 \fBlacp\-system\-priority\fR
 The LACP system priority of this \fBPort\fR\.  In
 LACP negotiations, link status decisions are made by the system
@@ -836,11 +878,25 @@ and 65535.
 .TP
 \fBlacp\-time\fR
 The LACP timing which should be used on this
-\fBPort\fR\.  Possible values are \fBfast\fR and
-\fBslow\fR\.  By default \fBslow\fR is used.  When
-configured to be \fBfast\fR more frequent LACP heartbeats
-will be requested causing connectivity problems to be detected more
-quickly.
+\fBPort\fR\.  Possible values are \fBfast\fR,
+\fBslow\fR and a positive number of milliseconds.  By
+default \fBslow\fR is used.  When configured to be
+\fBfast\fR LACP heartbeats are requested at a rate of once
+per second causing connectivity problems to be detected more
+quickly.  In \fBslow\fR mode, heartbeats are requested at
+a rate of once every 30 seconds.
+.IP
+Users may manually set a heartbeat transmission rate to increase
+the fault detection speed further.  When manually set, OVS
+expects the partner switch to be configured with the same
+transmission rate.  Manually setting \fBlacp\-time\fR to
+something other than \fBfast\fR or \fBslow\fR is
+not supported by the LACP specification.
+.TP
+\fBlacp\-heartbeat\fR
+Treats LACP like a simple heartbeat protocol for link state
+monitoring.  Most features of the LACP protocol are disabled when
+this mode is in use.
 .RE
 .bp
 .SS "Interface Table"
@@ -859,7 +915,7 @@ l | l.
 Core Features
 _
 \ \ \fBname\fR	T{
-string
+string (must be unique within table)
 T}
 \ \ \fBmac\fR	T{
 optional string
@@ -919,10 +975,25 @@ _
 .T&
 li | s
 l | l.
+Connectivity Fault Management
+_
+\ \ \fBcfm_mpid\fR	T{
+optional integer, in range 1 to 8,191
+T}
+\ \ \fBcfm_remote_mpid\fR	T{
+optional integer, in range 1 to 8,191
+T}
+\ \ \fBcfm_fault\fR	T{
+optional boolean
+T}
+_
+.T&
+li | s
+l | l.
 Other Features
 _
-\ \ \fBmonitor\fR	T{
-optional \fBMonitor\fR
+\ \ \fBlacp_current\fR	T{
+optional boolean
 T}
 \ \ \fBexternal_ids\fR	T{
 map of string-string pairs
@@ -935,7 +1006,7 @@ map of string-integer pairs
 T}
 .TE
 .ST "Core Features:"
-.IP "\fBname\fR: string"
+.IP "\fBname\fR: string (must be unique within table)"
 Interface name.  Should be alphanumeric and no more than about 8 bytes
 long.  May be the same as the port name, for non-bonded ports.  Must
 otherwise be unique among the names of ports, interfaces, and bridges
@@ -1001,11 +1072,13 @@ A TUN/TAP device managed by Open vSwitch.
 \fBgre\fR
 An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
 tunnel.  Each tunnel must be uniquely identified by the
-combination of \fBremote_ip\fR, \fBlocal_ip\fR, and
-\fBin_key\fR\.  Note that if two ports are defined that are
-the same except one has an optional identifier and the other does
-not, the more specific one is matched first.  \fBin_key\fR
-is considered more specific than \fBlocal_ip\fR if a port
+combination of \fBoptions:remote_ip\fR,
+\fBoptions:local_ip\fR, and
+\fBoptions:in_key\fR\.  Note that if two ports
+are defined that are the same except one has an optional
+identifier and the other does not, the more specific one is
+matched first.  \fBoptions:in_key\fR is considered
+more specific than \fBoptions:local_ip\fR if a port
 defines one and another port defines the other.  The following
 options may be specified in the \fBoptions\fR column:
 .RS
@@ -1081,18 +1154,32 @@ Default is disabled, set to \fBtrue\fR to enable.
 .RE
 .RS
 .TP
+\fBdf_inherit\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be copied
+from the inner IP headers (those of the encapsulated traffic)
+to the outer (tunnel) headers.  Default is disabled; set to
+\fBtrue\fR to enable.
+.RE
+.RS
+.TP
+\fBdf_default\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be set by
+default on tunnel headers if the \fBdf_inherit\fR option
+is not set, or if the encapsulated packet is not IP.  Default
+is enabled; set to \fBfalse\fR to disable.
+.RE
+.RS
+.TP
 \fBpmtud\fR
 Optional.  Enable tunnel path MTU discovery.  If enabled
-``ICMP destination unreachable - fragmentation\(cq\(cq needed
+``ICMP Destination Unreachable - Fragmentation Needed\(cq\(cq
 messages will be generated for IPv4 packets with the DF bit set
 and IPv6 packets above the minimum MTU if the packet size
-exceeds the path MTU minus the size of the tunnel headers.  It
-also forces the encapsulating packet DF bit to be set (it is
-always set if the inner packet implies path MTU discovery).
+exceeds the path MTU minus the size of the tunnel headers.
 Note that this option causes behavior that is typically
 reserved for routers and therefore is not entirely in
 compliance with the IEEE 802.1D specification for bridges.
-Default is enabled, set to \fBfalse\fR to disable.
+Default is enabled; set to \fBfalse\fR to disable.
 .RE
 .RS
 .TP
@@ -1111,13 +1198,14 @@ required or as a debugging measure.  Default is enabled, set to
 An Ethernet over RFC 2890 Generic Routing Encapsulation
 over IPv4 IPsec tunnel.  Each tunnel (including those of type
 \fBgre\fR) must be uniquely identified by the
-combination of \fBremote_ip\fR and
-\fBlocal_ip\fR\.  Note that if two ports are defined
-that are the same except one has an optional identifier and
+combination of \fBoptions:remote_ip\fR and
+\fBoptions:local_ip\fR\.  Note that if two ports are
+defined that are the same except one has an optional identifier and
 the other does not, the more specific one is matched first.
-An authentication method of \fBpeer_cert\fR or
-\fBpsk\fR must be defined.  The following options may
-be specified in the \fBoptions\fR column:
+An authentication method of \fBoptions:peer_cert\fR
+or \fBoptions:psk\fR must be defined.  The
+following options may be specified in the \fBoptions\fR
+column:
 .RS
 .TP
 \fBremote_ip\fR
@@ -1221,18 +1309,32 @@ Default is disabled, set to \fBtrue\fR to enable.
 .RE
 .RS
 .TP
+\fBdf_inherit\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be copied
+from the inner IP headers (those of the encapsulated traffic)
+to the outer (tunnel) headers.  Default is disabled; set to
+\fBtrue\fR to enable.
+.RE
+.RS
+.TP
+\fBdf_default\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be set by
+default on tunnel headers if the \fBdf_inherit\fR option
+is not set, or if the encapsulated packet is not IP.  Default
+is enabled; set to \fBfalse\fR to disable.
+.RE
+.RS
+.TP
 \fBpmtud\fR
 Optional.  Enable tunnel path MTU discovery.  If enabled
-``ICMP destination unreachable - fragmentation\(cq\(cq needed
+``ICMP Destination Unreachable - Fragmentation Needed\(cq\(cq
 messages will be generated for IPv4 packets with the DF bit set
 and IPv6 packets above the minimum MTU if the packet size
-exceeds the path MTU minus the size of the tunnel headers.  It
-also forces the encapsulating packet DF bit to be set (it is
-always set if the inner packet implies path MTU discovery).
+exceeds the path MTU minus the size of the tunnel headers.
 Note that this option causes behavior that is typically
 reserved for routers and therefore is not entirely in
 compliance with the IEEE 802.1D specification for bridges.
-Default is enabled, set to \fBfalse\fR to disable.
+Default is enabled; set to \fBfalse\fR to disable.
 .RE
 .TP
 \fBcapwap\fR
@@ -1242,10 +1344,12 @@ where GRE is not available.  Note that only the tunneling component
 of the protocol is implemented.  Due to the non-standard use of
 CAPWAP, UDP ports 58881 and 58882 are used as the source and
 destination ports respectively.  Each tunnel must be uniquely
-identified by the combination of \fBremote_ip\fR and
-\fBlocal_ip\fR\.  If two ports are defined that are the same
-except one includes \fBlocal_ip\fR and the other does not,
-the more specific one is matched first.  CAPWAP support is not
+identified by the combination of
+\fBoptions:remote_ip\fR and
+\fBoptions:local_ip\fR\.  If two ports are defined
+that are the same except one includes
+\fBoptions:local_ip\fR and the other does not, the
+more specific one is matched first.  CAPWAP support is not
 available on all platforms.  Currently it is only supported in the
 Linux kernel module with kernel versions >= 2.6.25.  The following
 options may be specified in the \fBoptions\fR column:
@@ -1281,18 +1385,32 @@ Default is the system default TTL.
 .RE
 .RS
 .TP
+\fBdf_inherit\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be copied
+from the inner IP headers (those of the encapsulated traffic)
+to the outer (tunnel) headers.  Default is disabled; set to
+\fBtrue\fR to enable.
+.RE
+.RS
+.TP
+\fBdf_default\fR
+Optional.  If enabled, the Don\(cqt Fragment bit will be set by
+default on tunnel headers if the \fBdf_inherit\fR option
+is not set, or if the encapsulated packet is not IP.  Default
+is enabled; set to \fBfalse\fR to disable.
+.RE
+.RS
+.TP
 \fBpmtud\fR
 Optional.  Enable tunnel path MTU discovery.  If enabled
-``ICMP destination unreachable - fragmentation\(cq\(cq needed
+``ICMP Destination Unreachable - Fragmentation Needed\(cq\(cq
 messages will be generated for IPv4 packets with the DF bit set
 and IPv6 packets above the minimum MTU if the packet size
-exceeds the path MTU minus the size of the tunnel headers.  It
-also forces the encapsulating packet DF bit to be set (it is
-always set if the inner packet implies path MTU discovery).
+exceeds the path MTU minus the size of the tunnel headers.
 Note that this option causes behavior that is typically
 reserved for routers and therefore is not entirely in
 compliance with the IEEE 802.1D specification for bridges.
-Default is enabled, set to \fBfalse\fR to disable.
+Default is enabled; set to \fBfalse\fR to disable.
 .RE
 .RS
 .TP
@@ -1318,6 +1436,9 @@ this \fBInterface\fR\(cqs name.  That is, the two patch
 interfaces must have reversed \fBname\fR and
 \fBpeer\fR values.
 .RE
+.TP
+\fBnull\fR
+An ignored interface.
 .RE
 .IP "\fBoptions\fR: map of string-string pairs"
 Configuration options whose interpretation varies based on
@@ -1349,9 +1470,9 @@ higher MTUs.
 This column will be empty for an interface that does not
 have an MTU as, for example, some kinds of tunnels do not.
 .IP "\fBstatus\fR: map of string-string pairs"
-Key-value pairs that report port status.  Supported status
-values are \fBtype\fR-dependent; some interfaces may not have
-a valid \fBdriver_name\fR, for example.
+Key-value pairs that report port status.  Supported status values are
+\fBtype\fR-dependent; some interfaces may not have a valid
+\fBstatus:driver_name\fR, for example.
 .IP
 The currently defined key-value pairs are:
 .RS
@@ -1384,14 +1505,16 @@ such as \fBgre\fR or \fBcapwap\fR\.
 Egress interface for tunnels.  Currently only relevant for GRE
 and CAPWAP tunnels.  On Linux systems, this column will show
 the name of the interface which is responsible for routing
-traffic destined for the configured \fBremote_ip\fR\.
-This could be an internal interface such as a bridge port.
+traffic destined for the configured
+\fBoptions:remote_ip\fR\.  This could be an
+internal interface such as a bridge port.
 .RE
 .RS
 .TP
 \fBtunnel_egress_iface_carrier\fR
-Whether a carrier is detected on \fBtunnel_egress_iface\fR\.  Valid values are \fBdown\fR
-and \fBup\fR\.
+Whether a carrier is detected on
+\fBstatus:tunnel_egress_iface\fR\.  Valid values
+are \fBdown\fR and \fBup\fR\.
 .RE
 .ST "Ingress Policing:"
 These settings control ingress policing for packets received on this
@@ -1451,9 +1574,35 @@ dropped packets.  The burst size should be at least the size of the
 interface\(cqs MTU.  Specifying a value that is numerically at least as
 large as 10% of \fBingress_policing_rate\fR helps TCP come
 closer to achieving the full rate.
+.ST "Connectivity Fault Management:"
+802.1ag Connectivity Fault Management (CFM) allows a group of
+Maintenance Points (MPs) called a Maintenance Association (MA) to
+detect connectivity problems with each other.  MPs within a MA should
+have complete and exclusive interconnectivity.  This is verified by
+occasionally broadcasting Continuity Check Messages (CCMs) at a
+configurable transmission interval.
+.IP "\fBcfm_mpid\fR: optional integer, in range 1 to 8,191"
+A Maintenance Point ID (MPID) uniquely identifies each endpoint within
+a Maintenance Association.  The MPID is used to identify this endpoint
+to other Maintenance Points in the MA.  Each end of a link being
+monitored should have a different MPID.  Must be configured to enable
+CFM on this \fBInterface\fR\.
+.IP "\fBcfm_remote_mpid\fR: optional integer, in range 1 to 8,191"
+The MPID of the remote endpoint being monitored.  If this
+\fBInterface\fR does not have connectivity to an endpoint
+advertising the configured MPID, a fault is signalled.  Must be
+configured to enable CFM on this \fBInterface\fR
+.IP "\fBcfm_fault\fR: optional boolean"
+Indicates a connectivity fault triggered by an inability to receive
+heartbeats from the remote endpoint.  When a fault is triggered on
+\fBInterface\fRs participating in bonds, they will be
+disabled.
 .ST "Other Features:"
-.IP "\fBmonitor\fR: optional \fBMonitor\fR"
-Connectivity monitor configuration for this interface.
+.IP "\fBlacp_current\fR: optional boolean"
+Boolean value indicating LACP status for this interface.  If true, this
+interface has current LACP information about its LACP partner.  This
+information may be used to monitor the health of interfaces in a LACP
+enabled port. This column will be empty if LACP is not enabled.
 .IP "\fBexternal_ids\fR: map of string-string pairs"
 Key-value pairs for use by external frameworks that integrate
 with Open vSwitch, rather than by Open vSwitch itself.  System
@@ -1472,7 +1621,8 @@ field in the VIF record for this interface.
 .TP
 \fBiface\-id\fR
 A system-unique identifier for the interface.  On XenServer,
-this will commonly be the same as \fBxs\-vif\-uuid\fR\.
+this will commonly be the same as
+\fBexternal_ids:xs-vif-uuid\fR\.
 .RE
 .IP
 Additionally the following key-value pairs specifically
@@ -1500,11 +1650,37 @@ The VM to which this interface belongs.
 Key-value pairs for rarely used interface features.
 .RS
 .TP
+\fBcfm_interval\fR
+The transmission interval of CFM heartbeats in milliseconds.
+Three missed heartbeat receptions indicate a connectivity fault.
+Defaults to 1000ms.
+.TP
+\fBbond\-stable\-id\fR
+A positive integer using in \fBstable\fR bond mode to
+make slave selection decisions.  Allocating
+\fBother_config:bond-stable-id\fR values
+consistently across interfaces participating in a bond will
+guarantee consistent slave selection decisions across
+\fBovs\-vswitchd\fR instances when using \fBstable\fR
+bonding mode.
+.TP
+\fBlacp\-port\-id\fR
+The LACP port ID of this \fBInterface\fR\.  Port IDs are
+used in LACP negotiations to identify individual ports
+participating in a bond.  Must be a number between 1 and
+65535.
+.TP
 \fBlacp\-port\-priority\fR
 The LACP port priority of this \fBInterface\fR\.  In
 LACP negotiations \fBInterface\fRs with numerically lower
 priorities are preferred for aggregation.  Must be a number between
 1 and 65535.
+.TP
+\fBlacp\-aggregation\-key\fR
+The LACP aggregation key of this \fBInterface\fR\.
+\fBInterface\fRs with different aggregation keys may not
+be active within a given \fBPort\fR at the same time. Must
+be a number between 1 and 65535.
 .RE
 .IP "\fBstatistics\fR: map of string-integer pairs"
 Key-value pairs that report interface statistics.  The current
@@ -1721,120 +1897,6 @@ either use the Open vSwitch development mailing list to coordinate on
 common key-value definitions, or choose key names that are likely to be
 unique.  No common key-value pairs are currently defined.
 .bp
-.SS "Monitor Table"
-A \fBMonitor\fR attaches to an \fBInterface\fR to
-implement 802.1ag Connectivity Fault Management (CFM).  CFM allows a
-group of Maintenance Points (MPs) called a Maintenance Association (MA)
-to detect connectivity problems with each other.  MPs within a MA should
-have complete and exclusive interconnectivity.  This is verified by
-occasionally broadcasting Continuity Check Messages (CCMs) at a
-configurable transmission interval.  A \fBMonitor\fR is
-responsible for collecting data about other MPs in its MA and
-broadcasting CCMs.
-.sp
-.ce 1
-\fBMonitor\fR Table Columns:
-.TS
-center box;
-l | l.
-Column	Type
-=
-.T&
-li | s
-l | l.
-Monitor Configuration
-_
-\ \ \fBmpid\fR	T{
-integer, in range 1 to 8,191
-T}
-\ \ \fBremote_mps\fR	T{
-set of \fBMaintenance_Point\fRs
-T}
-\ \ \fBma_name\fR	T{
-optional string, between 1 and 43 characters long
-T}
-\ \ \fBmd_name\fR	T{
-optional string, between 1 and 43 characters long
-T}
-\ \ \fBinterval\fR	T{
-optional integer, at least 100
-T}
-_
-.T&
-li | s
-l | l.
-Monitor Status
-_
-\ \ \fBfault\fR	T{
-optional boolean
-T}
-.TE
-.ST "Monitor Configuration:"
-.IP "\fBmpid\fR: integer, in range 1 to 8,191"
-A Maintenance Point ID (MPID) uniquely identifies each endpoint within
-a Maintenance Association (see \fBma_name\fR).  The MPID is
-used to identify this \fBMonitor\fR to other endpoints in the
-MA.
-.IP "\fBremote_mps\fR: set of \fBMaintenance_Point\fRs"
-A set of \fBMaintenance_Points\fR which this
-\fBMonitor\fR should have connectivity to.  If this
-\fBMonitor\fR does not have connectivity to any MPs in this
-set, or has connectivity to any MPs not in this set, a fault is
-signaled.
-.IP "\fBma_name\fR: optional string, between 1 and 43 characters long"
-A Maintenance Association (MA) name pairs with a Maintenance Domain
-(MD) name to uniquely identify a MA.  A MA is a group of endpoints who
-have complete and exclusive interconnectivity. Defaults to
-\fBovs\fR if unset.
-.IP "\fBmd_name\fR: optional string, between 1 and 43 characters long"
-A Maintenance Domain name pairs with a Maintenance Association name to
-uniquely identify a MA. Defaults to \fBovs\fR if unset.
-.IP "\fBinterval\fR: optional integer, at least 100"
-The transmission interval of CCMs in milliseconds.  Three missed CCMs
-indicate a connectivity fault.  Defaults to 1000ms.
-.ST "Monitor Status:"
-.IP "\fBfault\fR: optional boolean"
-Indicates a Connectivity Fault caused by a configuration error, a down
-remote MP, or unexpected connectivity to a remote MAID or remote MP.
-.bp
-.SS "Maintenance_Point Table"
-A \fBMaintenance_Point\fR represents a MP which a
-\fBMonitor\fR has or should have connectivity to.
-.sp
-.ce 1
-\fBMaintenance_Point\fR Table Columns:
-.TS
-center box;
-l | l.
-Column	Type
-=
-.T&
-li | s
-l | l.
-Maintenance_Point Configuration
-_
-\ \ \fBmpid\fR	T{
-integer, in range 1 to 8,191
-T}
-_
-.T&
-li | s
-l | l.
-Maintenance_Point Status
-_
-\ \ \fBfault\fR	T{
-optional boolean
-T}
-.TE
-.ST "Maintenance_Point Configuration:"
-.IP "\fBmpid\fR: integer, in range 1 to 8,191"
-A Maintenance Point ID (MPID) uniquely identifies each endpoint within
-a Maintenance Association. All MPs within a MA should have a unique
-MPID.
-.ST "Maintenance_Point Status:"
-.IP "\fBfault\fR: optional boolean"
-Indicates a connectivity fault.
-.bp
 .SS "Mirror Table"
 A port mirror within a \fBBridge\fR\.
 .PP
@@ -1931,6 +1993,35 @@ trunk port, the frame\(cqs VLAN tag will be set to
 \fBoutput_vlan\fR, replacing any existing tag; when it is
 sent out an implicit VLAN port, the frame will not be tagged.  This
 type of mirroring is sometimes called RSPAN.
+.IP
+The following destination MAC addresses will not be mirrored to a
+VLAN to avoid confusing switches that interpret the protocols that
+they represent:
+.RS
+.TP
+\fB01:80:c2:00:00:00\fR
+IEEE 802.1D Spanning Tree Protocol (STP).
+.TP
+\fB01:80:c2:00:00:01\fR
+IEEE Pause frame.
+.TP
+\fB01:80:c2:00:00:0\fIx\fB\fR
+Other reserved protocols.
+.TP
+\fB01:00:0c:cc:cc:cc\fR
+Cisco Discovery Protocol (CDP), VLAN Trunking Protocol (VTP),
+Dynamic Trunking Protocol (DTP), Port Aggregation Protocol (PAgP),
+and others.
+.TP
+\fB01:00:0c:cc:cc:cd\fR
+Cisco Shared Spanning Tree Protocol PVSTP+.
+.TP
+\fB01:00:0c:cd:cd:cd\fR
+Cisco STP Uplink Fast.
+.TP
+\fB01:00:0c:00:00:00\fR
+Cisco Inter Switch Link.
+.RE
 .IP
 \fBPlease note:\fR Mirroring to a VLAN can disrupt a network that
 contains unmanaged switches.  Consider an unmanaged physical switch
@@ -2314,7 +2405,7 @@ l | l.
 Core Features
 _
 \ \ \fBtarget\fR	T{
-string
+string (must be unique within table)
 T}
 \ \ \fBconnection_mode\fR	T{
 optional string, either \fBin\-band\fR or \fBout\-of\-band\fR
@@ -2354,7 +2445,7 @@ map of string-string pairs
 T}
 .TE
 .ST "Core Features:"
-.IP "\fBtarget\fR: string"
+.IP "\fBtarget\fR: string (must be unique within table)"
 Connection method for managers.
 .IP
 The following connection methods are currently supported:
@@ -2478,6 +2569,31 @@ successfully connected.
 The amount of time since this manager last disconnected from the
 database (in seconds). Value is empty if manager has never
 disconnected.
+.RE
+.RS
+.TP
+\fBlocks_held\fR
+.TQ
+\fBlocks_waiting\fR
+.TQ
+\fBlocks_lost\fR
+Space-separated lists of the names of OVSDB locks that the
+connection holds, is currently waiting to acquire, or has had
+stolen by another OVSDB client, respectively.  Key-value pairs for
+lists that would be empty are omitted.
+.RE
+.RS
+.TP
+\fBn_connections\fR
+When \fBtarget\fR specifies a connection method that
+listens for inbound connections (e.g. \fBptcp:\fR or
+\fBpssl:\fR) and more than one connection is actually
+active, the value is the number of active connections.
+Otherwise, this key-value pair is omitted.
+.IP
+When multiple connections are active, status columns and
+key-value pairs (other than this one) report the status of one
+arbitrarily chosen connection.
 .RE
 .bp
 .SS "NetFlow Table"

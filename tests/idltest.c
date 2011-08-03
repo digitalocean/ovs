@@ -582,17 +582,17 @@ static void
 idltest_simple_parse_ba(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
-    size_t i;
 
     assert(inited);
-    row->ba = NULL;
-    row->n_ba = 0;
-    for (i = 0; i < datum->n; i++) {
-        if (!row->n_ba) {
-            row->ba = xmalloc(datum->n * sizeof *row->ba);
-        }
-        row->ba[row->n_ba] = datum->keys[i].boolean;
-        row->n_ba++;
+    if (datum->n >= 1) {
+        static const bool false_value = false;
+        static const bool true_value = true;
+
+        row->n_ba = 1;
+        row->ba = datum->keys[0].boolean ? &true_value : &false_value;
+    } else {
+        row->n_ba = 0;
+        row->ba = NULL;
     }
 }
 
@@ -727,12 +727,9 @@ idltest_simple_unparse_b(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
-idltest_simple_unparse_ba(struct ovsdb_idl_row *row_)
+idltest_simple_unparse_ba(struct ovsdb_idl_row *row OVS_UNUSED)
 {
-    struct idltest_simple *row = idltest_simple_cast(row_);
-
-    assert(inited);
-    free(row->ba);
+    /* Nothing to do. */
 }
 
 static void
@@ -1293,7 +1290,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
+    c->type.n_max = 1;
     c->parse = idltest_simple_parse_ba;
     c->unparse = idltest_simple_unparse_ba;
 

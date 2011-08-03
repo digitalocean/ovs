@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "3.1.0",
- "cksum": "2572059147 15155",
+ "version": "5.2.0",
+ "cksum": "434778864 14545",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -16,6 +16,8 @@
          "type": {"key": {"type": "uuid",
                           "refTable": "SSL"},
                   "min": 0, "max": 1}},
+       "other_config": {
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}},
@@ -92,7 +94,8 @@
          "type": {"key": {"type": "integer",
                           "minInteger": 0,
                           "maxInteger": 4095},
-                  "min": 0, "max": 4096}}}},
+                  "min": 0, "max": 4096}}},
+     "indexes": [["name"]]},
    "Port": {
      "columns": {
        "name": {
@@ -121,7 +124,7 @@
                   "min": 0, "max": 1}},
        "bond_mode": {
          "type": {"key": {"type": "string",
-           "enum": ["set", ["balance-tcp", "balance-slb", "active-backup"]]},
+           "enum": ["set", ["balance-tcp", "balance-slb", "active-backup", "stable"]]},
          "min": 0, "max": 1}},
        "lacp": {
          "type": {"key": {"type": "string",
@@ -138,7 +141,8 @@
        "other_config": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "external_ids": {
-         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}}}},
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}}},
+     "indexes": [["name"]]},
    "Interface": {
      "columns": {
        "name": {
@@ -162,11 +166,24 @@
        "ofport": {
          "type": {"key": "integer", "min": 0, "max": 1},
          "ephemeral": true},
-       "monitor": {
+       "cfm_mpid": {
          "type": {
-           "key": {"type": "uuid", "refTable": "Monitor"},
+           "key": {"type": "integer", "minInteger": 1, "maxInteger": 8191},
            "min": 0,
            "max": 1}},
+       "cfm_remote_mpid": {
+         "type" : {
+           "key": { "type": "integer", "minInteger": 1, "maxInteger": 8191},
+           "min": 0,
+           "max": 1}},
+       "cfm_fault": {
+         "type": {
+           "key": { "type": "boolean"},
+           "min": 0,
+           "max": 1}},
+       "lacp_current": {
+         "type": {"key": {"type": "boolean"},
+                  "min": 0, "max": 1}},
        "other_config": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "statistics": {
@@ -195,50 +212,8 @@
          "ephemeral": true},
        "mtu": {
          "type": {"key": "integer", "min": 0, "max": 1},
-         "ephemeral": true}}},
-   "Monitor": {
-     "columns": {
-       "mpid": {
-         "type" : {
-           "key": { "type": "integer", "minInteger": 1, "maxInteger": 8191}}},
-       "md_name": {
-         "type" : {
-           "key": { "type": "string", "minLength": 1, "maxLength": 43},
-           "min": 0,
-           "max": 1}},
-       "ma_name": {
-         "type" : {
-           "key": { "type": "string", "minLength": 1, "maxLength": 43},
-           "min": 0,
-           "max": 1}},
-       "interval": {
-         "type": {
-           "key": { "type": "integer", "minInteger": 100},
-           "min": 0,
-           "max": 1}},
-       "remote_mps": {
-         "type": {
-           "key": { "type": "uuid", "refTable": "Maintenance_Point"},
-           "min": 0,
-           "max": "unlimited"}},
-       "fault": {
-         "type": {
-           "key": { "type": "boolean"},
-           "min": 0,
-           "max": 1},
-         "ephemeral": true}}},
-   "Maintenance_Point": {
-     "columns": {
-       "mpid": {
-         "type" : {
-           "key": { "type": "integer", "minInteger": 1, "maxInteger": 8191}},
-         "mutable": false},
-       "fault": {
-         "type": {
-           "key": { "type": "boolean"},
-           "min": 0,
-           "max": 1},
-         "ephemeral": true}}},
+         "ephemeral": true}},
+     "indexes": [["name"]]},
    "QoS": {
      "columns": {
        "type": {
@@ -271,8 +246,7 @@
        "name": {
          "type": "string"},
        "select_all": {
-         "type": "boolean"
-       },
+         "type": "boolean"},
        "select_src_port": {
          "type": {"key": {"type": "uuid",
                           "refTable": "Port",
@@ -406,7 +380,8 @@
          "ephemeral": true},
        "status": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"},
-         "ephemeral": true}}},
+         "ephemeral": true}},
+     "indexes": [["target"]]},
    "SSL": {
      "columns": {
        "private_key": {

@@ -45,7 +45,7 @@ struct flow {
     uint32_t regs[FLOW_N_REGS]; /* Registers. */
     ovs_be32 nw_src;            /* IPv4 source address. */
     ovs_be32 nw_dst;            /* IPv4 destination address. */
-    uint16_t in_port;           /* Input switch port. */
+    uint16_t in_port;           /* OpenFlow port number of input port. */
     ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
     ovs_be16 tp_src;            /* TCP/UDP source port. */
@@ -70,7 +70,7 @@ BUILD_ASSERT_DECL(offsetof(struct flow, nd_target) == FLOW_SIG_SIZE - 16);
 BUILD_ASSERT_DECL(sizeof(((struct flow *)0)->nd_target) == 16);
 BUILD_ASSERT_DECL(sizeof(struct flow) == FLOW_SIG_SIZE + FLOW_PAD_SIZE);
 
-int flow_extract(struct ofpbuf *, uint64_t tun_id, uint16_t in_port,
+int flow_extract(struct ofpbuf *, ovs_be64 tun_id, uint16_t in_port,
                  struct flow *);
 void flow_extract_stats(const struct flow *flow, struct ofpbuf *packet,
                         struct dpif_flow_stats *);
@@ -118,7 +118,7 @@ typedef unsigned int OVS_BITWISE flow_wildcards_t;
 #define FWW_TP_DST      ((OVS_FORCE flow_wildcards_t) (1 << 7))
 /* Same meanings as corresponding OFPFW_* bits, but differ in value. */
 #define FWW_NW_TOS      ((OVS_FORCE flow_wildcards_t) (1 << 1))
-/* No corresponding OFPFW_* or OVSFW_* bits. */
+/* No corresponding OFPFW_* bits. */
 #define FWW_ETH_MCAST   ((OVS_FORCE flow_wildcards_t) (1 << 8))
                                                        /* multicast bit only */
 #define FWW_ARP_SHA     ((OVS_FORCE flow_wildcards_t) (1 << 9))
@@ -162,9 +162,18 @@ void flow_wildcards_combine(struct flow_wildcards *dst,
 bool flow_wildcards_has_extra(const struct flow_wildcards *,
                               const struct flow_wildcards *);
 
-uint32_t flow_wildcards_hash(const struct flow_wildcards *);
+uint32_t flow_wildcards_hash(const struct flow_wildcards *, uint32_t basis);
 bool flow_wildcards_equal(const struct flow_wildcards *,
                           const struct flow_wildcards *);
 uint32_t flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis);
+
+const uint8_t *flow_wildcards_to_dl_dst_mask(flow_wildcards_t);
+bool flow_wildcards_is_dl_dst_mask_valid(const uint8_t[6]);
+flow_wildcards_t flow_wildcards_set_dl_dst_mask(flow_wildcards_t,
+                                                const uint8_t mask[6]);
+uint32_t flow_hash_fields(const struct flow *, enum nx_hash_fields,
+                          uint16_t basis);
+const char *flow_hash_fields_to_str(enum nx_hash_fields);
+bool flow_hash_fields_valid(enum nx_hash_fields);
 
 #endif /* flow.h */

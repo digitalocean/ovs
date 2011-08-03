@@ -14,93 +14,137 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-dnl OVS_CHECK_LINUX26
+dnl OVS_ENABLE_WERROR
+AC_DEFUN([OVS_ENABLE_WERROR],
+  [AC_ARG_ENABLE(
+     [Werror],
+     [AC_HELP_STRING([--enable-Werror], [Add -Werror to CFLAGS])],
+     [], [enable_Werror=no])
+   AC_CONFIG_COMMANDS_PRE(
+     [if test "X$enable_Werror" = Xyes; then
+        CFLAGS="$CFLAGS -Werror"
+      fi])])
+
+dnl OVS_CHECK_LINUX
 dnl
 dnl Configure linux kernel source tree 
-AC_DEFUN([OVS_CHECK_LINUX26], [
-  AC_ARG_WITH([l26],
-              [AC_HELP_STRING([--with-l26=/path/to/linux-2.6],
-                              [Specify the linux 2.6 kernel build directory])],
-              [KBUILD26="$withval"], [KBUILD26=])dnl
-  AC_ARG_WITH([l26-source],
-              [AC_HELP_STRING([--with-l26-source=/path/to/linux-2.6-source],
-                              [Specify the linux 2.6 kernel source directory
+AC_DEFUN([OVS_CHECK_LINUX], [
+  AC_ARG_WITH([linux],
+              [AC_HELP_STRING([--with-linux=/path/to/linux],
+                              [Specify the Linux kernel build directory])])
+  AC_ARG_WITH([linux-source],
+              [AC_HELP_STRING([--with-linux-source=/path/to/linux-source],
+                              [Specify the Linux kernel source directory
 			       (usually figured out automatically from build
-			       directory)])],
-              [KSRC26="$withval"], [KSRC26=])dnl
-  if test -n "$KBUILD26"; then
-    KBUILD26=`eval echo "$KBUILD26"`
-    case $KBUILD26 in
+			       directory)])])
+
+  # Deprecated equivalents to --with-linux, --with-linux-source.
+  AC_ARG_WITH([l26])
+  AC_ARG_WITH([l26-source])
+
+  if test X"$with_linux" != X; then
+    KBUILD=$with_linux
+  elif test X"$with_l26" != X; then
+    KBUILD=$with_l26
+    AC_MSG_WARN([--with-l26 is deprecated, please use --with-linux instead])
+  else
+    KBUILD=
+  fi
+
+  if test X"$KBUILD" != X; then
+    if test X"$with_linux_source" != X; then
+      KSRC=$with_linux_source
+    elif test X"$with_l26_source" != X; then
+      KSRC=$with_l26_source
+      AC_MSG_WARN([--with-l26-source is deprecated, please use --with-linux-source instead])
+    else
+      KSRC=
+    fi
+  elif test X"$with_linux_source" != X || test X"$with_l26_source" != X; then
+    AC_MSG_ERROR([Linux source directory may not be specified without Linux build directory])
+  fi
+
+  if test -n "$KBUILD"; then
+    KBUILD=`eval echo "$KBUILD"`
+    case $KBUILD in
         /*) ;;
-        *) KBUILD26=`pwd`/$KBUILD26 ;;
+        *) KBUILD=`pwd`/$KBUILD ;;
     esac
 
     # The build directory is what the user provided.
     # Make sure that it exists.
-    AC_MSG_CHECKING([for Linux 2.6 build directory])
-    if test -d "$KBUILD26"; then
-	AC_MSG_RESULT([$KBUILD26])
-	AC_SUBST(KBUILD26)
+    AC_MSG_CHECKING([for Linux build directory])
+    if test -d "$KBUILD"; then
+	AC_MSG_RESULT([$KBUILD])
+	AC_SUBST(KBUILD)
     else
 	AC_MSG_RESULT([no])
-	AC_ERROR([source dir $KBUILD26 doesn't exist])
+	AC_ERROR([source dir $KBUILD doesn't exist])
     fi
 
     # Debian breaks kernel headers into "source" header and "build" headers.
-    # We want the source headers, but $KBUILD26 gives us the "build" headers.
+    # We want the source headers, but $KBUILD gives us the "build" headers.
     # Use heuristics to find the source headers.
-    AC_MSG_CHECKING([for Linux 2.6 source directory])
-    if test -n "$KSRC26"; then
-      KSRC26=`eval echo "$KSRC26"`
-      case $KSRC26 in
+    AC_MSG_CHECKING([for Linux source directory])
+    if test -n "$KSRC"; then
+      KSRC=`eval echo "$KSRC"`
+      case $KSRC in
           /*) ;;
-          *) KSRC26=`pwd`/$KSRC26 ;;
+          *) KSRC=`pwd`/$KSRC ;;
       esac
-      if test ! -e $KSRC26/include/linux/kernel.h; then
-        AC_MSG_ERROR([$KSRC26 is not a kernel source directory)])
+      if test ! -e $KSRC/include/linux/kernel.h; then
+        AC_MSG_ERROR([$KSRC is not a kernel source directory])
       fi
     else
-      KSRC26=$KBUILD26
-      if test ! -e $KSRC26/include/linux/kernel.h; then
-	case `echo "$KBUILD26" | sed 's,/*$,,'` in # (
+      KSRC=$KBUILD
+      if test ! -e $KSRC/include/linux/kernel.h; then
+	case `echo "$KBUILD" | sed 's,/*$,,'` in # (
 	  */build)
-	    KSRC26=`echo "$KBUILD26" | sed 's,/build/*$,/source,'`
+	    KSRC=`echo "$KBUILD" | sed 's,/build/*$,/source,'`
 	    ;; # (
 	  *)
-	    KSRC26=`(cd $KBUILD26 && pwd -P) | sed 's,-[[^-]]*$,-common,'`
+	    KSRC=`(cd $KBUILD && pwd -P) | sed 's,-[[^-]]*$,-common,'`
 	    ;;
 	esac
       fi
-      if test ! -e $KSRC26/include/linux/kernel.h; then
-        AC_MSG_ERROR([cannot find source directory (please use --with-l26-source)])
+      if test ! -e $KSRC/include/linux/kernel.h; then
+        AC_MSG_ERROR([cannot find source directory (please use --with-linux-source)])
       fi
     fi
-    AC_MSG_RESULT([$KSRC26])
+    AC_MSG_RESULT([$KSRC])
 
     AC_MSG_CHECKING([for kernel version])
-    patchlevel=`sed -n 's/^PATCHLEVEL = //p' "$KSRC26/Makefile"`
-    sublevel=`sed -n 's/^SUBLEVEL = //p' "$KSRC26/Makefile"`
-    if test -z "$patchlevel" || test -z "$sublevel"; then
+    version=`sed -n 's/^VERSION = //p' "$KSRC/Makefile"`
+    patchlevel=`sed -n 's/^PATCHLEVEL = //p' "$KSRC/Makefile"`
+    sublevel=`sed -n 's/^SUBLEVEL = //p' "$KSRC/Makefile"`
+    if test X"$version" = X || test X"$patchlevel" = X; then
        AC_ERROR([cannot determine kernel version])
+    elif test X"$sublevel" = X; then
+       kversion=$version.$patchlevel
+    else
+       kversion=$version.$patchlevel.$sublevel
     fi
-    AC_MSG_RESULT([2.$patchlevel.$sublevel])
-    if test "2.$patchlevel" != '2.6'; then
-       if test "$BUILD26" = "$KSRC26"; then
-         AC_ERROR([Linux kernel in $KBUILD26 is not version 2.6])
+    AC_MSG_RESULT([$kversion])
+
+    if test "$version" -ge 3; then
+       : # Linux 3.x
+    elif test "$version" = 2 && test "$patchlevel" -ge 6; then
+       : # Linux 2.6.x
+    else
+       if test "$KBUILD" = "$KSRC"; then
+         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version 2.6 or later is required])
        else
-         AC_ERROR([Linux kernel in build tree $KBUILD26 (source tree $KSRC26) is not version 2.6])
+         AC_ERROR([Linux kernel in build tree $KBUILD (source tree $KSRC) is version $kversion, but version 2.6 or later is required])
        fi
     fi
-    if test ! -e "$KBUILD26"/include/linux/version.h || \
-       (test ! -e "$KBUILD26"/include/linux/autoconf.h && \
-        test ! -e "$KBUILD26"/include/generated/autoconf.h); then
-	AC_MSG_ERROR([Linux kernel source in $KBUILD26 is not configured])
+    if test ! -e "$KBUILD"/include/linux/version.h || \
+       (test ! -e "$KBUILD"/include/linux/autoconf.h && \
+        test ! -e "$KBUILD"/include/generated/autoconf.h); then
+	AC_MSG_ERROR([Linux kernel source in $KBUILD is not configured])
     fi
-    OVS_CHECK_LINUX26_COMPAT
-  elif test -n "$KSRC26"; then
-    AC_MSG_ERROR([--with-l26-source may not be specified without --with-l26])
+    OVS_CHECK_LINUX_COMPAT
   fi
-  AM_CONDITIONAL(L26_ENABLED, test -n "$KBUILD26")
+  AM_CONDITIONAL(LINUX_ENABLED, test -n "$KBUILD")
 ])
 
 dnl OVS_GREP_IFELSE(FILE, REGEX, [IF-MATCH], [IF-NO-MATCH])
@@ -136,12 +180,12 @@ dnl OVS_DEFINE(NAME)
 dnl
 dnl Defines NAME to 1 in kcompat.h.
 AC_DEFUN([OVS_DEFINE], [
-  echo '#define $1 1' >> datapath/linux-2.6/kcompat.h.new
+  echo '#define $1 1' >> datapath/linux/kcompat.h.new
 ])
 
 AC_DEFUN([OVS_CHECK_LOG2_H], [
-  AC_MSG_CHECKING([for $KSRC26/include/linux/log2.h])
-  if test -e $KSRC26/include/linux/log2.h; then
+  AC_MSG_CHECKING([for $KSRC/include/linux/log2.h])
+  if test -e $KSRC/include/linux/log2.h; then
     AC_MSG_RESULT([yes])
     OVS_DEFINE([HAVE_LOG2_H])
   else
@@ -149,28 +193,28 @@ AC_DEFUN([OVS_CHECK_LOG2_H], [
   fi
 ])
 
-dnl OVS_CHECK_LINUX26_COMPAT
+dnl OVS_CHECK_LINUX_COMPAT
 dnl
 dnl Runs various Autoconf checks on the Linux 2.6 kernel source in
-dnl the directory in $KBUILD26.
-AC_DEFUN([OVS_CHECK_LINUX26_COMPAT], [
-  rm -f datapath/linux-2.6/kcompat.h.new
-  mkdir -p datapath/linux-2.6
-  : > datapath/linux-2.6/kcompat.h.new
+dnl the directory in $KBUILD.
+AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
+  rm -f datapath/linux/kcompat.h.new
+  mkdir -p datapath/linux
+  : > datapath/linux/kcompat.h.new
 
-  OVS_GREP_IFELSE([$KSRC26/arch/x86/include/asm/checksum_32.h], [src_err,],
+  OVS_GREP_IFELSE([$KSRC/arch/x86/include/asm/checksum_32.h], [src_err,],
                   [OVS_DEFINE([HAVE_CSUM_COPY_DBG])])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/err.h], [ERR_CAST])
+  OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [ERR_CAST])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/in.h], [ipv4_is_multicast])
+  OVS_GREP_IFELSE([$KSRC/include/linux/in.h], [ipv4_is_multicast])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_disable_lro])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_get_stats])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/netdevice.h], [dev_get_by_index_rcu])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_disable_lro])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_stats])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_by_index_rcu])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/rcupdate.h], [rcu_read_lock_held], [],
-                  [OVS_GREP_IFELSE([$KSRC26/include/linux/rtnetlink.h],
+  OVS_GREP_IFELSE([$KSRC/include/linux/rcupdate.h], [rcu_read_lock_held], [],
+                  [OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h],
                                    [rcu_read_lock_held])])
   
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
@@ -178,49 +222,50 @@ AC_DEFUN([OVS_CHECK_LINUX26_COMPAT], [
   # member but retain the kerneldoc comment that describes it (which
   # starts with @).  The brackets must be doubled because of m4
   # quoting rules.
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [[[^@]]proto_data_valid],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [[[^@]]proto_data_valid],
                   [OVS_DEFINE([HAVE_PROTO_DATA_VALID])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [raw],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [raw],
                   [OVS_DEFINE([HAVE_MAC_RAW])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_dst(],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_dst(],
                   [OVS_DEFINE([HAVE_SKB_DST_ACCESSOR_FUNCS])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], 
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], 
                   [skb_copy_from_linear_data_offset])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_cow_head])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_transport_header],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_cow_head])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_transport_header],
                   [OVS_DEFINE([HAVE_SKBUFF_HEADER_HELPERS])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/icmpv6.h], [icmp6_hdr],
+  OVS_GREP_IFELSE([$KSRC/include/linux/icmpv6.h], [icmp6_hdr],
                   [OVS_DEFINE([HAVE_ICMP6_HDR])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/skbuff.h], [skb_warn_if_lro],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_warn_if_lro],
                   [OVS_DEFINE([HAVE_SKB_WARN_LRO])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [consume_skb])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/string.h], [kmemdup], [],
-                  [OVS_GREP_IFELSE([$KSRC26/include/linux/slab.h], [kmemdup])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/string.h], [kmemdup], [],
+                  [OVS_GREP_IFELSE([$KSRC/include/linux/slab.h], [kmemdup])])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/types.h], [bool],
+  OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [bool],
                   [OVS_DEFINE([HAVE_BOOL_TYPE])])
-  OVS_GREP_IFELSE([$KSRC26/include/linux/types.h], [__wsum],
+  OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [__wsum],
                   [OVS_DEFINE([HAVE_CSUM_TYPES])])
 
-  OVS_GREP_IFELSE([$KSRC26/include/net/checksum.h], [csum_replace4])
-  OVS_GREP_IFELSE([$KSRC26/include/net/checksum.h], [csum_unfold])
+  OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_replace4])
+  OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_unfold])
 
-  OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [NLA_NUL_STRING])
-  OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [nla_get_be16])
-  OVS_GREP_IFELSE([$KSRC26/include/net/netlink.h], [nla_find_nested])
+  OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [NLA_NUL_STRING])
+  OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_get_be16])
+  OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_find_nested])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/if_link.h], [rtnl_link_stats64])
+  OVS_GREP_IFELSE([$KSRC/include/linux/if_link.h], [rtnl_link_stats64])
 
-  OVS_GREP_IFELSE([$KSRC26/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
+  OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
                   [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
 
   OVS_CHECK_LOG2_H
 
-  if cmp -s datapath/linux-2.6/kcompat.h.new \
-            datapath/linux-2.6/kcompat.h >/dev/null 2>&1; then
-    rm datapath/linux-2.6/kcompat.h.new
+  if cmp -s datapath/linux/kcompat.h.new \
+            datapath/linux/kcompat.h >/dev/null 2>&1; then
+    rm datapath/linux/kcompat.h.new
   else
-    mv datapath/linux-2.6/kcompat.h.new datapath/linux-2.6/kcompat.h
+    mv datapath/linux/kcompat.h.new datapath/linux/kcompat.h
   fi
 ])
 
@@ -336,3 +381,58 @@ AC_DEFUN([OVS_CHECK_XENSERVER_VERSION],
       AC_MSG_ERROR([This appears to be XenServer $ovs_cv_xsversion, but only XenServer 5.6.100 or later is supported.  (If you are really using a supported version of XenServer, you may override this error message by specifying 'ovs_cv_xsversion=5.6.100' on the "configure" command line.)])
       ;;
   esac])
+
+dnl OVS_MAKE_HAS_IF([if-true], [if-false])
+dnl
+dnl Checks whether make has the GNU make $(if condition,then,else) extension.
+dnl Runs 'if-true' if so, 'if-false' otherwise.
+AC_DEFUN([OVS_MAKE_HAS_IF],
+  [AC_CACHE_CHECK(
+     [whether ${MAKE-make} has GNU make \$(if) extension],
+     [ovs_cv_gnu_make_if],
+     [cat <<'EOF' > conftest.mk
+conftest.out:
+	echo $(if x,y,z) > conftest.out
+.PHONY: all
+EOF
+      rm -f conftest.out
+      AS_ECHO(["$as_me:$LINENO: invoking ${MAKE-make} -f conftest.mk all:"]) >&AS_MESSAGE_LOG_FD 2>&1
+      ${MAKE-make} -f conftest.mk conftest.out >&AS_MESSAGE_LOG_FD 2>&1
+      AS_ECHO(["$as_me:$LINENO: conftest.out contains:"]) >&AS_MESSAGE_LOG_FD 2>&1
+      cat conftest.out >&AS_MESSAGE_LOG_FD 2>&1
+      result=`cat conftest.out`
+      rm -f conftest.mk conftest.out
+      if test "X$result" = "Xy"; then
+        ovs_cv_gnu_make_if=yes
+      else
+        ovs_cv_gnu_make_if=no
+      fi])
+   AS_IF([test $ovs_cv_gnu_make_if = yes], [$1], [$2])])
+
+dnl OVS_CHECK_SPARSE_TARGET
+dnl
+dnl The "cgcc" script from "sparse" isn't very good at detecting the
+dnl target for which the code is being built.  This helps it out.
+AC_DEFUN([OVS_CHECK_SPARSE_TARGET],
+  [AC_CACHE_CHECK(
+    [target hint for cgcc],
+    [ac_cv_sparse_target],
+    [AS_CASE([`$CC -dumpmachine 2>/dev/null`],
+       [i?86-* | athlon-*], [ac_cv_sparse_target=x86],
+       [x86_64-*], [ac_cv_sparse_target=x86_64],
+       [ac_cv_sparse_target=other])])
+   AS_CASE([$ac_cv_sparse_target],
+     [x86], [SPARSEFLAGS= CGCCFLAGS=-target=i86],
+     [x86_64], [SPARSEFLAGS=-m64 CGCCFLAGS=-target=x86_64],
+     [SPARSEFLAGS= CGCCFLAGS=])
+   AC_SUBST([SPARSEFLAGS])
+   AC_SUBST([CGCCFLAGS])])
+
+dnl OVS_ENABLE_SPARSE
+AC_DEFUN([OVS_ENABLE_SPARSE],
+  [AC_REQUIRE([OVS_CHECK_SPARSE_TARGET])
+   OVS_MAKE_HAS_IF(
+     [AC_CONFIG_COMMANDS_PRE(
+        [: ${SPARSE=sparse}
+         AC_SUBST([SPARSE])
+         CC='$(if $(C),REAL_CC="'"$CC"'" CHECK="$(SPARSE) -I $(top_srcdir)/include/sparse $(SPARSEFLAGS)" cgcc $(CGCCFLAGS),'"$CC"')'])])])
