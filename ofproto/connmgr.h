@@ -23,6 +23,7 @@
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
 
+struct nlattr;
 struct ofconn;
 struct ofopgroup;
 struct ofputil_flow_removed;
@@ -98,7 +99,6 @@ void ofconn_send_error(const struct ofconn *, const struct ofp_header *request,
 int ofconn_pktbuf_retrieve(struct ofconn *, uint32_t id,
                            struct ofpbuf **bufferp, uint16_t *in_port);
 
-size_t ofconn_n_pending_opgroups(const struct ofconn *);
 bool ofconn_has_pending_opgroups(const struct ofconn *);
 void ofconn_add_opgroup(struct ofconn *, struct list *);
 void ofconn_remove_opgroup(struct ofconn *, struct list *,

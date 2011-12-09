@@ -67,6 +67,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/lacp.h \
 	lib/leak-checker.c \
 	lib/leak-checker.h \
+	lib/learn.c \
+	lib/learn.h \
 	lib/learning-switch.c \
 	lib/learning-switch.h \
 	lib/list.c \
@@ -75,6 +77,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/lockfile.h \
 	lib/mac-learning.c \
 	lib/mac-learning.h \
+	lib/meta-flow.c \
+	lib/meta-flow.h \
 	lib/multipath.c \
 	lib/multipath.h \
 	lib/netdev-dummy.c \
@@ -95,6 +99,7 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/ofp-print.c \
 	lib/ofp-print.h \
 	lib/ofp-util.c \
+	lib/ofp-util.def \
 	lib/ofp-util.h \
 	lib/ofpbuf.c \
 	lib/ofpbuf.h \
@@ -136,6 +141,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/sort.h \
 	lib/sset.c \
 	lib/sset.h \
+	lib/stp.c \
+	lib/stp.h \
 	lib/stream-fd.c \
 	lib/stream-fd.h \
 	lib/stream-provider.h \
@@ -205,11 +212,11 @@ lib_libopenvswitch_a_SOURCES += \
 	lib/netdev-linux.h \
 	lib/netdev-vport.c \
 	lib/netdev-vport.h \
+	lib/netlink-notifier.c \
+	lib/netlink-notifier.h \
 	lib/netlink-protocol.h \
 	lib/netlink-socket.c \
 	lib/netlink-socket.h \
-	lib/rtnetlink.c \
-	lib/rtnetlink.h \
 	lib/rtnetlink-link.c \
 	lib/rtnetlink-link.h \
 	lib/route-table.c \
@@ -236,7 +243,7 @@ EXTRA_DIST += \
 	lib/dh4096.pem \
 	lib/dirs.c.in
 
-EXTRA_DIST += \
+MAN_FRAGMENTS += \
 	lib/common.man \
 	lib/common-syn.man \
 	lib/daemon.man \

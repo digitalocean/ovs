@@ -108,17 +108,7 @@ struct dpif_class {
     void (*wait)(struct dpif *dpif);
 
     /* Retrieves statistics for 'dpif' into 'stats'. */
-    int (*get_stats)(const struct dpif *dpif, struct odp_stats *stats);
-
-    /* Retrieves 'dpif''s current treatment of IP fragments into '*drop_frags':
-     * true indicates that fragments are dropped, false indicates that
-     * fragments are treated in the same way as other IP packets (except that
-     * the L4 header cannot be read). */
-    int (*get_drop_frags)(const struct dpif *dpif, bool *drop_frags);
-
-    /* Changes 'dpif''s treatment of IP fragments to 'drop_frags', whose
-     * meaning is the same as for the get_drop_frags member function. */
-    int (*set_drop_frags)(struct dpif *dpif, bool drop_frags);
+    int (*get_stats)(const struct dpif *dpif, struct dpif_dp_stats *stats);
 
     /* Adds 'netdev' as a new port in 'dpif'.  If successful, sets '*port_no'
      * to the new port's port number. */
@@ -141,6 +131,18 @@ struct dpif_class {
     /* Returns one greater than the largest port number accepted in flow
      * actions. */
     int (*get_max_ports)(const struct dpif *dpif);
+
+    /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE
+     * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
+     * flows whose packets arrived on port 'port_no'.
+     *
+     * The return value only needs to be meaningful when DPIF_UC_ACTION has
+     * been enabled in the 'dpif''s listen mask, and it is allowed to change
+     * when DPIF_UC_ACTION is disabled and then re-enabled.
+     *
+     * A dpif provider that doesn't have meaningful Netlink PIDs can use NULL
+     * for this function.  This is equivalent to always returning 0. */
+    uint32_t (*port_get_pid)(const struct dpif *dpif, uint16_t port_no);
 
     /* Attempts to begin dumping the ports in a dpif.  On success, returns 0
      * and initializes '*statep' with any data needed for iteration.  On
@@ -190,7 +192,7 @@ struct dpif_class {
     void (*port_poll_wait)(const struct dpif *dpif);
 
     /* Queries 'dpif' for a flow entry.  The flow is specified by the Netlink
-     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
      * 'key'.
      *
      * Returns 0 if successful.  If no flow matches, returns ENOENT.  On other
@@ -208,9 +210,9 @@ struct dpif_class {
                     struct ofpbuf **actionsp, struct dpif_flow_stats *stats);
 
     /* Adds or modifies a flow in 'dpif'.  The flow is specified by the Netlink
-     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
      * 'key'.  The associated actions are specified by the Netlink attributes
-     * with types ODP_ACTION_ATTR_* in the 'actions_len' bytes starting at
+     * with types OVS_ACTION_ATTR_* in the 'actions_len' bytes starting at
      * 'actions'.
      *
      * - If the flow's key does not exist in 'dpif', then the flow will be
@@ -235,7 +237,7 @@ struct dpif_class {
 
     /* Deletes a flow from 'dpif' and returns 0, or returns ENOENT if 'dpif'
      * does not contain such a flow.  The flow is specified by the Netlink
-     * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+     * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
      * 'key'.
      *
      * If the operation succeeds, then 'stats', if nonnull, must be set to the
@@ -262,10 +264,10 @@ struct dpif_class {
      * 'flow_dump_done' function will be called afterward).
      *
      * On success, if 'key' and 'key_len' are nonnull then '*key' and
-     * '*key_len' must be set to Netlink attributes with types ODP_KEY_ATTR_*
+     * '*key_len' must be set to Netlink attributes with types OVS_KEY_ATTR_*
      * representing the dumped flow's key.  If 'actions' and 'actions_len' are
      * nonnull then they should be set to Netlink attributes with types
-     * ODP_ACTION_ATTR_* representing the dumped flow's actions.  If 'stats'
+     * OVS_ACTION_ATTR_* representing the dumped flow's actions.  If 'stats'
      * is nonnull then it should be set to the dumped flow's statistics.
      *
      * All of the returned data is owned by 'dpif', not by the caller, and the
@@ -291,6 +293,14 @@ struct dpif_class {
                    const struct nlattr *actions, size_t actions_len,
                    const struct ofpbuf *packet);
 
+    /* Executes each of the 'n_ops' operations in 'ops' on 'dpif', in the order
+     * in which they are specified, placing each operation's results in the
+     * "output" members documented in comments.
+     *
+     * This function is optional.  It is only worthwhile to implement it if
+     * 'dpif' can perform operations in batch faster than individually. */
+    void (*operate)(struct dpif *dpif, union dpif_op **ops, size_t n_ops);
+
     /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  A 1-bit of value
      * 2**X set in '*listen_mask' indicates that 'dpif' will receive messages
      * of the type (from "enum dpif_upcall_type") with value X when its 'recv'
@@ -300,30 +310,15 @@ struct dpif_class {
     /* Sets 'dpif''s "listen mask" to 'listen_mask'.  A 1-bit of value 2**X set
      * in '*listen_mask' requests that 'dpif' will receive messages of the type
      * (from "enum dpif_upcall_type") with value X when its 'recv' function is
-     * called. */
+     * called.
+     *
+     * Turning DPIF_UC_ACTION off and then back on is allowed to change Netlink
+     * PID assignments (see ->port_get_pid()).  The client is responsible for
+     * updating flows as necessary if it does this. */
     int (*recv_set_mask)(struct dpif *dpif, int listen_mask);
 
-    /* Retrieves 'dpif''s sFlow sampling probability into '*probability'.
-     * Return value is 0 or a positive errno value.  EOPNOTSUPP indicates that
-     * the datapath does not support sFlow, as does a null pointer.
-     *
-     * '*probability' is expressed as the number of packets out of UINT_MAX to
-     * sample, e.g. probability/UINT_MAX is the probability of sampling a given
-     * packet. */
-    int (*get_sflow_probability)(const struct dpif *dpif,
-                                 uint32_t *probability);
-
-    /* Sets 'dpif''s sFlow sampling probability to 'probability'.  Return value
-     * is 0 or a positive errno value.  EOPNOTSUPP indicates that the datapath
-     * does not support sFlow, as does a null pointer.
-     *
-     * 'probability' is expressed as the number of packets out of UINT_MAX to
-     * sample, e.g. probability/UINT_MAX is the probability of sampling a given
-     * packet. */
-    int (*set_sflow_probability)(struct dpif *dpif, uint32_t probability);
-
     /* Translates OpenFlow queue ID 'queue_id' (in host byte order) into a
-     * priority value for use in the ODP_ACTION_ATTR_SET_PRIORITY action in
+     * priority value for use in the OVS_ACTION_ATTR_SET_PRIORITY action in
      * '*priority'. */
     int (*queue_to_priority)(const struct dpif *dpif, uint32_t queue_id,
                              uint32_t *priority);

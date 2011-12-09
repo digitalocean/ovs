@@ -45,6 +45,7 @@
 #include "table.h"
 #include "timeval.h"
 #include "util.h"
+#include "vconn.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(vsctl);
@@ -137,9 +138,9 @@ static void parse_command(int argc, char *argv[], struct vsctl_command *);
 static const struct vsctl_command_syntax *find_command(const char *name);
 static void run_prerequisites(struct vsctl_command[], size_t n_commands,
                               struct ovsdb_idl *);
-static void do_vsctl(const char *args,
-                     struct vsctl_command *, size_t n_commands,
-                     struct ovsdb_idl *);
+static enum ovsdb_idl_txn_status do_vsctl(const char *args,
+                                          struct vsctl_command *, size_t n,
+                                          struct ovsdb_idl *);
 
 static const struct vsctl_table_class *get_table(const char *table_name);
 static void set_column(const struct vsctl_table_class *,
@@ -155,6 +156,7 @@ int
 main(int argc, char *argv[])
 {
     extern struct vlog_module VLM_reconnect;
+    enum ovsdb_idl_txn_status status;
     struct ovsdb_idl *idl;
     struct vsctl_command *commands;
     size_t n_commands;
@@ -183,13 +185,16 @@ main(int argc, char *argv[])
     run_prerequisites(commands, n_commands, idl);
 
     /* Now execute the commands. */
+    status = TXN_AGAIN_WAIT;
     for (;;) {
-        if (ovsdb_idl_run(idl)) {
-            do_vsctl(args, commands, n_commands, idl);
+        if (ovsdb_idl_run(idl) || status == TXN_AGAIN_NOW) {
+            status = do_vsctl(args, commands, n_commands, idl);
         }
 
-        ovsdb_idl_wait(idl);
-        poll_block();
+        if (status != TXN_AGAIN_NOW) {
+            ovsdb_idl_wait(idl);
+            poll_block();
+        }
     }
 }
 
@@ -262,7 +267,7 @@ parse_options(int argc, char *argv[])
             usage();
 
         case 'V':
-            OVS_PRINT_VERSION(0, 0);
+            ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
         case 't':
@@ -504,17 +509,17 @@ Interface commands (a bond consists of multiple interfaces):\n\
   iface-to-br IFACE           print name of bridge that contains IFACE\n\
 \n\
 Controller commands:\n\
-  get-controller BRIDGE      print the controller for BRIDGE\n\
-  del-controller BRIDGE      delete the controller for BRIDGE\n\
-  set-controller BRIDGE TARGET  set the controller for BRIDGE to TARGET\n\
+  get-controller BRIDGE      print the controllers for BRIDGE\n\
+  del-controller BRIDGE      delete the controllers for BRIDGE\n\
+  set-controller BRIDGE TARGET...  set the controllers for BRIDGE\n\
   get-fail-mode BRIDGE       print the fail-mode for BRIDGE\n\
   del-fail-mode BRIDGE       delete the fail-mode for BRIDGE\n\
   set-fail-mode BRIDGE MODE  set the fail-mode for BRIDGE to MODE\n\
 \n\
 Manager commands:\n\
-  get-manager                print all manager(s)\n\
-  del-manager                delete all manager(s)\n\
-  set-manager TARGET...      set the list of manager(s) to TARGET(s)\n\
+  get-manager                print the managers\n\
+  del-manager                delete the managers\n\
+  set-manager TARGET...      set the list of managers to TARGET...\n\
 \n\
 SSL commands:\n\
   get-ssl                     print the SSL configuration\n\
@@ -2010,6 +2015,9 @@ insert_controllers(struct ovsdb_idl_txn *txn, char *targets[], size_t n)
 
     controllers = xmalloc(n * sizeof *controllers);
     for (i = 0; i < n; i++) {
+        if (vconn_verify_name(targets[i]) && pvconn_verify_name(targets[i])) {
+            VLOG_WARN("target type \"%s\" is possibly erroneous", targets[i]);
+        }
         controllers[i] = ovsrec_controller_insert(txn);
         ovsrec_controller_set_target(controllers[i], targets[i]);
     }
@@ -2168,6 +2176,9 @@ insert_managers(struct vsctl_context *ctx, char *targets[], size_t n)
     /* Insert each manager in a new row in Manager table. */
     managers = xmalloc(n * sizeof *managers);
     for (i = 0; i < n; i++) {
+        if (stream_verify_name(targets[i]) && pstream_verify_name(targets[i])) {
+            VLOG_WARN("target type \"%s\" is possibly erroneous", targets[i]);
+        }
         managers[i] = ovsrec_manager_insert(ctx->txn);
         ovsrec_manager_set_target(managers[i], targets[i]);
     }
@@ -3571,7 +3582,7 @@ run_prerequisites(struct vsctl_command *commands, size_t n_commands,
     }
 }
 
-static void
+static enum ovsdb_idl_txn_status
 do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
          struct ovsdb_idl *idl)
 {
@@ -3618,6 +3629,7 @@ do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
         vsctl_context_done(&ctx, c);
 
         if (ctx.try_again) {
+            status = TXN_AGAIN_WAIT;
             goto try_again;
         }
     }
@@ -3674,7 +3686,8 @@ do_vsctl(const char *args, struct vsctl_command *commands, size_t n_commands,
     case TXN_SUCCESS:
         break;
 
-    case TXN_TRY_AGAIN:
+    case TXN_AGAIN_WAIT:
+    case TXN_AGAIN_NOW:
         goto try_again;
 
     case TXN_ERROR:
@@ -3758,6 +3771,8 @@ try_again:
         free(c->table);
     }
     free(error);
+
+    return status;
 }
 
 static const struct vsctl_command_syntax all_commands[] = {

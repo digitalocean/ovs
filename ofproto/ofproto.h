@@ -22,9 +22,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "cfm.h"
 #include "flow.h"
 #include "netflow.h"
 #include "sset.h"
+#include "stp.h"
 #include "tag.h"
 
 #ifdef  __cplusplus
@@ -62,6 +64,39 @@ struct ofproto_sflow_options {
     uint32_t sub_id;
     char *agent_device;
     char *control_ip;
+};
+
+struct ofproto_stp_settings {
+    stp_identifier system_id;
+    uint16_t priority;
+    uint16_t hello_time;
+    uint16_t max_age;
+    uint16_t fwd_delay;
+};
+
+struct ofproto_stp_status {
+    bool enabled;               /* If false, ignore other members. */
+    stp_identifier bridge_id;
+    stp_identifier designated_root;
+    int root_path_cost;
+};
+
+struct ofproto_port_stp_settings {
+    bool enable;
+    uint8_t port_num;           /* In the range 1-255, inclusive. */
+    uint8_t priority;
+    uint16_t path_cost;
+};
+
+struct ofproto_port_stp_status {
+    bool enabled;               /* If false, ignore other members. */
+    int port_id;
+    enum stp_state state;
+    unsigned int sec_in_state;
+    enum stp_role role;
+    int tx_count;               /* Number of BPDUs transmitted. */
+    int rx_count;               /* Number of valid BPDUs received. */
+    int error_count;            /* Number of bad BPDUs received. */
 };
 
 /* How the switch should act if the controller cannot be contacted. */
@@ -104,6 +139,7 @@ void ofproto_destroy(struct ofproto *);
 int ofproto_delete(const char *name, const char *type);
 
 int ofproto_run(struct ofproto *);
+int ofproto_run_fast(struct ofproto *);
 void ofproto_wait(struct ofproto *);
 bool ofproto_is_alive(const struct ofproto *);
 
@@ -160,6 +196,7 @@ void ofproto_set_extra_in_band_remotes(struct ofproto *,
                                        const struct sockaddr_in *, size_t n);
 void ofproto_set_in_band_queue(struct ofproto *, int queue_id);
 void ofproto_set_flow_eviction_threshold(struct ofproto *, unsigned threshold);
+void ofproto_set_forward_bpdu(struct ofproto *, bool forward_bpdu);
 void ofproto_set_desc(struct ofproto *,
                       const char *mfr_desc, const char *hw_desc,
                       const char *sw_desc, const char *serial_desc,
@@ -168,6 +205,8 @@ int ofproto_set_snoops(struct ofproto *, const struct sset *snoops);
 int ofproto_set_netflow(struct ofproto *,
                         const struct netflow_options *nf_options);
 int ofproto_set_sflow(struct ofproto *, const struct ofproto_sflow_options *);
+int ofproto_set_stp(struct ofproto *, const struct ofproto_stp_settings *);
+int ofproto_get_stp_status(struct ofproto *, struct ofproto_stp_status *);
 
 /* Configuration of ports. */
 
@@ -177,6 +216,31 @@ void ofproto_port_clear_cfm(struct ofproto *, uint16_t ofp_port);
 void ofproto_port_set_cfm(struct ofproto *, uint16_t ofp_port,
                           const struct cfm_settings *);
 int ofproto_port_is_lacp_current(struct ofproto *, uint16_t ofp_port);
+int ofproto_port_set_stp(struct ofproto *, uint16_t ofp_port,
+                         const struct ofproto_port_stp_settings *);
+int ofproto_port_get_stp_status(struct ofproto *, uint16_t ofp_port,
+                                struct ofproto_port_stp_status *);
+
+/* The behaviour of the port regarding VLAN handling */
+enum port_vlan_mode {
+    /* This port is an access port.  'vlan' is the VLAN ID.  'trunks' is
+     * ignored. */
+    PORT_VLAN_ACCESS,
+
+    /* This port is a trunk.  'trunks' is the set of trunks. 'vlan' is
+     * ignored. */
+    PORT_VLAN_TRUNK,
+
+    /* Untagged incoming packets are part of 'vlan', as are incoming packets
+     * tagged with 'vlan'.  Outgoing packets tagged with 'vlan' stay tagged.
+     * Other VLANs in 'trunks' are trunked. */
+    PORT_VLAN_NATIVE_TAGGED,
+
+    /* Untagged incoming packets are part of 'vlan', as are incoming packets
+     * tagged with 'vlan'.  Outgoing packets tagged with 'vlan' are untagged.
+     * Other VLANs in 'trunks' are trunked. */
+    PORT_VLAN_NATIVE_UNTAGGED
+};
 
 /* Configuration of bundles. */
 struct ofproto_bundle_settings {
@@ -185,8 +249,9 @@ struct ofproto_bundle_settings {
     uint16_t *slaves;           /* OpenFlow port numbers for slaves. */
     size_t n_slaves;
 
-    int vlan;                   /* VLAN if access port, -1 if trunk port. */
-    unsigned long *trunks;      /* vlan_bitmap, NULL to trunk all VLANs. */
+    enum port_vlan_mode vlan_mode; /* Selects mode for vlan and trunks */
+    int vlan;                   /* VLAN VID, except for PORT_VLAN_TRUNK. */
+    unsigned long *trunks;      /* vlan_bitmap, except for PORT_VLAN_ACCESS. */
 
     struct bond_settings *bond; /* Must be nonnull iff if n_slaves > 1. */
     uint32_t *bond_stable_ids;  /* Array of n_slaves elements. */
@@ -225,7 +290,7 @@ int ofproto_mirror_register(struct ofproto *, void *aux,
 int ofproto_mirror_unregister(struct ofproto *, void *aux);
 
 int ofproto_set_flood_vlans(struct ofproto *, unsigned long *flood_vlans);
-bool ofproto_is_mirror_output_bundle(struct ofproto *, void *aux);
+bool ofproto_is_mirror_output_bundle(const struct ofproto *, void *aux);
 
 /* Configuration querying. */
 bool ofproto_has_snoops(const struct ofproto *);
@@ -234,6 +299,9 @@ void ofproto_get_all_flows(struct ofproto *p, struct ds *);
 void ofproto_get_netflow_ids(const struct ofproto *,
                              uint8_t *engine_type, uint8_t *engine_id);
 int ofproto_port_get_cfm_fault(const struct ofproto *, uint16_t ofp_port);
+int ofproto_port_get_cfm_remote_mpids(const struct ofproto *,
+                                      uint16_t ofp_port, const uint64_t **rmps,
+                                      size_t *n_rmps);
 
 void ofproto_get_ofproto_controller_info(const struct ofproto *, struct shash *);
 void ofproto_free_ofproto_controller_info(struct shash *);

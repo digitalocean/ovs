@@ -19,7 +19,7 @@
 #
 ### BEGIN INIT INFO
 # Provides:          openvswitch-ipsec
-# Required-Start:    $network $local_fs $remote_fs
+# Required-Start:    $network $local_fs $remote_fs openvswitch-switch
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
@@ -73,9 +73,8 @@ start_server() {
         install -d -m 755 -o root -g root /var/run/openvswitch
     fi
 
-    PYTHONPATH=/usr/share/openvswitch/python \
-           /usr/share/openvswitch/scripts/ovs-monitor-ipsec \
-           --pidfile-name=$PIDFILE --detach --monitor \
+    /usr/share/openvswitch/scripts/ovs-monitor-ipsec \
+           --pidfile=$PIDFILE --log-file --detach --monitor \
            unix:/var/run/openvswitch/db.sock
 
     return 0

@@ -22,6 +22,9 @@
 /* Define to 1 if you have the `socket' library (-lsocket). */
 #undef HAVE_LIBSOCKET
 
+/* Define to 1 if you have the <linux/types.h> header file. */
+#undef HAVE_LINUX_TYPES_H
+
 /* Define to 1 if you have __malloc_hook, __realloc_hook, and __free_hook in
    <malloc.h>. */
 #undef HAVE_MALLOC_HOOKS
@@ -40,9 +43,6 @@
 
 /* Define to 1 if OpenSSL is installed. */
 #undef HAVE_OPENSSL
-
-/* Define to 1 if <linux/if_link.h> defines struct rtnl_link_stats64. */
-#undef HAVE_RTNL_LINK_STATS64
 
 /* Define to 1 if you have the `setmntent' function. */
 #undef HAVE_SETMNTENT

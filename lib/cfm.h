@@ -25,11 +25,10 @@ struct flow;
 struct ofpbuf;
 
 struct cfm_settings {
-    uint16_t mpid;              /* The MPID of this CFM. */
+    uint64_t mpid;              /* The MPID of this CFM. */
     int interval;               /* The requested transmission interval. */
-
-    const uint16_t *remote_mpids; /* Array of remote MPIDs */
-    size_t n_remote_mpids;        /* Number of MPIDs in 'remote_mpids'. */
+    bool extended;              /* Run in extended mode. */
+    bool opup;                  /* Operational State. */
 };
 
 void cfm_init(void);
@@ -40,8 +39,11 @@ bool cfm_should_send_ccm(struct cfm *);
 void cfm_compose_ccm(struct cfm *, struct ofpbuf *packet, uint8_t eth_src[6]);
 void cfm_wait(struct cfm *);
 bool cfm_configure(struct cfm *, const struct cfm_settings *);
-bool cfm_should_process_flow(const struct flow *);
+bool cfm_should_process_flow(const struct cfm *cfm, const struct flow *);
 void cfm_process_heartbeat(struct cfm *, const struct ofpbuf *packet);
 bool cfm_get_fault(const struct cfm *);
+bool cfm_get_opup(const struct cfm *);
+void cfm_get_remote_mpids(const struct cfm *, const uint64_t **rmps,
+                          size_t *n_rmps);
 
 #endif /* cfm.h */

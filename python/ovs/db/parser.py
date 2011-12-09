@@ -1,4 +1,4 @@
-# Copyright (c) 2010 Nicira Networks
+# Copyright (c) 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 import re
 
 from ovs.db import error
+
 
 class Parser(object):
     def __init__(self, json, name):
@@ -34,7 +35,7 @@ class Parser(object):
                 self.__raise_error("Type mismatch for member '%s'." % name)
             return member
         else:
-            if not optional:        
+            if not optional:
                 self.__raise_error("Required '%s' member is missing." % name)
             return default
 
@@ -53,53 +54,56 @@ class Parser(object):
         if missing:
             name = missing.pop()
             if len(missing) > 1:
-                self.__raise_error("Member '%s' and %d other members "
-                                   "are present but not allowed here"
-                                   % (name, len(missing)))
+                present = "and %d other members are" % len(missing)
             elif missing:
-                self.__raise_error("Member '%s' and 1 other member "
-                                   "are present but not allowed here" % name)
+                present = "and 1 other member are"
             else:
-                self.__raise_error("Member '%s' is present but not "
-                                   "allowed here" % name)
-    
+                present = "is"
+            self.__raise_error("Member '%s' %s present but not allowed here" %
+                               (name, present))
+
+
 def float_to_int(x):
     # XXX still needed?
     if type(x) == float:
         integer = int(x)
-        if integer == x and integer >= -2**53 and integer < 2**53:
+        if integer == x and -2 ** 53 <= integer < 2 ** 53:
             return integer
     return x
 
+
 id_re = re.compile("[_a-zA-Z][_a-zA-Z0-9]*$")
+
+
 def is_identifier(s):
     return type(s) in [str, unicode] and id_re.match(s)
 
-def json_type_to_string(type):
-    if type == None:
+
+def json_type_to_string(type_):
+    if type_ == None:
         return "null"
-    elif type == bool:
+    elif type_ == bool:
         return "boolean"
-    elif type == dict:
+    elif type_ == dict:
         return "object"
-    elif type == list:
+    elif type_ == list:
         return "array"
-    elif type in [int, long, float]:
+    elif type_ in [int, long, float]:
         return "number"
-    elif type in [str, unicode]:
+    elif type_ in [str, unicode]:
         return "string"
     else:
         return "<invalid>"
 
-def unwrap_json(json, name, need_type):
-    if (type(json) != list or len(json) != 2 or json[0] != name or
-        type(json[1]) != need_type):
-        raise error.Error("expected [\"%s\", <%s>]"
-                          % (name, json_type_to_string(need_type)), json)
+
+def unwrap_json(json, name, types, desc):
+    if (type(json) not in (list, tuple) or len(json) != 2 or json[0] != name or
+        type(json[1]) not in types):
+        raise error.Error('expected ["%s", <%s>]' % (name, desc), json)
     return json[1]
+
 
 def parse_json_pair(json):
     if type(json) != list or len(json) != 2:
         raise error.Error("expected 2-element array", json)
     return json
-

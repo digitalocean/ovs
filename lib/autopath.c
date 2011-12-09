@@ -67,11 +67,7 @@ autopath_parse(struct nx_action_autopath *ap, const char *s_)
                   "less than required 65536", s_, n_bits, 1u << n_bits);
     }
 
-    memset(ap, 0, sizeof *ap);
-    ap->type = htons(OFPAT_VENDOR);
-    ap->len = htons(sizeof *ap);
-    ap->vendor = htonl(NX_VENDOR_ID);
-    ap->subtype = htons(NXAST_AUTOPATH);
+    ofputil_init_NXAST_AUTOPATH(ap);
     ap->id = htonl(id_int);
     ap->ofs_nbits = nxm_encode_ofs_nbits(ofs, n_bits);
     ap->dst = htonl(reg);
@@ -82,5 +78,14 @@ autopath_parse(struct nx_action_autopath *ap, const char *s_)
 int
 autopath_check(const struct nx_action_autopath *ap, const struct flow *flow)
 {
-    return nxm_dst_check(ap->dst, ap->ofs_nbits, 16, flow);
+    int n_bits = nxm_decode_n_bits(ap->ofs_nbits);
+    int ofs = nxm_decode_ofs(ap->ofs_nbits);
+
+    if (n_bits < 16) {
+        VLOG_WARN("at least 16 bit destination is required for autopath "
+                  "action.");
+        return ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT);
+    }
+
+    return nxm_dst_check(ap->dst, ofs, n_bits, flow);
 }

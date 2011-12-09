@@ -9,7 +9,10 @@ Upstream Authors (from AUTHORS):
   Andy Southgate          andy.southgate@citrix.com
   Ben Pfaff               blp@nicira.com
   Bryan Phillippe         bp@toroki.com
+  Casey Barker            crbarker@google.com
+  Chuck Short             zulcss@ubuntu.com
   Dan Wendlandt           dan@nicira.com
+  Daniel Roman            droman@nicira.com
   David Erickson          derickso@stanford.edu
   Ethan Jackson           ethan@nicira.com
   Gaetano Catalli         gaetano.catalli@gmail.com
@@ -27,10 +30,12 @@ Upstream Authors (from AUTHORS):
   Natasha Gude            natasha@nicira.com
   Neil McKee              neil.mckee@inmon.com
   Paul Fazzone            pfazzone@nicira.com
+  Philippe Jung           phil.jung@free.fr
   Pravin B Shelar         pshelar@nicira.com
   Reid Price              reid@nicira.com
   Romain Lenglet          romain.lenglet@berabera.info
   Sajjad Lateef           slateef@nicira.com
+  Sanjay Sane             ssane@nicira.com
   Shih-Hao Li             shli@nicira.com
   Simon Horman            horms@verge.net.au
   Tetsuo NAKAGAWA         nakagawa@mxc.nes.nec.co.jp
@@ -90,6 +95,8 @@ License:
   GNU Lesser General Public Licence version 2.1.
 
 	utilities/bugtool/ovs-bugtool
+	utilities/bugtool/ovs-bugtool-cfm-show
+	utilities/bugtool/ovs-bugtool-lacp-show
 	utilities/bugtool/ovs-bugtool-tc-class-show
 	utilities/bugtool/plugins/kernel-info/openvswitch.xml
 	utilities/bugtool/plugins/network-status/openvswitch.xml
@@ -118,13 +125,14 @@ License:
   On Debian systems, the complete text of the Apache License version 2.0
   can be found in '/usr/share/common-licenses/Apache-2.0'.
 
-* The following component is licenced under the
+* The following components are licenced under the
   Python Software Foundation License Version 2.
 
-	xenserver/uuid.py
+	python/compat/uuid.py
+	python/compat/argparse.py
 
-	* This component is only distributed in the source package.
-	  It does not appear in any binary packages.
+	* These components are only distributed in the source package.
+	  They do not appear in any binary packages.
 
    PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
    --------------------------------------------

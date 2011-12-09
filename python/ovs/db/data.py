@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010 Nicira Networks
+# Copyright (c) 2009, 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import errno
-import logging
-import os
 import re
-import select
-import sys
 import uuid
 
 import ovs.poller
@@ -30,46 +25,50 @@ import ovs.db.parser
 from ovs.db import error
 import ovs.db.types
 
+
 class ConstraintViolation(error.Error):
     def __init__(self, msg, json=None):
         error.Error.__init__(self, msg, json, tag="constraint violation")
 
+
 def escapeCString(src):
-    dst = ""
+    dst = []
     for c in src:
         if c in "\\\"":
-            dst += "\\" + c
+            dst.append("\\" + c)
         elif ord(c) < 32:
             if c == '\n':
-                dst += '\\n'
+                dst.append('\\n')
             elif c == '\r':
-                dst += '\\r'
+                dst.append('\\r')
             elif c == '\a':
-                dst += '\\a'
+                dst.append('\\a')
             elif c == '\b':
-                dst += '\\b'
+                dst.append('\\b')
             elif c == '\f':
-                dst += '\\f'
+                dst.append('\\f')
             elif c == '\t':
-                dst += '\\t'
+                dst.append('\\t')
             elif c == '\v':
-                dst += '\\v'
+                dst.append('\\v')
             else:
-                dst += '\\%03o' % ord(c)
+                dst.append('\\%03o' % ord(c))
         else:
-            dst += c
-    return dst
+            dst.append(c)
+    return ''.join(dst)
+
 
 def returnUnchanged(x):
     return x
 
+
 class Atom(object):
-    def __init__(self, type, value=None):
-        self.type = type
+    def __init__(self, type_, value=None):
+        self.type = type_
         if value is not None:
             self.value = value
         else:
-            self.value = type.default_atom()
+            self.value = type_.default_atom()
 
     def __cmp__(self, other):
         if not isinstance(other, Atom) or self.type != other.type:
@@ -85,25 +84,49 @@ class Atom(object):
         return hash(self.value)
 
     @staticmethod
-    def default(type):
-        return Atom(type)
+    def default(type_):
+        """Returns the default value for the given type_, which must be an
+        instance of ovs.db.types.AtomicType.
+
+        The default value for each atomic type is;
+
+          - 0, for integer or real atoms.
+
+          - False, for a boolean atom.
+
+          - "", for a string atom.
+
+          - The all-zeros UUID, for a UUID atom."""
+        return Atom(type_)
 
     def is_default(self):
-        return self == default(self.type)
+        return self == self.default(self.type)
 
     @staticmethod
     def from_json(base, json, symtab=None):
         type_ = base.type
         json = ovs.db.parser.float_to_int(json)
         if ((type_ == ovs.db.types.IntegerType and type(json) in [int, long])
-            or (type_ == ovs.db.types.RealType and type(json) in [int, long, float])
+            or (type_ == ovs.db.types.RealType
+                and type(json) in [int, long, float])
             or (type_ == ovs.db.types.BooleanType and type(json) == bool)
-            or (type_ == ovs.db.types.StringType and type(json) in [str, unicode])):
+            or (type_ == ovs.db.types.StringType
+                and type(json) in [str, unicode])):
             atom = Atom(type_, json)
         elif type_ == ovs.db.types.UuidType:
-            atom = Atom(type_, ovs.ovsuuid.UUID.from_json(json, symtab))
+            atom = Atom(type_, ovs.ovsuuid.from_json(json, symtab))
         else:
             raise error.Error("expected %s" % type_.to_string(), json)
+        atom.check_constraints(base)
+        return atom
+
+    @staticmethod
+    def from_python(base, value):
+        value = ovs.db.parser.float_to_int(value)
+        if type(value) in base.type.python_types:
+            atom = Atom(base.type, value)
+        else:
+            raise error.Error("expected %s, got %s" % (base.type, type(value)))
         atom.check_constraints(base)
         return atom
 
@@ -112,7 +135,6 @@ class Atom(object):
         'base' and raises an ovs.db.error.Error if any constraint is violated.
 
         'base' and 'atom' must have the same type.
-
         Checking UUID constraints is deferred to transaction commit time, so
         this function does nothing for UUID constraints."""
         assert base.type == self.type
@@ -143,16 +165,16 @@ class Atom(object):
             length = len(s)
             if length < base.min_length:
                 raise ConstraintViolation(
-                    "\"%s\" length %d is less than minimum allowed length %d"
+                    '"%s" length %d is less than minimum allowed length %d'
                     % (s, length, base.min_length))
             elif length > base.max_length:
                 raise ConstraintViolation(
-                    "\"%s\" length %d is greater than maximum allowed "
-                    "length %d" % (s, length, base.max_length))
-    
+                    '"%s" length %d is greater than maximum allowed '
+                    'length %d' % (s, length, base.max_length))
+
     def to_json(self):
         if self.type == ovs.db.types.UuidType:
-            return self.value.to_json()
+            return ovs.ovsuuid.to_json(self.value)
         else:
             return self.value
 
@@ -170,7 +192,7 @@ class Atom(object):
             return ['%s.string = xstrdup("%s");'
                     % (var, escapeCString(self.value))]
         elif self.type == ovs.db.types.UuidType:
-            return self.value.cInitUUID(var)
+            return ovs.ovsuuid.to_c_assignment(self.value, var)
 
     def toEnglish(self, escapeLiteral=returnUnchanged):
         if self.type == ovs.db.types.IntegerType:
@@ -188,6 +210,7 @@ class Atom(object):
             return self.value.value
 
     __need_quotes_re = re.compile("$|true|false|[^_a-zA-Z]|.*[^-._a-zA-Z]")
+
     @staticmethod
     def __string_needs_quotes(s):
         return Atom.__need_quotes_re.match(s)
@@ -217,7 +240,7 @@ class Atom(object):
         elif type(x) == float:
             t = ovs.db.types.RealType
         elif x in [False, True]:
-            t = ovs.db.types.RealType
+            t = ovs.db.types.BooleanType
         elif type(x) in [str, unicode]:
             t = ovs.db.types.StringType
         elif isinstance(x, uuid):
@@ -226,9 +249,10 @@ class Atom(object):
             raise TypeError
         return Atom(t, x)
 
+
 class Datum(object):
-    def __init__(self, type, values={}):
-        self.type = type
+    def __init__(self, type_, values={}):
+        self.type = type_
         self.values = values
 
     def __cmp__(self, other):
@@ -246,22 +270,21 @@ class Datum(object):
     def __contains__(self, item):
         return item in self.values
 
-    def clone(self):
+    def copy(self):
         return Datum(self.type, dict(self.values))
 
     @staticmethod
-    def default(type):
-        if type.n_min == 0:
+    def default(type_):
+        if type_.n_min == 0:
             values = {}
-        elif type.is_map():
-            values = {type.key.default(): type.value.default()}
+        elif type_.is_map():
+            values = {type_.key.default(): type_.value.default()}
         else:
-            values = {type.key.default(): None}
-        return Datum(type, values)
+            values = {type_.key.default(): None}
+        return Datum(type_, values)
 
-    @staticmethod
     def is_default(self):
-        return self == default(self.type)
+        return self == Datum.default(self.type)
 
     def check_constraints(self):
         """Checks that each of the atoms in 'datum' conforms to the constraints
@@ -270,19 +293,19 @@ class Datum(object):
         This function is not commonly useful because the most ordinary way to
         obtain a datum is ultimately via Datum.from_json() or Atom.from_json(),
         which check constraints themselves."""
-        for keyAtom, valueAtom in self.values:
-            keyAtom.check_constraints()
+        for keyAtom, valueAtom in self.values.iteritems():
+            keyAtom.check_constraints(self.type.key)
             if valueAtom is not None:
-                valueAtom.check_constraints()
+                valueAtom.check_constraints(self.type.value)
 
     @staticmethod
     def from_json(type_, json, symtab=None):
         """Parses 'json' as a datum of the type described by 'type'.  If
         successful, returns a new datum.  On failure, raises an
         ovs.db.error.Error.
-        
+
         Violations of constraints expressed by 'type' are treated as errors.
-        
+
         If 'symtab' is nonnull, then named UUIDs in 'symtab' are accepted.
         Refer to ovsdb/SPECS for information about this, and for the syntax
         that this function accepts."""
@@ -294,7 +317,8 @@ class Datum(object):
             else:
                 class_ = "set"
 
-            inner = ovs.db.parser.unwrap_json(json, class_, list)
+            inner = ovs.db.parser.unwrap_json(json, class_, [list, tuple],
+                                              "array")
             n = len(inner)
             if n < type_.n_min or n > type_.n_max:
                 raise error.Error("%s must have %d to %d members but %d are "
@@ -326,48 +350,51 @@ class Datum(object):
             return Datum(type_, {keyAtom: None})
 
     def to_json(self):
-        if len(self.values) == 1 and not self.type.is_map():
-            key = self.values.keys()[0]
-            return key.to_json()
-        elif not self.type.is_map():
-            return ["set", [k.to_json() for k in sorted(self.values.keys())]]
-        else:
+        if self.type.is_map():
             return ["map", [[k.to_json(), v.to_json()]
                             for k, v in sorted(self.values.items())]]
+        elif len(self.values) == 1:
+            key = self.values.keys()[0]
+            return key.to_json()
+        else:
+            return ["set", [k.to_json() for k in sorted(self.values.keys())]]
 
     def to_string(self):
+        head = tail = None
         if self.type.n_max > 1 or len(self.values) == 0:
             if self.type.is_map():
-                s = "{"
+                head = "{"
+                tail = "}"
             else:
-                s = "["
-        else:
-            s = ""
+                head = "["
+                tail = "]"
 
-        i = 0
-        for key in sorted(self.values):
-            if i > 0:
-                s += ", "
-            i += 1
+        s = []
+        if head:
+            s.append(head)
 
+        for i, key in enumerate(sorted(self.values)):
+            if i:
+                s.append(", ")
+
+            s.append(key.to_string())
             if self.type.is_map():
-                s += "%s=%s" % (key.to_string(), self.values[key].to_string())
-            else:
-                s += key.to_string()
+                s.append("=")
+                s.append(self.values[key].to_string())
 
-        if self.type.n_max > 1 or len(self.values) == 0:
-            if self.type.is_map():
-                s += "}"
-            else:
-                s += "]"
-        return s
+        if tail:
+            s.append(tail)
+        return ''.join(s)
 
     def as_list(self):
         if self.type.is_map():
             return [[k.value, v.value] for k, v in self.values.iteritems()]
         else:
             return [k.value for k in self.values.iterkeys()]
-        
+
+    def as_dict(self):
+        return dict(self.values)
+
     def as_scalar(self):
         if len(self.values) == 1:
             if self.type.is_map():
@@ -377,6 +404,97 @@ class Datum(object):
                 return self.values.keys()[0].value
         else:
             return None
+
+    def to_python(self, uuid_to_row):
+        """Returns this datum's value converted into a natural Python
+        representation of this datum's type, according to the following
+        rules:
+
+        - If the type has exactly one value and it is not a map (that is,
+          self.type.is_scalar() returns True), then the value is:
+
+            * An int or long, for an integer column.
+
+            * An int or long or float, for a real column.
+
+            * A bool, for a boolean column.
+
+            * A str or unicode object, for a string column.
+
+            * A uuid.UUID object, for a UUID column without a ref_table.
+
+            * An object represented the referenced row, for a UUID column with
+              a ref_table.  (For the Idl, this object will be an ovs.db.idl.Row
+              object.)
+
+          If some error occurs (e.g. the database server's idea of the column
+          is different from the IDL's idea), then the default value for the
+          scalar type is used (see Atom.default()).
+
+        - Otherwise, if the type is not a map, then the value is a Python list
+          whose elements have the types described above.
+
+        - Otherwise, the type is a map, and the value is a Python dict that
+          maps from key to value, with key and value types determined as
+          described above.
+
+        'uuid_to_row' must be a function that takes a value and an
+        ovs.db.types.BaseType and translates UUIDs into row objects."""
+        if self.type.is_scalar():
+            value = uuid_to_row(self.as_scalar(), self.type.key)
+            if value is None:
+                return self.type.key.default()
+            else:
+                return value
+        elif self.type.is_map():
+            value = {}
+            for k, v in self.values.iteritems():
+                dk = uuid_to_row(k.value, self.type.key)
+                dv = uuid_to_row(v.value, self.type.value)
+                if dk is not None and dv is not None:
+                    value[dk] = dv
+            return value
+        else:
+            s = set()
+            for k in self.values:
+                dk = uuid_to_row(k.value, self.type.key)
+                if dk is not None:
+                    s.add(dk)
+            return sorted(s)
+
+    @staticmethod
+    def from_python(type_, value, row_to_uuid):
+        """Returns a new Datum with the given ovs.db.types.Type 'type_'.  The
+        new datum's value is taken from 'value', which must take the form
+        described as a valid return value from Datum.to_python() for 'type'.
+
+        Each scalar value within 'value' is initally passed through
+        'row_to_uuid', which should convert objects that represent rows (if
+        any) into uuid.UUID objects and return other data unchanged.
+
+        Raises ovs.db.error.Error if 'value' is not in an appropriate form for
+        'type_'."""
+        d = {}
+        if type(value) == dict:
+            for k, v in value.iteritems():
+                ka = Atom.from_python(type_.key, row_to_uuid(k))
+                va = Atom.from_python(type_.value, row_to_uuid(v))
+                d[ka] = va
+        elif type(value) in (list, tuple):
+            for k in value:
+                ka = Atom.from_python(type_.key, row_to_uuid(k))
+                d[ka] = None
+        else:
+            ka = Atom.from_python(type_.key, row_to_uuid(value))
+            d[ka] = None
+
+        datum = Datum(type_, d)
+        datum.check_constraints()
+        if not datum.conforms_to_type():
+            raise error.Error("%d values when type requires between %d and %d"
+                              % (len(d), type_.n_min, type_.n_max))
+
+        return datum
 
     def __getitem__(self, key):
         if not isinstance(key, Atom):
@@ -395,13 +513,13 @@ class Datum(object):
             return self.values[key].value
         else:
             return default
-        
+
     def __str__(self):
         return self.to_string()
 
     def conforms_to_type(self):
         n = len(self.values)
-        return n >= self.type.n_min and n <= self.type.n_max
+        return self.type.n_min <= n <= self.type.n_max
 
     def cInitDatum(self, var):
         if len(self.values) == 0:
@@ -411,18 +529,14 @@ class Datum(object):
         s += ["%s->keys = xmalloc(%d * sizeof *%s->keys);"
               % (var, len(self.values), var)]
 
-        i = 0
-        for key, value in sorted(self.values.items()):
+        for i, key in enumerate(sorted(self.values)):
             s += key.cInitAtom("%s->keys[%d]" % (var, i))
-            i += 1
-        
+
         if self.type.value:
             s += ["%s->values = xmalloc(%d * sizeof *%s->values);"
                   % (var, len(self.values), var)]
-            i = 0
-            for key, value in sorted(self.values.items()):
+            for i, (key, value) in enumerate(sorted(self.values.items())):
                 s += value.cInitAtom("%s->values[%d]" % (var, i))
-                i += 1
         else:
             s += ["%s->values = NULL;" % var]
 

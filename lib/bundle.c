@@ -145,7 +145,16 @@ bundle_check(const struct nx_action_bundle *nab, int max_ports,
     }
 
     if (subtype == NXAST_BUNDLE_LOAD) {
-        error = nxm_dst_check(nab->dst, nab->ofs_nbits, 16, flow) || error;
+        int ofs = nxm_decode_ofs(nab->ofs_nbits);
+        int n_bits = nxm_decode_n_bits(nab->ofs_nbits);
+
+        if (n_bits < 16) {
+            VLOG_WARN_RL(&rl, "bundle_load action requires at least 16 bit "
+                         "destination.");
+            error = ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT);
+        } else {
+            error = nxm_dst_check(nab->dst, ofs, n_bits, flow) || error;
+        }
     }
 
     if (slaves_size < n_slaves * sizeof(ovs_be16)) {
@@ -184,6 +193,7 @@ bundle_parse__(struct ofpbuf *b, const char *s, char **save_ptr,
                const char *slave_type, const char *dst,
                const char *slave_delim)
 {
+    enum ofputil_action_code code;
     struct nx_action_bundle *nab;
     uint16_t n_slaves;
 
@@ -196,14 +206,15 @@ bundle_parse__(struct ofpbuf *b, const char *s, char **save_ptr,
                    s, slave_delim);
     }
 
-    b->l2 = ofpbuf_put_zeros(b, sizeof *nab);
+    code = dst ? OFPUTIL_NXAST_BUNDLE_LOAD : OFPUTIL_NXAST_BUNDLE;
+    b->l2 = ofputil_put_action(code, b);
 
     n_slaves = 0;
     for (;;) {
         ovs_be16 slave_be;
         char *slave;
 
-        slave = strtok_r(NULL, ", ", save_ptr);
+        slave = strtok_r(NULL, ", [", save_ptr);
         if (!slave || n_slaves >= BUNDLE_MAX_SLAVES) {
             break;
         }
@@ -220,10 +231,7 @@ bundle_parse__(struct ofpbuf *b, const char *s, char **save_ptr,
     }
 
     nab = b->l2;
-    nab->type = htons(OFPAT_VENDOR);
     nab->len = htons(b->size - ((char *) b->l2 - (char *) b->data));
-    nab->vendor = htonl(NX_VENDOR_ID);
-    nab->subtype = htons(dst ? NXAST_BUNDLE_LOAD: NXAST_BUNDLE);
     nab->n_slaves = htons(n_slaves);
     nab->basis = htons(atoi(basis));
 

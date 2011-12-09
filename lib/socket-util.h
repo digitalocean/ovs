@@ -18,6 +18,8 @@
 #define SOCKET_UTIL_H 1
 
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <stdbool.h>
 #include "openvswitch/types.h"
@@ -31,6 +33,7 @@ int lookup_ipv6(const char *host_name, struct in6_addr *address);
 int lookup_hostname(const char *host_name, struct in_addr *);
 
 int get_socket_error(int sock);
+int get_socket_rcvbuf(int sock);
 int check_connection_completion(int fd);
 int drain_rcvbuf(int fd);
 void drain_fd(int fd, size_t n_packets);
@@ -45,7 +48,7 @@ bool inet_parse_active(const char *target, uint16_t default_port,
 int inet_open_active(int style, const char *target, uint16_t default_port,
                     struct sockaddr_in *sinp, int *fdp);
 
-bool inet_parse_passive(const char *target, uint16_t default_port,
+bool inet_parse_passive(const char *target, int default_port,
                         struct sockaddr_in *sinp);
 int inet_open_passive(int style, const char *target, int default_port,
                       struct sockaddr_in *sinp);

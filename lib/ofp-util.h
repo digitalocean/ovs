@@ -92,7 +92,11 @@ int ofputil_decode_msg_type(const struct ofp_header *,
                             const struct ofputil_msg_type **);
 enum ofputil_msg_code ofputil_msg_type_code(const struct ofputil_msg_type *);
 const char *ofputil_msg_type_name(const struct ofputil_msg_type *);
+
+/* Port numbers. */
 int ofputil_check_output_port(uint16_t ofp_port, int max_ports);
+bool ofputil_port_from_string(const char *, uint16_t *port);
+void ofputil_format_port(uint16_t port, struct ds *);
 
 /* Converting OFPFW_NW_SRC_MASK and OFPFW_NW_DST_MASK wildcard bit counts to
  * and from IP bitmasks. */
@@ -122,7 +126,7 @@ struct ofpbuf *ofputil_make_set_flow_format(enum nx_flow_format);
 struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
 
 /* Flow format independent flow_mod. */
-struct flow_mod {
+struct ofputil_flow_mod {
     struct cls_rule cr;
     ovs_be64 cookie;
     uint8_t table_id;
@@ -136,24 +140,24 @@ struct flow_mod {
     size_t n_actions;
 };
 
-int ofputil_decode_flow_mod(struct flow_mod *, const struct ofp_header *,
-                            bool flow_mod_table_id);
-struct ofpbuf *ofputil_encode_flow_mod(const struct flow_mod *,
+int ofputil_decode_flow_mod(struct ofputil_flow_mod *,
+                            const struct ofp_header *, bool flow_mod_table_id);
+struct ofpbuf *ofputil_encode_flow_mod(const struct ofputil_flow_mod *,
                                        enum nx_flow_format,
                                        bool flow_mod_table_id);
 
 /* Flow stats or aggregate stats request, independent of flow format. */
-struct flow_stats_request {
+struct ofputil_flow_stats_request {
     bool aggregate;             /* Aggregate results? */
     struct cls_rule match;
     uint16_t out_port;
     uint8_t table_id;
 };
 
-int ofputil_decode_flow_stats_request(struct flow_stats_request *,
+int ofputil_decode_flow_stats_request(struct ofputil_flow_stats_request *,
                                       const struct ofp_header *);
 struct ofpbuf *ofputil_encode_flow_stats_request(
-    const struct flow_stats_request *, enum nx_flow_format);
+    const struct ofputil_flow_stats_request *, enum nx_flow_format);
 
 /* Flow stats reply, independent of flow format. */
 struct ofputil_flow_stats {
@@ -273,49 +277,97 @@ struct ofpbuf *make_unbuffered_packet_out(const struct ofpbuf *packet,
                                           uint16_t in_port, uint16_t out_port);
 struct ofpbuf *make_echo_request(void);
 struct ofpbuf *make_echo_reply(const struct ofp_header *rq);
+
+const char *ofputil_frag_handling_to_string(enum ofp_config_flags);
+bool ofputil_frag_handling_from_string(const char *, enum ofp_config_flags *);
 
 /* Actions. */
 
+/* The type of an action.
+ *
+ * For each implemented OFPAT_* and NXAST_* action type, there is a
+ * corresponding constant prefixed with OFPUTIL_, e.g.:
+ *
+ * OFPUTIL_OFPAT_OUTPUT
+ * OFPUTIL_OFPAT_SET_VLAN_VID
+ * OFPUTIL_OFPAT_SET_VLAN_PCP
+ * OFPUTIL_OFPAT_STRIP_VLAN
+ * OFPUTIL_OFPAT_SET_DL_SRC
+ * OFPUTIL_OFPAT_SET_DL_DST
+ * OFPUTIL_OFPAT_SET_NW_SRC
+ * OFPUTIL_OFPAT_SET_NW_DST
+ * OFPUTIL_OFPAT_SET_NW_TOS
+ * OFPUTIL_OFPAT_SET_TP_SRC
+ * OFPUTIL_OFPAT_SET_TP_DST
+ * OFPUTIL_OFPAT_ENQUEUE
+ * OFPUTIL_NXAST_RESUBMIT
+ * OFPUTIL_NXAST_SET_TUNNEL
+ * OFPUTIL_NXAST_SET_QUEUE
+ * OFPUTIL_NXAST_POP_QUEUE
+ * OFPUTIL_NXAST_REG_MOVE
+ * OFPUTIL_NXAST_REG_LOAD
+ * OFPUTIL_NXAST_NOTE
+ * OFPUTIL_NXAST_SET_TUNNEL64
+ * OFPUTIL_NXAST_MULTIPATH
+ * OFPUTIL_NXAST_AUTOPATH
+ * OFPUTIL_NXAST_BUNDLE
+ * OFPUTIL_NXAST_BUNDLE_LOAD
+ * OFPUTIL_NXAST_RESUBMIT_TABLE
+ * OFPUTIL_NXAST_OUTPUT_REG
+ *
+ * (The above list helps developers who want to "grep" for these definitions.)
+ */
 enum ofputil_action_code {
-    /* OFPAT_* actions. */
-    OFPUTIL_OFPAT_OUTPUT,
-    OFPUTIL_OFPAT_SET_VLAN_VID,
-    OFPUTIL_OFPAT_SET_VLAN_PCP,
-    OFPUTIL_OFPAT_STRIP_VLAN,
-    OFPUTIL_OFPAT_SET_DL_SRC,
-    OFPUTIL_OFPAT_SET_DL_DST,
-    OFPUTIL_OFPAT_SET_NW_SRC,
-    OFPUTIL_OFPAT_SET_NW_DST,
-    OFPUTIL_OFPAT_SET_NW_TOS,
-    OFPUTIL_OFPAT_SET_TP_SRC,
-    OFPUTIL_OFPAT_SET_TP_DST,
-    OFPUTIL_OFPAT_ENQUEUE,
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)             OFPUTIL_##ENUM,
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) OFPUTIL_##ENUM,
+#include "ofp-util.def"
+};
 
-    /* NXAST_* actions. */
-    OFPUTIL_NXAST_RESUBMIT,
-    OFPUTIL_NXAST_SET_TUNNEL,
-    OFPUTIL_NXAST_SET_QUEUE,
-    OFPUTIL_NXAST_POP_QUEUE,
-    OFPUTIL_NXAST_REG_MOVE,
-    OFPUTIL_NXAST_REG_LOAD,
-    OFPUTIL_NXAST_NOTE,
-    OFPUTIL_NXAST_SET_TUNNEL64,
-    OFPUTIL_NXAST_MULTIPATH,
-    OFPUTIL_NXAST_AUTOPATH,
-    OFPUTIL_NXAST_BUNDLE,
-    OFPUTIL_NXAST_BUNDLE_LOAD,
+/* The number of values of "enum ofputil_action_code". */
+enum {
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)             + 1
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) + 1
+    OFPUTIL_N_ACTIONS = 0
+#include "ofp-util.def"
 };
 
 int ofputil_decode_action(const union ofp_action *);
 enum ofputil_action_code ofputil_decode_action_unsafe(
     const union ofp_action *);
 
+int ofputil_action_code_from_name(const char *);
+
+void *ofputil_put_action(enum ofputil_action_code, struct ofpbuf *buf);
+
+/* For each OpenFlow action <ENUM> that has a corresponding action structure
+ * struct <STRUCT>, this defines two functions:
+ *
+ *   void ofputil_init_<ENUM>(struct <STRUCT> *action);
+ *
+ *     Initializes the parts of 'action' that identify it as having type <ENUM>
+ *     and length 'sizeof *action' and zeros the rest.  For actions that have
+ *     variable length, the length used and cleared is that of struct <STRUCT>.
+ *
+ *  struct <STRUCT> *ofputil_put_<ENUM>(struct ofpbuf *buf);
+ *
+ *     Appends a new 'action', of length 'sizeof(struct <STRUCT>)', to 'buf',
+ *     initializes it with ofputil_init_<ENUM>(), and returns it.
+ */
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)                \
+    void ofputil_init_##ENUM(struct STRUCT *);          \
+    struct STRUCT *ofputil_put_##ENUM(struct ofpbuf *);
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)    \
+    void ofputil_init_##ENUM(struct STRUCT *);          \
+    struct STRUCT *ofputil_put_##ENUM(struct ofpbuf *);
+#include "ofp-util.def"
+
 #define OFP_ACTION_ALIGN 8      /* Alignment of ofp_actions. */
 
 static inline union ofp_action *
 ofputil_action_next(const union ofp_action *a)
 {
-    return (void *) ((uint8_t *) a + ntohs(a->header.len));
+    return ((union ofp_action *) (void *)
+            ((uint8_t *) a + ntohs(a->header.len)));
 }
 
 static inline bool
@@ -497,5 +549,8 @@ int ofputil_decode_error_msg(const struct ofp_header *, size_t *payload_ofs);
 /* String versions of errors. */
 void ofputil_format_error(struct ds *, int error);
 char *ofputil_error_to_string(int error);
+
+/* Handy utility for parsing flows and actions. */
+bool ofputil_parse_key_value(char **stringp, char **keyp, char **valuep);
 
 #endif /* ofp-util.h */

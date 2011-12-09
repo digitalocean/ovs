@@ -111,7 +111,7 @@ HOSTS = '/etc/hosts'
 HOSTS_ALLOW = '/etc/hosts.allow'
 HOSTS_DENY = '/etc/hosts.deny'
 DHCP_LEASE_DIR = ['/var/lib/dhclient', '/var/lib/dhcp3']
-OPENVSWITCH_LOG_DIR = '@LOGDIR@'
+OPENVSWITCH_LOG_DIR = '@LOGDIR@/'
 OPENVSWITCH_DEFAULT_SWITCH = '/etc/default/openvswitch-switch' # Debian
 OPENVSWITCH_SYSCONFIG_SWITCH = '/etc/sysconfig/openvswitch'    # RHEL
 OPENVSWITCH_DEFAULT_CONTROLLER = '/etc/default/openvswitch-controller'
@@ -390,7 +390,7 @@ def collect_data():
 
 def main(argv = None):
     global ANSWER_YES_TO_ALL, SILENT_MODE
-    global entries, data, dbg
+    global entries, data, dbg, unlimited_data
 
     # we need access to privileged files, exit if we are not running as root
     if os.getuid() != 0:
@@ -586,9 +586,8 @@ exclude those logs from the archive.
     tree_output(CAP_NETWORK_STATUS, PROC_NET_VLAN_DIR)
     cmd_output(CAP_NETWORK_STATUS, [TC, '-s', 'qdisc'])
     file_output(CAP_NETWORK_STATUS, [PROC_NET_SOFTNET_STAT])
-    tree_output(CAP_NETWORK_STATUS, OPENVSWITCH_LOG_DIR)
     if os.path.exists(OPENVSWITCH_VSWITCHD_PID):
-        cmd_output(CAP_NETWORK_STATUS, [OVS_DPCTL, 'show'])
+        cmd_output(CAP_NETWORK_STATUS, [OVS_DPCTL, 'show', '-s'])
         for d in dp_list():
             cmd_output(CAP_NETWORK_STATUS, [OVS_OFCTL, 'show', d])
             cmd_output(CAP_NETWORK_STATUS, [OVS_OFCTL, 'dump-flows', d])
@@ -599,7 +598,7 @@ exclude those logs from the archive.
             vspidfile.close()
             for b in bond_list(vspid):
                 cmd_output(CAP_NETWORK_STATUS,
-                           [OVS_APPCTL, '-t', '/var/run/ovs-vswitchd.%s.ctl' % vspid, '-e' 'bond/show %s' % b],
+                           [OVS_APPCTL, '-t', '@RUNDIR@/ovs-vswitchd.%s.ctl' % vspid, '-e' 'bond/show %s' % b],
                            'ovs-appctl-bond-show-%s.out' % b)
         except e:
             pass
@@ -610,17 +609,18 @@ exclude those logs from the archive.
     cmd_output(CAP_PROCESS_LIST, [PS, 'wwwaxf', '-eo', 'pid,tty,stat,time,nice,psr,pcpu,pmem,nwchan,wchan:25,args'], label='process-tree')
     func_output(CAP_PROCESS_LIST, 'fd_usage', fd_usage)
 
+    logs = ([ VAR_LOG_DIR + x for x in
+             [ 'crit.log', 'kern.log', 'daemon.log', 'user.log',
+             'syslog', 'messages', 'secure', 'debug', 'dmesg', 'boot' ]]
+            + [ OPENVSWITCH_LOG_DIR + x for x in
+                [ 'ovs-vswitchd.log', 'ovs-brcompatd.log', 'ovsdb-server.log',
+                  'ovs-xapi-sync.log', 'ovs-monitor-ipsec.log' ]])
+    file_output(CAP_SYSTEM_LOGS, logs)
     file_output(CAP_SYSTEM_LOGS,
-         [ VAR_LOG_DIR + x for x in
-           [ 'crit.log', 'kern.log', 'daemon.log', 'user.log', 'syslog', 
-             'messages', 'secure', 'debug', 'dmesg', 'boot'] +
-           [ f % n for n in range(1, 20) \
-                 for f in ['crit.log.%d', 'crit.log.%d.gz',
-                           'kern.log.%d', 'kern.log.%d.gz',
-                           'daemon.log.%d', 'daemon.log.%d.gz',
-                           'user.log.%d', 'user.log.%d.gz',
-                           'messages.%d', 'messages.%d.gz',
-                           'syslog.%d', 'syslog.%d.gz']]])
+                [ '%s.%d' % (f, n) for n in range(20) for f in logs ])
+    file_output(CAP_SYSTEM_LOGS,
+                [ '%s.%d.gz' % (f, n) for n in range(20) for f in logs ])
+
     if not os.path.exists('/var/log/dmesg') and not os.path.exists('/var/log/boot'):
         cmd_output(CAP_SYSTEM_LOGS, [DMESG])
 
@@ -778,7 +778,7 @@ def dp_list():
 
 def bond_list(pid):
     output = StringIO.StringIO()
-    procs = [ProcOutput([OVS_APPCTL, '-t', '/var/run/ovs-vswitchd.%s.ctl' % pid, '-e' 'bond/list'], caps[CAP_NETWORK_STATUS][MAX_TIME], output)]
+    procs = [ProcOutput([OVS_APPCTL, '-t', '@RUNDIR@/ovs-vswitchd.%s.ctl' % pid, '-e' 'bond/list'], caps[CAP_NETWORK_STATUS][MAX_TIME], output)]
 
     run_procs([procs])
 

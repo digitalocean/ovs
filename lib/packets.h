@@ -38,7 +38,7 @@ static const uint8_t eth_addr_broadcast[ETH_ADDR_LEN] OVS_UNUSED
     = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 static const uint8_t eth_addr_stp[ETH_ADDR_LEN] OVS_UNUSED
-    = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x01 };
+    = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x00 };
 
 static const uint8_t eth_addr_lacp[ETH_ADDR_LEN] OVS_UNUSED
     = { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x02 };
@@ -131,7 +131,7 @@ void compose_benign_packet(struct ofpbuf *, const char *tag,
                            uint16_t snap_type,
                            const uint8_t eth_src[ETH_ADDR_LEN]);
 
-void eth_set_vlan_tci(struct ofpbuf *, ovs_be16 tci);
+void eth_push_vlan(struct ofpbuf *, ovs_be16 tci);
 
 /* Example:
  *
@@ -264,6 +264,25 @@ BUILD_ASSERT_DECL(VLAN_ETH_HEADER_LEN == sizeof(struct vlan_eth_header));
         ((uint8_t *) ip)[2],                    \
         ((uint8_t *) ip)[3]
 
+/* Example:
+ *
+ * char *string = "1 33.44.55.66 2";
+ * ovs_be32 ip;
+ * int a, b;
+ *
+ * if (sscanf(string, "%d"IP_SCAN_FMT"%d",
+ *     &a, IP_SCAN_ARGS(&ip), &b) == 1 + IP_SCAN_COUNT + 1) {
+ *     ...
+ * }
+ */
+#define IP_SCAN_FMT "%"SCNu8".%"SCNu8".%"SCNu8".%"SCNu8
+#define IP_SCAN_ARGS(ip)                                    \
+        ((void) (ovs_be32) *(ip), &((uint8_t *) ip)[0]),    \
+        &((uint8_t *) ip)[1],                               \
+        &((uint8_t *) ip)[2],                               \
+        &((uint8_t *) ip)[3]
+#define IP_SCAN_COUNT 4
+
 /* Returns true if 'netmask' is a CIDR netmask, that is, if it consists of N
  * high-order 1-bits and 32-N low-order 0-bits. */
 static inline bool
@@ -272,6 +291,8 @@ ip_is_cidr(ovs_be32 netmask)
     uint32_t x = ~ntohl(netmask);
     return !(x & (x + 1));
 }
+int ip_count_cidr_bits(ovs_be32 netmask);
+void ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *);
 
 #define IP_VER(ip_ihl_ver) ((ip_ihl_ver) >> 4)
 #define IP_IHL(ip_ihl_ver) ((ip_ihl_ver) & 15)
@@ -366,6 +387,20 @@ struct arp_eth_header {
 } __attribute__((packed));
 BUILD_ASSERT_DECL(ARP_ETH_HEADER_LEN == sizeof(struct arp_eth_header));
 
+/* Example:
+ *
+ * char *string = "1 ::1 2";
+ * char ipv6_s[IPV6_SCAN_LEN + 1];
+ * struct in6_addr ipv6;
+ *
+ * if (sscanf(string, "%d"IPV6_SCAN_FMT"%d", &a, ipv6_s, &b) == 3
+ *     && inet_pton(AF_INET6, ipv6_s, &ipv6) == 1) {
+ *     ...
+ * }
+ */
+#define IPV6_SCAN_FMT "%46[0123456789abcdefABCDEF:.]"
+#define IPV6_SCAN_LEN 46
+
 extern const struct in6_addr in6addr_exact;
 #define IN6ADDR_EXACT_INIT { { { 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff, \
                                  0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff } } }
@@ -390,6 +425,8 @@ static inline bool ipv6_mask_is_exact(const struct in6_addr *mask) {
 
 void format_ipv6_addr(char *addr_str, const struct in6_addr *addr);
 void print_ipv6_addr(struct ds *string, const struct in6_addr *addr);
+void print_ipv6_masked(struct ds *string, const struct in6_addr *addr,
+                       const struct in6_addr *mask);
 struct in6_addr ipv6_addr_bitand(const struct in6_addr *src,
                                  const struct in6_addr *mask);
 struct in6_addr ipv6_create_mask(int mask);

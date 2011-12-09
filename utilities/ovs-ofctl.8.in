@@ -92,6 +92,39 @@ spanning tree protocol is not in use.
 .
 .RE
 .
+.IP "\fBget\-frags \fIswitch\fR"
+Prints \fIswitch\fR's fragment handling mode.  See \fBset\-frags\fR,
+below, for a description of each fragment handling mode.
+.IP
+The \fBshow\fR command also prints the fragment handling mode among
+its other output.
+.
+.IP "\fBset\-frags \fIswitch frag_mode\fR"
+Configures \fIswitch\fR's treatment of IPv4 and IPv6 fragments.  The
+choices for \fIfrag_mode\fR are:
+.RS
+.IP "\fBnormal\fR"
+Fragments pass through the flow table like non-fragmented packets.
+The TCP ports, UDP ports, and ICMP type and code fields are always set
+to 0, even for fragments where that information would otherwise be
+available (fragments with offset 0).  This is the default fragment
+handling mode for an OpenFlow switch.
+.IP "\fBdrop\fR"
+Fragments are dropped without passing through the flow table.
+.IP "\fBreassemble\fR"
+The switch reassembles fragments into full IP packets before passing
+them through the flow table.  Open vSwitch does not implement this
+fragment handling mode.
+.IP "\fBnx\-match\fR"
+Fragments pass through the flow table like non-fragmented packets.
+The TCP ports, UDP ports, and ICMP type and code fields are available
+for matching for fragments with offset 0, and set to 0 in fragments
+with nonzero offset.  This mode is a Nicira extension.
+.RE
+.IP
+See the description of \fBip_frag\fR, below, for a way to match on
+whether a packet is a fragment and on its fragment offset.
+.
 .TP
 \fBdump\-flows \fIswitch \fR[\fIflows\fR]
 Prints to the console all flow entries in \fIswitch\fR's
@@ -276,8 +309,13 @@ may be specified to explicitly mark any of these fields as a wildcard.
 (\fB*\fR should be quoted to protect it from shell expansion.)
 .
 .IP \fBin_port=\fIport_no\fR
-Matches physical port \fIport_no\fR.  Switch ports are numbered as
+Matches OpenFlow port \fIport_no\fR.  Ports are numbered as
 displayed by \fBovs\-ofctl show\fR.
+.IP
+(The \fBresubmit\fR action can search OpenFlow flow tables with
+arbitrary \fBin_port\fR values, so flows that match port numbers that
+do not exist from an OpenFlow perspective can still potentially be
+matched.)
 .
 .IP \fBdl_vlan=\fIvlan\fR
 Matches IEEE 802.1q Virtual LAN tag \fIvlan\fR.  Specify \fB0xffff\fR
@@ -471,6 +509,27 @@ Match packets with no 802.1Q header or tagged with VLAN 0 and priority
 Some of these matching possibilities can also be achieved with
 \fBdl_vlan\fR and \fBdl_vlan_pcp\fR.
 .
+.IP \fBip_frag=\fIfrag_type\fR
+When \fBdl_type\fR specifies IP or IPv6, \fIfrag_type\fR
+specifies what kind of IP fragments or non-fragments to match.  The
+following values of \fIfrag_type\fR are supported:
+.RS
+.IP "\fBno\fR"
+Matches only non-fragmented packets.
+.IP "\fByes\fR"
+Matches all fragments.
+.IP "\fBfirst\fR"
+Matches only fragments with offset 0.
+.IP "\fBlater\fR"
+Matches only fragments with nonzero offset.
+.IP "\fBnot_later\fR"
+Matches non-fragmented packets and fragments with zero offset.
+.RE
+.IP
+The \fBip_frag\fR match type is likely to be most useful in
+\fBnx\-match\fR mode.  See the description of the \fBset\-frags\fR
+command, above, for more details.
+.
 .IP \fBarp_sha=\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fR
 .IQ \fBarp_tha=\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fB:\fIxx\fR
 When \fBdl_type\fR specifies ARP, \fBarp_sha\fR and \fBarp_tha\fR match
@@ -571,7 +630,14 @@ of the following keywords:
 .
 .RS
 .IP \fBoutput\fR:\fIport\fR
-Outputs the packet on the port specified by \fIport\fR.
+.IQ \fBoutput\fR:\fIsrc\fB[\fIstart\fB..\fIend\fB]
+Outputs the packet. If \fIport\fR is an OpenFlow port number, outputs directly
+to it.  Otherwise, outputs to the OpenFlow port number read from \fIsrc\fR
+which must be an NXM field as described above.  Outputting to an NXM field is
+an OpenFlow extension which is not supported by standard OpenFlow switches.
+.IP
+Example: \fBoutput:NXM_NX_REG0[16..31]\fR outputs to the OpenFlow port number
+written in the upper half of register 0.
 .
 .IP \fBenqueue\fR:\fIport\fB:\fIqueue\fR
 Enqueues the packet on the specified \fIqueue\fR within port
@@ -655,15 +721,21 @@ only known to be implemented by Open vSwitch:
 .RS
 .
 .IP \fBresubmit\fB:\fIport\fR
-Re-searches the OpenFlow flow table with the \fBin_port\fR field
-replaced by \fIport\fR and executes the actions found, if any, in
-addition to any other actions in this flow entry.  Recursive
-\fBresubmit\fR actions are ignored.
+.IQ \fBresubmit\fB(\fR[\fIport\fR]\fB,\fR[\fItable\fR]\fB)
+Re-searches this OpenFlow flow table (or the table whose number is
+specified by \fItable\fR) with the \fBin_port\fR field replaced by
+\fIport\fR (if \fIport\fR is specified) and executes the actions
+found, if any, in addition to any other actions in this flow entry.
+.IP
+Recursive \fBresubmit\fR actions are obeyed up to an
+implementation-defined maximum depth.  Open vSwitch 1.0.1 and earlier
+did not support recursion; Open vSwitch before 1.2.90 did not support
+\fItable\fR.
 .
 .IP \fBset_tunnel\fB:\fIid\fR
 .IQ \fBset_tunnel64\fB:\fIid\fR
 If outputting to a port that encapsulates the packet in a tunnel and
-supports an identifier (such as GRE), sets the identifier to \fBid\fR.
+supports an identifier (such as GRE), sets the identifier to \fIid\fR.
 If the \fBset_tunnel\fR form is used and \fIid\fR fits in 32 bits,
 then this uses an action extension that is supported by Open vSwitch
 1.0 and later.  Otherwise, if \fIid\fR is a 64-bit value, it requires
@@ -683,7 +755,7 @@ Does nothing at all.  Any number of bytes represented as hex digits
 \fIhh\fR may be included.  Pairs of hex digits may be separated by
 periods for readability.
 .
-.IP "\fBmove:\fIsrc\fB[\fIstart\fB..\fIend\fB]->\fIdst\fB[\fIstart\fB..\fIend\fB]\fR"
+.IP "\fBmove:\fIsrc\fB[\fIstart\fB..\fIend\fB]\->\fIdst\fB[\fIstart\fB..\fIend\fB]\fR"
 Copies the named bits from field \fIsrc\fR to field \fIdst\fR.
 \fIsrc\fR and \fIdst\fR must be NXM field names as defined in
 \fBnicira\-ext.h\fR, e.g. \fBNXM_OF_UDP_SRC\fR or \fBNXM_NX_REG0\fR.
@@ -696,12 +768,12 @@ entire field.
 Examples: \fBmove:NXM_NX_REG0[0..5]\->NXM_NX_REG1[26..31]\fR copies the
 six bits numbered 0 through 5, inclusive, in register 0 into bits 26
 through 31, inclusive;
-\fBmove:NXM_NX_REG0[0..15]->NXM_OF_VLAN_TCI[]\fR copies the least
+\fBmove:NXM_NX_REG0[0..15]\->NXM_OF_VLAN_TCI[]\fR copies the least
 significant 16 bits of register 0 into the VLAN TCI field.
 .
 .IP "\fBload:\fIvalue\fB\->\fIdst\fB[\fIstart\fB..\fIend\fB]"
 Writes \fIvalue\fR to bits \fIstart\fR through \fIend\fR, inclusive,
-in field \fBdst\fR.
+in field \fIdst\fR.
 .IP
 Example: \fBload:55\->NXM_NX_REG2[0..5]\fR loads value 55 (bit pattern
 \fB110111\fR) into bits 0 through 5, inclusive, in register 2.
@@ -756,17 +828,75 @@ of outputting to the selected slave, it writes its selection to
 \fIdst\fB[\fIstart\fB..\fIend\fB]\fR, which must be an NXM field as described
 above.
 .IP
-Example: \fBbundle_load(eth_src,0,hrw,ofport,NXM_NX_REG0[],slaves:4,8)\fR uses
-an Ethernet source hash with basis 0, to select between OpenFlow ports 4 and 8
-using the Highest Random Weight algorithm, and writes the selection to
-\fBNXM_NX_REG0[]\fR.
+Example: \fBbundle_load(eth_src, 0, hrw, ofport, NXM_NX_REG0[],
+slaves:4, 8)\fR uses an Ethernet source hash with basis 0, to select
+between OpenFlow ports 4 and 8 using the Highest Random Weight
+algorithm, and writes the selection to \fBNXM_NX_REG0[]\fR.
 .IP
 Refer to \fBnicira\-ext.h\fR for more details.
-.RE
 .
+.IP "\fBlearn(\fIargument\fR[\fB,\fIargument\fR]...\fB)\fR"
+This action adds or modifies a flow in an OpenFlow table, similar to
+\fBovs\-ofctl \-\-strict mod\-flows\fR.  The arguments specify the
+flow's match fields, actions, and other properties, as follows.  At
+least one match criterion and one action argument should ordinarily be
+specified.
+.RS
+.IP \fBidle_timeout=\fIseconds\fR
+.IQ \fBhard_timeout=\fIseconds\fR
+.IQ \fBpriority=\fIvalue\fR
+These key-value pairs have the same meaning as in the usual
+\fBovs\-ofctl\fR flow syntax.
+.
+.IP \fBtable=\fInumber\fR
+The table in which the new flow should be inserted.  Specify a decimal
+number between 0 and 254.  The default, if \fBtable\fR is unspecified,
+is table 1.
+.
+.IP \fIfield\fB=\fIvalue\fR
+.IQ \fIfield\fB[\fIstart\fB..\fIend\fB]=\fIsrc\fB[\fIstart\fB..\fIend\fB]\fR
+.IQ \fIfield\fB[\fIstart\fB..\fIend\fB]\fR
+Adds a match criterion to the new flow.
 .IP
-(The OpenFlow protocol supports other actions that \fBovs\-ofctl\fR does
-not yet expose to the user.)
+The first form specifies that \fIfield\fR must match the literal
+\fIvalue\fR, e.g. \fBdl_type=0x0800\fR.  All of the fields and values
+for \fBovs\-ofctl\fR flow syntax are available with their usual
+meanings.
+.IP
+The second form specifies that \fIfield\fB[\fIstart\fB..\fIend\fB]\fR
+in the new flow must match \fIsrc\fB[\fIstart\fB..\fIend\fB]\fR taken
+from the flow currently being processed.
+.IP
+The third form is a shorthand for the second form.  It specifies that
+\fIfield\fB[\fIstart\fB..\fIend\fB]\fR in the new flow must match
+\fIfield\fB[\fIstart\fB..\fIend\fB]\fR taken from the flow currently
+being processed.
+.
+.IP \fBload:\fIvalue\fB\->\fIdst\fB[\fIstart\fB..\fIend\fB]
+.IQ \fBload:\fIsrc\fB[\fIstart\fB..\fIend\fB]\->\fIdst\fB[\fIstart\fB..\fIend\fB]
+.
+Adds a \fBload\fR action to the new flow.
+.IP
+The first form loads the literal \fIvalue\fR into bits \fIstart\fR
+through \fIend\fR, inclusive, in field \fIdst\fR.  Its syntax is the
+same as the \fBload\fR action described earlier in this section.
+.IP
+The second form loads \fIsrc\fB[\fIstart\fB..\fIend\fB]\fR, a value
+from the flow currently being processed, into bits \fIstart\fR
+through \fIend\fR, inclusive, in field \fIdst\fR.
+.
+.IP \fBoutput:\fIfield\fB[\fIstart\fB..\fIend\fB]\fR
+Add an \fBoutput\fR action to the new flow's actions, that outputs to
+the OpenFlow port taken from \fIfield\fB[\fIstart\fB..\fIend\fB]\fR,
+which must be an NXM field as described above.
+.RE
+.IP
+For best performance, segregate learned flows into a table (using
+\fBtable=\fInumber\fR) that is not used for any other flows except
+possibly for a lowest-priority ``catch-all'' flow, that is, a flow
+with no match criteria.  (This is why the default \fBtable\fR is 1, to
+keep the learned flows separate from the primary flow table 0.)
+.RE
 .
 .PP
 The \fBadd\-flow\fR, \fBadd\-flows\fR, and \fBmod\-flows\fR commands

@@ -33,6 +33,7 @@ VLOG_DEFINE_THIS_MODULE(util);
 COVERAGE_DEFINE(util_xalloc);
 
 const char *program_name;
+static char *program_version;
 
 void
 out_of_memory(void)
@@ -277,21 +278,41 @@ ovs_retval_to_string(int retval)
     return unknown;
 }
 
-/* Sets program_name based on 'argv0'.  Should be called at the beginning of
- * main(), as "set_program_name(argv[0]);".  */
-void set_program_name(const char *argv0)
+/* Sets global "program_name" and "program_version" variables.  Should
+ * be called at the beginning of main() with "argv[0]" as the argument
+ * to 'argv0'.
+ *
+ * The 'date' and 'time' arguments should likely be called with
+ * "__DATE__" and "__TIME__" to use the time the binary was built.
+ * Alternatively, the "set_program_name" macro may be called to do this
+ * automatically.
+ */
+void
+set_program_name__(const char *argv0, const char *date, const char *time)
 {
     const char *slash = strrchr(argv0, '/');
     program_name = slash ? slash + 1 : argv0;
+
+    free(program_version);
+    program_version = xasprintf("%s (Open vSwitch) "VERSION BUILDNR"\n"
+                                "Compiled %s %s\n",
+                                program_name, date, time);
+}
+
+/* Returns a pointer to a string describing the program version.  The
+ * caller must not modify or free the returned string.
+ */
+const char *
+get_program_version(void)
+{
+    return program_version;
 }
 
 /* Print the version information for the program.  */
 void
-ovs_print_version(char *date, char *time,
-                  uint8_t min_ofp, uint8_t max_ofp)
+ovs_print_version(uint8_t min_ofp, uint8_t max_ofp)
 {
-    printf("%s (Open vSwitch) "VERSION BUILDNR"\n", program_name);
-    printf("Compiled %s %s\n", date, time);
+    printf("%s", program_version);
     if (min_ofp || max_ofp) {
         printf("OpenFlow versions %#x:%#x\n", min_ofp, max_ofp);
     }
@@ -642,3 +663,65 @@ log_2_floor(uint32_t n)
     }
 #endif
 }
+
+/* Returns the number of trailing 0-bits in 'n', or 32 if 'n' is 0. */
+int
+ctz(uint32_t n)
+{
+    if (!n) {
+        return 32;
+    } else {
+#if !defined(UINT_MAX) || !defined(UINT32_MAX)
+#error "Someone screwed up the #includes."
+#elif __GNUC__ >= 4 && UINT_MAX == UINT32_MAX
+        return __builtin_ctz(n);
+#else
+        unsigned int k;
+        int count = 31;
+
+#define CTZ_STEP(X)                             \
+        k = n << (X);                           \
+        if (k) {                                \
+            count -= X;                         \
+            n = k;                              \
+        }
+        CTZ_STEP(16);
+        CTZ_STEP(8);
+        CTZ_STEP(4);
+        CTZ_STEP(2);
+        CTZ_STEP(1);
+#undef CTZ_STEP
+
+        return count;
+#endif
+    }
+}
+
+/* Returns true if the 'n' bytes starting at 'p' are zeros. */
+bool
+is_all_zeros(const uint8_t *p, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        if (p[i] != 0x00) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Returns true if the 'n' bytes starting at 'p' are 0xff. */
+bool
+is_all_ones(const uint8_t *p, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        if (p[i] != 0xff) {
+            return false;
+        }
+    }
+    return true;
+}
+

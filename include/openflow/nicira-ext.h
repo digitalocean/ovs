@@ -279,7 +279,10 @@ enum nx_action_subtype {
     NXAST_MULTIPATH,            /* struct nx_action_multipath */
     NXAST_AUTOPATH,             /* struct nx_action_autopath */
     NXAST_BUNDLE,               /* struct nx_action_bundle */
-    NXAST_BUNDLE_LOAD           /* struct nx_action_bundle */
+    NXAST_BUNDLE_LOAD,          /* struct nx_action_bundle */
+    NXAST_RESUBMIT_TABLE,       /* struct nx_action_resubmit */
+    NXAST_OUTPUT_REG,           /* struct nx_action_output_reg */
+    NXAST_LEARN                 /* struct nx_action_learn */
 };
 
 /* Header for Nicira-defined actions. */
@@ -292,31 +295,51 @@ struct nx_action_header {
 };
 OFP_ASSERT(sizeof(struct nx_action_header) == 16);
 
-/* Action structure for NXAST_RESUBMIT.
+/* Action structures for NXAST_RESUBMIT and NXAST_RESUBMIT_TABLE.
  *
- * NXAST_RESUBMIT searches the flow table again, using a flow that is slightly
- * modified from the original lookup:
+ * These actions search one of the switch's flow tables:
  *
- *    - The 'in_port' member of struct nx_action_resubmit is used as the flow's
- *      in_port.
+ *    - For NXAST_RESUBMIT_TABLE only, if the 'table' member is not 255, then
+ *      it specifies the table to search.
  *
- *    - If NXAST_RESUBMIT is preceded by actions that affect the flow
- *      (e.g. OFPAT_SET_VLAN_VID), then the flow is updated with the new
- *      values.
+ *    - Otherwise (for NXAST_RESUBMIT_TABLE with a 'table' of 255, or for
+ *      NXAST_RESUBMIT regardless of 'table'), it searches the current flow
+ *      table, that is, the OpenFlow flow table that contains the flow from
+ *      which this action was obtained.  If this action did not come from a
+ *      flow table (e.g. it came from an OFPT_PACKET_OUT message), then table 0
+ *      is the current table.
+ *
+ * The flow table lookup uses a flow that may be slightly modified from the
+ * original lookup:
+ *
+ *    - For NXAST_RESUBMIT, the 'in_port' member of struct nx_action_resubmit
+ *      is used as the flow's in_port.
+ *
+ *    - For NXAST_RESUBMIT_TABLE, if the 'in_port' member is not OFPP_IN_PORT,
+ *      then its value is used as the flow's in_port.  Otherwise, the original
+ *      in_port is used.
+ *
+ *    - If actions that modify the flow (e.g. OFPAT_SET_VLAN_VID) precede the
+ *      resubmit action, then the flow is updated with the new values.
  *
  * Following the lookup, the original in_port is restored.
  *
  * If the modified flow matched in the flow table, then the corresponding
- * actions are executed.  Afterward, actions following NXAST_RESUBMIT in the
+ * actions are executed.  Afterward, actions following the resubmit in the
  * original set of actions, if any, are executed; any changes made to the
  * packet (e.g. changes to VLAN) by secondary actions persist when those
  * actions are executed, although the original in_port is restored.
  *
- * NXAST_RESUBMIT may be used any number of times within a set of actions.
+ * Resubmit actions may be used any number of times within a set of actions.
  *
- * NXAST_RESUBMIT may nest to an implementation-defined depth.  Beyond this
- * implementation-defined depth, further NXAST_RESUBMIT actions are simply
- * ignored.  (Open vSwitch 1.0.1 and earlier did not support recursion.)
+ * Resubmit actions may nest to an implementation-defined depth.  Beyond this
+ * implementation-defined depth, further resubmit actions are simply ignored.
+ *
+ * NXAST_RESUBMIT ignores 'table' and 'pad'.  NXAST_RESUBMIT_TABLE requires
+ * 'pad' to be all-bits-zero.
+ *
+ * Open vSwitch 1.0.1 and earlier did not support recursion.  Open vSwitch
+ * before 1.2.90 did not support NXAST_RESUBMIT_TABLE.
  */
 struct nx_action_resubmit {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
@@ -324,7 +347,8 @@ struct nx_action_resubmit {
     ovs_be32 vendor;                /* NX_VENDOR_ID. */
     ovs_be16 subtype;               /* NXAST_RESUBMIT. */
     ovs_be16 in_port;               /* New in_port for checking flow table. */
-    uint8_t pad[4];
+    uint8_t table;                  /* NXAST_RESUBMIT_TABLE: table to use. */
+    uint8_t pad[3];
 };
 OFP_ASSERT(sizeof(struct nx_action_resubmit) == 16);
 
@@ -633,6 +657,220 @@ enum nx_mp_algorithm {
     NX_MP_ALG_ITER_HASH         /* Iterative Hash. */
 };
 
+/* Action structure for NXAST_LEARN.
+ *
+ * This action adds or modifies a flow in an OpenFlow table, similar to
+ * OFPT_FLOW_MOD with OFPFC_MODIFY_STRICT as 'command'.  The new flow has the
+ * specified idle timeout, hard timeout, priority, cookie, and flags.  The new
+ * flow's match criteria and actions are built by applying each of the series
+ * of flow_mod_spec elements included as part of the action.
+ *
+ * A flow_mod_spec starts with a 16-bit header.  A header that is all-bits-0 is
+ * a no-op used for padding the action as a whole to a multiple of 8 bytes in
+ * length.  Otherwise, the flow_mod_spec can be thought of as copying 'n_bits'
+ * bits from a source to a destination.  In this case, the header contains
+ * multiple fields:
+ *
+ *  15  14  13 12  11 10                              0
+ * +------+---+------+---------------------------------+
+ * |   0  |src|  dst |             n_bits              |
+ * +------+---+------+---------------------------------+
+ *
+ * The meaning and format of a flow_mod_spec depends on 'src' and 'dst'.  The
+ * following table summarizes the meaning of each possible combination.
+ * Details follow the table:
+ *
+ *   src dst  meaning
+ *   --- ---  ----------------------------------------------------------
+ *    0   0   Add match criteria based on value in a field.
+ *    1   0   Add match criteria based on an immediate value.
+ *    0   1   Add NXAST_REG_LOAD action to copy field into a different field.
+ *    1   1   Add NXAST_REG_LOAD action to load immediate value into a field.
+ *    0   2   Add OFPAT_OUTPUT action to output to port from specified field.
+ *   All other combinations are undefined and not allowed.
+ *
+ * The flow_mod_spec header is followed by a source specification and a
+ * destination specification.  The format and meaning of the source
+ * specification depends on 'src':
+ *
+ *   - If 'src' is 0, the source bits are taken from a field in the flow to
+ *     which this action is attached.  (This should be a wildcarded field.  If
+ *     its value is fully specified then the source bits being copied have
+ *     constant values.)
+ *
+ *     The source specification is an ovs_be32 'field' and an ovs_be16 'ofs'.
+ *     'field' is an nxm_header with nxm_hasmask=0, and 'ofs' the starting bit
+ *     offset within that field.  The source bits are field[ofs:ofs+n_bits-1].
+ *     'field' and 'ofs' are subject to the same restrictions as the source
+ *     field in NXAST_REG_MOVE.
+ *
+ *   - If 'src' is 1, the source bits are a constant value.  The source
+ *     specification is (n_bits+15)/16*2 bytes long.  Taking those bytes as a
+ *     number in network order, the source bits are the 'n_bits'
+ *     least-significant bits.  The switch will report an error if other bits
+ *     in the constant are nonzero.
+ *
+ * The flow_mod_spec destination specification, for 'dst' of 0 or 1, is an
+ * ovs_be32 'field' and an ovs_be16 'ofs'.  'field' is an nxm_header with
+ * nxm_hasmask=0 and 'ofs' is a starting bit offset within that field.  The
+ * meaning of the flow_mod_spec depends on 'dst':
+ *
+ *   - If 'dst' is 0, the flow_mod_spec specifies match criteria for the new
+ *     flow.  The new flow matches only if bits field[ofs:ofs+n_bits-1] in a
+ *     packet equal the source bits.  'field' may be any nxm_header with
+ *     nxm_hasmask=0 that is allowed in NXT_FLOW_MOD.
+ *
+ *     Order is significant.  Earlier flow_mod_specs must satisfy any
+ *     prerequisites for matching fields specified later, by copying constant
+ *     values into prerequisite fields.
+ *
+ *     The switch will reject flow_mod_specs that do not satisfy NXM masking
+ *     restrictions.
+ *
+ *   - If 'dst' is 1, the flow_mod_spec specifies an NXAST_REG_LOAD action for
+ *     the new flow.  The new flow copies the source bits into
+ *     field[ofs:ofs+n_bits-1].  Actions are executed in the same order as the
+ *     flow_mod_specs.
+ *
+ * The flow_mod_spec destination spec for 'dst' of 2 (when 'src' is 0) is
+ * empty.  It has the following meaning:
+ *
+ *   - The flow_mod_spec specifies an OFPAT_OUTPUT action for the new flow.
+ *     The new flow outputs to the OpenFlow port specified by the source field.
+ *     Of the special output ports with value OFPP_MAX or larger, OFPP_IN_PORT,
+ *     OFPP_FLOOD, OFPP_LOCAL, and OFPP_ALL are supported.  Other special ports
+ *     may not be used.
+ *
+ * Resource Management
+ * -------------------
+ *
+ * A switch has a finite amount of flow table space available for learning.
+ * When this space is exhausted, no new learning table entries will be learned
+ * until some existing flow table entries expire.  The controller should be
+ * prepared to handle this by flooding (which can be implemented as a
+ * low-priority flow).
+ *
+ * Examples
+ * --------
+ *
+ * The following examples give a prose description of the flow_mod_specs along
+ * with informal notation for how those would be represented and a hex dump of
+ * the bytes that would be required.
+ *
+ * These examples could work with various nx_action_learn parameters.  Typical
+ * values would be idle_timeout=OFP_FLOW_PERMANENT, hard_timeout=60,
+ * priority=OFP_DEFAULT_PRIORITY, flags=0, table_id=10.
+ *
+ * 1. Learn input port based on the source MAC, with lookup into
+ *    NXM_NX_REG1[16:31] by resubmit to in_port=99:
+ *
+ *    Match on in_port=99:
+ *       ovs_be16(src=1, dst=0, n_bits=16),               20 10
+ *       ovs_be16(99),                                    00 63
+ *       ovs_be32(NXM_OF_IN_PORT), ovs_be16(0)            00 00 00 02 00 00
+ *
+ *    Match Ethernet destination on Ethernet source from packet:
+ *       ovs_be16(src=0, dst=0, n_bits=48),               00 30
+ *       ovs_be32(NXM_OF_ETH_SRC), ovs_be16(0)            00 00 04 06 00 00
+ *       ovs_be32(NXM_OF_ETH_DST), ovs_be16(0)            00 00 02 06 00 00
+ *
+ *    Set NXM_NX_REG1[16:31] to the packet's input port:
+ *       ovs_be16(src=0, dst=1, n_bits=16),               08 10
+ *       ovs_be32(NXM_OF_IN_PORT), ovs_be16(0)            00 00 00 02 00 00
+ *       ovs_be32(NXM_NX_REG1), ovs_be16(16)              00 01 02 04 00 10
+ *
+ *    Given a packet that arrived on port A with Ethernet source address B,
+ *    this would set up the flow "in_port=99, dl_dst=B,
+ *    actions=load:A->NXM_NX_REG1[16..31]".
+ *
+ *    In syntax accepted by ovs-ofctl, this action is: learn(in_port=99,
+ *    NXM_OF_ETH_DST[]=NXM_OF_ETH_SRC[],
+ *    load:NXM_OF_IN_PORT[]->NXM_NX_REG1[16..31])
+ *
+ * 2. Output to input port based on the source MAC and VLAN VID, with lookup
+ *    into NXM_NX_REG1[16:31]:
+ *
+ *    Match on same VLAN ID as packet:
+ *       ovs_be16(src=0, dst=0, n_bits=12),               00 0c
+ *       ovs_be32(NXM_OF_VLAN_TCI), ovs_be16(0)           00 00 08 02 00 00
+ *       ovs_be32(NXM_OF_VLAN_TCI), ovs_be16(0)           00 00 08 02 00 00
+ *
+ *    Match Ethernet destination on Ethernet source from packet:
+ *       ovs_be16(src=0, dst=0, n_bits=48),               00 30
+ *       ovs_be32(NXM_OF_ETH_SRC), ovs_be16(0)            00 00 04 06 00 00
+ *       ovs_be32(NXM_OF_ETH_DST), ovs_be16(0)            00 00 02 06 00 00
+ *
+ *    Output to the packet's input port:
+ *       ovs_be16(src=0, dst=2, n_bits=16),               10 10
+ *       ovs_be32(NXM_OF_IN_PORT), ovs_be16(0)            00 00 00 02 00 00
+ *
+ *    Given a packet that arrived on port A with Ethernet source address B in
+ *    VLAN C, this would set up the flow "dl_dst=B, vlan_vid=C,
+ *    actions=output:A".
+ *
+ *    In syntax accepted by ovs-ofctl, this action is:
+ *    learn(NXM_OF_VLAN_TCI[0..11], NXM_OF_ETH_DST[]=NXM_OF_ETH_SRC[],
+ *    output:NXM_OF_IN_PORT[])
+ *
+ * 3. Here's a recipe for a very simple-minded MAC learning switch.  It uses a
+ *    10-second MAC expiration time to make it easier to see what's going on
+ *
+ *      ovs-vsctl del-controller br0
+ *      ovs-ofctl del-flows br0
+ *      ovs-ofctl add-flow br0 "table=0 actions=learn(table=1, \
+          hard_timeout=10, NXM_OF_VLAN_TCI[0..11],             \
+          NXM_OF_ETH_DST[]=NXM_OF_ETH_SRC[],                   \
+          output:NXM_OF_IN_PORT[]), resubmit(,1)"
+ *      ovs-ofctl add-flow br0 "table=1 priority=0 actions=flood"
+ *
+ *    You can then dump the MAC learning table with:
+ *
+ *      ovs-ofctl dump-flows br0 table=1
+ *
+ * Usage Advice
+ * ------------
+ *
+ * For best performance, segregate learned flows into a table that is not used
+ * for any other flows except possibly for a lowest-priority "catch-all" flow
+ * (a flow with no match criteria).  If different learning actions specify
+ * different match criteria, use different tables for the learned flows.
+ *
+ * The meaning of 'hard_timeout' and 'idle_timeout' can be counterintuitive.
+ * These timeouts apply to the flow that is added, which means that a flow with
+ * an idle timeout will expire when no traffic has been sent *to* the learned
+ * address.  This is not usually the intent in MAC learning; instead, we want
+ * the MAC learn entry to expire when no traffic has been sent *from* the
+ * learned address.  Use a hard timeout for that.
+ */
+struct nx_action_learn {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* At least 24. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_LEARN. */
+    ovs_be16 idle_timeout;      /* Idle time before discarding (seconds). */
+    ovs_be16 hard_timeout;      /* Max time before discarding (seconds). */
+    ovs_be16 priority;          /* Priority level of flow entry. */
+    ovs_be64 cookie;            /* Cookie for new flow. */
+    ovs_be16 flags;             /* Either 0 or OFPFF_SEND_FLOW_REM. */
+    uint8_t table_id;           /* Table to insert flow entry. */
+    uint8_t pad[5];             /* Must be zero. */
+    /* Followed by a sequence of flow_mod_spec elements, as described above,
+     * until the end of the action is reached. */
+};
+OFP_ASSERT(sizeof(struct nx_action_learn) == 32);
+
+#define NX_LEARN_N_BITS_MASK    0x3ff
+
+#define NX_LEARN_SRC_FIELD     (0 << 13) /* Copy from field. */
+#define NX_LEARN_SRC_IMMEDIATE (1 << 13) /* Copy from immediate value. */
+#define NX_LEARN_SRC_MASK      (1 << 13)
+
+#define NX_LEARN_DST_MATCH     (0 << 11) /* Add match criterion. */
+#define NX_LEARN_DST_LOAD      (1 << 11) /* Add NXAST_REG_LOAD action. */
+#define NX_LEARN_DST_OUTPUT    (2 << 11) /* Add OFPAT_OUTPUT action. */
+#define NX_LEARN_DST_RESERVED  (3 << 11) /* Not yet defined. */
+#define NX_LEARN_DST_MASK      (3 << 11)
+
 /* Action structure for NXAST_AUTOPATH.
  *
  * This action performs the following steps in sequence:
@@ -759,6 +997,36 @@ enum nx_bd_algorithm {
     NX_BD_ALG_HRW /* Highest Random Weight. */
 };
 
+/* Action structure for NXAST_OUTPUT_REG.
+ *
+ * Outputs to the OpenFlow port number written to src[ofs:ofs+nbits].
+ *
+ * The format and semantics of 'src' and 'ofs_nbits' are similar to those for
+ * the NXAST_REG_LOAD action.
+ *
+ * The acceptable nxm_header values for 'src' are the same as the acceptable
+ * nxm_header values for the 'src' field of NXAST_REG_MOVE.
+ *
+ * The 'max_len' field indicates the number of bytes to send when the chosen
+ * port is OFPP_CONTROLLER.  Its semantics are equivalent to the 'max_len'
+ * field of OFPAT_OUTPUT.
+ *
+ * The 'zero' field is required to be zeroed for forward compatibility. */
+struct nx_action_output_reg {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* 24. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_OUTPUT_REG. */
+
+    ovs_be16 ofs_nbits;         /* (ofs << 6) | (n_bits - 1). */
+    ovs_be32 src;               /* Source. */
+
+    ovs_be16 max_len;           /* Max length to send to controller. */
+
+    uint8_t zero[6];            /* Reserved, must be zero. */
+};
+OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
+
 /* Flexible flow specifications (aka NXM = Nicira Extended Match).
  *
  * OpenFlow 1.0 has "struct ofp_match" for specifying flow matches.  This
@@ -866,12 +1134,12 @@ enum nx_bd_algorithm {
  *     and nxm_value=0x0800.  That is, matching on the IP source address is
  *     allowed only if the Ethernet type is explicitly set to IP.
  *
- *   - An nxm_entry for nxm_type=NXM_OF_TCP_SRC is allowed only if it is preced
- *     by an entry with nxm_type=NXM_OF_ETH_TYPE, nxm_hasmask=0,
- *     nxm_value=0x0800 and another with nxm_type=NXM_OF_IP_PROTO,
- *     nxm_hasmask=0, nxm_value=6, in that order.  That is, matching on the TCP
- *     source port is allowed only if the Ethernet type is IP and the IP
- *     protocol is TCP.
+ *   - An nxm_entry for nxm_type=NXM_OF_TCP_SRC is allowed only if it is
+ *     preceded by an entry with nxm_type=NXM_OF_ETH_TYPE, nxm_hasmask=0, and
+ *     nxm_value either 0x0800 or 0x86dd, and another with
+ *     nxm_type=NXM_OF_IP_PROTO, nxm_hasmask=0, nxm_value=6, in that order.
+ *     That is, matching on the TCP source port is allowed only if the Ethernet
+ *     type is IP or IPv6 and the IP protocol is TCP.
  *
  * These restrictions should be noted in specifications for individual fields.
  * A switch may implement relaxed versions of these restrictions.  A switch
@@ -896,7 +1164,7 @@ enum nx_bd_algorithm {
  * numbers and byte indexes.
  *
  *
- * 8-bit nxm_value, nxm_hasmask=1, nxm_length=1:
+ * 8-bit nxm_value, nxm_hasmask=1, nxm_length=2:
  *
  *  0          3  4   5
  * +------------+---+---+
@@ -1172,6 +1440,8 @@ enum nx_bd_algorithm {
 #define NXM_NX_REG2_W     NXM_HEADER_W(0x0001, 2, 4)
 #define NXM_NX_REG3       NXM_HEADER  (0x0001, 3, 4)
 #define NXM_NX_REG3_W     NXM_HEADER_W(0x0001, 3, 4)
+#define NXM_NX_REG4       NXM_HEADER  (0x0001, 4, 4)
+#define NXM_NX_REG4_W     NXM_HEADER_W(0x0001, 4, 4)
 
 /* Tunnel ID.
  *
@@ -1261,6 +1531,55 @@ enum nx_bd_algorithm {
  * Masking: Not maskable. */
 #define NXM_NX_ND_TLL      NXM_HEADER  (0x0001, 25, 6)
 
+/* IP fragment information.
+ *
+ * Prereqs:
+ *   NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
+ *
+ * Format: 8-bit value with one of the values 0, 1, or 3, as described below.
+ *
+ * Masking: Fully maskable.
+ *
+ * This field has three possible values:
+ *
+ *   - A packet that is not an IP fragment has value 0.
+ *
+ *   - A packet that is an IP fragment with offset 0 (the first fragment) has
+ *     bit 0 set and thus value 1.
+ *
+ *   - A packet that is an IP fragment with nonzero offset has bits 0 and 1 set
+ *     and thus value 3.
+ *
+ * NX_IP_FRAG_ANY and NX_IP_FRAG_LATER are declared to symbolically represent
+ * the meanings of bits 0 and 1.
+ *
+ * The switch may reject matches against values that can never appear.
+ *
+ * It is important to understand how this field interacts with the OpenFlow IP
+ * fragment handling mode:
+ *
+ *   - In OFPC_FRAG_DROP mode, the OpenFlow switch drops all IP fragments
+ *     before they reach the flow table, so every packet that is available for
+ *     matching will have value 0 in this field.
+ *
+ *   - Open vSwitch does not implement OFPC_FRAG_REASM mode, but if it did then
+ *     IP fragments would be reassembled before they reached the flow table and
+ *     again every packet available for matching would always have value 0.
+ *
+ *   - In OFPC_FRAG_NORMAL mode, all three values are possible, but OpenFlow
+ *     1.0 says that fragments' transport ports are always 0, even for the
+ *     first fragment, so this does not provide much extra information.
+ *
+ *   - In OFPC_FRAG_NX_MATCH mode, all three values are possible.  For
+ *     fragments with offset 0, Open vSwitch makes L4 header information
+ *     available.
+ */
+#define NXM_NX_IP_FRAG     NXM_HEADER  (0x0001, 26, 1)
+#define NXM_NX_IP_FRAG_W   NXM_HEADER_W(0x0001, 26, 1)
+
+/* Bits in the value of NXM_NX_IP_FRAG. */
+#define NX_IP_FRAG_ANY   (1 << 0) /* Is this a fragment? */
+#define NX_IP_FRAG_LATER (1 << 1) /* Is this a fragment with nonzero offset? */
 
 /* ## --------------------- ## */
 /* ## Requests and replies. ## */

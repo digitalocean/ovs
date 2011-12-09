@@ -15,8 +15,10 @@ TESTSUITE_AT = \
 	tests/daemon-py.at \
 	tests/ofp-print.at \
 	tests/ovs-ofctl.at \
+	tests/odp.at \
 	tests/multipath.at \
 	tests/autopath.at \
+	tests/learn.at \
 	tests/vconn.at \
 	tests/file_name.at \
 	tests/aes128.at \
@@ -27,6 +29,7 @@ TESTSUITE_AT = \
 	tests/timeval.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
+	tests/ofproto-dpif.at \
 	tests/ofproto-macros.at \
 	tests/ofproto.at \
 	tests/ovsdb.at \
@@ -47,11 +50,15 @@ TESTSUITE_AT = \
 	tests/ovsdb-server.at \
 	tests/ovsdb-monitor.at \
 	tests/ovsdb-idl.at \
-	tests/ovsdb-idl-py.at \
 	tests/ovs-vsctl.at \
-	tests/interface-reconfigure.at
+	tests/ovs-monitor-ipsec.at \
+	tests/ovs-xapi-sync.at \
+	tests/stp.at \
+	tests/interface-reconfigure.at \
+	tests/vlog.at
 TESTSUITE = $(srcdir)/tests/testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
+EXTRA_DIST += tests/compare-odp-actions.pl
 
 AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
 
@@ -80,11 +87,13 @@ lcov_wrappers = \
 	tests/lcov/test-list \
 	tests/lcov/test-lockfile \
 	tests/lcov/test-multipath \
+	tests/lcov/test-odp \
 	tests/lcov/test-ovsdb \
 	tests/lcov/test-packets \
 	tests/lcov/test-random \
 	tests/lcov/test-reconnect \
 	tests/lcov/test-sha1 \
+	tests/lcov/test-stp \
 	tests/lcov/test-timeval \
 	tests/lcov/test-type-props \
 	tests/lcov/test-unix-socket \
@@ -133,12 +142,13 @@ valgrind_wrappers = \
 	tests/valgrind/test-list \
 	tests/valgrind/test-lockfile \
 	tests/valgrind/test-multipath \
-	tests/valgrind/test-openflowd \
+	tests/valgrind/test-odp \
 	tests/valgrind/test-ovsdb \
 	tests/valgrind/test-packets \
 	tests/valgrind/test-random \
 	tests/valgrind/test-reconnect \
 	tests/valgrind/test-sha1 \
+	tests/valgrind/test-stp \
 	tests/valgrind/test-timeval \
 	tests/valgrind/test-type-props \
 	tests/valgrind/test-unix-socket \
@@ -237,18 +247,6 @@ noinst_PROGRAMS += tests/test-multipath
 tests_test_multipath_SOURCES = tests/test-multipath.c
 tests_test_multipath_LDADD = lib/libopenvswitch.a
 
-noinst_PROGRAMS += tests/test-openflowd
-EXTRA_DIST += tests/test-openflowd.8.in
-DISTCLEANFILES += tests/test-openflowd.8
-noinst_man_MANS += tests/ovs-openflowd.8
-tests_test_openflowd_SOURCES = tests/test-openflowd.c
-tests_test_openflowd_LDADD = \
-	ofproto/libofproto.a \
-	lib/libsflow.a \
-	lib/libopenvswitch.a \
-	$(SSL_LIBS)
-
-
 noinst_PROGRAMS += tests/test-packets
 tests_test_packets_SOURCES = tests/test-packets.c
 tests_test_packets_LDADD = lib/libopenvswitch.a
@@ -257,9 +255,17 @@ noinst_PROGRAMS += tests/test-random
 tests_test_random_SOURCES = tests/test-random.c
 tests_test_random_LDADD = lib/libopenvswitch.a
 
+noinst_PROGRAMS += tests/test-stp
+tests_test_stp_SOURCES = tests/test-stp.c
+tests_test_stp_LDADD = lib/libopenvswitch.a
+
 noinst_PROGRAMS += tests/test-unix-socket
 tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
 tests_test_unix_socket_LDADD = lib/libopenvswitch.a
+
+noinst_PROGRAMS += tests/test-odp
+tests_test_odp_SOURCES = tests/test-odp.c
+tests_test_odp_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-ovsdb
 tests_test_ovsdb_SOURCES = \
@@ -270,7 +276,7 @@ EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
 tests_test_ovsdb_LDADD = ovsdb/libovsdb.a lib/libopenvswitch.a $(SSL_LIBS)
 
 # idltest schema and IDL
-OVSIDL_BUILT +=	tests/idltest.c tests/idltest.h tests/idltest.ovsidl
+OVSIDL_BUILT += tests/idltest.c tests/idltest.h tests/idltest.ovsidl
 IDLTEST_IDL_FILES = tests/idltest.ovsschema tests/idltest.ann
 EXTRA_DIST += $(IDLTEST_IDL_FILES)
 tests/idltest.ovsidl: $(IDLTEST_IDL_FILES)
@@ -319,7 +325,9 @@ EXTRA_DIST += \
 	tests/test-json.py \
 	tests/test-jsonrpc.py \
 	tests/test-ovsdb.py \
-	tests/test-reconnect.py
+	tests/test-reconnect.py \
+	tests/MockXenAPI.py \
+	tests/test-vlog.py
 
 if HAVE_OPENSSL
 TESTPKI_FILES = \

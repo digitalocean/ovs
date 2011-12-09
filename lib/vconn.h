@@ -17,19 +17,15 @@
 #ifndef VCONN_H
 #define VCONN_H 1
 
-#include <assert.h>
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include "openvswitch/types.h"
 
-#include "flow.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct list;
 struct ofpbuf;
-struct ofp_action_header;
-struct ofp_header;
-struct ofp_match;
-struct ofp_stats_msg;
 struct pvconn;
 struct vconn;
 
@@ -77,5 +73,9 @@ const char *pvconn_get_name(const struct pvconn *);
 void pvconn_close(struct pvconn *);
 int pvconn_accept(struct pvconn *, int min_version, struct vconn **);
 void pvconn_wait(struct pvconn *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* vconn.h */

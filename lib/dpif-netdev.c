@@ -47,6 +47,7 @@
 #include "ofpbuf.h"
 #include "packets.h"
 #include "poll-loop.h"
+#include "random.h"
 #include "shash.h"
 #include "timeval.h"
 #include "util.h"
@@ -80,18 +81,15 @@ struct dp_netdev {
     int open_cnt;
     bool destroyed;
 
-    bool drop_frags;            /* Drop all IP fragments, if true. */
     struct dp_netdev_queue queues[N_QUEUES];
     struct hmap flow_table;     /* Flow table. */
 
     /* Statistics. */
-    long long int n_frags;      /* Number of dropped IP fragments. */
     long long int n_hit;        /* Number of flow table matches. */
     long long int n_missed;     /* Number of flow table misses. */
     long long int n_lost;       /* Number of misses not passed to client. */
 
     /* Ports. */
-    int n_ports;
     struct dp_netdev_port *ports[MAX_PORTS];
     struct list port_list;
     unsigned int serial;
@@ -149,10 +147,10 @@ static int dpif_netdev_open(const struct dpif_class *, const char *name,
 static int dp_netdev_output_userspace(struct dp_netdev *, const struct ofpbuf *,
                                     int queue_no, const struct flow *,
                                     uint64_t arg);
-static int dp_netdev_execute_actions(struct dp_netdev *,
-                                     struct ofpbuf *, struct flow *,
-                                     const struct nlattr *actions,
-                                     size_t actions_len);
+static void dp_netdev_execute_actions(struct dp_netdev *,
+                                      struct ofpbuf *, struct flow *,
+                                      const struct nlattr *actions,
+                                      size_t actions_len);
 
 static struct dpif_class dpif_dummy_class;
 
@@ -198,13 +196,12 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     dp->class = class;
     dp->name = xstrdup(name);
     dp->open_cnt = 0;
-    dp->drop_frags = false;
     for (i = 0; i < N_QUEUES; i++) {
         dp->queues[i].head = dp->queues[i].tail = 0;
     }
     hmap_init(&dp->flow_table);
     list_init(&dp->port_list);
-    error = do_add_port(dp, name, "internal", ODPP_LOCAL);
+    error = do_add_port(dp, name, "internal", OVSP_LOCAL);
     if (error) {
         dp_netdev_free(dp);
         return error;
@@ -265,10 +262,10 @@ dp_netdev_purge_queues(struct dp_netdev *dp)
 static void
 dp_netdev_free(struct dp_netdev *dp)
 {
+    struct dp_netdev_port *port, *next;
+
     dp_netdev_flow_flush(dp);
-    while (dp->n_ports > 0) {
-        struct dp_netdev_port *port = CONTAINER_OF(
-            dp->port_list.next, struct dp_netdev_port, node);
+    LIST_FOR_EACH_SAFE (port, next, node, &dp->port_list) {
         do_del_port(dp, port->port_no);
     }
     dp_netdev_purge_queues(dp);
@@ -298,30 +295,13 @@ dpif_netdev_destroy(struct dpif *dpif)
 }
 
 static int
-dpif_netdev_get_stats(const struct dpif *dpif, struct odp_stats *stats)
+dpif_netdev_get_stats(const struct dpif *dpif, struct dpif_dp_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    memset(stats, 0, sizeof *stats);
-    stats->n_frags = dp->n_frags;
+    stats->n_flows = hmap_count(&dp->flow_table);
     stats->n_hit = dp->n_hit;
     stats->n_missed = dp->n_missed;
     stats->n_lost = dp->n_lost;
-    return 0;
-}
-
-static int
-dpif_netdev_get_drop_frags(const struct dpif *dpif, bool *drop_fragsp)
-{
-    struct dp_netdev *dp = get_dp_netdev(dpif);
-    *drop_fragsp = dp->drop_frags;
-    return 0;
-}
-
-static int
-dpif_netdev_set_drop_frags(struct dpif *dpif, bool drop_frags)
-{
-    struct dp_netdev *dp = get_dp_netdev(dpif);
-    dp->drop_frags = drop_frags;
     return 0;
 }
 
@@ -330,14 +310,13 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
             uint16_t port_no)
 {
     struct dp_netdev_port *port;
-    struct netdev_options netdev_options;
     struct netdev *netdev;
     bool internal;
     int mtu;
     int error;
 
     /* XXX reject devices already in some dp_netdev. */
-    if (type[0] == '\0' || !strcmp(type, "system")) {
+    if (type[0] == '\0' || !strcmp(type, "system") || !strcmp(type, "dummy")) {
         internal = false;
     } else if (!strcmp(type, "internal")) {
         internal = true;
@@ -347,21 +326,26 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     }
 
     /* Open and validate network device. */
-    memset(&netdev_options, 0, sizeof netdev_options);
-    netdev_options.name = devname;
-    netdev_options.ethertype = NETDEV_ETH_TYPE_ANY;
     if (dp->class == &dpif_dummy_class) {
-        netdev_options.type = "dummy";
+        type = "dummy";
     } else if (internal) {
-        netdev_options.type = "tap";
+        type = "tap";
     }
 
-    error = netdev_open(&netdev_options, &netdev);
+    error = netdev_open(devname, type, &netdev);
     if (error) {
         return error;
     }
     /* XXX reject loopback devices */
     /* XXX reject non-Ethernet devices */
+
+    error = netdev_listen(netdev);
+    if (error) {
+        VLOG_ERR("%s: cannot receive packets on this network device (%s)",
+                 devname, strerror(errno));
+        netdev_close(netdev);
+        return error;
+    }
 
     error = netdev_turn_flags_on(netdev, NETDEV_PROMISC, false);
     if (error) {
@@ -374,14 +358,13 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     port->netdev = netdev;
     port->internal = internal;
 
-    netdev_get_mtu(netdev, &mtu);
-    if (mtu != INT_MAX && mtu > max_mtu) {
+    error = netdev_get_mtu(netdev, &mtu);
+    if (!error) {
         max_mtu = mtu;
     }
 
     list_push_back(&dp->port_list, &port->node);
     dp->ports[port_no] = port;
-    dp->n_ports++;
     dp->serial++;
 
     return 0;
@@ -408,7 +391,7 @@ static int
 dpif_netdev_port_del(struct dpif *dpif, uint16_t port_no)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    return port_no == ODPP_LOCAL ? EINVAL : do_del_port(dp, port_no);
+    return port_no == OVSP_LOCAL ? EINVAL : do_del_port(dp, port_no);
 }
 
 static bool
@@ -459,7 +442,6 @@ do_del_port(struct dp_netdev *dp, uint16_t port_no)
 
     list_remove(&port->node);
     dp->ports[port->port_no] = NULL;
-    dp->n_ports--;
     dp->serial++;
 
     name = xstrdup(netdev_get_name(port->netdev));
@@ -652,6 +634,12 @@ dpif_netdev_flow_from_nlattrs(const struct nlattr *key, uint32_t key_len,
         return EINVAL;
     }
 
+    if (flow->in_port < OFPP_MAX
+        ? flow->in_port >= MAX_PORTS
+        : flow->in_port != OFPP_LOCAL && flow->in_port != OFPP_NONE) {
+        return EINVAL;
+    }
+
     return 0;
 }
 
@@ -685,77 +673,9 @@ dpif_netdev_flow_get(const struct dpif *dpif,
 }
 
 static int
-dpif_netdev_validate_actions(const struct nlattr *actions,
-                             size_t actions_len, bool *mutates)
-{
-    const struct nlattr *a;
-    unsigned int left;
-
-    *mutates = false;
-    NL_ATTR_FOR_EACH (a, left, actions, actions_len) {
-        uint16_t type = nl_attr_type(a);
-        int len = odp_action_len(type);
-
-        if (len != nl_attr_get_size(a)) {
-            return EINVAL;
-        }
-
-        switch (type) {
-        case ODP_ACTION_ATTR_OUTPUT:
-            if (nl_attr_get_u32(a) >= MAX_PORTS) {
-                return EINVAL;
-            }
-            break;
-
-        case ODP_ACTION_ATTR_USERSPACE:
-            break;
-
-        case ODP_ACTION_ATTR_SET_DL_TCI:
-            *mutates = true;
-            if (nl_attr_get_be16(a) & htons(VLAN_CFI)) {
-                return EINVAL;
-            }
-            break;
-
-        case ODP_ACTION_ATTR_SET_NW_TOS:
-            *mutates = true;
-            if (nl_attr_get_u8(a) & IP_ECN_MASK) {
-                return EINVAL;
-            }
-            break;
-
-        case ODP_ACTION_ATTR_STRIP_VLAN:
-        case ODP_ACTION_ATTR_SET_DL_SRC:
-        case ODP_ACTION_ATTR_SET_DL_DST:
-        case ODP_ACTION_ATTR_SET_NW_SRC:
-        case ODP_ACTION_ATTR_SET_NW_DST:
-        case ODP_ACTION_ATTR_SET_TP_SRC:
-        case ODP_ACTION_ATTR_SET_TP_DST:
-            *mutates = true;
-            break;
-
-        case ODP_ACTION_ATTR_SET_TUNNEL:
-        case ODP_ACTION_ATTR_SET_PRIORITY:
-        case ODP_ACTION_ATTR_POP_PRIORITY:
-        default:
-            return EOPNOTSUPP;
-        }
-    }
-    return 0;
-}
-
-static int
 set_flow_actions(struct dp_netdev_flow *flow,
                  const struct nlattr *actions, size_t actions_len)
 {
-    bool mutates;
-    int error;
-
-    error = dpif_netdev_validate_actions(actions, actions_len, &mutates);
-    if (error) {
-        return error;
-    }
-
     flow->actions = xrealloc(flow->actions, actions_len);
     flow->actions_len = actions_len;
     memcpy(flow->actions, actions, actions_len);
@@ -949,7 +869,6 @@ dpif_netdev_execute(struct dpif *dpif,
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct ofpbuf copy;
-    bool mutates;
     struct flow key;
     int error;
 
@@ -957,32 +876,19 @@ dpif_netdev_execute(struct dpif *dpif,
         return EINVAL;
     }
 
-    error = dpif_netdev_validate_actions(actions, actions_len, &mutates);
-    if (error) {
-        return error;
-    }
-
-    if (mutates) {
-        /* We need a deep copy of 'packet' since we're going to modify its
-         * data. */
-        ofpbuf_init(&copy, DP_NETDEV_HEADROOM + packet->size);
-        ofpbuf_reserve(&copy, DP_NETDEV_HEADROOM);
-        ofpbuf_put(&copy, packet->data, packet->size);
-    } else {
-        /* We still need a shallow copy of 'packet', even though we won't
-         * modify its data, because flow_extract() modifies packet->l2, etc.
-         * We could probably get away with modifying those but it's more polite
-         * if we don't. */
-        copy = *packet;
-    }
+    /* Make a deep copy of 'packet', because we might modify its data. */
+    ofpbuf_init(&copy, DP_NETDEV_HEADROOM + packet->size);
+    ofpbuf_reserve(&copy, DP_NETDEV_HEADROOM);
+    ofpbuf_put(&copy, packet->data, packet->size);
 
     flow_extract(&copy, 0, -1, &key);
-    dpif_netdev_flow_from_nlattrs(key_attrs, key_len, &key);
-
-    error = dp_netdev_execute_actions(dp, &copy, &key, actions, actions_len);
-    if (mutates) {
-        ofpbuf_uninit(&copy);
+    error = dpif_netdev_flow_from_nlattrs(key_attrs, key_len, &key);
+    if (!error) {
+        dp_netdev_execute_actions(dp, &copy, &key,
+                                  actions, actions_len);
     }
+
+    ofpbuf_uninit(&copy);
     return error;
 }
 
@@ -1075,11 +981,7 @@ dp_netdev_port_input(struct dp_netdev *dp, struct dp_netdev_port *port,
     if (packet->size < ETH_HEADER_LEN) {
         return;
     }
-    if (flow_extract(packet, 0, port->port_no, &key) && dp->drop_frags) {
-        dp->n_frags++;
-        return;
-    }
-
+    flow_extract(packet, 0, port->port_no, &key);
     flow = dp_netdev_lookup_flow(dp, &key);
     if (flow) {
         dp_netdev_flow_used(flow, &key, packet);
@@ -1132,7 +1034,7 @@ dpif_netdev_wait(struct dpif *dpif)
 }
 
 static void
-dp_netdev_strip_vlan(struct ofpbuf *packet)
+dp_netdev_pop_vlan(struct ofpbuf *packet)
 {
     struct vlan_eth_header *veh = packet->l2;
     if (packet->size >= sizeof *veh
@@ -1150,94 +1052,94 @@ dp_netdev_strip_vlan(struct ofpbuf *packet)
 }
 
 static void
-dp_netdev_set_dl_src(struct ofpbuf *packet, const uint8_t dl_addr[ETH_ADDR_LEN])
+dp_netdev_set_dl(struct ofpbuf *packet, const struct ovs_key_ethernet *eth_key)
 {
     struct eth_header *eh = packet->l2;
-    memcpy(eh->eth_src, dl_addr, sizeof eh->eth_src);
+
+    memcpy(eh->eth_src, eth_key->eth_src, sizeof eh->eth_src);
+    memcpy(eh->eth_dst, eth_key->eth_dst, sizeof eh->eth_dst);
 }
 
 static void
-dp_netdev_set_dl_dst(struct ofpbuf *packet, const uint8_t dl_addr[ETH_ADDR_LEN])
+dp_netdev_set_ip_addr(struct ofpbuf *packet, ovs_be32 *addr, ovs_be32 new_addr)
 {
-    struct eth_header *eh = packet->l2;
-    memcpy(eh->eth_dst, dl_addr, sizeof eh->eth_dst);
-}
+    struct ip_header *nh = packet->l3;
 
-static bool
-is_ip(const struct ofpbuf *packet, const struct flow *key)
-{
-    return key->dl_type == htons(ETH_TYPE_IP) && packet->l4;
-}
-
-static void
-dp_netdev_set_nw_addr(struct ofpbuf *packet, const struct flow *key,
-                      const struct nlattr *a)
-{
-    if (is_ip(packet, key)) {
-        struct ip_header *nh = packet->l3;
-        ovs_be32 ip = nl_attr_get_be32(a);
-        uint16_t type = nl_attr_type(a);
-        ovs_be32 *field;
-
-        field = type == ODP_ACTION_ATTR_SET_NW_SRC ? &nh->ip_src : &nh->ip_dst;
-        if (key->nw_proto == IPPROTO_TCP && packet->l7) {
-            struct tcp_header *th = packet->l4;
-            th->tcp_csum = recalc_csum32(th->tcp_csum, *field, ip);
-        } else if (key->nw_proto == IPPROTO_UDP && packet->l7) {
-            struct udp_header *uh = packet->l4;
-            if (uh->udp_csum) {
-                uh->udp_csum = recalc_csum32(uh->udp_csum, *field, ip);
-                if (!uh->udp_csum) {
-                    uh->udp_csum = htons(0xffff);
-                }
+    if (nh->ip_proto == IPPROTO_TCP && packet->l7) {
+        struct tcp_header *th = packet->l4;
+        th->tcp_csum = recalc_csum32(th->tcp_csum, *addr, new_addr);
+    } else if (nh->ip_proto == IPPROTO_UDP && packet->l7) {
+        struct udp_header *uh = packet->l4;
+        if (uh->udp_csum) {
+            uh->udp_csum = recalc_csum32(uh->udp_csum, *addr, new_addr);
+            if (!uh->udp_csum) {
+                uh->udp_csum = htons(0xffff);
             }
         }
-        nh->ip_csum = recalc_csum32(nh->ip_csum, *field, ip);
-        *field = ip;
+    }
+    nh->ip_csum = recalc_csum32(nh->ip_csum, *addr, new_addr);
+    *addr = new_addr;
+}
+
+static void
+dp_netdev_set_ip_tos(struct ip_header *nh, uint8_t new_tos)
+{
+    uint8_t *field = &nh->ip_tos;
+
+    /* Set the DSCP bits and preserve the ECN bits. */
+    uint8_t new = new_tos | (nh->ip_tos & IP_ECN_MASK);
+
+    nh->ip_csum = recalc_csum16(nh->ip_csum, htons((uint16_t)*field),
+			            htons((uint16_t) new));
+    *field = new;
+}
+
+static void
+dp_netdev_set_ipv4(struct ofpbuf *packet, const struct ovs_key_ipv4 *ipv4_key)
+{
+    struct ip_header *nh = packet->l3;
+
+    if (nh->ip_src != ipv4_key->ipv4_src) {
+        dp_netdev_set_ip_addr(packet, &nh->ip_src, ipv4_key->ipv4_src);
+    }
+    if (nh->ip_dst != ipv4_key->ipv4_dst) {
+        dp_netdev_set_ip_addr(packet, &nh->ip_dst, ipv4_key->ipv4_dst);
+    }
+    if (nh->ip_tos != ipv4_key->ipv4_tos) {
+        dp_netdev_set_ip_tos(nh, ipv4_key->ipv4_tos);
     }
 }
 
 static void
-dp_netdev_set_nw_tos(struct ofpbuf *packet, const struct flow *key,
-                     uint8_t nw_tos)
+dp_netdev_set_port(ovs_be16 *port, ovs_be16 new_port, ovs_be16 *csum)
 {
-    if (is_ip(packet, key)) {
-        struct ip_header *nh = packet->l3;
-        uint8_t *field = &nh->ip_tos;
+    *csum = recalc_csum16(*csum, *port, new_port);
+    *port = new_port;
+}
 
-        /* Set the DSCP bits and preserve the ECN bits. */
-        uint8_t new = nw_tos | (nh->ip_tos & IP_ECN_MASK);
+static void
+dp_netdev_set_tcp_port(struct ofpbuf *packet, const struct ovs_key_tcp *tcp_key)
+{
+    struct tcp_header *th = packet->l4;
 
-        nh->ip_csum = recalc_csum16(nh->ip_csum, htons((uint16_t)*field),
-                htons((uint16_t) new));
-        *field = new;
+    if (th->tcp_src != tcp_key->tcp_src) {
+        dp_netdev_set_port(&th->tcp_src, tcp_key->tcp_src, &th->tcp_csum);
+    }
+    if (th->tcp_dst != tcp_key->tcp_dst) {
+        dp_netdev_set_port(&th->tcp_dst, tcp_key->tcp_dst, &th->tcp_csum);
     }
 }
 
 static void
-dp_netdev_set_tp_port(struct ofpbuf *packet, const struct flow *key,
-                      const struct nlattr *a)
+dp_netdev_set_udp_port(struct ofpbuf *packet, const struct ovs_key_udp *udp_key)
 {
-	if (is_ip(packet, key)) {
-        uint16_t type = nl_attr_type(a);
-        ovs_be16 port = nl_attr_get_be16(a);
-        ovs_be16 *field;
+    struct udp_header *uh = packet->l4;
 
-        if (key->nw_proto == IPPROTO_TCP && packet->l7) {
-            struct tcp_header *th = packet->l4;
-            field = (type == ODP_ACTION_ATTR_SET_TP_SRC
-                     ? &th->tcp_src : &th->tcp_dst);
-            th->tcp_csum = recalc_csum16(th->tcp_csum, *field, port);
-            *field = port;
-        } else if (key->nw_proto == IPPROTO_UDP && packet->l7) {
-            struct udp_header *uh = packet->l4;
-            field = (type == ODP_ACTION_ATTR_SET_TP_SRC
-                     ? &uh->udp_src : &uh->udp_dst);
-            uh->udp_csum = recalc_csum16(uh->udp_csum, *field, port);
-            *field = port;
-        } else {
-            return;
-        }
+    if (uh->udp_src != udp_key->udp_src) {
+        dp_netdev_set_port(&uh->udp_src, udp_key->udp_src, &uh->udp_csum);
+    }
+    if (uh->udp_dst != udp_key->udp_dst) {
+        dp_netdev_set_port(&uh->udp_dst, udp_key->udp_dst, &uh->udp_csum);
     }
 }
 
@@ -1284,7 +1186,97 @@ dp_netdev_output_userspace(struct dp_netdev *dp, const struct ofpbuf *packet,
     return 0;
 }
 
-static int
+static void
+dp_netdev_sample(struct dp_netdev *dp,
+                 struct ofpbuf *packet, struct flow *key,
+                 const struct nlattr *action)
+{
+    const struct nlattr *subactions = NULL;
+    const struct nlattr *a;
+    size_t left;
+
+    NL_NESTED_FOR_EACH_UNSAFE (a, left, action) {
+        int type = nl_attr_type(a);
+
+        switch ((enum ovs_sample_attr) type) {
+        case OVS_SAMPLE_ATTR_PROBABILITY:
+            if (random_uint32() >= nl_attr_get_u32(a)) {
+                return;
+            }
+            break;
+
+        case OVS_SAMPLE_ATTR_ACTIONS:
+            subactions = a;
+            break;
+
+        case OVS_SAMPLE_ATTR_UNSPEC:
+        case __OVS_SAMPLE_ATTR_MAX:
+        default:
+            NOT_REACHED();
+        }
+    }
+
+    dp_netdev_execute_actions(dp, packet, key, nl_attr_get(subactions),
+                              nl_attr_get_size(subactions));
+}
+
+static void
+dp_netdev_action_userspace(struct dp_netdev *dp,
+                          struct ofpbuf *packet, struct flow *key,
+                          const struct nlattr *a)
+{
+    const struct nlattr *userdata_attr;
+    uint64_t userdata;
+
+    userdata_attr = nl_attr_find_nested(a, OVS_USERSPACE_ATTR_USERDATA);
+    userdata = userdata_attr ? nl_attr_get_u64(userdata_attr) : 0;
+    dp_netdev_output_userspace(dp, packet, DPIF_UC_ACTION, key, userdata);
+}
+
+static void
+execute_set_action(struct ofpbuf *packet, const struct nlattr *a)
+{
+    enum ovs_key_attr type = nl_attr_type(a);
+    switch (type) {
+    case OVS_KEY_ATTR_TUN_ID:
+        break;
+
+    case OVS_KEY_ATTR_ETHERNET:
+        dp_netdev_set_dl(packet,
+                   nl_attr_get_unspec(a, sizeof(struct ovs_key_ethernet)));
+        break;
+
+    case OVS_KEY_ATTR_IPV4:
+        dp_netdev_set_ipv4(packet,
+                   nl_attr_get_unspec(a, sizeof(struct ovs_key_ipv4)));
+        break;
+
+    case OVS_KEY_ATTR_TCP:
+        dp_netdev_set_tcp_port(packet,
+                   nl_attr_get_unspec(a, sizeof(struct ovs_key_tcp)));
+        break;
+
+     case OVS_KEY_ATTR_UDP:
+        dp_netdev_set_udp_port(packet,
+                   nl_attr_get_unspec(a, sizeof(struct ovs_key_udp)));
+        break;
+
+     case OVS_KEY_ATTR_UNSPEC:
+     case OVS_KEY_ATTR_ETHERTYPE:
+     case OVS_KEY_ATTR_IPV6:
+     case OVS_KEY_ATTR_IN_PORT:
+     case OVS_KEY_ATTR_8021Q:
+     case OVS_KEY_ATTR_ICMP:
+     case OVS_KEY_ATTR_ICMPV6:
+     case OVS_KEY_ATTR_ARP:
+     case OVS_KEY_ATTR_ND:
+     case __OVS_KEY_ATTR_MAX:
+     default:
+        NOT_REACHED();
+    }
+}
+
+static void
 dp_netdev_execute_actions(struct dp_netdev *dp,
                           struct ofpbuf *packet, struct flow *key,
                           const struct nlattr *actions,
@@ -1294,48 +1286,49 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
     unsigned int left;
 
     NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
-        switch (nl_attr_type(a)) {
-        case ODP_ACTION_ATTR_OUTPUT:
+        const struct nlattr *nested;
+        const struct ovs_key_8021q *q_key;
+        int type = nl_attr_type(a);
+
+        switch ((enum ovs_action_attr) type) {
+        case OVS_ACTION_ATTR_OUTPUT:
             dp_netdev_output_port(dp, packet, nl_attr_get_u32(a));
             break;
 
-        case ODP_ACTION_ATTR_USERSPACE:
-            dp_netdev_output_userspace(dp, packet, DPIF_UC_ACTION,
-                                     key, nl_attr_get_u64(a));
+        case OVS_ACTION_ATTR_USERSPACE:
+            dp_netdev_action_userspace(dp, packet, key, a);
             break;
 
-        case ODP_ACTION_ATTR_SET_DL_TCI:
-            eth_set_vlan_tci(packet, nl_attr_get_be16(a));
+        case OVS_ACTION_ATTR_PUSH:
+            nested = nl_attr_get(a);
+            assert(nl_attr_type(nested) == OVS_KEY_ATTR_8021Q);
+            q_key = nl_attr_get_unspec(nested, sizeof(*q_key));
+            eth_push_vlan(packet, q_key->q_tci);
             break;
 
-        case ODP_ACTION_ATTR_STRIP_VLAN:
-            dp_netdev_strip_vlan(packet);
+        case OVS_ACTION_ATTR_POP:
+            assert(nl_attr_get_u16(a) == OVS_KEY_ATTR_8021Q);
+            dp_netdev_pop_vlan(packet);
             break;
 
-        case ODP_ACTION_ATTR_SET_DL_SRC:
-            dp_netdev_set_dl_src(packet, nl_attr_get_unspec(a, ETH_ADDR_LEN));
+        case OVS_ACTION_ATTR_SET:
+            execute_set_action(packet, nl_attr_get(a));
             break;
 
-        case ODP_ACTION_ATTR_SET_DL_DST:
-            dp_netdev_set_dl_dst(packet, nl_attr_get_unspec(a, ETH_ADDR_LEN));
+        case OVS_ACTION_ATTR_SAMPLE:
+            dp_netdev_sample(dp, packet, key, a);
             break;
 
-        case ODP_ACTION_ATTR_SET_NW_SRC:
-        case ODP_ACTION_ATTR_SET_NW_DST:
-            dp_netdev_set_nw_addr(packet, key, a);
+        case OVS_ACTION_ATTR_SET_PRIORITY:
+        case OVS_ACTION_ATTR_POP_PRIORITY:
+            /* not implemented */
             break;
 
-        case ODP_ACTION_ATTR_SET_NW_TOS:
-            dp_netdev_set_nw_tos(packet, key, nl_attr_get_u8(a));
-            break;
-
-        case ODP_ACTION_ATTR_SET_TP_SRC:
-        case ODP_ACTION_ATTR_SET_TP_DST:
-            dp_netdev_set_tp_port(packet, key, a);
-            break;
+        case OVS_ACTION_ATTR_UNSPEC:
+        case __OVS_ACTION_ATTR_MAX:
+            NOT_REACHED();
         }
     }
-    return 0;
 }
 
 const struct dpif_class dpif_netdev_class = {
@@ -1347,13 +1340,12 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_run,
     dpif_netdev_wait,
     dpif_netdev_get_stats,
-    dpif_netdev_get_drop_frags,
-    dpif_netdev_set_drop_frags,
     dpif_netdev_port_add,
     dpif_netdev_port_del,
     dpif_netdev_port_query_by_number,
     dpif_netdev_port_query_by_name,
     dpif_netdev_get_max_ports,
+    NULL,                       /* port_get_pid */
     dpif_netdev_port_dump_start,
     dpif_netdev_port_dump_next,
     dpif_netdev_port_dump_done,
@@ -1367,10 +1359,9 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_flow_dump_next,
     dpif_netdev_flow_dump_done,
     dpif_netdev_execute,
+    NULL,                       /* operate */
     dpif_netdev_recv_get_mask,
     dpif_netdev_recv_set_mask,
-    NULL,                       /* get_sflow_probability */
-    NULL,                       /* set_sflow_probability */
     NULL,                       /* queue_to_priority */
     dpif_netdev_recv,
     dpif_netdev_recv_wait,

@@ -324,8 +324,13 @@ output.
 .SS "OpenFlow Controller Connectivity"
 .
 \fBovs\-vswitchd\fR can perform all configured bridging and switching
-locally, or it can be configured to connect a given bridge to one or
-more external OpenFlow controllers, such as NOX.
+locally, or it can be configured to communicate with one or more
+external OpenFlow controllers.  The switch is typically configured to
+connect to a primary controller that takes charge of the bridge's flow
+table to implement a network policy.  In addition, the switch can be
+configured to listen to connections from service controllers.  Service
+controllers are typically used for occasional support and maintenance,
+e.g. with \fBovs\-ofctl\fR.
 .
 .IP "\fBget\-controller\fR \fIbridge\fR"
 Prints the configured controller target.
@@ -339,6 +344,7 @@ use any of the following forms:
 .
 .RS
 .so lib/vconn-active.man
+.so lib/vconn-passive.man
 .RE
 .
 .ST "Controller Failure Settings"
@@ -353,7 +359,7 @@ If the value is \fBstandalone\fR, or if neither of these settings
 is set, \fBovs\-vswitchd\fR will take over
 responsibility for setting up
 flows when no message has been received from the controller for three
-times the inactivity probe interval (xxx needs to be exposed).  In this mode,
+times the inactivity probe interval.  In this mode,
 \fBovs\-vswitchd\fR causes the datapath to act like an ordinary
 MAC-learning switch.  \fBovs\-vswitchd\fR will continue to retry connecting
 to the controller in the background and, when the connection succeeds,
@@ -786,11 +792,11 @@ their UUIDs, then "\fBovs\-vsctl destroy Queue \fIuuid1\fR
 .PP
 Monitor connectivity to a remote maintenance point on eth0.
 .IP
-.B "ovs\-vsctl set Interface eth0 cfm_mpid=1 cfm_remote_mpid=2"
+.B "ovs\-vsctl set Interface eth0 cfm_mpid=1"
 .PP
 Deconfigure connectivity monitoring from above:
 .IP
-.B "ovs\-vsctl clear Interface eth0 cfm_mpid cfm_remote_mpid"
+.B "ovs\-vsctl clear Interface eth0 cfm_mpid"
 .SS "NetFlow"
 .PP
 Configure bridge \fBbr0\fR to send NetFlow records to UDP port 5566 on
@@ -819,10 +825,28 @@ with specific sampling parameters:
 .IP
 .B "\-\- set Bridge br0 sflow=@s"
 .PP
-Deconfigure sFlow from br0, which also destroys the sFlow record
+Deconfigure sFlow from \fBbr0\fR, which also destroys the sFlow record
 (since it is now unreferenced):
 .IP
 .B "ovs\-vsctl \-\- clear Bridge br0 sflow"
+.SS "802.1D Spanning Tree Protocol (STP)"
+.PP
+Configure bridge \fBbr0\fR to participate in an 802.1D spanning tree:
+.IP
+.B "ovs\-vsctl set Bridge br0 stp_enable=true"
+.PP
+Set the bridge priority of \fBbr0\fR to 0x7800:
+.IP
+.B "ovs\-vsctl set Bridge br0 other_config:stp-priority=0x7800"
+.PP
+Set the path cost of port \fBeth0\fR to 10:
+.IP
+.B "ovs\-vsctl set Port eth0 other_config:stp-path-cost=10"
+.PP
+Deconfigure STP from above:
+.IP
+.B "ovs\-vsctl clear Bridge br0 stp_enable"
+.PP
 .SH "EXIT STATUS"
 .IP "0"
 Successful program execution.

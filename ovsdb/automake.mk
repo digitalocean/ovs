@@ -29,7 +29,7 @@ ovsdb_libovsdb_a_SOURCES = \
 	ovsdb/trigger.h \
 	ovsdb/transaction.c \
 	ovsdb/transaction.h
-EXTRA_DIST += \
+MAN_FRAGMENTS += \
 	ovsdb/remote-active.man \
 	ovsdb/remote-passive.man
 
@@ -67,7 +67,7 @@ EXTRA_DIST += \
 	ovsdb/ovsdb-idlc.in \
 	ovsdb/ovsdb-idlc.1
 DISTCLEANFILES += ovsdb/ovsdb-idlc
-SUFFIXES += .ovsidl
+SUFFIXES += .ovsidl .ovsschema
 OVSDB_IDLC = $(run_python) $(srcdir)/ovsdb/ovsdb-idlc.in
 .ovsidl.c:
 	$(OVSDB_IDLC) c-idl-source $< > $@.tmp

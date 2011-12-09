@@ -75,35 +75,53 @@ compose_benign_packet(struct ofpbuf *b, const char *tag, uint16_t snap_type,
     memcpy(payload + tag_size, eth_src, ETH_ADDR_LEN);
 }
 
-/* Modify the TCI field of 'packet', whose data must begin with an Ethernet
- * header.  If a VLAN tag is present, its TCI field is replaced by 'tci'.  If a
- * VLAN tag is not present, one is added with the TCI field set to 'tci'.
+/* Insert VLAN header according to given TCI. Packet passed must be Ethernet
+ * packet.
  *
  * Also sets 'packet->l2' to point to the new Ethernet header. */
 void
-eth_set_vlan_tci(struct ofpbuf *packet, ovs_be16 tci)
+eth_push_vlan(struct ofpbuf *packet, ovs_be16 tci)
 {
     struct eth_header *eh = packet->data;
     struct vlan_eth_header *veh;
 
-    if (packet->size >= sizeof(struct vlan_eth_header)
-        && eh->eth_type == htons(ETH_TYPE_VLAN)) {
-        veh = packet->data;
-        veh->veth_tci = tci;
-    } else {
-        /* Insert new 802.1Q header. */
-        struct vlan_eth_header tmp;
-        memcpy(tmp.veth_dst, eh->eth_dst, ETH_ADDR_LEN);
-        memcpy(tmp.veth_src, eh->eth_src, ETH_ADDR_LEN);
-        tmp.veth_type = htons(ETH_TYPE_VLAN);
-        tmp.veth_tci = tci;
-        tmp.veth_next_type = eh->eth_type;
+    /* Insert new 802.1Q header. */
+    struct vlan_eth_header tmp;
+    memcpy(tmp.veth_dst, eh->eth_dst, ETH_ADDR_LEN);
+    memcpy(tmp.veth_src, eh->eth_src, ETH_ADDR_LEN);
+    tmp.veth_type = htons(ETH_TYPE_VLAN);
+    tmp.veth_tci = tci;
+    tmp.veth_next_type = eh->eth_type;
 
-        veh = ofpbuf_push_uninit(packet, VLAN_HEADER_LEN);
-        memcpy(veh, &tmp, sizeof tmp);
-    }
+    veh = ofpbuf_push_uninit(packet, VLAN_HEADER_LEN);
+    memcpy(veh, &tmp, sizeof tmp);
+
     packet->l2 = packet->data;
 }
+
+/* Given the IP netmask 'netmask', returns the number of bits of the IP address
+ * that it specifies, that is, the number of 1-bits in 'netmask'.  'netmask'
+ * must be a CIDR netmask (see ip_is_cidr()). */
+int
+ip_count_cidr_bits(ovs_be32 netmask)
+{
+    assert(ip_is_cidr(netmask));
+    return 32 - ctz(ntohl(netmask));
+}
+
+void
+ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *s)
+{
+    ds_put_format(s, IP_FMT, IP_ARGS(&ip));
+    if (mask != htonl(UINT32_MAX)) {
+        if (ip_is_cidr(mask)) {
+            ds_put_format(s, "/%d", ip_count_cidr_bits(mask));
+        } else {
+            ds_put_format(s, "/"IP_FMT, IP_ARGS(&mask));
+        }
+    }
+}
+
 
 /* Stores the string representation of the IPv6 address 'addr' into the
  * character array 'addr_str', which must be at least INET6_ADDRSTRLEN
@@ -117,10 +135,29 @@ format_ipv6_addr(char *addr_str, const struct in6_addr *addr)
 void
 print_ipv6_addr(struct ds *string, const struct in6_addr *addr)
 {
-    char addr_str[INET6_ADDRSTRLEN];
+    char *dst;
 
-    format_ipv6_addr(addr_str, addr);
-    ds_put_format(string, "%s", addr_str);
+    ds_reserve(string, string->length + INET6_ADDRSTRLEN);
+
+    dst = string->string + string->length;
+    format_ipv6_addr(dst, addr);
+    string->length += strlen(dst);
+}
+
+void
+print_ipv6_masked(struct ds *s, const struct in6_addr *addr,
+                  const struct in6_addr *mask)
+{
+    print_ipv6_addr(s, addr);
+    if (mask && !ipv6_mask_is_exact(mask)) {
+        if (ipv6_is_cidr(mask)) {
+            int cidr_bits = ipv6_count_cidr_bits(mask);
+            ds_put_format(s, "/%d", cidr_bits);
+        } else {
+            ds_put_char(s, '/');
+            print_ipv6_addr(s, mask);
+        }
+    }
 }
 
 struct in6_addr ipv6_addr_bitand(const struct in6_addr *a,
@@ -164,9 +201,9 @@ ipv6_create_mask(int mask)
     return netmask;
 }
 
-/* Given the IPv6 netmask 'netmask', returns the number of bits of the
- * IPv6 address that it wildcards.  'netmask' must be a CIDR netmask (see
- * ipv6_is_cidr()). */
+/* Given the IPv6 netmask 'netmask', returns the number of bits of the IPv6
+ * address that it specifies, that is, the number of 1-bits in 'netmask'.
+ * 'netmask' must be a CIDR netmask (see ipv6_is_cidr()). */
 int
 ipv6_count_cidr_bits(const struct in6_addr *netmask)
 {

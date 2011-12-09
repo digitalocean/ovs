@@ -46,7 +46,7 @@ struct genlmsghdr *nl_msg_genlmsghdr(const struct ofpbuf *);
 bool nl_msg_nlmsgerr(const struct ofpbuf *, int *error);
 void nl_msg_reserve(struct ofpbuf *, size_t);
 
-/* Appending headers and raw data. */
+/* Appending and prepending headers and raw data. */
 void nl_msg_put_nlmsghdr(struct ofpbuf *, size_t expected_payload,
                          uint32_t type, uint32_t flags);
 void nl_msg_put_genlmsghdr(struct ofpbuf *, size_t expected_payload,
@@ -54,6 +54,8 @@ void nl_msg_put_genlmsghdr(struct ofpbuf *, size_t expected_payload,
                            uint8_t cmd, uint8_t version);
 void nl_msg_put(struct ofpbuf *, const void *, size_t);
 void *nl_msg_put_uninit(struct ofpbuf *, size_t);
+void nl_msg_push(struct ofpbuf *, const void *, size_t);
+void *nl_msg_push_uninit(struct ofpbuf *, size_t);
 
 /* Appending attributes. */
 void *nl_msg_put_unspec_uninit(struct ofpbuf *, uint16_t type, size_t);
@@ -73,8 +75,33 @@ void nl_msg_end_nested(struct ofpbuf *, size_t offset);
 void nl_msg_put_nested(struct ofpbuf *, uint16_t type,
                        const void *data, size_t size);
 
+/* Prepending attributes. */
+void *nl_msg_push_unspec_uninit(struct ofpbuf *, uint16_t type, size_t);
+void nl_msg_push_unspec(struct ofpbuf *, uint16_t type, const void *, size_t);
+void nl_msg_push_flag(struct ofpbuf *, uint16_t type);
+void nl_msg_push_u8(struct ofpbuf *, uint16_t type, uint8_t value);
+void nl_msg_push_u16(struct ofpbuf *, uint16_t type, uint16_t value);
+void nl_msg_push_u32(struct ofpbuf *, uint16_t type, uint32_t value);
+void nl_msg_push_u64(struct ofpbuf *, uint16_t type, uint64_t value);
+void nl_msg_push_be16(struct ofpbuf *, uint16_t type, ovs_be16 value);
+void nl_msg_push_be32(struct ofpbuf *, uint16_t type, ovs_be32 value);
+void nl_msg_push_be64(struct ofpbuf *, uint16_t type, ovs_be64 value);
+void nl_msg_push_string(struct ofpbuf *, uint16_t type, const char *value);
+
 /* Separating buffers into individual messages. */
 struct nlmsghdr *nl_msg_next(struct ofpbuf *buffer, struct ofpbuf *msg);
+
+/* Sizes of various attribute types, in bytes, including the attribute header
+ * and padding. */
+#define NL_ATTR_SIZE(PAYLOAD_SIZE) (NLA_HDRLEN + NLA_ALIGN(PAYLOAD_SIZE))
+#define NL_A_U8_SIZE   NL_ATTR_SIZE(sizeof(uint8_t))
+#define NL_A_U16_SIZE  NL_ATTR_SIZE(sizeof(uint16_t))
+#define NL_A_U32_SIZE  NL_ATTR_SIZE(sizeof(uint32_t))
+#define NL_A_U64_SIZE  NL_ATTR_SIZE(sizeof(uint64_t))
+#define NL_A_BE16_SIZE NL_ATTR_SIZE(sizeof(ovs_be16))
+#define NL_A_BE32_SIZE NL_ATTR_SIZE(sizeof(ovs_be32))
+#define NL_A_BE64_SIZE NL_ATTR_SIZE(sizeof(ovs_be64))
+#define NL_A_FLAG_SIZE NL_ATTR_SIZE(0)
 
 /* Netlink attribute types. */
 enum nl_attr_type
@@ -124,6 +151,12 @@ nl_attr_is_valid(const struct nlattr *nla, size_t maxlen)
          (LEFT) > 0;                                                    \
          (LEFT) -= NLA_ALIGN((ITER)->nla_len), (ITER) = nl_attr_next(ITER))
 
+/* These variants are convenient for iterating nested attributes. */
+#define NL_NESTED_FOR_EACH(ITER, LEFT, A)                               \
+    NL_ATTR_FOR_EACH(ITER, LEFT, nl_attr_get(A), nl_attr_get_size(A))
+#define NL_NESTED_FOR_EACH_UNSAFE(ITER, LEFT, A)                        \
+    NL_ATTR_FOR_EACH_UNSAFE(ITER, LEFT, nl_attr_get(A), nl_attr_get_size(A))
+
 /* Netlink attribute parsing. */
 int nl_attr_type(const struct nlattr *);
 const void *nl_attr_get(const struct nlattr *);
@@ -160,5 +193,7 @@ bool nl_parse_nested(const struct nlattr *, const struct nl_policy[],
 const struct nlattr *nl_attr_find(const struct ofpbuf *, size_t hdr_len,
                                   uint16_t type);
 const struct nlattr *nl_attr_find_nested(const struct nlattr *, uint16_t type);
+const struct nlattr *nl_attr_find__(const struct nlattr *attrs, size_t size,
+                                    uint16_t type);
 
 #endif /* netlink.h */

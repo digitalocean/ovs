@@ -6,7 +6,10 @@ Andrew Lambeth          wal@nicira.com
 Andy Southgate          andy.southgate@citrix.com
 Ben Pfaff               blp@nicira.com
 Bryan Phillippe         bp@toroki.com
+Casey Barker            crbarker@google.com
+Chuck Short             zulcss@ubuntu.com
 Dan Wendlandt           dan@nicira.com
+Daniel Roman            droman@nicira.com
 David Erickson          derickso@stanford.edu
 Ethan Jackson           ethan@nicira.com
 Gaetano Catalli         gaetano.catalli@gmail.com
@@ -24,10 +27,12 @@ Martin Casado           casado@nicira.com
 Natasha Gude            natasha@nicira.com
 Neil McKee              neil.mckee@inmon.com
 Paul Fazzone            pfazzone@nicira.com
+Philippe Jung           phil.jung@free.fr
 Pravin B Shelar         pshelar@nicira.com
 Reid Price              reid@nicira.com
 Romain Lenglet          romain.lenglet@berabera.info
 Sajjad Lateef           slateef@nicira.com
+Sanjay Sane             ssane@nicira.com
 Shih-Hao Li             shli@nicira.com
 Simon Horman            horms@verge.net.au
 Tetsuo NAKAGAWA         nakagawa@mxc.nes.nec.co.jp
@@ -56,16 +61,22 @@ Bryan Osoro             bosoro@nicira.com
 Cedric Hobbs            cedric@nicira.com
 Dave Walker             DaveWalker@ubuntu.com
 Derek Cormier           derek.cormier@lab.ntt.co.jp
+Duffie Cooley           dcooley@nicira.com
 DK Moon                 dkmoon@nicira.com
+Eivind Bulie Haanaes
 Gaetano Catalli         gaetano.catalli@gmail.com
+George Shuklin          amarao@desunote.ru
 Ghanem Bahri            bahri.ghanem@gmail.com
 Giuseppe de Candia      giuseppe.decandia@gmail.com
+Gordon Good             ggood@nicira.com
 Gregor Schaffrath       grsch@net.t-labs.tu-berlin.de
 Hassan Khan             hassan.khan@seecs.edu.pk
 Hector Oron             hector.oron@gmail.com
 Henrik Amren            henrik@nicira.com
 Jad Naous               jnaous@gmail.com
 Jan Medved              jmedved@juniper.net
+Janis Hamme             janis.hamme@student.kit.edu
+Jari Sundell            sundell.software@gmail.com
 Jed Daniels             openvswitch@jeddaniels.com
 Jeongkeun Lee           jklee@hp.com
 Joan Cirer              joan@ev0.net
@@ -73,13 +84,17 @@ John Galgay             john@galgay.net
 Koichi Yagishita        yagishita.koichi@jrc.co.jp
 Krishna Miriyala        krishna@nicira.com
 Luiz Henrique Ozaki     luiz.ozaki@gmail.com
+Michael Hu              mhu@nicira.com
 Michael Mao             mmao@nicira.com
+Murphy McCauley         murphy.mccauley@gmail.com
 Mikael Doverhag         mdoverhag@nicira.com
+Niklas Andersson        nandersson@nicira.com
 Pankaj Thakkar          thakkar@nicira.com
 Paulo Cravero           pcravero@as2594.net
 Peter Balland           peter@nicira.com
 Peter Phaal             peter.phaal@inmon.com
 Ram Jothikumar          rjothikumar@nicira.com
+Ramana Reddy            gtvrreddy@gmail.com
 Rob Hoes                rob.hoes@citrix.com
 Roger Leigh             rleigh@codelibre.net
 Sean Brady              sbrady@gtfservices.com
@@ -89,7 +104,9 @@ Srini Seetharaman       seethara@stanford.edu
 Stephen Hemminger       shemminger@vyatta.com
 Takayuki HAMA           t-hama@cb.jp.nec.com
 Teemu Koponen           koponen@nicira.com
+Tyler Coumbes           coumbes@gmail.com
 Vishal Swarankar        vishal.swarnkar@gmail.com
+Voravit T.              voravit@kth.se
 YAMAMOTO Takashi        yamamoto@valinux.co.jp
 Yongqiang Liu           liuyq7809@gmail.com
 kk yap                  yapkke@stanford.edu

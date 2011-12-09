@@ -1,4 +1,4 @@
-# Copyright (c) 2010 Nicira Networks
+# Copyright (c) 2010, 2011 Nicira Networks
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,14 +13,16 @@
 # limitations under the License.
 
 import errno
-import logging
 import os
 import select
 import socket
-import sys
 
 import ovs.poller
 import ovs.socket_util
+import ovs.vlog
+
+vlog = ovs.vlog.Vlog("stream")
+
 
 class Stream(object):
     """Bidirectional byte stream.  Currently only Unix domain sockets
@@ -75,8 +77,8 @@ class Stream(object):
             return errno.EAFNOSUPPORT, None
 
         Stream.n_unix_sockets += 1
-        bind_path = "/tmp/stream-unix.%ld.%d" % (os.getpid(),
-                                                 Stream.n_unix_sockets)
+        bind_path = "/tmp/stream-unix.%d.%d" % (os.getpid(),
+                                                Stream.n_unix_sockets)
         connect_path = name[5:]
         error, sock = ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
                                                        True, bind_path,
@@ -88,15 +90,14 @@ class Stream(object):
             return 0, Stream(sock, name, bind_path, status)
 
     @staticmethod
-    def open_block(tuple):
+    def open_block((error, stream)):
         """Blocks until a Stream completes its connection attempt, either
-        succeeding or failing.  'tuple' should be the tuple returned by
+        succeeding or failing.  (error, stream) should be the tuple returned by
         Stream.open().  Returns a tuple of the same form.
 
         Typical usage:
-        error, stream = Stream.open_block(Stream.open("tcp:1.2.3.4:5"))"""
+        error, stream = Stream.open_block(Stream.open("unix:/tmp/socket"))"""
 
-        error, stream = tuple
         if not error:
             while True:
                 error = stream.connect()
@@ -108,7 +109,7 @@ class Stream(object):
                 stream.connect_wait(poller)
                 poller.block()
             assert error != errno.EINPROGRESS
-        
+
         if error and stream:
             stream.close()
             stream = None
@@ -136,6 +137,7 @@ class Stream(object):
         returns errno.EAGAIN."""
         last_state = -1         # Always differs from initial self.state
         while self.state != last_state:
+            last_state = self.state
             if self.state == Stream.__S_CONNECTING:
                 self.__scs_connecting()
             elif self.state == Stream.__S_CONNECTED:
@@ -146,7 +148,7 @@ class Stream(object):
     def recv(self, n):
         """Tries to receive up to 'n' bytes from this stream.  Returns a
         (error, string) tuple:
-        
+
             - If successful, 'error' is zero and 'string' contains between 1
               and 'n' bytes of data.
 
@@ -154,7 +156,7 @@ class Stream(object):
 
             - If the connection has been closed in the normal fashion or if 'n'
               is 0, the tuple is (0, "").
-        
+
         The recv function will not block waiting for data to arrive.  If no
         data have been received, it returns (errno.EAGAIN, "") immediately."""
 
@@ -206,26 +208,24 @@ class Stream(object):
 
         if self.state == Stream.__S_CONNECTING:
             wait = Stream.W_CONNECT
-        if wait in (Stream.W_CONNECT, Stream.W_SEND):
-            poller.fd_wait(self.socket, select.POLLOUT)
-        else:
+        if wait == Stream.W_RECV:
             poller.fd_wait(self.socket, select.POLLIN)
+        else:
+            poller.fd_wait(self.socket, select.POLLOUT)
 
     def connect_wait(self, poller):
         self.wait(poller, Stream.W_CONNECT)
-        
+
     def recv_wait(self, poller):
         self.wait(poller, Stream.W_RECV)
-        
+
     def send_wait(self, poller):
         self.wait(poller, Stream.W_SEND)
-        
-    def get_name(self):
-        return self.name
-        
+
     def __del__(self):
         # Don't delete the file: we might have forked.
         self.socket.close()
+
 
 class PassiveStream(object):
     @staticmethod
@@ -262,7 +262,7 @@ class PassiveStream(object):
         try:
             sock.listen(10)
         except socket.error, e:
-            logging.error("%s: listen: %s" % (name, os.strerror(e.error)))
+            vlog.err("%s: listen: %s" % (name, os.strerror(e.error)))
             sock.close()
             return e.error, None
 
@@ -293,7 +293,7 @@ class PassiveStream(object):
                 error = ovs.socket_util.get_exception_errno(e)
                 if error != errno.EAGAIN:
                     # XXX rate-limit
-                    logging.debug("accept: %s" % os.strerror(error))
+                    vlog.dbg("accept: %s" % os.strerror(error))
                 return error, None
 
     def wait(self, poller):
@@ -303,14 +303,11 @@ class PassiveStream(object):
         # Don't delete the file: we might have forked.
         self.socket.close()
 
-def usage(name, active, passive, bootstrap):
-    print
-    if active:
-        print("Active %s connection methods:" % name)
-        print("  unix:FILE               "
-               "Unix domain socket named FILE");
 
-    if passive:
-        print("Passive %s connection methods:" % name)
-        print("  punix:FILE              "
-              "listen on Unix domain socket FILE")
+def usage(name):
+    return """
+Active %s connection methods:
+  unix:FILE               Unix domain socket named FILE
+
+Passive %s connection methods:
+  punix:FILE              Listen on Unix domain socket FILE""" % (name, name)

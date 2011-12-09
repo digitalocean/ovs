@@ -77,19 +77,6 @@ extern void unregister_netdevice_many(struct list_head *head);
 extern void dev_disable_lro(struct net_device *dev);
 #endif
 
-/* Linux 2.6.28 introduced dev_get_stats():
- * const struct net_device_stats *dev_get_stats(struct net_device *dev);
- *
- * Linux 2.6.36 changed dev_get_stats() to:
- * struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
- *                                         struct rtnl_link_stats64 *storage);
- */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
-#define dev_get_stats(dev, storage) rpl_dev_get_stats(dev, storage)
-struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
-					struct rtnl_link_stats64 *storage);
-#endif
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
 #define skb_checksum_help(skb) skb_checksum_help((skb), 0)
 #endif
@@ -139,6 +126,32 @@ static inline struct net_device *dev_get_by_index_rcu(struct net *net, int ifind
 
 #ifndef NETIF_F_FSO
 #define NETIF_F_FSO 0
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,30)
+#define NETIF_F_FCOE_CRC	(1 << 24) /* FCoE CRC32 */
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,23)
+#define NETIF_F_IPV6_CSUM	16      /* Can checksum TCP/UDP over IPV6 */
+
+#define NETIF_F_V4_CSUM		(NETIF_F_GEN_CSUM | NETIF_F_IP_CSUM)
+#define NETIF_F_V6_CSUM		(NETIF_F_GEN_CSUM | NETIF_F_IPV6_CSUM)
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
+#define skb_gso_segment rpl_skb_gso_segment
+struct sk_buff *rpl_skb_gso_segment(struct sk_buff *skb, u32 features);
+
+#define netif_skb_features rpl_netif_skb_features
+u32 rpl_netif_skb_features(struct sk_buff *skb);
+
+#define netif_needs_gso rpl_netif_needs_gso
+static inline int rpl_netif_needs_gso(struct sk_buff *skb, int features)
+{
+        return skb_is_gso(skb) && (!skb_gso_ok(skb, features) ||
+                unlikely(skb->ip_summed != CHECKSUM_PARTIAL));
+}
 #endif
 
 #endif

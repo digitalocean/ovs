@@ -22,6 +22,10 @@
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,1,0)
+#define HAVE_NET_DEVICE_OPS
+#endif
+
 struct internal_dev {
 	struct vport *vport;
 	struct net_device_stats stats;
@@ -32,16 +36,14 @@ static inline struct internal_dev *internal_dev_priv(struct net_device *netdev)
 	return netdev_priv(netdev);
 }
 
-/* This function is only called by the kernel network layer.  It is not a vport
- * get_stats() function.  If a vport get_stats() function is defined that
- * results in this being called it will cause infinite recursion. */
+/* This function is only called by the kernel network layer.*/
 static struct net_device_stats *internal_dev_sys_stats(struct net_device *netdev)
 {
 	struct vport *vport = internal_dev_get_vport(netdev);
 	struct net_device_stats *stats = &internal_dev_priv(netdev)->stats;
 
 	if (vport) {
-		struct rtnl_link_stats64 vport_stats;
+		struct ovs_vport_stats vport_stats;
 
 		vport_get_stats(vport, &vport_stats);
 
@@ -55,7 +57,6 @@ static struct net_device_stats *internal_dev_sys_stats(struct net_device *netdev
 		stats->tx_errors	= vport_stats.rx_errors;
 		stats->rx_dropped	= vport_stats.tx_dropped;
 		stats->tx_dropped	= vport_stats.rx_dropped;
-		stats->collisions	= vport_stats.collisions;
 	}
 
 	return stats;
@@ -71,7 +72,7 @@ static int internal_dev_mac_addr(struct net_device *dev, void *p)
 	return 0;
 }
 
-/* Called with rcu_read_lock and bottom-halves disabled. */
+/* Called with rcu_read_lock_bh. */
 static int internal_dev_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
 	if (unlikely(compute_ip_summed(skb, true))) {
@@ -82,7 +83,9 @@ static int internal_dev_xmit(struct sk_buff *skb, struct net_device *netdev)
 	vlan_copy_skb_tci(skb);
 	OVS_CB(skb)->flow = NULL;
 
+	rcu_read_lock();
 	vport_receive(internal_dev_priv(netdev)->vport, skb);
+	rcu_read_unlock();
 	return 0;
 }
 
@@ -117,12 +120,7 @@ static const struct ethtool_ops internal_dev_ethtool_ops = {
 
 static int internal_dev_change_mtu(struct net_device *netdev, int new_mtu)
 {
-	struct vport *vport = internal_dev_get_vport(netdev);
-
 	if (new_mtu < 68)
-		return -EINVAL;
-
-	if (new_mtu > dp_min_mtu(vport->dp))
 		return -EINVAL;
 
 	netdev->mtu = new_mtu;
@@ -173,6 +171,7 @@ static void do_setup(struct net_device *netdev)
 	netdev->change_mtu = internal_dev_change_mtu;
 #endif
 
+	netdev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	netdev->destructor = internal_dev_destructor;
 	SET_ETHTOOL_OPS(netdev, &internal_dev_ethtool_ops);
 	netdev->tx_queue_len = 0;
@@ -230,7 +229,7 @@ error:
 	return ERR_PTR(err);
 }
 
-static int internal_dev_destroy(struct vport *vport)
+static void internal_dev_destroy(struct vport *vport)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
@@ -239,8 +238,6 @@ static int internal_dev_destroy(struct vport *vport)
 
 	/* unregister_netdevice() waits for an RCU grace period. */
 	unregister_netdevice(netdev_vport->dev);
-
-	return 0;
 }
 
 static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
@@ -259,10 +256,7 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 	skb->protocol = eth_type_trans(skb, netdev);
 	forward_ip_summed(skb, false);
 
-	if (in_interrupt())
-		netif_rx(skb);
-	else
-		netif_rx_ni(skb);
+	netif_rx(skb);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29)
 	netdev->last_rx = jiffies;
@@ -272,11 +266,10 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 }
 
 const struct vport_ops internal_vport_ops = {
-	.type		= ODP_VPORT_TYPE_INTERNAL,
-	.flags		= VPORT_F_REQUIRED | VPORT_F_GEN_STATS | VPORT_F_FLOW,
+	.type		= OVS_VPORT_TYPE_INTERNAL,
+	.flags		= VPORT_F_REQUIRED | VPORT_F_FLOW,
 	.create		= internal_dev_create,
 	.destroy	= internal_dev_destroy,
-	.set_mtu	= netdev_set_mtu,
 	.set_addr	= netdev_set_addr,
 	.get_name	= netdev_get_name,
 	.get_addr	= netdev_get_addr,
@@ -285,7 +278,6 @@ const struct vport_ops internal_vport_ops = {
 	.is_running	= netdev_is_running,
 	.get_operstate	= netdev_get_operstate,
 	.get_ifindex	= netdev_get_ifindex,
-	.get_iflink	= netdev_get_iflink,
 	.get_mtu	= netdev_get_mtu,
 	.send		= internal_dev_recv,
 };

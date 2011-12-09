@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ struct netdev_dummy {
 };
 
 static int netdev_dummy_create(const struct netdev_class *, const char *,
-                               const struct shash *, struct netdev_dev **);
+                               struct netdev_dev **);
 static void netdev_dummy_poll_notify(const struct netdev *);
 
 static bool
@@ -68,14 +68,13 @@ netdev_dummy_cast(const struct netdev *netdev)
 
 static int
 netdev_dummy_create(const struct netdev_class *class, const char *name,
-                    const struct shash *args,
                     struct netdev_dev **netdev_devp)
 {
     static unsigned int n = 0xaa550000;
     struct netdev_dev_dummy *netdev_dev;
 
     netdev_dev = xzalloc(sizeof *netdev_dev);
-    netdev_dev_init(&netdev_dev->netdev_dev, name, args, class);
+    netdev_dev_init(&netdev_dev->netdev_dev, name, class);
     netdev_dev->hwaddr[0] = 0xaa;
     netdev_dev->hwaddr[1] = 0x55;
     netdev_dev->hwaddr[2] = n >> 24;
@@ -102,8 +101,7 @@ netdev_dummy_destroy(struct netdev_dev *netdev_dev_)
 }
 
 static int
-netdev_dummy_open(struct netdev_dev *netdev_dev_, int ethertype OVS_UNUSED,
-                  struct netdev **netdevp)
+netdev_dummy_open(struct netdev_dev *netdev_dev_, struct netdev **netdevp)
 {
     struct netdev_dummy *netdev;
 
@@ -119,6 +117,22 @@ netdev_dummy_close(struct netdev *netdev_)
 {
     struct netdev_dummy *netdev = netdev_dummy_cast(netdev_);
     free(netdev);
+}
+
+static int
+netdev_dummy_listen(struct netdev *netdev_ OVS_UNUSED)
+{
+    /* It's OK to listen on a dummy device.  It just never receives any
+     * packets. */
+    return 0;
+}
+
+static int
+netdev_dummy_recv(struct netdev *netdev_ OVS_UNUSED,
+                  void *buffer OVS_UNUSED, size_t size OVS_UNUSED)
+{
+    /* A dummy device never receives any packets. */
+    return -EAGAIN;
 }
 
 static int
@@ -154,6 +168,16 @@ netdev_dummy_get_mtu(const struct netdev *netdev, int *mtup)
         netdev_dev_dummy_cast(netdev_get_dev(netdev));
 
     *mtup = dev->mtu;
+    return 0;
+}
+
+static int
+netdev_dummy_set_mtu(const struct netdev *netdev, int mtu)
+{
+    struct netdev_dev_dummy *dev =
+        netdev_dev_dummy_cast(netdev_get_dev(netdev));
+
+    dev->mtu = mtu;
     return 0;
 }
 
@@ -226,15 +250,14 @@ static const struct netdev_class dummy_class = {
 
     netdev_dummy_create,
     netdev_dummy_destroy,
+    NULL,                       /* get_config */
     NULL,                       /* set_config */
-    NULL,                       /* config_equal */
 
     netdev_dummy_open,
     netdev_dummy_close,
 
-    NULL,                       /* enumerate */
-
-    NULL,                       /* recv */
+    netdev_dummy_listen,        /* listen */
+    netdev_dummy_recv,          /* recv */
     NULL,                       /* recv_wait */
     NULL,                       /* drain */
 
@@ -244,8 +267,10 @@ static const struct netdev_class dummy_class = {
     netdev_dummy_set_etheraddr,
     netdev_dummy_get_etheraddr,
     netdev_dummy_get_mtu,
+    netdev_dummy_set_mtu,
     NULL,                       /* get_ifindex */
     NULL,                       /* get_carrier */
+    NULL,                       /* get_carrier_resets */
     NULL,                       /* get_miimon */
     netdev_dummy_get_stats,
     netdev_dummy_set_stats,

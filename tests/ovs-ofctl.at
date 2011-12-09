@@ -21,9 +21,13 @@ actions=bundle(symmetric_l4,60,hrw,ofport,slaves:)
 actions=output:1,bundle(eth_src,0,hrw,ofport,slaves:1),output:2
 actions=bundle_load(eth_src,50,active_backup,ofport,NXM_NX_REG0[],slaves:1)
 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..15],slaves:2,3)
+actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..15],slaves:[2,3])
 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..30],slaves:)
 actions=output:1,bundle_load(eth_src,0,hrw,ofport,NXM_NX_REG0[16..31],slaves:1),output:2
+actions=resubmit:1,resubmit(2),resubmit(,3),resubmit(2,3)
+actions=output:1,output:NXM_NX_REG0[],output:2,output:NXM_NX_REG1[16..31],output:3
 ]])
+
 AT_CHECK([ovs-ofctl parse-flows flows.txt
 ], [0], [stdout])
 AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0], 
@@ -47,8 +51,11 @@ NXT_FLOW_MOD: ADD table:255 actions=bundle(symmetric_l4,60,hrw,ofport,slaves:)
 NXT_FLOW_MOD: ADD table:255 actions=output:1,bundle(eth_src,0,hrw,ofport,slaves:1),output:2
 NXT_FLOW_MOD: ADD table:255 actions=bundle_load(eth_src,50,active_backup,ofport,NXM_NX_REG0[],slaves:1)
 NXT_FLOW_MOD: ADD table:255 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..15],slaves:2,3)
+NXT_FLOW_MOD: ADD table:255 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..15],slaves:2,3)
 NXT_FLOW_MOD: ADD table:255 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..30],slaves:)
 NXT_FLOW_MOD: ADD table:255 actions=output:1,bundle_load(eth_src,0,hrw,ofport,NXM_NX_REG0[16..31],slaves:1),output:2
+NXT_FLOW_MOD: ADD table:255 actions=resubmit:1,resubmit:2,resubmit(,3),resubmit(2,3)
+NXT_FLOW_MOD: ADD table:255 actions=output:1,output:NXM_NX_REG0[],output:2,output:NXM_NX_REG1[16..31],output:3
 ]])
 AT_CLEANUP
 
@@ -296,6 +303,32 @@ NXM_OF_ETH_TYPE(86dd) NXM_OF_IP_PROTO(3a) NXM_NX_ICMPV6_TYPE(87) NXM_NX_ND_TARGE
 NXM_OF_ETH_TYPE(86dd) NXM_OF_IP_PROTO(3b) NXM_NX_ICMPV6_TYPE(87) NXM_NX_ND_TARGET(20010db83c4d00010002000300040005) NXM_NX_ND_TLL(0002e30f80a4)
 NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(3a) NXM_NX_ICMPV6_TYPE(88) NXM_NX_ND_TARGET(20010db83c4d00010002000300040005) NXM_NX_ND_TLL(0002e30f80a4)
 
+# IPv4 fragments.
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG(01)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG(02)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG(03)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(00/03)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(00/fd)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(00/02)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(01/01)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(02/02)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG_W(03/03)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_FRAG(f3)
+
+# IPv6 fragments.
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG(01)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG(02)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG(03)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(00/03)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(00/01)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(00/02)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(01/01)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(02/02)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG_W(03/03)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_FRAG(f3)
+
 # Tunnel ID.
 NXM_NX_TUN_ID(00000000abcdef01)
 NXM_NX_TUN_ID_W(84200000abcdef01/84200000FFFFFFFF)
@@ -448,6 +481,32 @@ nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_
 nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
 nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
 
+# IPv4 fragments.
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(01)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(02)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(03)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG_W(00/01)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG_W(00/02)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG_W(01/01)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG_W(02/02)
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_FRAG(03)
+nx_pull_match() returned error 44010102 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_VALUE)
+
+# IPv6 fragments.
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(01)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(02)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(03)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(00)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG_W(00/01)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG_W(00/02)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG_W(01/01)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG_W(02/02)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_FRAG(03)
+nx_pull_match() returned error 44010102 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_VALUE)
+
 # Tunnel ID.
 NXM_NX_TUN_ID(00000000abcdef01)
 NXM_NX_TUN_ID_W(84200000abcdef01/84200000ffffffff)
@@ -483,45 +542,45 @@ dnl (If it doesn't, then either the tun_id won't show up at all, or it will
 dnl additionally show up as the top 32 bits of the cookie.)  This checks
 dnl for regression against bug #4566.
 AT_SETUP([ovs-ofctl -F option with flow_mods])
-OFPROTO_START
+OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl -F nxm add-flow br0 tun_id=0x12345678,actions=drop])
 AT_CHECK([ovs-ofctl dump-flows br0 | STRIP_XIDS | STRIP_DURATION], [0], [dnl
 NXST_FLOW reply:
  cookie=0x0, duration=?s, table=0, n_packets=0, n_bytes=0, tun_id=0x12345678 actions=drop
 ])
-OFPROTO_STOP
+OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 dnl Check that "-F openflow10" is really honored on dump-flows.
 dnl (If it isn't, then dump-flows will show the register match.)
 AT_SETUP([ovs-ofctl dump-flows honors -F option])
-OFPROTO_START
+OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl add-flow br0 reg0=0x12345,actions=drop])
 AT_CHECK([ovs-ofctl -F openflow10 dump-flows br0 | STRIP_XIDS | STRIP_DURATION], [0], [dnl
 OFPST_FLOW reply:
- cookie=0x0, duration=?s, table=0, n_packets=0, n_bytes=0,  actions=drop
+ cookie=0x0, duration=?s, table=0, n_packets=0, n_bytes=0, actions=drop
 ])
-OFPROTO_STOP
+OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 dnl Check that "-F openflow10" fails on dump-flows if the requested match
 dnl can't be represented in OpenFlow 1.0.
 AT_SETUP([ovs-ofctl dump-flows rejects bad -F option])
-OFPROTO_START
+OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl -F openflow10 dump-flows unix:br0.mgmt reg0=0xabcdef], [1], [],
   [ovs-ofctl: unix:br0.mgmt: cannot use requested flow format nxm for specified flow
 ])
-OFPROTO_STOP
+OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 dnl Check that add-flow reports non-normalized flows (feature #5029).
 AT_SETUP([ovs-ofctl add-flow reports non-normalized flows])
-OFPROTO_START
+OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl TESTABLE_LOG add-flow br0 nw_src=1.2.3.4,actions=5],
   [0], [], [dnl
 ofp_util|INFO|normalization changed ofp_match, details:
 ofp_util|INFO| pre: nw_src=1.2.3.4
 ofp_util|INFO|post: @&t@
 ])
-OFPROTO_STOP
+OVS_VSWITCHD_STOP
 AT_CLEANUP

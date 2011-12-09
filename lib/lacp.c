@@ -32,6 +32,55 @@
 
 VLOG_DEFINE_THIS_MODULE(lacp);
 
+/* Masks for lacp_info state member. */
+#define LACP_STATE_ACT  0x01 /* Activity. Active or passive? */
+#define LACP_STATE_TIME 0x02 /* Timeout. Short or long timeout? */
+#define LACP_STATE_AGG  0x04 /* Aggregation. Is the link is bondable? */
+#define LACP_STATE_SYNC 0x08 /* Synchronization. Is the link in up to date? */
+#define LACP_STATE_COL  0x10 /* Collecting. Is the link receiving frames? */
+#define LACP_STATE_DIST 0x20 /* Distributing. Is the link sending frames? */
+#define LACP_STATE_DEF  0x40 /* Defaulted. Using default partner info? */
+#define LACP_STATE_EXP  0x80 /* Expired. Using expired partner info? */
+
+#define LACP_FAST_TIME_TX 1000  /* Fast transmission rate. */
+#define LACP_SLOW_TIME_TX 30000 /* Slow transmission rate. */
+#define LACP_RX_MULTIPLIER 3    /* Multiply by TX rate to get RX rate. */
+
+#define LACP_INFO_LEN 15
+struct lacp_info {
+    ovs_be16 sys_priority;            /* System priority. */
+    uint8_t sys_id[ETH_ADDR_LEN];     /* System ID. */
+    ovs_be16 key;                     /* Operational key. */
+    ovs_be16 port_priority;           /* Port priority. */
+    ovs_be16 port_id;                 /* Port ID. */
+    uint8_t state;                    /* State mask.  See LACP_STATE macros. */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(LACP_INFO_LEN == sizeof(struct lacp_info));
+
+#define LACP_PDU_LEN 110
+struct lacp_pdu {
+    uint8_t subtype;          /* Always 1. */
+    uint8_t version;          /* Always 1. */
+
+    uint8_t actor_type;       /* Always 1. */
+    uint8_t actor_len;        /* Always 20. */
+    struct lacp_info actor;   /* LACP actor information. */
+    uint8_t z1[3];            /* Reserved.  Always 0. */
+
+    uint8_t partner_type;     /* Always 2. */
+    uint8_t partner_len;      /* Always 20. */
+    struct lacp_info partner; /* LACP partner information. */
+    uint8_t z2[3];            /* Reserved.  Always 0. */
+
+    uint8_t collector_type;   /* Always 3. */
+    uint8_t collector_len;    /* Always 16. */
+    ovs_be16 collector_delay; /* Maximum collector delay. Set to UINT16_MAX. */
+    uint8_t z3[64];           /* Combination of several fields.  Always 0. */
+} __attribute__((packed));
+BUILD_ASSERT_DECL(LACP_PDU_LEN == sizeof(struct lacp_pdu));
+
+/* Implementation. */
+
 enum slave_status {
     LACP_CURRENT,   /* Current State.  Partner up to date. */
     LACP_EXPIRED,   /* Expired State.  Partner out of date. */
@@ -90,7 +139,7 @@ static void lacp_unixctl_show(struct unixctl_conn *, const char *args,
                               void *aux);
 
 /* Populates 'pdu' with a LACP PDU comprised of 'actor' and 'partner'. */
-void
+static void
 compose_lacp_pdu(const struct lacp_info *actor,
                  const struct lacp_info *partner, struct lacp_pdu *pdu)
 {
@@ -116,7 +165,7 @@ compose_lacp_pdu(const struct lacp_info *actor,
  * returns NULL if 'b' is malformed, or does not represent a LACP PDU format
  * supported by OVS.  Otherwise, it returns a pointer to the lacp_pdu contained
  * within 'b'. */
-const struct lacp_pdu *
+static const struct lacp_pdu *
 parse_lacp_packet(const struct ofpbuf *b)
 {
     const struct lacp_pdu *pdu;
@@ -138,7 +187,7 @@ parse_lacp_packet(const struct ofpbuf *b)
 void
 lacp_init(void)
 {
-    unixctl_command_register("lacp/show", lacp_unixctl_show, NULL);
+    unixctl_command_register("lacp/show", "[port]", lacp_unixctl_show, NULL);
 }
 
 /* Creates a LACP object. */
@@ -202,15 +251,23 @@ lacp_is_active(const struct lacp *lacp)
     return lacp->active;
 }
 
-/* Processes 'pdu', a parsed LACP packet received on 'slave_'.  This function
- * should be called on all packets received on 'slave_' with Ethernet Type
- * ETH_TYPE_LACP and parsable by parse_lacp_packet(). */
+/* Processes 'packet' which was received on 'slave_'.  This function should be
+ * called on all packets received on 'slave_' with Ethernet Type ETH_TYPE_LACP.
+ */
 void
-lacp_process_pdu(struct lacp *lacp, const void *slave_,
-                 const struct lacp_pdu *pdu)
+lacp_process_packet(struct lacp *lacp, const void *slave_,
+                    const struct ofpbuf *packet)
 {
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     struct slave *slave = slave_lookup(lacp, slave_);
+    const struct lacp_pdu *pdu;
     long long int tx_rate;
+
+    pdu = parse_lacp_packet(packet);
+    if (!pdu) {
+        VLOG_WARN_RL(&rl, "%s: received an unparsable LACP PDU.", lacp->name);
+        return;
+    }
 
     switch (lacp->lacp_time) {
     case LACP_TIME_FAST:
@@ -371,7 +428,6 @@ lacp_run(struct lacp *lacp, lacp_send_pdu *send_pdu)
     }
 
     HMAP_FOR_EACH (slave, node, &lacp->slaves) {
-        struct lacp_pdu pdu;
         struct lacp_info actor;
 
         if (!slave_may_tx(slave)) {
@@ -383,10 +439,11 @@ lacp_run(struct lacp *lacp, lacp_send_pdu *send_pdu)
         if (timer_expired(&slave->tx)
             || !info_tx_equal(&actor, &slave->ntt_actor)) {
             long long int duration;
+            struct lacp_pdu pdu;
 
             slave->ntt_actor = actor;
             compose_lacp_pdu(&actor, &slave->partner, &pdu);
-            send_pdu(slave->aux, &pdu);
+            send_pdu(slave->aux, &pdu, sizeof pdu);
 
             if (lacp->lacp_time == LACP_TIME_CUSTOM) {
                 duration = lacp->custom_time;
@@ -700,53 +757,43 @@ ds_put_lacp_state(struct ds *ds, uint8_t state)
 }
 
 static void
-lacp_unixctl_show(struct unixctl_conn *conn,
-                  const char *args, void *aux OVS_UNUSED)
+lacp_print_details(struct ds *ds, struct lacp *lacp)
 {
-    struct ds ds = DS_EMPTY_INITIALIZER;
-    struct lacp *lacp;
     struct slave *slave;
 
-    lacp = lacp_find(args);
-    if (!lacp) {
-        unixctl_command_reply(conn, 501, "no such lacp object");
-        return;
-    }
-
-    ds_put_format(&ds, "lacp: %s\n", lacp->name);
-
-    ds_put_format(&ds, "\tstatus: %s", lacp->active ? "active" : "passive");
+    ds_put_format(ds, "---- %s ----\n", lacp->name);
+    ds_put_format(ds, "\tstatus: %s", lacp->active ? "active" : "passive");
     if (lacp->heartbeat) {
-        ds_put_cstr(&ds, " heartbeat");
+        ds_put_cstr(ds, " heartbeat");
     }
     if (lacp->negotiated) {
-        ds_put_cstr(&ds, " negotiated");
+        ds_put_cstr(ds, " negotiated");
     }
-    ds_put_cstr(&ds, "\n");
+    ds_put_cstr(ds, "\n");
 
-    ds_put_format(&ds, "\tsys_id: " ETH_ADDR_FMT "\n", ETH_ADDR_ARGS(lacp->sys_id));
-    ds_put_format(&ds, "\tsys_priority: %u\n", lacp->sys_priority);
-    ds_put_cstr(&ds, "\taggregation key: ");
+    ds_put_format(ds, "\tsys_id: " ETH_ADDR_FMT "\n", ETH_ADDR_ARGS(lacp->sys_id));
+    ds_put_format(ds, "\tsys_priority: %u\n", lacp->sys_priority);
+    ds_put_cstr(ds, "\taggregation key: ");
     if (lacp->key_slave) {
-        ds_put_format(&ds, "%u", lacp->key_slave->port_id);
+        ds_put_format(ds, "%u", lacp->key_slave->port_id);
     } else {
-        ds_put_cstr(&ds, "none");
+        ds_put_cstr(ds, "none");
     }
-    ds_put_cstr(&ds, "\n");
+    ds_put_cstr(ds, "\n");
 
-    ds_put_cstr(&ds, "\tlacp_time: ");
+    ds_put_cstr(ds, "\tlacp_time: ");
     switch (lacp->lacp_time) {
     case LACP_TIME_FAST:
-        ds_put_cstr(&ds, "fast\n");
+        ds_put_cstr(ds, "fast\n");
         break;
     case LACP_TIME_SLOW:
-        ds_put_cstr(&ds, "slow\n");
+        ds_put_cstr(ds, "slow\n");
         break;
     case LACP_TIME_CUSTOM:
-        ds_put_format(&ds, "custom (%lld)\n", lacp->custom_time);
+        ds_put_format(ds, "custom (%lld)\n", lacp->custom_time);
         break;
     default:
-        ds_put_cstr(&ds, "unknown\n");
+        ds_put_cstr(ds, "unknown\n");
     }
 
     HMAP_FOR_EACH (slave, node, &lacp->slaves) {
@@ -768,38 +815,59 @@ lacp_unixctl_show(struct unixctl_conn *conn,
             NOT_REACHED();
         }
 
-        ds_put_format(&ds, "\nslave: %s: %s %s\n", slave->name, status,
+        ds_put_format(ds, "\nslave: %s: %s %s\n", slave->name, status,
                       slave->attached ? "attached" : "detached");
-        ds_put_format(&ds, "\tport_id: %u\n", slave->port_id);
-        ds_put_format(&ds, "\tport_priority: %u\n", slave->port_priority);
+        ds_put_format(ds, "\tport_id: %u\n", slave->port_id);
+        ds_put_format(ds, "\tport_priority: %u\n", slave->port_priority);
 
-        ds_put_format(&ds, "\n\tactor sys_id: " ETH_ADDR_FMT "\n",
+        ds_put_format(ds, "\n\tactor sys_id: " ETH_ADDR_FMT "\n",
                       ETH_ADDR_ARGS(actor.sys_id));
-        ds_put_format(&ds, "\tactor sys_priority: %u\n",
+        ds_put_format(ds, "\tactor sys_priority: %u\n",
                       ntohs(actor.sys_priority));
-        ds_put_format(&ds, "\tactor port_id: %u\n",
+        ds_put_format(ds, "\tactor port_id: %u\n",
                       ntohs(actor.port_id));
-        ds_put_format(&ds, "\tactor port_priority: %u\n",
+        ds_put_format(ds, "\tactor port_priority: %u\n",
                       ntohs(actor.port_priority));
-        ds_put_format(&ds, "\tactor key: %u\n",
+        ds_put_format(ds, "\tactor key: %u\n",
                       ntohs(actor.key));
-        ds_put_cstr(&ds, "\tactor state: ");
-        ds_put_lacp_state(&ds, actor.state);
-        ds_put_cstr(&ds, "\n\n");
+        ds_put_cstr(ds, "\tactor state: ");
+        ds_put_lacp_state(ds, actor.state);
+        ds_put_cstr(ds, "\n\n");
 
-        ds_put_format(&ds, "\tpartner sys_id: " ETH_ADDR_FMT "\n",
+        ds_put_format(ds, "\tpartner sys_id: " ETH_ADDR_FMT "\n",
                       ETH_ADDR_ARGS(slave->partner.sys_id));
-        ds_put_format(&ds, "\tpartner sys_priority: %u\n",
+        ds_put_format(ds, "\tpartner sys_priority: %u\n",
                       ntohs(slave->partner.sys_priority));
-        ds_put_format(&ds, "\tpartner port_id: %u\n",
+        ds_put_format(ds, "\tpartner port_id: %u\n",
                       ntohs(slave->partner.port_id));
-        ds_put_format(&ds, "\tpartner port_priority: %u\n",
+        ds_put_format(ds, "\tpartner port_priority: %u\n",
                       ntohs(slave->partner.port_priority));
-        ds_put_format(&ds, "\tpartner key: %u\n",
+        ds_put_format(ds, "\tpartner key: %u\n",
                       ntohs(slave->partner.key));
-        ds_put_cstr(&ds, "\tpartner state: ");
-        ds_put_lacp_state(&ds, slave->partner.state);
-        ds_put_cstr(&ds, "\n");
+        ds_put_cstr(ds, "\tpartner state: ");
+        ds_put_lacp_state(ds, slave->partner.state);
+        ds_put_cstr(ds, "\n");
+    }
+}
+
+static void
+lacp_unixctl_show(struct unixctl_conn *conn,
+                  const char *args, void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    struct lacp *lacp;
+
+    if (strlen(args)) {
+        lacp = lacp_find(args);
+        if (!lacp) {
+            unixctl_command_reply(conn, 501, "no such lacp object");
+            return;
+        }
+        lacp_print_details(&ds, lacp);
+    } else {
+        LIST_FOR_EACH (lacp, node, &all_lacps) {
+            lacp_print_details(&ds, lacp);
+        }
     }
 
     unixctl_command_reply(conn, 200, ds_cstr(&ds));

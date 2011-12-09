@@ -104,10 +104,11 @@ install -m 644 \
 
 install -d -m 755 $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch
 find datapath/linux -name *.ko -exec install -m 755  \{\} $RPM_BUILD_ROOT/lib/modules/%{xen_version}/extra/openvswitch \;
-install xenserver/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
+install python/compat/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
+install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
 install -d -m 755 $RPM_BUILD_ROOT/etc/xensource/bugtool
-mv $RPM_BUILD_ROOT/etc/openvswitch/bugtool-plugins $RPM_BUILD_ROOT/etc/xensource/bugtool
+mv $RPM_BUILD_ROOT/etc/openvswitch/bugtool-plugins/* $RPM_BUILD_ROOT/etc/xensource/bugtool
 
 # Get rid of stuff we don't want to make RPM happy.
 rm \
@@ -323,28 +324,7 @@ exit 0
 /etc/xensource/bugtool/*
 /etc/logrotate.d/openvswitch
 /etc/profile.d/openvswitch.sh
-/usr/share/openvswitch/python/ovs/__init__.py
-/usr/share/openvswitch/python/ovs/daemon.py
-/usr/share/openvswitch/python/ovs/db/__init__.py
-/usr/share/openvswitch/python/ovs/db/data.py
-/usr/share/openvswitch/python/ovs/db/error.py
-/usr/share/openvswitch/python/ovs/db/idl.py
-/usr/share/openvswitch/python/ovs/db/parser.py
-/usr/share/openvswitch/python/ovs/db/schema.py
-/usr/share/openvswitch/python/ovs/db/types.py
-/usr/share/openvswitch/python/ovs/dirs.py
-/usr/share/openvswitch/python/ovs/fatal_signal.py
-/usr/share/openvswitch/python/ovs/json.py
-/usr/share/openvswitch/python/ovs/jsonrpc.py
-/usr/share/openvswitch/python/ovs/ovsuuid.py
-/usr/share/openvswitch/python/ovs/poller.py
-/usr/share/openvswitch/python/ovs/process.py
-/usr/share/openvswitch/python/ovs/reconnect.py
-/usr/share/openvswitch/python/ovs/socket_util.py
-/usr/share/openvswitch/python/ovs/stream.py
-/usr/share/openvswitch/python/ovs/timeval.py
-/usr/share/openvswitch/python/ovs/util.py
-/usr/share/openvswitch/python/uuid.py
+/usr/share/openvswitch/python/
 /usr/share/openvswitch/scripts/ovs-xapi-sync
 /usr/share/openvswitch/scripts/interface-reconfigure
 /usr/share/openvswitch/scripts/InterfaceReconfigure.py

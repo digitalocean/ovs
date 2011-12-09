@@ -11,6 +11,7 @@
 
 #include <linux/kernel.h>
 #include <linux/netlink.h>
+#include <linux/openvswitch.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/rcupdate.h>
@@ -18,9 +19,8 @@
 #include <linux/in6.h>
 #include <linux/jiffies.h>
 #include <linux/time.h>
-
-#include "openvswitch/datapath-protocol.h"
-#include "table.h"
+#include <linux/flex_array.h>
+#include <net/inet_ecn.h>
 
 struct sk_buff;
 
@@ -30,10 +30,14 @@ struct sw_flow_actions {
 	struct nlattr actions[];
 };
 
+/* Mask for the OVS_FRAG_TYPE_* value in the low 2 bits of ip.tos_frag in
+ * struct sw_flow_key. */
+#define OVS_FRAG_TYPE_MASK INET_ECN_MASK
+
 struct sw_flow_key {
 	struct {
 		__be64 tun_id;		/* Encapsulating tunnel ID. */
-		u16    in_port;		/* Input switch port. */
+		u16    in_port;		/* Input switch port (or USHRT_MAX). */
 		u8     src[ETH_ALEN];	/* Ethernet source address. */
 		u8     dst[ETH_ALEN];	/* Ethernet destination address. */
 		__be16 tci;		/* 0 if no VLAN, VLAN_TAG_PRESENT set otherwise. */
@@ -41,7 +45,8 @@ struct sw_flow_key {
 	} eth;
 	struct {
 		u8     proto;		/* IP protocol or lower 8 bits of ARP opcode. */
-		u8     tos;		/* IP ToS (DSCP field, 6 bits). */
+		u8     tos_frag;	/* IP ToS DSCP in high 6 bits,
+					 * OVS_FRAG_TYPE_* in low 2 bits. */
 	} ip;
 	union {
 		struct {
@@ -80,7 +85,8 @@ struct sw_flow_key {
 
 struct sw_flow {
 	struct rcu_head rcu;
-	struct tbl_node tbl_node;
+	struct hlist_node  hash_node;
+	u32 hash;
 
 	struct sw_flow_key key;
 	struct sw_flow_actions __rcu *sf_acts;
@@ -115,7 +121,6 @@ void flow_exit(void);
 
 struct sw_flow *flow_alloc(void);
 void flow_deferred_free(struct sw_flow *);
-void flow_free_tbl(struct tbl_node *);
 
 struct sw_flow_actions *flow_actions_alloc(const struct nlattr *);
 void flow_deferred_free_acts(struct sw_flow_actions *);
@@ -124,26 +129,23 @@ void flow_hold(struct sw_flow *);
 void flow_put(struct sw_flow *);
 
 int flow_extract(struct sk_buff *, u16 in_port, struct sw_flow_key *,
-		 int *key_lenp, bool *is_frag);
+		 int *key_lenp);
 void flow_used(struct sw_flow *, struct sk_buff *);
 u64 flow_used_time(unsigned long flow_jiffies);
-
-u32 flow_hash(const struct sw_flow_key *, int key_lenp);
-int flow_cmp(const struct tbl_node *, void *target, int len);
 
 /* Upper bound on the length of a nlattr-formatted flow key.  The longest
  * nlattr-formatted flow key would be:
  *
  *                         struct  pad  nl hdr  total
  *                         ------  ---  ------  -----
- *  ODP_KEY_ATTR_TUN_ID        8    --     4     12
- *  ODP_KEY_ATTR_IN_PORT       4    --     4      8
- *  ODP_KEY_ATTR_ETHERNET     12    --     4     16
- *  ODP_KEY_ATTR_8021Q         4    --     4      8
- *  ODP_KEY_ATTR_ETHERTYPE     2     2     4      8
- *  ODP_KEY_ATTR_IPV6         34     2     4     40
- *  ODP_KEY_ATTR_ICMPV6        2     2     4      8
- *  ODP_KEY_ATTR_ND           28    --     4     32
+ *  OVS_KEY_ATTR_TUN_ID        8    --     4     12
+ *  OVS_KEY_ATTR_IN_PORT       4    --     4      8
+ *  OVS_KEY_ATTR_ETHERNET     12    --     4     16
+ *  OVS_KEY_ATTR_8021Q         4    --     4      8
+ *  OVS_KEY_ATTR_ETHERTYPE     2     2     4      8
+ *  OVS_KEY_ATTR_IPV6         34     2     4     40
+ *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
+ *  OVS_KEY_ATTR_ND           28    --     4     32
  *  -------------------------------------------------
  *  total                                       132
  */
@@ -155,9 +157,35 @@ int flow_from_nlattrs(struct sw_flow_key *swkey, int *key_lenp,
 int flow_metadata_from_nlattrs(u16 *in_port, __be64 *tun_id,
 			       const struct nlattr *);
 
-static inline struct sw_flow *flow_cast(const struct tbl_node *node)
+#define TBL_MIN_BUCKETS		1024
+
+struct flow_table {
+        struct flex_array *buckets;
+        unsigned int count, n_buckets;
+        struct rcu_head rcu;
+};
+
+static inline int flow_tbl_count(struct flow_table *table)
 {
-	return container_of(node, struct sw_flow, tbl_node);
+	return table->count;
 }
+
+static inline int flow_tbl_need_to_expand(struct flow_table *table)
+{
+	return (table->count > table->n_buckets);
+}
+
+struct sw_flow *flow_tbl_lookup(struct flow_table *table,
+				struct sw_flow_key *key,    int len);
+void flow_tbl_destroy(struct flow_table *table);
+void flow_tbl_deferred_destroy(struct flow_table *table);
+struct flow_table *flow_tbl_alloc(int new_size);
+struct flow_table *flow_tbl_expand(struct flow_table *table);
+void flow_tbl_insert(struct flow_table *table, struct sw_flow *flow);
+void flow_tbl_remove(struct flow_table *table, struct sw_flow *flow);
+u32 flow_hash(const struct sw_flow_key *key, int key_len);
+
+struct sw_flow *flow_tbl_next(struct flow_table *table, u32 *bucket, u32 *idx);
+extern const u32 ovs_key_lens[OVS_KEY_ATTR_MAX + 1];
 
 #endif /* flow.h */

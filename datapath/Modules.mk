@@ -17,8 +17,6 @@ openvswitch_sources = \
 	dp_sysfs_dp.c \
 	dp_sysfs_if.c \
 	flow.c \
-	loop_counter.c \
-	table.c \
 	tunnel.c \
 	vlan.c \
 	vport.c \
@@ -36,8 +34,6 @@ openvswitch_headers = \
 	datapath.h \
 	dp_sysfs.h \
 	flow.h \
-	loop_counter.h \
-	table.h \
 	tunnel.h \
 	vlan.h \
 	vport.h \
@@ -45,8 +41,12 @@ openvswitch_headers = \
 	vport-internal_dev.h \
 	vport-netdev.h
 
+openvswitch_extras = \
+	CAPWAP.txt
+
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
 dist_headers = $(foreach module,$(dist_modules),$($(module)_headers))
+dist_extras = $(foreach module,$(dist_modules),$($(module)_extras))
 build_sources = $(foreach module,$(build_modules),$($(module)_sources))
 build_headers = $(foreach module,$(build_modules),$($(module)_headers))
 build_links = $(notdir $(build_sources))

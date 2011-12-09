@@ -53,6 +53,14 @@
 #define BUILD_ASSERT_DECL BOOST_STATIC_ASSERT
 #endif /* __cplusplus */
 
+#ifdef __GNUC__
+#define BUILD_ASSERT_GCCONLY(EXPR) BUILD_ASSERT(EXPR)
+#define BUILD_ASSERT_DECL_GCCONLY(EXPR) BUILD_ASSERT_DECL(EXPR)
+#else
+#define BUILD_ASSERT_GCCONLY(EXPR) ((void) 0)
+#define BUILD_ASSERT_DECL_GCCONLY(EXPR) ((void) 0)
+#endif
+
 extern const char *program_name;
 
 /* Returns the number of elements in ARRAY. */
@@ -140,12 +148,12 @@ extern const char *program_name;
 extern "C" {
 #endif
 
-void set_program_name(const char *);
+void set_program_name__(const char *name, const char *date, const char *time);
+#define set_program_name(name) \
+        set_program_name__(name, __DATE__, __TIME__)
 
-void ovs_print_version(char *date, char *time,
-                       uint8_t min_ofp, uint8_t max_ofp);
-#define OVS_PRINT_VERSION(min_ofp, max_ofp) \
-        ovs_print_version(__DATE__, __TIME__, (min_ofp), (max_ofp))
+const char *get_program_version(void);
+void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
 
 void out_of_memory(void) NO_RETURN;
 void *xmalloc(size_t) MALLOC_LIKE;
@@ -194,7 +202,11 @@ char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
 
 void ignore(bool x OVS_UNUSED);
-int log_2_floor(uint32_t n);
+int log_2_floor(uint32_t);
+int ctz(uint32_t);
+
+bool is_all_zeros(const uint8_t *, size_t);
+bool is_all_ones(const uint8_t *, size_t);
 
 #ifdef  __cplusplus
 }

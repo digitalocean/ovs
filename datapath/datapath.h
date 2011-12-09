@@ -27,17 +27,12 @@
 
 struct vport;
 
-/* Mask for the priority bits in a vlan header.  If we ever merge upstream
- * then this should go into include/linux/if_vlan.h. */
-#define VLAN_PCP_MASK 0xe000
-#define VLAN_PCP_SHIFT 13
-
 #define DP_MAX_PORTS 1024
+#define SAMPLE_ACTION_DEPTH 3
 
 /**
  * struct dp_stats_percpu - per-cpu packet processing statistics for a given
  * datapath.
- * @n_frags: Number of IP fragments processed by datapath.
  * @n_hit: Number of received packets for which a matching flow was found in
  * the flow table.
  * @n_miss: Number of received packets that had no matching flow in the flow
@@ -48,7 +43,6 @@ struct vport;
  * one of the datapath's queues).
  */
 struct dp_stats_percpu {
-	u64 n_frags;
 	u64 n_hit;
 	u64 n_missed;
 	u64 n_lost;
@@ -58,34 +52,26 @@ struct dp_stats_percpu {
 /**
  * struct datapath - datapath for flow-based packet switching
  * @rcu: RCU callback head for deferred destruction.
- * @dp_ifindex: ifindex of local port.
  * @list_node: Element in global 'dps' list.
  * @ifobj: Represents /sys/class/net/<devname>/brif.  Protected by RTNL.
- * @drop_frags: Drop all IP fragments if nonzero.
  * @n_flows: Number of flows currently in flow table.
  * @table: Current flow table.  Protected by genl_lock and RCU.
- * @ports: Map from port number to &struct vport.  %ODPP_LOCAL port
+ * @ports: Map from port number to &struct vport.  %OVSP_LOCAL port
  * always exists, other ports may be %NULL.  Protected by RTNL and RCU.
  * @port_list: List of all ports in @ports in arbitrary order.  RTNL required
  * to iterate or modify.
  * @stats_percpu: Per-CPU datapath statistics.
- * @sflow_probability: Number of packets out of UINT_MAX to sample to the
- * %ODP_PACKET_CMD_SAMPLE multicast group, e.g. (@sflow_probability/UINT_MAX)
- * is the probability of sampling a given packet.
  *
  * Context: See the comment on locking at the top of datapath.c for additional
  * locking information.
  */
 struct datapath {
 	struct rcu_head rcu;
-	int dp_ifindex;
 	struct list_head list_node;
 	struct kobject ifobj;
 
-	int drop_frags;
-
 	/* Flow table. */
-	struct tbl __rcu *table;
+	struct flow_table __rcu *table;
 
 	/* Switch ports. */
 	struct vport __rcu *ports[DP_MAX_PORTS];
@@ -93,9 +79,6 @@ struct datapath {
 
 	/* Stats. */
 	struct dp_stats_percpu __percpu *stats_percpu;
-
-	/* sFlow Sampling */
-	unsigned int sflow_probability;
 };
 
 /**
@@ -127,32 +110,32 @@ struct ovs_skb_cb {
 
 /**
  * struct dp_upcall - metadata to include with a packet to send to userspace
- * @cmd: One of %ODP_PACKET_CMD_*.
- * @key: Becomes %ODP_PACKET_ATTR_KEY.  Must be nonnull.
- * @userdata: Becomes %ODP_PACKET_ATTR_USERDATA if nonzero.
- * @sample_pool: Becomes %ODP_PACKET_ATTR_SAMPLE_POOL if nonzero.
- * @actions: Becomes %ODP_PACKET_ATTR_ACTIONS if nonnull.
- * @actions_len: Number of bytes in @actions.
-*/
+ * @cmd: One of %OVS_PACKET_CMD_*.
+ * @key: Becomes %OVS_PACKET_ATTR_KEY.  Must be nonnull.
+ * @userdata: If nonnull, its u64 value is extracted and passed to userspace as
+ * %OVS_PACKET_ATTR_USERDATA.
+ * @pid: Netlink PID to which packet should be sent.  If @pid is 0 then no
+ * packet is sent and the packet is accounted in the datapath's @n_lost
+ * counter.
+ */
 struct dp_upcall_info {
 	u8 cmd;
 	const struct sw_flow_key *key;
-	u64 userdata;
-	u32 sample_pool;
-	const struct nlattr *actions;
-	u32 actions_len;
+	const struct nlattr *userdata;
+	u32 pid;
 };
 
 extern struct notifier_block dp_device_notifier;
+extern struct genl_multicast_group dp_vport_multicast_group;
 extern int (*dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
 
 void dp_process_received_packet(struct vport *, struct sk_buff *);
-int dp_detach_port(struct vport *);
+void dp_detach_port(struct vport *);
 int dp_upcall(struct datapath *, struct sk_buff *, const struct dp_upcall_info *);
-int dp_min_mtu(const struct datapath *dp);
-void set_internal_devs_mtu(const struct datapath *dp);
 
 struct datapath *get_dp(int dp_idx);
 const char *dp_name(const struct datapath *dp);
+struct sk_buff *ovs_vport_cmd_build_info(struct vport *, u32 pid, u32 seq,
+					 u8 cmd);
 
 #endif /* datapath.h */

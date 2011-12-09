@@ -35,6 +35,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "list.h"
 
 struct ofpbuf;
 struct nl_sock;
@@ -59,6 +60,22 @@ int nl_sock_transact(struct nl_sock *, const struct ofpbuf *request,
 int nl_sock_drain(struct nl_sock *);
 
 void nl_sock_wait(const struct nl_sock *, short int events);
+int nl_sock_fd(const struct nl_sock *);
+
+uint32_t nl_sock_pid(const struct nl_sock *);
+
+/* Batching transactions. */
+struct nl_transaction {
+    /* Filled in by client. */
+    struct ofpbuf *request;     /* Request to send. */
+
+    /* Filled in by nl_sock_transact_batch(). */
+    struct ofpbuf *reply;       /* Reply (NULL if reply was an error code). */
+    int error;                  /* Positive errno value, 0 if no error. */
+};
+
+void nl_sock_transact_multiple(struct nl_sock *,
+                               struct nl_transaction **, size_t n);
 
 /* Table dumping. */
 struct nl_dump {
@@ -75,5 +92,8 @@ int nl_dump_done(struct nl_dump *);
 
 /* Miscellaneous */
 int nl_lookup_genl_family(const char *name, int *number);
+int nl_lookup_genl_mcgroup(const char *family_name, const char *group_name,
+                           unsigned int *multicast_group,
+                           unsigned int fallback);
 
 #endif /* netlink-socket.h */

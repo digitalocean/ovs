@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import errno
-import getopt
 import os
 import sys
 
@@ -22,6 +22,7 @@ import ovs.json
 import ovs.jsonrpc
 import ovs.poller
 import ovs.stream
+
 
 def handle_rpc(rpc, msg):
     done = False
@@ -43,10 +44,11 @@ def handle_rpc(rpc, msg):
     else:
         rpc.error(errno.EPROTO)
         sys.stderr.write("unsolicited JSON-RPC reply or error\n")
-        
+
     if reply:
         rpc.send(reply)
     return done
+
 
 def do_listen(name):
     error, pstream = ovs.stream.PassiveStream.open(name)
@@ -98,6 +100,7 @@ def do_listen(name):
         poller.block()
     pstream.close()
 
+
 def do_request(name, method, params_string):
     params = ovs.json.from_string(params_string)
     msg = ovs.jsonrpc.Message.create_request(method, params)
@@ -123,11 +126,12 @@ def do_request(name, method, params_string):
     if error:
         sys.stderr.write("error waiting for reply: %s\n" % os.strerror(error))
         sys.exit(1)
-    
+
     print ovs.json.to_string(msg.to_json())
 
     rpc.close()
-    
+
+
 def do_notify(name, method, params_string):
     params = ovs.json.from_string(params_string)
     msg = ovs.jsonrpc.Message.create_notify(method, params)
@@ -152,32 +156,40 @@ def do_notify(name, method, params_string):
 
     rpc.close()
 
-def main(argv):
-    try:
-        options, args = getopt.gnu_getopt(
-            argv[1:], 'h', ["help"] + ovs.daemon.LONG_OPTIONS)
-    except getopt.GetoptError, geo:
-        sys.stderr.write("%s: %s\n" % (ovs.util.PROGRAM_NAME, geo.msg))
-        sys.exit(1)
 
-    for key, value in options:
-        if key in ['h', '--help']:
-            usage()
-        elif not ovs.daemon.parse_opt(key, value):
-            sys.stderr.write("%s: unhandled option %s\n"
-                             % (ovs.util.PROGRAM_NAME, key))
-            sys.exit(1)
+def main(argv):
+
+    parser = argparse.ArgumentParser(
+            description="JSON-RPC test utility for Python.",
+            formatter_class=argparse.RawDescriptionHelpFormatter)
 
     commands = {"listen": (do_listen, 1),
                 "request": (do_request, 3),
                 "notify": (do_notify, 3),
-                "help": (usage, (0,))}
+                "help": (parser.print_help, (0,))}
 
-    command_name = args[0]
-    args = args[1:]
+    group_description = """\
+listen LOCAL             listen for connections on LOCAL
+request REMOTE METHOD PARAMS   send request, print reply
+notify REMOTE METHOD PARAMS  send notification and exit
+""" + ovs.stream.usage("JSON-RPC")
+
+    group = parser.add_argument_group(title="Commands",
+                                      description=group_description)
+    group.add_argument('command', metavar="COMMAND", nargs=1,
+                        choices=commands, help="Command to use.")
+    group.add_argument('command_args', metavar="ARG", nargs='*',
+                       help="Arguments to COMMAND.")
+
+    ovs.daemon.add_args(parser)
+    args = parser.parse_args()
+    ovs.daemon.handle_args(args)
+
+    command_name = args.command[0]
+    args = args.command_args
     if not command_name in commands:
         sys.stderr.write("%s: unknown command \"%s\" "
-                         "(use --help for help)\n" % (argv0, command_name))
+                         "(use --help for help)\n" % (argv[0], command_name))
         sys.exit(1)
 
     func, n_args = commands[command_name]
@@ -185,35 +197,19 @@ def main(argv):
         if len(args) < n_args[0]:
             sys.stderr.write("%s: \"%s\" requires at least %d arguments but "
                              "only %d provided\n"
-                             % (argv0, command_name, n_args, len(args)))
+                             % (argv[0], command_name, n_args, len(args)))
             sys.exit(1)
     elif type(n_args) == int:
         if len(args) != n_args:
             sys.stderr.write("%s: \"%s\" requires %d arguments but %d "
                              "provided\n"
-                             % (argv0, command_name, n_args, len(args)))
+                             % (argv[0], command_name, n_args, len(args)))
             sys.exit(1)
     else:
         assert False
 
     func(*args)
 
-def usage():
-    sys.stdout.write("""\
-%s: JSON-RPC test utility for Python
-usage: %s [OPTIONS] COMMAND [ARG...]
-  listen LOCAL             listen for connections on LOCAL
-  request REMOTE METHOD PARAMS   send request, print reply
-  notify REMOTE METHOD PARAMS  send notification and exit
-""" % (ovs.util.PROGRAM_NAME, ovs.util.PROGRAM_NAME))
-    ovs.stream.usage("JSON-RPC", True, True, True)
-    ovs.daemon.usage()
-    sys.stdout.write("""
-Other options:
-  -h, --help              display this help message
-""")
-    sys.exit(0)
 
 if __name__ == '__main__':
     main(sys.argv)
-

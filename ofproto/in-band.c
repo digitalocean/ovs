@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include "classifier.h"
 #include "dhcp.h"
-#include "dpif.h"
 #include "flow.h"
 #include "netdev.h"
 #include "netlink.h"
@@ -131,7 +130,7 @@ refresh_remote(struct in_band *ib, struct in_band_remote *r)
     {
         netdev_close(r->remote_netdev);
 
-        retval = netdev_open_default(next_hop_dev, &r->remote_netdev);
+        retval = netdev_open(next_hop_dev, "system", &r->remote_netdev);
         if (retval) {
             VLOG_WARN_RL(&rl, "cannot open netdev %s (next hop "
                          "to controller "IP_FMT"): %s",
@@ -267,8 +266,8 @@ in_band_rule_check(const struct flow *flow,
         unsigned int left;
 
         NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
-            if (nl_attr_type(a) == ODP_ACTION_ATTR_OUTPUT
-                && nl_attr_get_u32(a) == ODPP_LOCAL) {
+            if (nl_attr_type(a) == OVS_ACTION_ATTR_OUTPUT
+                && nl_attr_get_u32(a) == OVSP_LOCAL) {
                 return true;
             }
         }
@@ -310,10 +309,10 @@ update_rules(struct in_band *ib)
         ib_rule->op = DELETE;
     }
 
-    if (!eth_addr_is_zero(ib->local_mac)) {
+    if (ib->n_remotes && !eth_addr_is_zero(ib->local_mac)) {
         /* (a) Allow DHCP requests sent from the local port. */
         cls_rule_init_catchall(&rule, IBR_FROM_LOCAL_DHCP);
-        cls_rule_set_in_port(&rule, ODPP_LOCAL);
+        cls_rule_set_in_port(&rule, OFPP_LOCAL);
         cls_rule_set_dl_type(&rule, htons(ETH_TYPE_IP));
         cls_rule_set_dl_src(&rule, ib->local_mac);
         cls_rule_set_nw_proto(&rule, IPPROTO_UDP);
@@ -395,7 +394,12 @@ update_rules(struct in_band *ib)
     }
 }
 
-void
+/* Updates the OpenFlow flow table for the current state of in-band control.
+ * Returns true ordinarily.  Returns false if no remotes are configured on 'ib'
+ * and 'ib' doesn't have any rules left to remove from the OpenFlow flow
+ * table.  Thus, a false return value means that the caller can destroy 'ib'
+ * without leaving extra flows hanging around in the flow table. */
+bool
 in_band_run(struct in_band *ib)
 {
     struct {
@@ -446,6 +450,8 @@ in_band_run(struct in_band *ib)
             break;
         }
     }
+
+    return ib->n_remotes || !hmap_is_empty(&ib->rules);
 }
 
 void
@@ -465,7 +471,7 @@ in_band_create(struct ofproto *ofproto, const char *local_name,
     int error;
 
     *in_bandp = NULL;
-    error = netdev_open_default(local_name, &local_netdev);
+    error = netdev_open(local_name, "system", &local_netdev);
     if (error) {
         VLOG_ERR("failed to initialize in-band control: cannot open "
                  "datapath local port %s (%s)", local_name, strerror(error));

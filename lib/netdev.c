@@ -192,66 +192,42 @@ netdev_enumerate_types(struct sset *types)
     }
 }
 
-void
-update_device_args(struct netdev_dev *dev, const struct shash *args)
-{
-    smap_destroy(&dev->args);
-    smap_clone(&dev->args, args);
-}
-
-/* Opens the network device named 'name' (e.g. "eth0") and returns zero if
- * successful, otherwise a positive errno value.  On success, sets '*netdevp'
- * to the new network device, otherwise to null.
+/* Opens the network device named 'name' (e.g. "eth0") of the specified 'type'
+ * (e.g. "system") and returns zero if successful, otherwise a positive errno
+ * value.  On success, sets '*netdevp' to the new network device, otherwise to
+ * null.
  *
- * If this is the first time the device has been opened, then create is called
- * before opening.  The device is created using the given type and arguments.
- *
- * 'ethertype' may be a 16-bit Ethernet protocol value in host byte order to
- * capture frames of that type received on the device.  It may also be one of
- * the 'enum netdev_pseudo_ethertype' values to receive frames in one of those
- * categories. */
+ * Some network devices may need to be configured (with netdev_set_config())
+ * before they can be used. */
 int
-netdev_open(struct netdev_options *options, struct netdev **netdevp)
+netdev_open(const char *name, const char *type, struct netdev **netdevp)
 {
-    struct shash empty_args = SHASH_INITIALIZER(&empty_args);
     struct netdev_dev *netdev_dev;
     int error;
 
     *netdevp = NULL;
     netdev_initialize();
 
-    if (!options->args) {
-        options->args = &empty_args;
-    }
-
-    netdev_dev = shash_find_data(&netdev_dev_shash, options->name);
+    netdev_dev = shash_find_data(&netdev_dev_shash, name);
 
     if (!netdev_dev) {
         const struct netdev_class *class;
 
-        class = netdev_lookup_provider(options->type);
+        class = netdev_lookup_provider(type);
         if (!class) {
             VLOG_WARN("could not create netdev %s of unknown type %s",
-                      options->name, options->type);
+                      name, type);
             return EAFNOSUPPORT;
         }
-        error = class->create(class, options->name, options->args,
-                              &netdev_dev);
+        error = class->create(class, name, &netdev_dev);
         if (error) {
             return error;
         }
         assert(netdev_dev->netdev_class == class);
 
-    } else if (!shash_is_empty(options->args) &&
-               !netdev_dev_args_equal(netdev_dev, options->args)) {
-
-        VLOG_WARN("%s: attempted to open already open netdev with "
-                  "different arguments", options->name);
-        return EINVAL;
     }
 
-    error = netdev_dev->netdev_class->open(netdev_dev, options->ethertype,
-                netdevp);
+    error = netdev_dev->netdev_class->open(netdev_dev, netdevp);
 
     if (!error) {
         netdev_dev->ref_cnt++;
@@ -264,53 +240,49 @@ netdev_open(struct netdev_options *options, struct netdev **netdevp)
     return error;
 }
 
-int
-netdev_open_default(const char *name, struct netdev **netdevp)
-{
-    struct netdev_options options;
-
-    memset(&options, 0, sizeof options);
-    options.name = name;
-    options.ethertype = NETDEV_ETH_TYPE_NONE;
-
-    return netdev_open(&options, netdevp);
-}
-
 /* Reconfigures the device 'netdev' with 'args'.  'args' may be empty
  * or NULL if none are needed. */
 int
 netdev_set_config(struct netdev *netdev, const struct shash *args)
 {
-    struct shash empty_args = SHASH_INITIALIZER(&empty_args);
     struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
 
-    if (!args) {
-        args = &empty_args;
-    }
-
     if (netdev_dev->netdev_class->set_config) {
-        if (!netdev_dev_args_equal(netdev_dev, args)) {
-            update_device_args(netdev_dev, args);
-            return netdev_dev->netdev_class->set_config(netdev_dev, args);
-        }
-    } else if (!shash_is_empty(args)) {
-        VLOG_WARN("%s: arguments provided to device whose configuration "
-                  "cannot be changed", netdev_get_name(netdev));
+        struct shash no_args = SHASH_INITIALIZER(&no_args);
+        return netdev_dev->netdev_class->set_config(netdev_dev,
+                                                    args ? args : &no_args);
+    } else if (args && !shash_is_empty(args)) {
+        VLOG_WARN("%s: arguments provided to device that is not configurable",
+                  netdev_get_name(netdev));
     }
 
     return 0;
 }
 
-/* Returns the current configuration for 'netdev'.  This is either the
- * configuration passed to netdev_open() or netdev_set_config(), or it is a
- * configuration retrieved from the device itself if no configuration was
- * passed to those functions.
+/* Returns the current configuration for 'netdev' in 'args'.  The caller must
+ * have already initialized 'args' with shash_init().  Returns 0 on success, in
+ * which case 'args' will be filled with 'netdev''s configuration.  On failure
+ * returns a positive errno value, in which case 'args' will be empty.
  *
- * 'netdev' retains ownership of the returned configuration. */
-const struct shash *
-netdev_get_config(const struct netdev *netdev)
+ * The caller owns 'args' and its contents and must eventually free them with
+ * shash_destroy_free_data(). */
+int
+netdev_get_config(const struct netdev *netdev, struct shash *args)
 {
-    return &netdev_get_dev(netdev)->args;
+    struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
+    int error;
+
+    shash_clear_free_data(args);
+    if (netdev_dev->netdev_class->get_config) {
+        error = netdev_dev->netdev_class->get_config(netdev_dev, args);
+        if (error) {
+            shash_clear_free_data(args);
+        }
+    } else {
+        error = 0;
+    }
+
+    return error;
 }
 
 /* Closes and destroys 'netdev'. */
@@ -339,7 +311,7 @@ netdev_exists(const char *name)
     struct netdev *netdev;
     int error;
 
-    error = netdev_open_default(name, &netdev);
+    error = netdev_open(name, "system", &netdev);
     if (!error) {
         netdev_close(netdev);
         return true;
@@ -360,31 +332,36 @@ netdev_is_open(const char *name)
     return !!shash_find_data(&netdev_dev_shash, name);
 }
 
-/*  Clears 'sset' and enumerates the names of all known network devices. */
-int
-netdev_enumerate(struct sset *sset)
+/* Parses 'netdev_name_', which is of the form [type@]name into its component
+ * pieces.  'name' and 'type' must be freed by the caller. */
+void
+netdev_parse_name(const char *netdev_name_, char **name, char **type)
 {
-    struct shash_node *node;
-    int error = 0;
+    char *netdev_name = xstrdup(netdev_name_);
+    char *separator;
 
-    netdev_initialize();
-    sset_clear(sset);
-
-    SHASH_FOR_EACH(node, &netdev_classes) {
-        const struct netdev_class *netdev_class = node->data;
-        if (netdev_class->enumerate) {
-            int retval = netdev_class->enumerate(sset);
-            if (retval) {
-                VLOG_WARN("failed to enumerate %s network devices: %s",
-                          netdev_class->type, strerror(retval));
-                if (!error) {
-                    error = retval;
-                }
-            }
-        }
+    separator = strchr(netdev_name, '@');
+    if (separator) {
+        *separator = '\0';
+        *type = netdev_name;
+        *name = xstrdup(separator + 1);
+    } else {
+        *name = netdev_name;
+        *type = xstrdup("system");
     }
+}
 
-    return error;
+/* Attempts to set up 'netdev' for receiving packets with netdev_recv().
+ * Returns 0 if successful, otherwise a positive errno value.  EOPNOTSUPP
+ * indicates that the network device does not implement packet reception
+ * through this interface. */
+int
+netdev_listen(struct netdev *netdev)
+{
+    int (*listen)(struct netdev *);
+
+    listen = netdev_get_dev(netdev)->netdev_class->listen;
+    return listen ? (listen)(netdev) : EOPNOTSUPP;
 }
 
 /* Attempts to receive a packet from 'netdev' into 'buffer', which the caller
@@ -393,6 +370,9 @@ netdev_enumerate(struct sset *sset)
  * bytes, plus the device's MTU (which may be retrieved via netdev_get_mtu()).
  * (Some devices do not allow for a VLAN header, in which case VLAN_HEADER_LEN
  * need not be included.)
+ *
+ * This function can only be expected to return a packet if ->listen() has
+ * been called successfully.
  *
  * If a packet is successfully retrieved, returns 0.  In this case 'buffer' is
  * guaranteed to contain at least ETH_TOTAL_MIN bytes.  Otherwise, returns a
@@ -522,19 +502,45 @@ netdev_get_name(const struct netdev *netdev)
  * (and received) packets, in bytes, not including the hardware header; thus,
  * this is typically 1500 bytes for Ethernet devices.
  *
- * If successful, returns 0 and stores the MTU size in '*mtup'.  Stores INT_MAX
- * in '*mtup' if 'netdev' does not have an MTU (as e.g. some tunnels do not).On
- * failure, returns a positive errno value and stores ETH_PAYLOAD_MAX (1500) in
- * '*mtup'. */
+ * If successful, returns 0 and stores the MTU size in '*mtup'.  Returns
+ * EOPNOTSUPP if 'netdev' does not have an MTU (as e.g. some tunnels do not).
+ * On other failure, returns a positive errno value.  On failure, sets '*mtup'
+ * to 0. */
 int
 netdev_get_mtu(const struct netdev *netdev, int *mtup)
 {
-    int error = netdev_get_dev(netdev)->netdev_class->get_mtu(netdev, mtup);
+    const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
+    int error;
+
+    error = class->get_mtu ? class->get_mtu(netdev, mtup) : EOPNOTSUPP;
     if (error) {
+        *mtup = 0;
+        if (error != EOPNOTSUPP) {
+            VLOG_WARN_RL(&rl, "failed to retrieve MTU for network device %s: "
+                         "%s", netdev_get_name(netdev), strerror(error));
+        }
+    }
+    return error;
+}
+
+/* Sets the MTU of 'netdev'.  The MTU is the maximum size of transmitted
+ * (and received) packets, in bytes.
+ *
+ * If successful, returns 0.  Returns EOPNOTSUPP if 'netdev' does not have an
+ * MTU (as e.g. some tunnels do not).  On other failure, returns a positive
+ * errno value. */
+int
+netdev_set_mtu(const struct netdev *netdev, int mtu)
+{
+    const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
+    int error;
+
+    error = class->set_mtu ? class->set_mtu(netdev, mtu) : EOPNOTSUPP;
+    if (error && error != EOPNOTSUPP) {
         VLOG_WARN_RL(&rl, "failed to retrieve MTU for network device %s: %s",
                      netdev_get_name(netdev), strerror(error));
-        *mtup = ETH_PAYLOAD_MAX;
     }
+
     return error;
 }
 
@@ -652,7 +658,7 @@ netdev_set_advertisements(struct netdev *netdev, uint32_t advertise)
  *
  *   - EOPNOTSUPP: No IPv4 network stack attached to 'netdev'.
  *
- * 'address' or 'netmask' or both may be null, in which case the address or 
+ * 'address' or 'netmask' or both may be null, in which case the address or
  * netmask is not reported. */
 int
 netdev_get_in4(const struct netdev *netdev,
@@ -884,6 +890,15 @@ netdev_get_carrier(const struct netdev *netdev)
     }
 
     return carrier;
+}
+
+/* Returns the number of times 'netdev''s carrier has changed. */
+long long int
+netdev_get_carrier_resets(const struct netdev *netdev)
+{
+    return (netdev_get_dev(netdev)->netdev_class->get_carrier_resets
+            ? netdev_get_dev(netdev)->netdev_class->get_carrier_resets(netdev)
+            : 0);
 }
 
 /* Attempts to force netdev_get_carrier() to poll 'netdev''s MII registers for
@@ -1253,49 +1268,16 @@ netdev_get_vlan_vid(const struct netdev *netdev, int *vlan_vid)
     }
     return error;
 }
-
-/* Returns a network device that has 'in4' as its IP address, if one exists,
- * otherwise a null pointer. */
-struct netdev *
-netdev_find_dev_by_in4(const struct in_addr *in4)
-{
-    struct netdev *netdev;
-    struct sset dev_list = SSET_INITIALIZER(&dev_list);
-    const char *name;
-
-    netdev_enumerate(&dev_list);
-    SSET_FOR_EACH (name, &dev_list) {
-        struct in_addr dev_in4;
-
-        if (!netdev_open_default(name, &netdev)
-            && !netdev_get_in4(netdev, &dev_in4, NULL)
-            && dev_in4.s_addr == in4->s_addr) {
-            goto exit;
-        }
-        netdev_close(netdev);
-    }
-    netdev = NULL;
-
-exit:
-    sset_destroy(&dev_list);
-    return netdev;
-}
 
 /* Initializes 'netdev_dev' as a netdev device named 'name' of the specified
  * 'netdev_class'.  This function is ordinarily called from a netdev provider's
  * 'create' function.
- *
- * 'args' should be the arguments that were passed to the netdev provider's
- * 'create'.  If an empty set of arguments was passed, and 'name' is the name
- * of a network device that existed before the 'create' call, then 'args' may
- * instead be the configuration for that existing device.
  *
  * This function adds 'netdev_dev' to a netdev-owned shash, so it is
  * very important that 'netdev_dev' only be freed after calling
  * the refcount drops to zero.  */
 void
 netdev_dev_init(struct netdev_dev *netdev_dev, const char *name,
-                const struct shash *args,
                 const struct netdev_class *netdev_class)
 {
     assert(!shash_find(&netdev_dev_shash, name));
@@ -1304,7 +1286,6 @@ netdev_dev_init(struct netdev_dev *netdev_dev, const char *name,
     netdev_dev->netdev_class = netdev_class;
     netdev_dev->name = xstrdup(name);
     netdev_dev->node = shash_add(&netdev_dev_shash, name, netdev_dev);
-    smap_clone(&netdev_dev->args, args);
 }
 
 /* Undoes the results of initialization.
@@ -1322,7 +1303,6 @@ netdev_dev_uninit(struct netdev_dev *netdev_dev, bool destroy)
     assert(!netdev_dev->ref_cnt);
 
     shash_delete(&netdev_dev_shash, netdev_dev->node);
-    smap_destroy(&netdev_dev->args);
 
     if (destroy) {
         netdev_dev->netdev_class->destroy(netdev_dev);
@@ -1379,19 +1359,6 @@ netdev_dev_get_devices(const struct netdev_class *netdev_class,
         if (dev->netdev_class == netdev_class) {
             shash_add(device_list, node->name, node->data);
         }
-    }
-}
-
-/* Returns true if 'args' is equivalent to the "args" field in
- * 'netdev_dev', otherwise false. */
-bool
-netdev_dev_args_equal(const struct netdev_dev *netdev_dev,
-                      const struct shash *args)
-{
-    if (netdev_dev->netdev_class->config_equal) {
-        return netdev_dev->netdev_class->config_equal(netdev_dev, args);
-    } else {
-        return smap_equal(&netdev_dev->args, args);
     }
 }
 

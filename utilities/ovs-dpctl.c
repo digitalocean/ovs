@@ -108,7 +108,7 @@ parse_options(int argc, char *argv[])
             usage();
 
         case 'V':
-            OVS_PRINT_VERSION(0, 0);
+            ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
         VLOG_OPTION_HANDLERS
@@ -166,7 +166,7 @@ static int if_up(const char *netdev_name)
     struct netdev *netdev;
     int retval;
 
-    retval = netdev_open_default(netdev_name, &netdev);
+    retval = netdev_open(netdev_name, "system", &netdev);
     if (!retval) {
         retval = netdev_turn_flags_on(netdev, NETDEV_UP, true);
         netdev_close(netdev);
@@ -222,19 +222,17 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
 
     run(parsed_dpif_open(argv[1], false, &dpif), "opening datapath");
     for (i = 2; i < argc; i++) {
+        const char *name, *type;
         char *save_ptr = NULL;
-        struct netdev_options options;
-        struct netdev *netdev;
+        struct netdev *netdev = NULL;
         struct shash args;
         char *option;
         int error;
 
-        options.name = strtok_r(argv[i], ",", &save_ptr);
-        options.type = "system";
-        options.args = &args;
-        options.ethertype = NETDEV_ETH_TYPE_NONE;
+        name = strtok_r(argv[i], ",", &save_ptr);
+        type = "system";
 
-        if (!options.name) {
+        if (!name) {
             ovs_error(0, "%s is not a valid network device name", argv[i]);
             continue;
         }
@@ -251,26 +249,34 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
             }
 
             if (!strcmp(key, "type")) {
-                options.type = value;
+                type = value;
             } else if (!shash_add_once(&args, key, value)) {
                 ovs_error(0, "duplicate \"%s\" option", key);
             }
         }
 
-        error = netdev_open(&options, &netdev);
+        error = netdev_open(name, type, &netdev);
         if (error) {
-            ovs_error(error, "%s: failed to open network device",
-                      options.name);
-        } else {
-            error = dpif_port_add(dpif, netdev, NULL);
-            if (error) {
-                ovs_error(error, "adding %s to %s failed",
-                          options.name, argv[1]);
-            } else {
-                error = if_up(options.name);
-            }
-            netdev_close(netdev);
+            ovs_error(error, "%s: failed to open network device", name);
+            goto next;
         }
+
+        error = netdev_set_config(netdev, &args);
+        if (error) {
+            ovs_error(error, "%s: failed to configure network device", name);
+            goto next;
+        }
+
+        error = dpif_port_add(dpif, netdev, NULL);
+        if (error) {
+            ovs_error(error, "adding %s to %s failed", name, argv[1]);
+            goto next;
+        }
+
+        error = if_up(name);
+
+next:
+        netdev_close(netdev);
         if (error) {
             failure = true;
         }
@@ -360,44 +366,45 @@ show_dpif(struct dpif *dpif)
 {
     struct dpif_port_dump dump;
     struct dpif_port dpif_port;
-    struct odp_stats stats;
+    struct dpif_dp_stats stats;
+    struct netdev *netdev;
 
     printf("%s:\n", dpif_name(dpif));
     if (!dpif_get_dp_stats(dpif, &stats)) {
-        printf("\tlookups: frags:%llu, hit:%llu, missed:%llu, lost:%llu\n",
-               (unsigned long long int) stats.n_frags,
-               (unsigned long long int) stats.n_hit,
-               (unsigned long long int) stats.n_missed,
-               (unsigned long long int) stats.n_lost);
+        printf("\tlookups: hit:%"PRIu64" missed:%"PRIu64" lost:%"PRIu64"\n"
+               "\tflows: %"PRIu64"\n",
+               stats.n_hit, stats.n_missed, stats.n_lost, stats.n_flows);
     }
     DPIF_PORT_FOR_EACH (&dpif_port, &dump, dpif) {
         printf("\tport %u: %s", dpif_port.port_no, dpif_port.name);
 
         if (strcmp(dpif_port.type, "system")) {
-            struct netdev_options netdev_options;
-            struct netdev *netdev;
             int error;
 
             printf (" (%s", dpif_port.type);
 
-            netdev_options.name = dpif_port.name;
-            netdev_options.type = dpif_port.type;
-            netdev_options.args = NULL;
-            netdev_options.ethertype = NETDEV_ETH_TYPE_NONE;
-            error = netdev_open(&netdev_options, &netdev);
+            error = netdev_open(dpif_port.name, dpif_port.type, &netdev);
             if (!error) {
-                const struct shash_node **nodes;
-                const struct shash *config;
-                size_t i;
+                struct shash config;
 
-                config = netdev_get_config(netdev);
-                nodes = shash_sort(config);
-                for (i = 0; i < shash_count(config); i++) {
-                    const struct shash_node *node = nodes[i];
-                    printf("%c %s=%s", i ? ',' : ':',
-                           node->name, (char *) node->data);
+                shash_init(&config);
+                error = netdev_get_config(netdev, &config);
+                if (!error) {
+                    const struct shash_node **nodes;
+                    size_t i;
+
+                    nodes = shash_sort(&config);
+                    for (i = 0; i < shash_count(&config); i++) {
+                        const struct shash_node *node = nodes[i];
+                        printf("%c %s=%s", i ? ',' : ':',
+                               node->name, (char *) node->data);
+                    }
+                    free(nodes);
+                } else {
+                    printf(", could not retrieve configuration (%s)",
+                           strerror(error));
                 }
-                free(nodes);
+                shash_destroy_free_data(&config);
 
                 netdev_close(netdev);
             } else {
@@ -408,29 +415,42 @@ show_dpif(struct dpif *dpif)
         putchar('\n');
 
         if (print_statistics) {
-            const struct netdev_stats *s = &dpif_port.stats;
+            struct netdev_stats s;
+            int error;
 
-            print_stat("\t\tRX packets:", s->rx_packets);
-            print_stat(" errors:", s->rx_errors);
-            print_stat(" dropped:", s->rx_dropped);
-            print_stat(" overruns:", s->rx_over_errors);
-            print_stat(" frame:", s->rx_frame_errors);
+            error = netdev_open(dpif_port.name, dpif_port.type, &netdev);
+            if (error) {
+                printf(", open failed (%s)", strerror(error));
+                continue;
+            }
+            error = netdev_get_stats(netdev, &s);
+            if (error) {
+                printf(", could not retrieve stats (%s)", strerror(error));
+                continue;
+            }
+
+            netdev_close(netdev);
+            print_stat("\t\tRX packets:", s.rx_packets);
+            print_stat(" errors:", s.rx_errors);
+            print_stat(" dropped:", s.rx_dropped);
+            print_stat(" overruns:", s.rx_over_errors);
+            print_stat(" frame:", s.rx_frame_errors);
             printf("\n");
 
-            print_stat("\t\tTX packets:", s->tx_packets);
-            print_stat(" errors:", s->tx_errors);
-            print_stat(" dropped:", s->tx_dropped);
-            print_stat(" aborted:", s->tx_aborted_errors);
-            print_stat(" carrier:", s->tx_carrier_errors);
+            print_stat("\t\tTX packets:", s.tx_packets);
+            print_stat(" errors:", s.tx_errors);
+            print_stat(" dropped:", s.tx_dropped);
+            print_stat(" aborted:", s.tx_aborted_errors);
+            print_stat(" carrier:", s.tx_carrier_errors);
             printf("\n");
 
-            print_stat("\t\tcollisions:", s->collisions);
+            print_stat("\t\tcollisions:", s.collisions);
             printf("\n");
 
-            print_stat("\t\tRX bytes:", s->rx_bytes);
-            print_human_size(s->rx_bytes);
-            print_stat("  TX bytes:", s->tx_bytes);
-            print_human_size(s->tx_bytes);
+            print_stat("\t\tRX bytes:", s.rx_bytes);
+            print_human_size(s.rx_bytes);
+            print_stat("  TX bytes:", s.tx_bytes);
+            print_human_size(s.tx_bytes);
             printf("\n");
         }
     }

@@ -24,6 +24,7 @@
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <linux/gen_stats.h>
+#include <linux/if_ether.h>
 #include <linux/if_tun.h>
 #include <linux/ip.h>
 #include <linux/types.h>
@@ -37,9 +38,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netpacket/packet.h>
-#include <net/ethernet.h>
 #include <net/if.h>
-#include <linux/if_tunnel.h>
 #include <net/if_arp.h>
 #include <net/if_packet.h>
 #include <net/route.h>
@@ -58,12 +57,12 @@
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "netlink.h"
+#include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "rtnetlink.h"
 #include "rtnetlink-link.h"
 #include "socket-util.h"
 #include "shash.h"
@@ -90,13 +89,22 @@ COVERAGE_DEFINE(netdev_ethtool);
 #define ADVERTISED_Asym_Pause           (1 << 14)
 #endif
 
+/* These were introduced in Linux 2.6.24, so they might be missing if we
+ * have old headers. */
+#ifndef ETHTOOL_GFLAGS
+#define ETHTOOL_GFLAGS       0x00000025 /* Get flags bitmap(ethtool_value) */
+#endif
+#ifndef ETHTOOL_SFLAGS
+#define ETHTOOL_SFLAGS       0x00000026 /* Set flags bitmap(ethtool_value) */
+#endif
+
 /* This was introduced in Linux 2.6.25, so it might be missing if we have old
  * headers. */
 #ifndef TC_RTAB_SIZE
 #define TC_RTAB_SIZE 1024
 #endif
 
-static struct rtnetlink_notifier netdev_linux_cache_notifier;
+static struct nln_notifier *netdev_linux_cache_notifier = NULL;
 static int cache_notifier_refcount;
 
 enum {
@@ -105,10 +113,8 @@ enum {
     VALID_IN4               = 1 << 2,
     VALID_IN6               = 1 << 3,
     VALID_MTU               = 1 << 4,
-    VALID_CARRIER           = 1 << 5,
-    VALID_IS_PSEUDO         = 1 << 6, /* Represents is_internal and is_tap. */
-    VALID_POLICING          = 1 << 7,
-    VALID_HAVE_VPORT_STATS  = 1 << 8
+    VALID_POLICING          = 1 << 5,
+    VALID_HAVE_VPORT_STATS  = 1 << 6
 };
 
 struct tap_state {
@@ -359,9 +365,8 @@ struct netdev_dev_linux {
     struct in_addr address, netmask;
     struct in6_addr in6;
     int mtu;
-    int carrier;
-    bool is_internal;           /* Is this an openvswitch internal device? */
-    bool is_tap;                /* Is this a tuntap device? */
+    bool carrier;
+    long long int carrier_resets;
     uint32_t kbits_rate;        /* Policing data. */
     uint32_t kbits_burst;
     bool have_vport_stats;
@@ -407,6 +412,7 @@ static int set_etheraddr(const char *netdev_name, int hwaddr_family,
                          const uint8_t[ETH_ADDR_LEN]);
 static int get_stats_via_netlink(int ifindex, struct netdev_stats *stats);
 static int get_stats_via_proc(const char *netdev_name, struct netdev_stats *stats);
+static int get_carrier_via_sysfs(const char *name, bool *carrier);
 static int af_packet_sock(void);
 static void netdev_linux_miimon_run(void);
 static void netdev_linux_miimon_wait(void);
@@ -463,14 +469,14 @@ netdev_linux_init(void)
 static void
 netdev_linux_run(void)
 {
-    rtnetlink_link_notifier_run();
+    rtnetlink_link_run();
     netdev_linux_miimon_run();
 }
 
 static void
 netdev_linux_wait(void)
 {
-    rtnetlink_link_notifier_wait();
+    rtnetlink_link_wait();
     netdev_linux_miimon_wait();
 }
 
@@ -497,6 +503,12 @@ netdev_linux_cache_cb(const struct rtnetlink_link_change *change,
 
             if (is_netdev_linux_class(netdev_class)) {
                 dev = netdev_dev_linux_cast(base_dev);
+
+                if (dev->carrier != change->running) {
+                    dev->carrier = change->running;
+                    dev->carrier_resets++;
+                }
+
                 netdev_dev_linux_changed(dev);
             }
         }
@@ -507,7 +519,16 @@ netdev_linux_cache_cb(const struct rtnetlink_link_change *change,
         shash_init(&device_shash);
         netdev_dev_get_devices(&netdev_linux_class, &device_shash);
         SHASH_FOR_EACH (node, &device_shash) {
+            bool carrier;
+
             dev = node->data;
+
+            get_carrier_via_sysfs(node->name, &carrier);
+            if (dev->carrier != carrier) {
+                dev->carrier = carrier;
+                dev->carrier_resets++;
+            }
+
             netdev_dev_linux_changed(dev);
         }
         shash_destroy(&device_shash);
@@ -516,30 +537,27 @@ netdev_linux_cache_cb(const struct rtnetlink_link_change *change,
 
 /* Creates system and internal devices. */
 static int
-netdev_linux_create(const struct netdev_class *class,
-                           const char *name, const struct shash *args,
-                           struct netdev_dev **netdev_devp)
+netdev_linux_create(const struct netdev_class *class, const char *name,
+                    struct netdev_dev **netdev_devp)
 {
     struct netdev_dev_linux *netdev_dev;
-    int error;
-
-    if (!shash_is_empty(args)) {
-        VLOG_WARN("%s: arguments for %s devices should be empty",
-                  name, class->type);
-    }
 
     if (!cache_notifier_refcount) {
-        error = rtnetlink_link_notifier_register(&netdev_linux_cache_notifier,
-                                                 netdev_linux_cache_cb, NULL);
-        if (error) {
-            return error;
+        assert(!netdev_linux_cache_notifier);
+
+        netdev_linux_cache_notifier =
+            rtnetlink_link_notifier_create(netdev_linux_cache_cb, NULL);
+
+        if (!netdev_linux_cache_notifier) {
+            return EINVAL;
         }
     }
     cache_notifier_refcount++;
 
     netdev_dev = xzalloc(sizeof *netdev_dev);
     netdev_dev->change_seq = 1;
-    netdev_dev_init(&netdev_dev->netdev_dev, name, args, class);
+    netdev_dev_init(&netdev_dev->netdev_dev, name, class);
+    get_carrier_via_sysfs(name, &netdev_dev->carrier);
 
     *netdev_devp = &netdev_dev->netdev_dev;
     return 0;
@@ -553,18 +571,13 @@ netdev_linux_create(const struct netdev_class *class,
  * be unavailable to other reads for tap devices. */
 static int
 netdev_linux_create_tap(const struct netdev_class *class OVS_UNUSED,
-                        const char *name, const struct shash *args,
-                        struct netdev_dev **netdev_devp)
+                        const char *name, struct netdev_dev **netdev_devp)
 {
     struct netdev_dev_linux *netdev_dev;
     struct tap_state *state;
     static const char tap_dev[] = "/dev/net/tun";
     struct ifreq ifr;
     int error;
-
-    if (!shash_is_empty(args)) {
-        VLOG_WARN("%s: arguments for TAP devices should be empty", name);
-    }
 
     netdev_dev = xzalloc(sizeof *netdev_dev);
     state = &netdev_dev->state.tap;
@@ -593,7 +606,7 @@ netdev_linux_create_tap(const struct netdev_class *class OVS_UNUSED,
         goto error;
     }
 
-    netdev_dev_init(&netdev_dev->netdev_dev, name, args, &netdev_tap_class);
+    netdev_dev_init(&netdev_dev->netdev_dev, name, &netdev_tap_class);
     *netdev_devp = &netdev_dev->netdev_dev;
     return 0;
 
@@ -627,7 +640,9 @@ netdev_linux_destroy(struct netdev_dev *netdev_dev_)
         cache_notifier_refcount--;
 
         if (!cache_notifier_refcount) {
-            rtnetlink_link_notifier_unregister(&netdev_linux_cache_notifier);
+            assert(netdev_linux_cache_notifier);
+            rtnetlink_link_notifier_destroy(netdev_linux_cache_notifier);
+            netdev_linux_cache_notifier = NULL;
         }
     } else if (class == &netdev_tap_class) {
         destroy_tap(netdev_dev);
@@ -639,8 +654,7 @@ netdev_linux_destroy(struct netdev_dev *netdev_dev_)
 }
 
 static int
-netdev_linux_open(struct netdev_dev *netdev_dev_, int ethertype,
-                  struct netdev **netdevp)
+netdev_linux_open(struct netdev_dev *netdev_dev_, struct netdev **netdevp)
 {
     struct netdev_dev_linux *netdev_dev = netdev_dev_linux_cast(netdev_dev_);
     struct netdev_linux *netdev;
@@ -676,54 +690,6 @@ netdev_linux_open(struct netdev_dev *netdev_dev_, int ethertype,
          * directions appearing to be reversed. */
         netdev->fd = netdev_dev->state.tap.fd;
         netdev_dev->state.tap.opened = true;
-    } else if (ethertype != NETDEV_ETH_TYPE_NONE) {
-        struct sockaddr_ll sll;
-        int protocol;
-        int ifindex;
-
-        /* Create file descriptor. */
-        protocol = (ethertype == NETDEV_ETH_TYPE_ANY ? ETH_P_ALL
-                    : ethertype == NETDEV_ETH_TYPE_802_2 ? ETH_P_802_2
-                    : ethertype);
-        netdev->fd = socket(PF_PACKET, SOCK_RAW,
-                            (OVS_FORCE int) htons(protocol));
-        if (netdev->fd < 0) {
-            error = errno;
-            goto error;
-        }
-
-        /* Set non-blocking mode. */
-        error = set_nonblocking(netdev->fd);
-        if (error) {
-            goto error;
-        }
-
-        /* Get ethernet device index. */
-        error = get_ifindex(&netdev->netdev, &ifindex);
-        if (error) {
-            goto error;
-        }
-
-        /* Bind to specific ethernet device. */
-        memset(&sll, 0, sizeof sll);
-        sll.sll_family = AF_PACKET;
-        sll.sll_ifindex = ifindex;
-        if (bind(netdev->fd,
-                 (struct sockaddr *) &sll, sizeof sll) < 0) {
-            error = errno;
-            VLOG_ERR("bind to %s failed: %s", netdev_dev_get_name(netdev_dev_),
-                     strerror(error));
-            goto error;
-        }
-
-        /* Between the socket() and bind() calls above, the socket receives all
-         * packets of the requested type on all system interfaces.  We do not
-         * want to receive that data, but there is no way to avoid it.  So we
-         * must now drain out the receive queue. */
-        error = drain_rcvbuf(netdev->fd);
-        if (error) {
-            goto error;
-        }
     }
 
     *netdevp = &netdev->netdev;
@@ -746,26 +712,59 @@ netdev_linux_close(struct netdev *netdev_)
     free(netdev);
 }
 
-/* Initializes 'sset' with a list of the names of all known network devices. */
 static int
-netdev_linux_enumerate(struct sset *sset)
+netdev_linux_listen(struct netdev *netdev_)
 {
-    struct if_nameindex *names;
+    struct netdev_linux *netdev = netdev_linux_cast(netdev_);
+    struct sockaddr_ll sll;
+    int ifindex;
+    int error;
+    int fd;
 
-    names = if_nameindex();
-    if (names) {
-        size_t i;
-
-        for (i = 0; names[i].if_name != NULL; i++) {
-            sset_add(sset, names[i].if_name);
-        }
-        if_freenameindex(names);
+    if (netdev->fd >= 0) {
         return 0;
-    } else {
-        VLOG_WARN("could not obtain list of network device names: %s",
-                  strerror(errno));
-        return errno;
     }
+
+    /* Create file descriptor. */
+    fd = socket(PF_PACKET, SOCK_RAW, 0);
+    if (fd < 0) {
+        error = errno;
+        VLOG_ERR("failed to create raw socket (%s)", strerror(error));
+        goto error;
+    }
+
+    /* Set non-blocking mode. */
+    error = set_nonblocking(fd);
+    if (error) {
+        goto error;
+    }
+
+    /* Get ethernet device index. */
+    error = get_ifindex(&netdev->netdev, &ifindex);
+    if (error) {
+        goto error;
+    }
+
+    /* Bind to specific ethernet device. */
+    memset(&sll, 0, sizeof sll);
+    sll.sll_family = AF_PACKET;
+    sll.sll_ifindex = ifindex;
+    sll.sll_protocol = (OVS_FORCE unsigned short int) htons(ETH_P_ALL);
+    if (bind(fd, (struct sockaddr *) &sll, sizeof sll) < 0) {
+        error = errno;
+        VLOG_ERR("%s: failed to bind raw socket (%s)",
+                 netdev_get_name(netdev_), strerror(error));
+        goto error;
+    }
+
+    netdev->fd = fd;
+    return 0;
+
+error:
+    if (fd >= 0) {
+        close(fd);
+    }
+    return error;
 }
 
 static int
@@ -774,7 +773,7 @@ netdev_linux_recv(struct netdev *netdev_, void *data, size_t size)
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
 
     if (netdev->fd < 0) {
-        /* Device was opened with NETDEV_ETH_TYPE_NONE. */
+        /* Device is not listening. */
         return -EAGAIN;
     }
 
@@ -996,6 +995,29 @@ netdev_linux_get_mtu(const struct netdev *netdev_, int *mtup)
     return 0;
 }
 
+/* Sets the maximum size of transmitted (MTU) for given device using linux
+ * networking ioctl interface.
+ */
+static int
+netdev_linux_set_mtu(const struct netdev *netdev_, int mtu)
+{
+    struct netdev_dev_linux *netdev_dev =
+                                netdev_dev_linux_cast(netdev_get_dev(netdev_));
+    struct ifreq ifr;
+    int error;
+
+    ifr.ifr_mtu = mtu;
+    error = netdev_linux_do_ioctl(netdev_get_name(netdev_), &ifr,
+                                  SIOCSIFMTU, "SIOCSIFMTU");
+    if (error) {
+        return error;
+    }
+
+    netdev_dev->mtu = ifr.ifr_mtu;
+    netdev_dev->cache_valid |= VALID_MTU;
+    return 0;
+}
+
 /* Returns the ifindex of 'netdev', if successful, as a positive number.
  * On failure, returns a negative errno value. */
 static int
@@ -1012,62 +1034,20 @@ netdev_linux_get_carrier(const struct netdev *netdev_, bool *carrier)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev_));
-    int error = 0;
-    char *fn = NULL;
-    int fd = -1;
 
     if (netdev_dev->miimon_interval > 0) {
         *carrier = netdev_dev->miimon;
-        return 0;
+    } else {
+        *carrier = netdev_dev->carrier;
     }
 
-    if (!(netdev_dev->cache_valid & VALID_CARRIER)) {
-        char line[8];
-        int retval;
+    return 0;
+}
 
-        fn = xasprintf("/sys/class/net/%s/carrier",
-                       netdev_get_name(netdev_));
-        fd = open(fn, O_RDONLY);
-        if (fd < 0) {
-            error = errno;
-            VLOG_WARN_RL(&rl, "%s: open failed: %s", fn, strerror(error));
-            goto exit;
-        }
-
-        retval = read(fd, line, sizeof line);
-        if (retval < 0) {
-            error = errno;
-            if (error == EINVAL) {
-                /* This is the normal return value when we try to check carrier
-                 * if the network device is not up. */
-            } else {
-                VLOG_WARN_RL(&rl, "%s: read failed: %s", fn, strerror(error));
-            }
-            goto exit;
-        } else if (retval == 0) {
-            error = EPROTO;
-            VLOG_WARN_RL(&rl, "%s: unexpected end of file", fn);
-            goto exit;
-        }
-
-        if (line[0] != '0' && line[0] != '1') {
-            error = EPROTO;
-            VLOG_WARN_RL(&rl, "%s: value is %c (expected 0 or 1)",
-                         fn, line[0]);
-            goto exit;
-        }
-        netdev_dev->carrier = line[0] != '0';
-        netdev_dev->cache_valid |= VALID_CARRIER;
-    }
-    *carrier = netdev_dev->carrier;
-    error = 0;
-
-exit:
-    if (fd >= 0) {
-        close(fd);
-    }
-    free(fn);
-    return error;
+static long long int
+netdev_linux_get_carrier_resets(const struct netdev *netdev)
+{
+    return netdev_dev_linux_cast(netdev_get_dev(netdev))->carrier_resets;
 }
 
 static int
@@ -1219,21 +1199,6 @@ check_for_working_netlink_stats(void)
     }
 }
 
-/* Brings the 'is_internal' and 'is_tap' members of 'netdev_dev' up-to-date. */
-static void
-netdev_linux_update_is_pseudo(struct netdev_dev_linux *netdev_dev)
-{
-    if (!(netdev_dev->cache_valid & VALID_IS_PSEUDO)) {
-        const char *name = netdev_dev_get_name(&netdev_dev->netdev_dev);
-        const char *type = netdev_dev_get_type(&netdev_dev->netdev_dev);
-
-        netdev_dev->is_tap = !strcmp(type, "tap");
-        netdev_dev->is_internal = (!netdev_dev->is_tap
-                                   && dpif_linux_is_internal_device(name));
-        netdev_dev->cache_valid |= VALID_IS_PSEUDO;
-    }
-}
-
 static void
 swap_uint64(uint64_t *a, uint64_t *b)
 {
@@ -1242,37 +1207,123 @@ swap_uint64(uint64_t *a, uint64_t *b)
     *b = tmp;
 }
 
-/* Retrieves current device stats for 'netdev'. */
+static void
+get_stats_via_vport(const struct netdev *netdev_,
+                    struct netdev_stats *stats)
+{
+    struct netdev_dev_linux *netdev_dev =
+                                netdev_dev_linux_cast(netdev_get_dev(netdev_));
+
+    if (netdev_dev->have_vport_stats ||
+        !(netdev_dev->cache_valid & VALID_HAVE_VPORT_STATS)) {
+        int error;
+
+        error = netdev_vport_get_stats(netdev_, stats);
+        if (error) {
+            VLOG_WARN_RL(&rl, "%s: obtaining netdev stats via vport failed %d",
+                         netdev_get_name(netdev_), error);
+        }
+        netdev_dev->have_vport_stats = !error;
+        netdev_dev->cache_valid |= VALID_HAVE_VPORT_STATS;
+    }
+}
+
+static int
+netdev_linux_sys_get_stats(const struct netdev *netdev_,
+                         struct netdev_stats *stats)
+{
+    static int use_netlink_stats = -1;
+    int error;
+
+    if (use_netlink_stats < 0) {
+        use_netlink_stats = check_for_working_netlink_stats();
+    }
+
+    if (use_netlink_stats) {
+        int ifindex;
+
+        error = get_ifindex(netdev_, &ifindex);
+        if (!error) {
+            error = get_stats_via_netlink(ifindex, stats);
+        }
+    } else {
+        error = get_stats_via_proc(netdev_get_name(netdev_), stats);
+    }
+
+    if (error) {
+        VLOG_WARN_RL(&rl, "%s: linux-sys get stats failed %d",
+                      netdev_get_name(netdev_), error);
+    }
+    return error;
+
+}
+
+/* Retrieves current device stats for 'netdev-linux'. */
 static int
 netdev_linux_get_stats(const struct netdev *netdev_,
                        struct netdev_stats *stats)
 {
     struct netdev_dev_linux *netdev_dev =
                                 netdev_dev_linux_cast(netdev_get_dev(netdev_));
-    static int use_netlink_stats = -1;
+    struct netdev_stats dev_stats;
     int error;
 
-    if (netdev_dev->have_vport_stats ||
-        !(netdev_dev->cache_valid & VALID_HAVE_VPORT_STATS)) {
+    get_stats_via_vport(netdev_, stats);
 
-        error = netdev_vport_get_stats(netdev_, stats);
-        netdev_dev->have_vport_stats = !error;
-        netdev_dev->cache_valid |= VALID_HAVE_VPORT_STATS;
+    error = netdev_linux_sys_get_stats(netdev_, &dev_stats);
+
+    if (error) {
+        if (!netdev_dev->have_vport_stats) {
+            return error;
+        } else {
+            return 0;
+        }
     }
 
     if (!netdev_dev->have_vport_stats) {
-        if (use_netlink_stats < 0) {
-            use_netlink_stats = check_for_working_netlink_stats();
-        }
-        if (use_netlink_stats) {
-            int ifindex;
+        /* stats not available from OVS then use ioctl stats. */
+        *stats = dev_stats;
+    } else {
+        stats->rx_errors           += dev_stats.rx_errors;
+        stats->tx_errors           += dev_stats.tx_errors;
+        stats->rx_dropped          += dev_stats.rx_dropped;
+        stats->tx_dropped          += dev_stats.tx_dropped;
+        stats->multicast           += dev_stats.multicast;
+        stats->collisions          += dev_stats.collisions;
+        stats->rx_length_errors    += dev_stats.rx_length_errors;
+        stats->rx_over_errors      += dev_stats.rx_over_errors;
+        stats->rx_crc_errors       += dev_stats.rx_crc_errors;
+        stats->rx_frame_errors     += dev_stats.rx_frame_errors;
+        stats->rx_fifo_errors      += dev_stats.rx_fifo_errors;
+        stats->rx_missed_errors    += dev_stats.rx_missed_errors;
+        stats->tx_aborted_errors   += dev_stats.tx_aborted_errors;
+        stats->tx_carrier_errors   += dev_stats.tx_carrier_errors;
+        stats->tx_fifo_errors      += dev_stats.tx_fifo_errors;
+        stats->tx_heartbeat_errors += dev_stats.tx_heartbeat_errors;
+        stats->tx_window_errors    += dev_stats.tx_window_errors;
+    }
+    return 0;
+}
 
-            error = get_ifindex(netdev_, &ifindex);
-            if (!error) {
-                error = get_stats_via_netlink(ifindex, stats);
-            }
+/* Retrieves current device stats for 'netdev-tap' netdev or
+ * netdev-internal. */
+static int
+netdev_pseudo_get_stats(const struct netdev *netdev_,
+                        struct netdev_stats *stats)
+{
+    struct netdev_dev_linux *netdev_dev =
+                                netdev_dev_linux_cast(netdev_get_dev(netdev_));
+    struct netdev_stats dev_stats;
+    int error;
+
+    get_stats_via_vport(netdev_, stats);
+
+    error = netdev_linux_sys_get_stats(netdev_, &dev_stats);
+    if (error) {
+        if (!netdev_dev->have_vport_stats) {
+            return error;
         } else {
-            error = get_stats_via_proc(netdev_get_name(netdev_), stats);
+            return 0;
         }
     }
 
@@ -1282,9 +1333,8 @@ netdev_linux_get_stats(const struct netdev *netdev_,
      * them back here. This does not apply if we are getting stats from the
      * vport layer because it always tracks stats from the perspective of the
      * switch. */
-    netdev_linux_update_is_pseudo(netdev_dev);
-    if (!error && !netdev_dev->have_vport_stats &&
-        (netdev_dev->is_internal || netdev_dev->is_tap)) {
+    if (!netdev_dev->have_vport_stats) {
+        *stats = dev_stats;
         swap_uint64(&stats->rx_packets, &stats->tx_packets);
         swap_uint64(&stats->rx_bytes, &stats->tx_bytes);
         swap_uint64(&stats->rx_errors, &stats->tx_errors);
@@ -1300,9 +1350,17 @@ netdev_linux_get_stats(const struct netdev *netdev_,
         stats->tx_fifo_errors = 0;
         stats->tx_heartbeat_errors = 0;
         stats->tx_window_errors = 0;
-    }
+    } else {
+        stats->rx_dropped          += dev_stats.tx_dropped;
+        stats->tx_dropped          += dev_stats.rx_dropped;
 
-    return error;
+        stats->rx_errors           += dev_stats.tx_errors;
+        stats->tx_errors           += dev_stats.rx_errors;
+
+        stats->multicast           += dev_stats.multicast;
+        stats->collisions          += dev_stats.collisions;
+    }
+    return 0;
 }
 
 /* Stores the features supported by 'netdev' into each of '*current',
@@ -2236,7 +2294,7 @@ netdev_linux_change_seq(const struct netdev *netdev)
     return netdev_dev_linux_cast(netdev_get_dev(netdev))->change_seq;
 }
 
-#define NETDEV_LINUX_CLASS(NAME, CREATE, ENUMERATE, SET_STATS)  \
+#define NETDEV_LINUX_CLASS(NAME, CREATE, GET_STATS, SET_STATS)  \
 {                                                               \
     NAME,                                                       \
                                                                 \
@@ -2246,14 +2304,13 @@ netdev_linux_change_seq(const struct netdev *netdev)
                                                                 \
     CREATE,                                                     \
     netdev_linux_destroy,                                       \
+    NULL,                       /* get_config */                \
     NULL,                       /* set_config */                \
-    NULL,                       /* config_equal */              \
                                                                 \
     netdev_linux_open,                                          \
     netdev_linux_close,                                         \
                                                                 \
-    ENUMERATE,                                                  \
-                                                                \
+    netdev_linux_listen,                                        \
     netdev_linux_recv,                                          \
     netdev_linux_recv_wait,                                     \
     netdev_linux_drain,                                         \
@@ -2264,10 +2321,12 @@ netdev_linux_change_seq(const struct netdev *netdev)
     netdev_linux_set_etheraddr,                                 \
     netdev_linux_get_etheraddr,                                 \
     netdev_linux_get_mtu,                                       \
+    netdev_linux_set_mtu,                                       \
     netdev_linux_get_ifindex,                                   \
     netdev_linux_get_carrier,                                   \
+    netdev_linux_get_carrier_resets,                            \
     netdev_linux_set_miimon_interval,                           \
-    netdev_linux_get_stats,                                     \
+    GET_STATS,                                                  \
     SET_STATS,                                                  \
                                                                 \
     netdev_linux_get_features,                                  \
@@ -2303,21 +2362,21 @@ const struct netdev_class netdev_linux_class =
     NETDEV_LINUX_CLASS(
         "system",
         netdev_linux_create,
-        netdev_linux_enumerate,
+        netdev_linux_get_stats,
         NULL);                  /* set_stats */
 
 const struct netdev_class netdev_tap_class =
     NETDEV_LINUX_CLASS(
         "tap",
         netdev_linux_create_tap,
-        NULL,                   /* enumerate */
+        netdev_pseudo_get_stats,
         NULL);                  /* set_stats */
 
 const struct netdev_class netdev_internal_class =
     NETDEV_LINUX_CLASS(
         "internal",
         netdev_linux_create,
-        NULL,                    /* enumerate */
+        netdev_pseudo_get_stats,
         netdev_vport_set_stats);
 
 /* HTB traffic control class. */
@@ -2407,11 +2466,11 @@ htb_setup_class__(struct netdev *netdev, unsigned int handle,
     int error;
     int mtu;
 
-    netdev_get_mtu(netdev, &mtu);
-    if (mtu == INT_MAX) {
+    error = netdev_get_mtu(netdev, &mtu);
+    if (error) {
         VLOG_WARN_RL(&rl, "cannot set up HTB on device %s that lacks MTU",
                      netdev_get_name(netdev));
-        return EINVAL;
+        return error;
     }
 
     memset(&opt, 0, sizeof opt);
@@ -2530,13 +2589,13 @@ htb_parse_class_details__(struct netdev *netdev,
     const char *max_rate_s = shash_find_data(details, "max-rate");
     const char *burst_s = shash_find_data(details, "burst");
     const char *priority_s = shash_find_data(details, "priority");
-    int mtu;
+    int mtu, error;
 
-    netdev_get_mtu(netdev, &mtu);
-    if (mtu == INT_MAX) {
+    error = netdev_get_mtu(netdev, &mtu);
+    if (error) {
         VLOG_WARN_RL(&rl, "cannot parse HTB class on device %s that lacks MTU",
                      netdev_get_name(netdev));
-        return EINVAL;
+        return error;
     }
 
     /* HTB requires at least an mtu sized min-rate to send any traffic even
@@ -3927,56 +3986,34 @@ tc_calc_buffer(unsigned int Bps, int mtu, uint64_t burst_bytes)
     return tc_bytes_to_ticks(Bps, MAX(burst_bytes, min_burst));
 }
 
-/* Public utility functions. */
-
-#define COPY_NETDEV_STATS                                   \
-    dst->rx_packets = src->rx_packets;                      \
-    dst->tx_packets = src->tx_packets;                      \
-    dst->rx_bytes = src->rx_bytes;                          \
-    dst->tx_bytes = src->tx_bytes;                          \
-    dst->rx_errors = src->rx_errors;                        \
-    dst->tx_errors = src->tx_errors;                        \
-    dst->rx_dropped = src->rx_dropped;                      \
-    dst->tx_dropped = src->tx_dropped;                      \
-    dst->multicast = src->multicast;                        \
-    dst->collisions = src->collisions;                      \
-    dst->rx_length_errors = src->rx_length_errors;          \
-    dst->rx_over_errors = src->rx_over_errors;              \
-    dst->rx_crc_errors = src->rx_crc_errors;                \
-    dst->rx_frame_errors = src->rx_frame_errors;            \
-    dst->rx_fifo_errors = src->rx_fifo_errors;              \
-    dst->rx_missed_errors = src->rx_missed_errors;          \
-    dst->tx_aborted_errors = src->tx_aborted_errors;        \
-    dst->tx_carrier_errors = src->tx_carrier_errors;        \
-    dst->tx_fifo_errors = src->tx_fifo_errors;              \
-    dst->tx_heartbeat_errors = src->tx_heartbeat_errors;    \
-    dst->tx_window_errors = src->tx_window_errors
-
 /* Copies 'src' into 'dst', performing format conversion in the process. */
-void
+static void
 netdev_stats_from_rtnl_link_stats(struct netdev_stats *dst,
                                   const struct rtnl_link_stats *src)
 {
-    COPY_NETDEV_STATS;
+    dst->rx_packets = src->rx_packets;
+    dst->tx_packets = src->tx_packets;
+    dst->rx_bytes = src->rx_bytes;
+    dst->tx_bytes = src->tx_bytes;
+    dst->rx_errors = src->rx_errors;
+    dst->tx_errors = src->tx_errors;
+    dst->rx_dropped = src->rx_dropped;
+    dst->tx_dropped = src->tx_dropped;
+    dst->multicast = src->multicast;
+    dst->collisions = src->collisions;
+    dst->rx_length_errors = src->rx_length_errors;
+    dst->rx_over_errors = src->rx_over_errors;
+    dst->rx_crc_errors = src->rx_crc_errors;
+    dst->rx_frame_errors = src->rx_frame_errors;
+    dst->rx_fifo_errors = src->rx_fifo_errors;
+    dst->rx_missed_errors = src->rx_missed_errors;
+    dst->tx_aborted_errors = src->tx_aborted_errors;
+    dst->tx_carrier_errors = src->tx_carrier_errors;
+    dst->tx_fifo_errors = src->tx_fifo_errors;
+    dst->tx_heartbeat_errors = src->tx_heartbeat_errors;
+    dst->tx_window_errors = src->tx_window_errors;
 }
 
-/* Copies 'src' into 'dst', performing format conversion in the process. */
-void
-netdev_stats_from_rtnl_link_stats64(struct netdev_stats *dst,
-                                    const struct rtnl_link_stats64 *src)
-{
-    COPY_NETDEV_STATS;
-}
-
-/* Copies 'src' into 'dst', performing format conversion in the process. */
-void
-netdev_stats_to_rtnl_link_stats64(struct rtnl_link_stats64 *dst,
-                                  const struct netdev_stats *src)
-{
-    COPY_NETDEV_STATS;
-    dst->rx_compressed = 0;
-    dst->tx_compressed = 0;
-}
 
 /* Utility functions. */
 
@@ -4085,6 +4122,58 @@ get_stats_via_proc(const char *netdev_name, struct netdev_stats *stats)
     VLOG_WARN_RL(&rl, "%s: no stats for %s", fn, netdev_name);
     fclose(stream);
     return ENODEV;
+}
+
+static int
+get_carrier_via_sysfs(const char *name, bool *carrier)
+{
+    char line[8];
+    int retval;
+
+    int error = 0;
+    char *fn = NULL;
+    int fd = -1;
+
+    *carrier = false;
+
+    fn = xasprintf("/sys/class/net/%s/carrier", name);
+    fd = open(fn, O_RDONLY);
+    if (fd < 0) {
+        error = errno;
+        VLOG_WARN_RL(&rl, "%s: open failed: %s", fn, strerror(error));
+        goto exit;
+    }
+
+    retval = read(fd, line, sizeof line);
+    if (retval < 0) {
+        error = errno;
+        if (error == EINVAL) {
+            /* This is the normal return value when we try to check carrier if
+             * the network device is not up. */
+        } else {
+            VLOG_WARN_RL(&rl, "%s: read failed: %s", fn, strerror(error));
+        }
+        goto exit;
+    } else if (retval == 0) {
+        error = EPROTO;
+        VLOG_WARN_RL(&rl, "%s: unexpected end of file", fn);
+        goto exit;
+    }
+
+    if (line[0] != '0' && line[0] != '1') {
+        error = EPROTO;
+        VLOG_WARN_RL(&rl, "%s: value is %c (expected 0 or 1)", fn, line[0]);
+        goto exit;
+    }
+    *carrier = line[0] != '0';
+    error = 0;
+
+exit:
+    if (fd >= 0) {
+        close(fd);
+    }
+    free(fn);
+    return error;
 }
 
 static int
@@ -4212,6 +4301,51 @@ netdev_linux_do_ethtool(const char *name, struct ethtool_cmd *ecmd,
         }
         return errno;
     }
+}
+
+/* Modifies the 'flag' bit in ethtool's flags field for 'netdev'.  If
+ * 'enable' is true, the bit is set.  Otherwise, it is cleared. */
+int
+netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
+                              const char *flag_name, bool enable)
+{
+    const char *netdev_name = netdev_get_name(netdev);
+    struct ethtool_value evalue;
+    uint32_t new_flags;
+    int error;
+
+    memset(&evalue, 0, sizeof evalue);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
+    if (error) {
+        return error;
+    }
+
+    evalue.data = new_flags = (evalue.data & ~flag) | (enable ? flag : 0);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_SFLAGS, "ETHTOOL_SFLAGS");
+    if (error) {
+        return error;
+    }
+
+    memset(&evalue, 0, sizeof evalue);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
+    if (error) {
+        return error;
+    }
+
+    if (new_flags != evalue.data) {
+        VLOG_WARN_RL(&rl, "attempt to %s ethtool %s flag on network "
+                     "device %s failed", enable ? "enable" : "disable",
+                     flag_name, netdev_name);
+        return EOPNOTSUPP;
+    }
+
+    return 0;
 }
 
 static int

@@ -31,6 +31,7 @@
 #include "compiler.h"
 #include "dynamic-string.h"
 #include "flow.h"
+#include "learn.h"
 #include "multipath.h"
 #include "nx-match.h"
 #include "ofp-util.h"
@@ -43,7 +44,6 @@
 #include "unaligned.h"
 #include "util.h"
 
-static void ofp_print_port_name(struct ds *string, uint16_t port);
 static void ofp_print_queue_name(struct ds *string, uint32_t port);
 static void ofp_print_error(struct ds *, int error);
 
@@ -115,7 +115,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_packet_in *op,
 
     ds_put_format(string, " total_len=%"PRIu16" in_port=",
                   ntohs(op->total_len));
-    ofp_print_port_name(string, ntohs(op->in_port));
+    ofputil_format_port(ntohs(op->in_port), string);
 
     if (op->reason == OFPR_ACTION)
         ds_put_cstr(string, " (via action)");
@@ -152,42 +152,6 @@ ofp_print_packet_in(struct ds *string, const struct ofp_packet_in *op,
     }
 }
 
-static void ofp_print_port_name(struct ds *string, uint16_t port)
-{
-    const char *name;
-    switch (port) {
-    case OFPP_IN_PORT:
-        name = "IN_PORT";
-        break;
-    case OFPP_TABLE:
-        name = "TABLE";
-        break;
-    case OFPP_NORMAL:
-        name = "NORMAL";
-        break;
-    case OFPP_FLOOD:
-        name = "FLOOD";
-        break;
-    case OFPP_ALL:
-        name = "ALL";
-        break;
-    case OFPP_CONTROLLER:
-        name = "CONTROLLER";
-        break;
-    case OFPP_LOCAL:
-        name = "LOCAL";
-        break;
-    case OFPP_NONE:
-        name = "NONE";
-        break;
-    default:
-        ds_put_format(string, "%"PRIu16, port);
-        return;
-    }
-    ds_put_cstr(string, name);
-}
-
-
 static void
 print_note(struct ds *string, const struct nx_action_note *nan)
 {
@@ -218,6 +182,7 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
     const struct nx_action_reg_load *load;
     const struct nx_action_multipath *nam;
     const struct nx_action_autopath *naa;
+    const struct nx_action_output_reg *naor;
     uint16_t port;
 
     switch (code) {
@@ -226,7 +191,7 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
         if (port < OFPP_MAX) {
             ds_put_format(s, "output:%"PRIu16, port);
         } else {
-            ofp_print_port_name(s, port);
+            ofputil_format_port(port, s);
             if (port == OFPP_CONTROLLER) {
                 if (a->output.max_len != htons(0)) {
                     ds_put_format(s, ":%"PRIu16, ntohs(a->output.max_len));
@@ -240,7 +205,7 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
     case OFPUTIL_OFPAT_ENQUEUE:
         oae = (const struct ofp_action_enqueue *) a;
         ds_put_format(s, "enqueue:");
-        ofp_print_port_name(s, ntohs(oae->port));
+        ofputil_format_port(ntohs(oae->port), s);
         ds_put_format(s, "q%"PRIu32, ntohl(oae->queue_id));
         break;
 
@@ -292,7 +257,20 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
     case OFPUTIL_NXAST_RESUBMIT:
         nar = (struct nx_action_resubmit *)a;
         ds_put_format(s, "resubmit:");
-        ofp_print_port_name(s, ntohs(nar->in_port));
+        ofputil_format_port(ntohs(nar->in_port), s);
+        break;
+
+    case OFPUTIL_NXAST_RESUBMIT_TABLE:
+        nar = (struct nx_action_resubmit *)a;
+        ds_put_format(s, "resubmit(");
+        if (nar->in_port != htons(OFPP_IN_PORT)) {
+            ofputil_format_port(ntohs(nar->in_port), s);
+        }
+        ds_put_char(s, ',');
+        if (nar->table != 255) {
+            ds_put_format(s, "%"PRIu8, nar->table);
+        }
+        ds_put_char(s, ')');
         break;
 
     case OFPUTIL_NXAST_SET_TUNNEL:
@@ -348,6 +326,18 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
         bundle_format((const struct nx_action_bundle *) a, s);
         break;
 
+    case OFPUTIL_NXAST_OUTPUT_REG:
+        naor = (const struct nx_action_output_reg *) a;
+        ds_put_cstr(s, "output:");
+        nxm_format_field_bits(s, ntohl(naor->src),
+                              nxm_decode_ofs(naor->ofs_nbits),
+                              nxm_decode_n_bits(naor->ofs_nbits));
+        break;
+
+    case OFPUTIL_NXAST_LEARN:
+        learn_format((const struct nx_action_learn *) a, s);
+        break;
+
     default:
         break;
     }
@@ -390,7 +380,7 @@ ofp_print_packet_out(struct ds *string, const struct ofp_packet_out *opo,
     size_t actions_len = ntohs(opo->actions_len);
 
     ds_put_cstr(string, " in_port=");
-    ofp_print_port_name(string, ntohs(opo->in_port));
+    ofputil_format_port(ntohs(opo->in_port), string);
 
     ds_put_format(string, " actions_len=%zu ", actions_len);
     if (actions_len > (ntohs(opo->header.length) - sizeof *opo)) {
@@ -553,7 +543,7 @@ ofp_print_phy_port(struct ds *string, const struct ofp_phy_port *port)
     name[j] = '\0';
 
     ds_put_char(string, ' ');
-    ofp_print_port_name(string, ntohs(port->port_no));
+    ofputil_format_port(ntohs(port->port_no), string);
     ds_put_format(string, "(%s): addr:"ETH_ADDR_FMT"\n",
                   name, ETH_ADDR_ARGS(port->hw_addr));
 
@@ -614,21 +604,9 @@ ofp_print_switch_config(struct ds *string, const struct ofp_switch_config *osc)
 
     flags = ntohs(osc->flags);
 
-    ds_put_cstr(string, " frags=");
-    switch (flags & OFPC_FRAG_MASK) {
-    case OFPC_FRAG_NORMAL:
-        ds_put_cstr(string, "normal");
-        flags &= ~OFPC_FRAG_MASK;
-        break;
-    case OFPC_FRAG_DROP:
-        ds_put_cstr(string, "drop");
-        flags &= ~OFPC_FRAG_MASK;
-        break;
-    case OFPC_FRAG_REASM:
-        ds_put_cstr(string, "reassemble");
-        flags &= ~OFPC_FRAG_MASK;
-        break;
-    }
+    ds_put_format(string, " frags=%s", ofputil_frag_handling_to_string(flags));
+    flags &= ~OFPC_FRAG_MASK;
+
     if (flags) {
         ds_put_format(string, " ***unknown flags 0x%04"PRIx16"***", flags);
     }
@@ -749,9 +727,9 @@ ofp_match_to_string(const struct ofp_match *om, int verbosity)
                "%u", om->nw_tos);
     if (om->nw_proto == IPPROTO_ICMP) {
         print_wild(&f, "icmp_type=", w & OFPFW_ICMP_TYPE, verbosity,
-                   "%d", ntohs(om->icmp_type));
+                   "%d", ntohs(om->tp_src));
         print_wild(&f, "icmp_code=", w & OFPFW_ICMP_CODE, verbosity,
-                   "%d", ntohs(om->icmp_code));
+                   "%d", ntohs(om->tp_dst));
     } else {
         print_wild(&f, "tp_src=", w & OFPFW_TP_SRC, verbosity,
                    "%d", ntohs(om->tp_src));
@@ -768,7 +746,7 @@ static void
 ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh,
                    enum ofputil_msg_code code, int verbosity)
 {
-    struct flow_mod fm;
+    struct ofputil_flow_mod fm;
     bool need_priority;
     int error;
 
@@ -1003,7 +981,7 @@ static void
 ofp_print_flow_stats_request(struct ds *string,
                              const struct ofp_stats_msg *osm)
 {
-    struct flow_stats_request fsr;
+    struct ofputil_flow_stats_request fsr;
     int error;
 
     error = ofputil_decode_flow_stats_request(&fsr, &osm->header);
@@ -1018,7 +996,7 @@ ofp_print_flow_stats_request(struct ds *string,
 
     if (fsr.out_port != OFPP_NONE) {
         ds_put_cstr(string, " out_port=");
-        ofp_print_port_name(string, fsr.out_port);
+        ofputil_format_port(fsr.out_port, string);
     }
 
     /* A flow stats request doesn't include a priority, but cls_rule_format()
@@ -1063,7 +1041,9 @@ ofp_print_flow_stats_reply(struct ds *string, const struct ofp_header *oh)
         }
 
         cls_rule_format(&fs.rule, string);
-        ds_put_char(string, ' ');
+        if (string->string[string->length - 1] != ' ') {
+            ds_put_char(string, ' ');
+        }
         ofp_print_actions(string, fs.actions, fs.n_actions);
      }
 }
@@ -1187,7 +1167,7 @@ ofp_print_ofpst_queue_request(struct ds *string,
                               const struct ofp_queue_stats_request *qsr)
 {
     ds_put_cstr(string, "port=");
-    ofp_print_port_name(string, ntohs(qsr->port_no));
+    ofputil_format_port(ntohs(qsr->port_no), string);
 
     ds_put_cstr(string, " queue=");
     ofp_print_queue_name(string, ntohl(qsr->queue_id));
@@ -1206,7 +1186,7 @@ ofp_print_ofpst_queue_reply(struct ds *string, const struct ofp_header *oh,
 
     for (; n--; qs++) {
         ds_put_cstr(string, "  port ");
-        ofp_print_port_name(string, ntohs(qs->port_no));
+        ofputil_format_port(ntohs(qs->port_no), string);
         ds_put_cstr(string, " queue ");
         ofp_print_queue_name(string, ntohl(qs->queue_id));
         ds_put_cstr(string, ": ");

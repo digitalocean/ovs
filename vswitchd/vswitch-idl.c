@@ -293,6 +293,40 @@ ovsrec_bridge_parse_sflow(struct ovsdb_idl_row *row_, const struct ovsdb_datum *
 }
 
 static void
+ovsrec_bridge_parse_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_bridge *row = ovsrec_bridge_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_status = NULL;
+    row->value_status = NULL;
+    row->n_status = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_status) {
+            row->key_status = xmalloc(datum->n * sizeof *row->key_status);
+            row->value_status = xmalloc(datum->n * sizeof *row->value_status);
+        }
+        row->key_status[row->n_status] = datum->keys[i].string;
+        row->value_status[row->n_status] = datum->values[i].string;
+        row->n_status++;
+    }
+}
+
+static void
+ovsrec_bridge_parse_stp_enable(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_bridge *row = ovsrec_bridge_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->stp_enable = datum->keys[0].boolean;
+    } else {
+        row->stp_enable = false;
+    }
+}
+
+static void
 ovsrec_bridge_unparse_controller(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_bridge *row = ovsrec_bridge_cast(row_);
@@ -380,6 +414,22 @@ ovsrec_bridge_unparse_ports(struct ovsdb_idl_row *row_)
 
 static void
 ovsrec_bridge_unparse_sflow(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+ovsrec_bridge_unparse_status(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_bridge *row = ovsrec_bridge_cast(row_);
+
+    assert(inited);
+    free(row->key_status);
+    free(row->value_status);
+}
+
+static void
+ovsrec_bridge_unparse_stp_enable(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
 }
@@ -491,6 +541,20 @@ ovsrec_bridge_verify_sflow(const struct ovsrec_bridge *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_SFLOW]);
+}
+
+void
+ovsrec_bridge_verify_status(const struct ovsrec_bridge *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_STATUS]);
+}
+
+void
+ovsrec_bridge_verify_stp_enable(const struct ovsrec_bridge *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_STP_ENABLE]);
 }
 
 /* Returns the controller column's value in 'row' as a struct ovsdb_datum.
@@ -775,6 +839,55 @@ ovsrec_bridge_get_sflow(const struct ovsrec_bridge *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_bridge_col_sflow);
 }
 
+/* Returns the status column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes status's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_bridge_get_status(const struct ovsrec_bridge *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_bridge_col_status);
+}
+
+/* Returns the stp_enable column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_BOOLEAN.
+ * (This helps to avoid silent bugs if someone changes stp_enable's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_bridge_get_stp_enable(const struct ovsrec_bridge *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    return ovsdb_idl_read(&row->header_, &ovsrec_bridge_col_stp_enable);
+}
+
 void
 ovsrec_bridge_set_controller(const struct ovsrec_bridge *row, struct ovsrec_controller **controller, size_t n_controller)
 {
@@ -977,6 +1090,37 @@ ovsrec_bridge_set_sflow(const struct ovsrec_bridge *row, const struct ovsrec_sfl
     ovsdb_idl_txn_write(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_SFLOW], &datum);
 }
 
+void
+ovsrec_bridge_set_status(const struct ovsrec_bridge *row, char **key_status, char **value_status, size_t n_status)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_status;
+    datum.keys = xmalloc(n_status * sizeof *datum.keys);
+    datum.values = xmalloc(n_status * sizeof *datum.values);
+    for (i = 0; i < n_status; i++) {
+        datum.keys[i].string = xstrdup(key_status[i]);
+        datum.values[i].string = xstrdup(value_status[i]);
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_STATUS], &datum);
+}
+
+void
+ovsrec_bridge_set_stp_enable(const struct ovsrec_bridge *row, bool stp_enable)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    datum.n = 1;
+    datum.keys = xmalloc(sizeof *datum.keys);
+    datum.keys[0].boolean = stp_enable;
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_bridge_columns[OVSREC_BRIDGE_COL_STP_ENABLE], &datum);
+}
+
 struct ovsdb_idl_column ovsrec_bridge_columns[OVSREC_BRIDGE_N_COLUMNS];
 
 static void
@@ -1130,6 +1274,28 @@ ovsrec_bridge_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_bridge_parse_sflow;
     c->unparse = ovsrec_bridge_unparse_sflow;
+
+    /* Initialize ovsrec_bridge_col_status. */
+    c = &ovsrec_bridge_col_status;
+    c->name = "status";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_bridge_parse_status;
+    c->unparse = ovsrec_bridge_unparse_status;
+
+    /* Initialize ovsrec_bridge_col_stp_enable. */
+    c = &ovsrec_bridge_col_stp_enable;
+    c->name = "stp_enable";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_BOOLEAN);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 1;
+    c->type.n_max = 1;
+    c->parse = ovsrec_bridge_parse_stp_enable;
+    c->unparse = ovsrec_bridge_unparse_stp_enable;
 }
 
 /* Capability table. */
@@ -2430,21 +2596,20 @@ ovsrec_interface_parse_cfm_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_d
 }
 
 static void
-ovsrec_interface_parse_cfm_remote_mpid(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+ovsrec_interface_parse_cfm_remote_mpids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
-    size_t n = MIN(1, datum->n);
     size_t i;
 
     assert(inited);
-    row->cfm_remote_mpid = NULL;
-    row->n_cfm_remote_mpid = 0;
-    for (i = 0; i < n; i++) {
-        if (!row->n_cfm_remote_mpid) {
-            row->cfm_remote_mpid = xmalloc(n * sizeof *row->cfm_remote_mpid);
+    row->cfm_remote_mpids = NULL;
+    row->n_cfm_remote_mpids = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_cfm_remote_mpids) {
+            row->cfm_remote_mpids = xmalloc(datum->n * sizeof *row->cfm_remote_mpids);
         }
-        row->cfm_remote_mpid[row->n_cfm_remote_mpid] = datum->keys[i].integer;
-        row->n_cfm_remote_mpid++;
+        row->cfm_remote_mpids[row->n_cfm_remote_mpids] = datum->keys[i].integer;
+        row->n_cfm_remote_mpids++;
     }
 }
 
@@ -2523,6 +2688,25 @@ ovsrec_interface_parse_lacp_current(struct ovsdb_idl_row *row_, const struct ovs
     } else {
         row->n_lacp_current = 0;
         row->lacp_current = NULL;
+    }
+}
+
+static void
+ovsrec_interface_parse_link_resets(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->link_resets = NULL;
+    row->n_link_resets = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_link_resets) {
+            row->link_resets = xmalloc(n * sizeof *row->link_resets);
+        }
+        row->link_resets[row->n_link_resets] = datum->keys[i].integer;
+        row->n_link_resets++;
     }
 }
 
@@ -2741,12 +2925,12 @@ ovsrec_interface_unparse_cfm_mpid(struct ovsdb_idl_row *row_)
 }
 
 static void
-ovsrec_interface_unparse_cfm_remote_mpid(struct ovsdb_idl_row *row_)
+ovsrec_interface_unparse_cfm_remote_mpids(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_interface *row = ovsrec_interface_cast(row_);
 
     assert(inited);
-    free(row->cfm_remote_mpid);
+    free(row->cfm_remote_mpids);
 }
 
 static void
@@ -2781,6 +2965,15 @@ static void
 ovsrec_interface_unparse_lacp_current(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
+}
+
+static void
+ovsrec_interface_unparse_link_resets(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_interface *row = ovsrec_interface_cast(row_);
+
+    assert(inited);
+    free(row->link_resets);
 }
 
 static void
@@ -2921,10 +3114,10 @@ ovsrec_interface_verify_cfm_mpid(const struct ovsrec_interface *row)
 }
 
 void
-ovsrec_interface_verify_cfm_remote_mpid(const struct ovsrec_interface *row)
+ovsrec_interface_verify_cfm_remote_mpids(const struct ovsrec_interface *row)
 {
     assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPID]);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPIDS]);
 }
 
 void
@@ -2960,6 +3153,13 @@ ovsrec_interface_verify_lacp_current(const struct ovsrec_interface *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LACP_CURRENT]);
+}
+
+void
+ovsrec_interface_verify_link_resets(const struct ovsrec_interface *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_RESETS]);
 }
 
 void
@@ -3108,13 +3308,13 @@ ovsrec_interface_get_cfm_mpid(const struct ovsrec_interface *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_mpid);
 }
 
-/* Returns the cfm_remote_mpid column's value in 'row' as a struct ovsdb_datum.
+/* Returns the cfm_remote_mpids column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
  * the same operation on the "cooked" form in 'row'.
  *
  * 'key_type' must be OVSDB_TYPE_INTEGER.
- * (This helps to avoid silent bugs if someone changes cfm_remote_mpid's
+ * (This helps to avoid silent bugs if someone changes cfm_remote_mpids's
  * type without updating the caller.)
  *
  * The caller must not modify or free the returned value.
@@ -3124,11 +3324,11 @@ ovsrec_interface_get_cfm_mpid(const struct ovsrec_interface *row,
  * If the returned value is needed for a long time, it is best to make a copy
  * of it with ovsdb_datum_clone(). */
 const struct ovsdb_datum *
-ovsrec_interface_get_cfm_remote_mpid(const struct ovsrec_interface *row,
+ovsrec_interface_get_cfm_remote_mpids(const struct ovsrec_interface *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
     assert(key_type == OVSDB_TYPE_INTEGER);
-    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_remote_mpid);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_cfm_remote_mpids);
 }
 
 /* Returns the duplex column's value in 'row' as a struct ovsdb_datum.
@@ -3247,6 +3447,29 @@ ovsrec_interface_get_lacp_current(const struct ovsrec_interface *row,
 {
     assert(key_type == OVSDB_TYPE_BOOLEAN);
     return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_lacp_current);
+}
+
+/* Returns the link_resets column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes link_resets's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_interface_get_link_resets(const struct ovsrec_interface *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_interface_col_link_resets);
 }
 
 /* Returns the link_speed column's value in 'row' as a struct ovsdb_datum.
@@ -3567,20 +3790,20 @@ ovsrec_interface_set_cfm_mpid(const struct ovsrec_interface *row, const int64_t 
 }
 
 void
-ovsrec_interface_set_cfm_remote_mpid(const struct ovsrec_interface *row, const int64_t *cfm_remote_mpid, size_t n_cfm_remote_mpid)
+ovsrec_interface_set_cfm_remote_mpids(const struct ovsrec_interface *row, const int64_t *cfm_remote_mpids, size_t n_cfm_remote_mpids)
 {
     struct ovsdb_datum datum;
     size_t i;
 
     assert(inited);
-    datum.n = n_cfm_remote_mpid;
-    datum.keys = xmalloc(n_cfm_remote_mpid * sizeof *datum.keys);
+    datum.n = n_cfm_remote_mpids;
+    datum.keys = xmalloc(n_cfm_remote_mpids * sizeof *datum.keys);
     datum.values = NULL;
-    for (i = 0; i < n_cfm_remote_mpid; i++) {
-        datum.keys[i].integer = cfm_remote_mpid[i];
+    for (i = 0; i < n_cfm_remote_mpids; i++) {
+        datum.keys[i].integer = cfm_remote_mpids[i];
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPID], &datum);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_CFM_REMOTE_MPIDS], &datum);
 }
 
 void
@@ -3660,6 +3883,23 @@ ovsrec_interface_set_lacp_current(const struct ovsrec_interface *row, const bool
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
     ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LACP_CURRENT], &datum);
+}
+
+void
+ovsrec_interface_set_link_resets(const struct ovsrec_interface *row, const int64_t *link_resets, size_t n_link_resets)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_link_resets;
+    datum.keys = xmalloc(n_link_resets * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_link_resets; i++) {
+        datum.keys[i].integer = link_resets[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_interface_columns[OVSREC_INTERFACE_COL_LINK_RESETS], &datum);
 }
 
 void
@@ -3886,25 +4126,21 @@ ovsrec_interface_columns_init(void)
     c = &ovsrec_interface_col_cfm_mpid;
     c->name = "cfm_mpid";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    c->type.key.u.integer.min = INT64_C(1);
-    c->type.key.u.integer.max = INT64_C(8191);
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
     c->parse = ovsrec_interface_parse_cfm_mpid;
     c->unparse = ovsrec_interface_unparse_cfm_mpid;
 
-    /* Initialize ovsrec_interface_col_cfm_remote_mpid. */
-    c = &ovsrec_interface_col_cfm_remote_mpid;
-    c->name = "cfm_remote_mpid";
+    /* Initialize ovsrec_interface_col_cfm_remote_mpids. */
+    c = &ovsrec_interface_col_cfm_remote_mpids;
+    c->name = "cfm_remote_mpids";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
-    c->type.key.u.integer.min = INT64_C(1);
-    c->type.key.u.integer.max = INT64_C(8191);
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
-    c->type.n_max = 1;
-    c->parse = ovsrec_interface_parse_cfm_remote_mpid;
-    c->unparse = ovsrec_interface_unparse_cfm_remote_mpid;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_interface_parse_cfm_remote_mpids;
+    c->unparse = ovsrec_interface_unparse_cfm_remote_mpids;
 
     /* Initialize ovsrec_interface_col_duplex. */
     c = &ovsrec_interface_col_duplex;
@@ -3967,6 +4203,16 @@ ovsrec_interface_columns_init(void)
     c->type.n_max = 1;
     c->parse = ovsrec_interface_parse_lacp_current;
     c->unparse = ovsrec_interface_unparse_lacp_current;
+
+    /* Initialize ovsrec_interface_col_link_resets. */
+    c = &ovsrec_interface_col_link_resets;
+    c->name = "link_resets";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_interface_parse_link_resets;
+    c->unparse = ovsrec_interface_unparse_link_resets;
 
     /* Initialize ovsrec_interface_col_link_speed. */
     c = &ovsrec_interface_col_link_speed;
@@ -7270,6 +7516,48 @@ ovsrec_port_parse_qos(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datu
 }
 
 static void
+ovsrec_port_parse_statistics(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_statistics = NULL;
+    row->value_statistics = NULL;
+    row->n_statistics = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_statistics) {
+            row->key_statistics = xmalloc(datum->n * sizeof *row->key_statistics);
+            row->value_statistics = xmalloc(datum->n * sizeof *row->value_statistics);
+        }
+        row->key_statistics[row->n_statistics] = datum->keys[i].string;
+        row->value_statistics[row->n_statistics] = datum->values[i].integer;
+        row->n_statistics++;
+    }
+}
+
+static void
+ovsrec_port_parse_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_status = NULL;
+    row->value_status = NULL;
+    row->n_status = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_status) {
+            row->key_status = xmalloc(datum->n * sizeof *row->key_status);
+            row->value_status = xmalloc(datum->n * sizeof *row->value_status);
+        }
+        row->key_status[row->n_status] = datum->keys[i].string;
+        row->value_status[row->n_status] = datum->values[i].string;
+        row->n_status++;
+    }
+}
+
+static void
 ovsrec_port_parse_tag(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_port *row = ovsrec_port_cast(row_);
@@ -7304,6 +7592,19 @@ ovsrec_port_parse_trunks(struct ovsdb_idl_row *row_, const struct ovsdb_datum *d
         }
         row->trunks[row->n_trunks] = datum->keys[i].integer;
         row->n_trunks++;
+    }
+}
+
+static void
+ovsrec_port_parse_vlan_mode(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    assert(inited);
+    if (datum->n >= 1) {
+        row->vlan_mode = datum->keys[0].string;
+    } else {
+        row->vlan_mode = NULL;
     }
 }
 
@@ -7391,6 +7692,26 @@ ovsrec_port_unparse_qos(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
+ovsrec_port_unparse_statistics(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    assert(inited);
+    free(row->key_statistics);
+    free(row->value_statistics);
+}
+
+static void
+ovsrec_port_unparse_status(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    assert(inited);
+    free(row->key_status);
+    free(row->value_status);
+}
+
+static void
 ovsrec_port_unparse_tag(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_port *row = ovsrec_port_cast(row_);
@@ -7406,6 +7727,12 @@ ovsrec_port_unparse_trunks(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->trunks);
+}
+
+static void
+ovsrec_port_unparse_vlan_mode(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
 }
 
 const struct ovsrec_port *
@@ -7518,6 +7845,20 @@ ovsrec_port_verify_qos(const struct ovsrec_port *row)
 }
 
 void
+ovsrec_port_verify_statistics(const struct ovsrec_port *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_STATISTICS]);
+}
+
+void
+ovsrec_port_verify_status(const struct ovsrec_port *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_STATUS]);
+}
+
+void
 ovsrec_port_verify_tag(const struct ovsrec_port *row)
 {
     assert(inited);
@@ -7529,6 +7870,13 @@ ovsrec_port_verify_trunks(const struct ovsrec_port *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_TRUNKS]);
+}
+
+void
+ovsrec_port_verify_vlan_mode(const struct ovsrec_port *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_VLAN_MODE]);
 }
 
 /* Returns the bond_downdelay column's value in 'row' as a struct ovsdb_datum.
@@ -7813,6 +8161,58 @@ ovsrec_port_get_qos(const struct ovsrec_port *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_port_col_qos);
 }
 
+/* Returns the statistics column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes statistics's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_statistics(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_statistics);
+}
+
+/* Returns the status column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes status's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_status(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_status);
+}
+
 /* Returns the tag column's value in 'row' as a struct ovsdb_datum.
  * This is useful occasionally: for example, ovsdb_datum_find_key() is an
  * easier and more efficient way to search for a given key than implementing
@@ -7857,6 +8257,29 @@ ovsrec_port_get_trunks(const struct ovsrec_port *row,
 {
     assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &ovsrec_port_col_trunks);
+}
+
+/* Returns the vlan_mode column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes vlan_mode's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_vlan_mode(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_vlan_mode);
 }
 
 void
@@ -8050,6 +8473,42 @@ ovsrec_port_set_qos(const struct ovsrec_port *row, const struct ovsrec_qos *qos)
 }
 
 void
+ovsrec_port_set_statistics(const struct ovsrec_port *row, char **key_statistics, const int64_t *value_statistics, size_t n_statistics)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_statistics;
+    datum.keys = xmalloc(n_statistics * sizeof *datum.keys);
+    datum.values = xmalloc(n_statistics * sizeof *datum.values);
+    for (i = 0; i < n_statistics; i++) {
+        datum.keys[i].string = xstrdup(key_statistics[i]);
+        datum.values[i].integer = value_statistics[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_INTEGER);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_STATISTICS], &datum);
+}
+
+void
+ovsrec_port_set_status(const struct ovsrec_port *row, char **key_status, char **value_status, size_t n_status)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_status;
+    datum.keys = xmalloc(n_status * sizeof *datum.keys);
+    datum.values = xmalloc(n_status * sizeof *datum.values);
+    for (i = 0; i < n_status; i++) {
+        datum.keys[i].string = xstrdup(key_status[i]);
+        datum.values[i].string = xstrdup(value_status[i]);
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_STATUS], &datum);
+}
+
+void
 ovsrec_port_set_tag(const struct ovsrec_port *row, const int64_t *tag, size_t n_tag)
 {
     struct ovsdb_datum datum;
@@ -8081,6 +8540,24 @@ ovsrec_port_set_trunks(const struct ovsrec_port *row, const int64_t *trunks, siz
     }
     ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
     ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_TRUNKS], &datum);
+}
+
+void
+ovsrec_port_set_vlan_mode(const struct ovsrec_port *row, const char *vlan_mode)
+{
+    struct ovsdb_datum datum;
+
+    assert(inited);
+    if (vlan_mode) {
+        datum.n = 1;
+        datum.keys = xmalloc(sizeof *datum.keys);
+        datum.keys[0].string = xstrdup(vlan_mode);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_VLAN_MODE], &datum);
 }
 
 struct ovsdb_idl_column ovsrec_port_columns[OVSREC_PORT_N_COLUMNS];
@@ -8239,6 +8716,29 @@ ovsrec_port_columns_init(void)
     c->parse = ovsrec_port_parse_qos;
     c->unparse = ovsrec_port_unparse_qos;
 
+    /* Initialize ovsrec_port_col_statistics. */
+    c = &ovsrec_port_col_statistics;
+    c->name = "statistics";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_INTEGER);
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_port_parse_statistics;
+    c->unparse = ovsrec_port_unparse_statistics;
+
+    /* Initialize ovsrec_port_col_status. */
+    c = &ovsrec_port_col_status;
+    c->name = "status";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_port_parse_status;
+    c->unparse = ovsrec_port_unparse_status;
+
     /* Initialize ovsrec_port_col_tag. */
     c = &ovsrec_port_col_tag;
     c->name = "tag";
@@ -8262,6 +8762,26 @@ ovsrec_port_columns_init(void)
     c->type.n_max = 4096;
     c->parse = ovsrec_port_parse_trunks;
     c->unparse = ovsrec_port_unparse_trunks;
+
+    /* Initialize ovsrec_port_col_vlan_mode. */
+    c = &ovsrec_port_col_vlan_mode;
+    c->name = "vlan_mode";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
+    c->type.key.enum_->n = 4;
+    c->type.key.enum_->keys = xmalloc(4 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->keys[0].string = xstrdup("access");
+    c->type.key.enum_->keys[1].string = xstrdup("native-tagged");
+    c->type.key.enum_->keys[2].string = xstrdup("native-untagged");
+    c->type.key.enum_->keys[3].string = xstrdup("trunk");
+    c->type.key.enum_->values = NULL;
+    ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_port_parse_vlan_mode;
+    c->unparse = ovsrec_port_unparse_vlan_mode;
 }
 
 /* QoS table. */

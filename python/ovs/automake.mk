@@ -20,6 +20,7 @@ ovs_pyfiles = \
 	python/ovs/socket_util.py \
 	python/ovs/stream.py \
 	python/ovs/timeval.py \
+	python/ovs/vlog.py \
 	python/ovs/util.py
 EXTRA_DIST += $(ovs_pyfiles) python/ovs/dirs.py
 
@@ -42,6 +43,6 @@ ovs-install-data-local:
 endif
 install-data-local: ovs-install-data-local
 
-uninstall-local: ovs-uninstall-local
+UNINSTALL_LOCAL += ovs-uninstall-local
 ovs-uninstall-local:
 	rm -f $(DESTDIR)$(pkgdatadir)/python/ovs/dirs.py

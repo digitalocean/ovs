@@ -13,13 +13,16 @@
 # limitations under the License.
 
 import errno
-import logging
 import os
 import select
 import socket
 import sys
 
 import ovs.fatal_signal
+import ovs.vlog
+
+vlog = ovs.vlog.Vlog("socket_util")
+
 
 def make_unix_socket(style, nonblock, bind_path, connect_path):
     """Creates a Unix domain socket in the given 'style' (either
@@ -74,6 +77,7 @@ def make_unix_socket(style, nonblock, bind_path, connect_path):
             ovs.fatal_signal.add_file_to_unlink(bind_path)
         return get_exception_errno(e), None
 
+
 def check_connection_completion(sock):
     p = select.poll()
     p.register(sock, select.POLLOUT)
@@ -82,10 +86,12 @@ def check_connection_completion(sock):
     else:
         return errno.EAGAIN
 
+
 def get_socket_error(sock):
     """Returns the errno value associated with 'socket' (0 if no error) and
     resets the socket's error status."""
     return sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+
 
 def get_exception_errno(e):
     """A lot of methods on Python socket objects raise socket.error, but that
@@ -97,7 +103,10 @@ def get_exception_errno(e):
     else:
         return errno.EPROTO
 
+
 null_fd = -1
+
+
 def get_null_fd():
     """Returns a readable and writable fd for /dev/null, if successful,
     otherwise a negative errno value.  The caller must not close the returned
@@ -107,10 +116,10 @@ def get_null_fd():
         try:
             null_fd = os.open("/dev/null", os.O_RDWR)
         except OSError, e:
-            logging.error("could not open /dev/null: %s"
-                          % os.strerror(e.errno))
+            vlog.err("could not open /dev/null: %s" % os.strerror(e.errno))
             return -e.errno
     return null_fd
+
 
 def write_fully(fd, buf):
     """Returns an (error, bytes_written) tuple where 'error' is 0 on success,
@@ -127,7 +136,7 @@ def write_fully(fd, buf):
             if retval == len(buf):
                 return 0, bytes_written + len(buf)
             elif retval == 0:
-                logging.warning("write returned 0")
+                vlog.warn("write returned 0")
                 return errno.EPROTO, bytes_written
             else:
                 bytes_written += retval
@@ -135,9 +144,10 @@ def write_fully(fd, buf):
         except OSError, e:
             return e.errno, bytes_written
 
+
 def set_nonblocking(sock):
     try:
         sock.setblocking(0)
     except socket.error, e:
-        logging.error("could not set nonblocking mode on socket: %s"
-                      % os.strerror(get_socket_error(e)))
+        vlog.err("could not set nonblocking mode on socket: %s"
+                 % os.strerror(get_socket_error(e)))

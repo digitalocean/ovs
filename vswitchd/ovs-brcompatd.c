@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <fcntl.h>
@@ -43,13 +44,13 @@
 #include "leak-checker.h"
 #include "netdev.h"
 #include "netlink.h"
+#include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "ofpbuf.h"
 #include "openvswitch/brcompat-netlink.h"
 #include "packets.h"
 #include "poll-loop.h"
 #include "process.h"
-#include "rtnetlink.h"
 #include "rtnetlink-link.h"
 #include "signals.h"
 #include "sset.h"
@@ -488,7 +489,7 @@ handle_fdb_query_cmd(struct ofpbuf *buffer)
         struct mac *mac = &local_macs[n_local_macs];
         struct netdev *netdev;
 
-        error = netdev_open_default(iface_name, &netdev);
+        error = netdev_open(iface_name, "system", &netdev);
         if (!error) {
             if (!netdev_get_etheraddr(netdev, mac->addr)) {
                 n_local_macs++;
@@ -724,7 +725,7 @@ brc_recv_update(void)
      * (XenServer Tools 5.5.0 does not exhibit this behavior, and neither does
      * a VM without Tools installed at all.)
      */
-    rtnetlink_link_notifier_run();
+    rtnetlink_link_run();
 
     switch (genlmsghdr->cmd) {
     case BRC_GENL_C_DP_ADD:
@@ -790,7 +791,7 @@ netdev_changed_cb(const struct rtnetlink_link_change *change,
               port_name, br_name);
 
     run_vsctl(vsctl_program, VSCTL_OPTIONS,
-              "--", "--if-exists", "del-port", br_name, port_name,
+              "--", "--if-exists", "del-port", port_name,
               "--", "comment", "ovs-brcompatd:", port_name, "disappeared",
               (char *) NULL);
 }
@@ -799,7 +800,7 @@ int
 main(int argc, char *argv[])
 {
     extern struct vlog_module VLM_reconnect;
-    struct rtnetlink_notifier link_notifier;
+    struct nln_notifier *link_notifier;
     struct unixctl_server *unixctl;
     int retval;
 
@@ -823,26 +824,25 @@ main(int argc, char *argv[])
                    "\"brcompat\" kernel module.");
     }
 
-
-    rtnetlink_link_notifier_register(&link_notifier, netdev_changed_cb, NULL);
+    link_notifier = rtnetlink_link_notifier_create(netdev_changed_cb, NULL);
 
     daemonize_complete();
 
     for (;;) {
         unixctl_server_run(unixctl);
-        rtnetlink_link_notifier_run();
+        rtnetlink_link_run();
         brc_recv_update();
 
         netdev_run();
 
         nl_sock_wait(brc_sock, POLLIN);
         unixctl_server_wait(unixctl);
-        rtnetlink_link_notifier_wait();
+        rtnetlink_link_wait();
         netdev_wait();
         poll_block();
     }
 
-    rtnetlink_link_notifier_unregister(&link_notifier);
+    rtnetlink_link_notifier_destroy(link_notifier);
 
     return 0;
 }
@@ -880,12 +880,11 @@ parse_options(int argc, char *argv[])
         }
 
         switch (c) {
-        case 'H':
         case 'h':
             usage();
 
         case 'V':
-            OVS_PRINT_VERSION(0, 0);
+            ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
         case OPT_APPCTL:

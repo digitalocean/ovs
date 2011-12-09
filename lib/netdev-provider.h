@@ -39,11 +39,9 @@ struct netdev_dev {
                                                 this device. */
     int ref_cnt;                        /* Times this devices was opened. */
     struct shash_node *node;            /* Pointer to element in global map. */
-    struct shash args;                  /* Argument list from last config. */
 };
 
 void netdev_dev_init(struct netdev_dev *, const char *name,
-                     const struct shash *args,
                      const struct netdev_class *);
 void netdev_dev_uninit(struct netdev_dev *, bool destroy);
 const char *netdev_dev_get_type(const struct netdev_dev *);
@@ -52,8 +50,6 @@ const char *netdev_dev_get_name(const struct netdev_dev *);
 struct netdev_dev *netdev_dev_from_name(const char *name);
 void netdev_dev_get_devices(const struct netdev_class *,
                             struct shash *device_list);
-bool netdev_dev_args_equal(const struct netdev_dev *netdev_dev,
-                           const struct shash *args);
 
 static inline void netdev_dev_assert_class(const struct netdev_dev *netdev_dev,
                                            const struct netdev_class *class_)
@@ -116,11 +112,10 @@ struct netdev_class {
      * needed here. */
     void (*wait)(void);
 
-    /* Attempts to create a network device named 'name' with initial 'args' in
-     * 'netdev_class'.  On success sets 'netdev_devp' to the newly created
-     * device. */
+    /* Attempts to create a network device named 'name' in 'netdev_class'.  On
+     * success sets 'netdev_devp' to the newly created device. */
     int (*create)(const struct netdev_class *netdev_class, const char *name,
-                  const struct shash *args, struct netdev_dev **netdev_devp);
+                  struct netdev_dev **netdev_devp);
 
     /* Destroys 'netdev_dev'.
      *
@@ -130,55 +125,58 @@ struct netdev_class {
      * called. */
     void (*destroy)(struct netdev_dev *netdev_dev);
 
+    /* Fetches the device 'netdev_dev''s configuration, storing it in 'args'.
+     * The caller owns 'args' and pre-initializes it to an empty shash.
+     *
+     * If this netdev class does not have any configuration options, this may
+     * be a null pointer. */
+    int (*get_config)(struct netdev_dev *netdev_dev, struct shash *args);
+
     /* Changes the device 'netdev_dev''s configuration to 'args'.
      *
-     * If this netdev class does not support reconfiguring a netdev
-     * device, this may be a null pointer.
-     */
+     * If this netdev class does not support configuration, this may be a null
+     * pointer. */
     int (*set_config)(struct netdev_dev *netdev_dev, const struct shash *args);
 
-    /* Returns true if 'args' is equivalent to the "args" field in
-     * 'netdev_dev', otherwise false.
-     *
-     * If no special processing needs to be done beyond a simple
-     * shash comparison, this may be a null pointer.
-     */
-    bool (*config_equal)(const struct netdev_dev *netdev_dev,
-                         const struct shash *args);
-
     /* Attempts to open a network device.  On success, sets 'netdevp'
-     * to the new network device.
-     *
-     * 'ethertype' may be a 16-bit Ethernet protocol value in host byte order
-     * to capture frames of that type received on the device.  It may also be
-     * one of the 'enum netdev_pseudo_ethertype' values to receive frames in
-     * one of those categories. */
-    int (*open)(struct netdev_dev *netdev_dev, int ethertype,
-                struct netdev **netdevp);
+     * to the new network device. */
+    int (*open)(struct netdev_dev *netdev_dev, struct netdev **netdevp);
 
     /* Closes 'netdev'. */
     void (*close)(struct netdev *netdev);
+
+/* ## ----------------- ## */
+/* ## Receiving Packets ## */
+/* ## ----------------- ## */
 
-    /* Enumerates the names of all network devices of this class.
-     *
-     * The caller has already initialized 'all_names' and might already have
-     * added some names to it.  This function should not disturb any existing
-     * names in 'all_names'.
-     *
-     * If this netdev class does not support enumeration, this may be a null
-     * pointer. */
-    int (*enumerate)(struct sset *all_names);
+/* The network provider interface is mostly used for inspecting and configuring
+ * device "metadata", not for sending and receiving packets directly.  It may
+ * be impractical to implement these functions on some operating systems and
+ * hardware.  These functions may all be NULL in such cases.
+ *
+ * (However, the "dpif-netdev" implementation, which is the easiest way to
+ * integrate Open vSwitch with a new operating system or hardware, does require
+ * the ability to receive packets.) */
+
+    /* Attempts to set up 'netdev' for receiving packets with ->recv().
+     * Returns 0 if successful, otherwise a positive errno value.  Return
+     * EOPNOTSUPP to indicate that the network device does not implement packet
+     * reception through this interface.  This function may be set to null if
+     * it would always return EOPNOTSUPP anyhow.  (This will prevent the
+     * network device from being usefully used by the netdev-based "userspace
+     * datapath".)*/
+    int (*listen)(struct netdev *netdev);
 
     /* Attempts to receive a packet from 'netdev' into the 'size' bytes in
      * 'buffer'.  If successful, returns the number of bytes in the received
      * packet, otherwise a negative errno value.  Returns -EAGAIN immediately
      * if no packet is ready to be received.
      *
-     * May return -EOPNOTSUPP if a network device does not implement packet
-     * reception through this interface.  This function may be set to null if
-     * it would always return -EOPNOTSUPP anyhow.  (This will prevent the
-     * network device from being usefully used by the netdev-based "userspace
-     * datapath".) */
+     * This function can only be expected to return a packet if ->listen() has
+     * been called successfully.
+     *
+     * May be null if not needed, such as for a network device that does not
+     * implement packet reception through the 'recv' member function. */
     int (*recv)(struct netdev *netdev, void *buffer, size_t size);
 
     /* Registers with the poll loop to wake up from the next call to
@@ -194,7 +192,7 @@ struct netdev_class {
      * May be null if not needed, such as for a network device that does not
      * implement packet reception through the 'recv' member function. */
     int (*drain)(struct netdev *netdev);
-
+
     /* Sends the 'size'-byte packet in 'buffer' on 'netdev'.  Returns 0 if
      * successful, otherwise a positive errno value.  Returns EAGAIN without
      * blocking if the packet cannot be queued immediately.  Returns EMSGSIZE
@@ -240,8 +238,16 @@ struct netdev_class {
      * bytes for Ethernet devices.
      *
      * If 'netdev' does not have an MTU (e.g. as some tunnels do not), then
-     * this function should set '*mtup' to INT_MAX. */
+     * this function should return EOPNOTSUPP.  This function may be set to
+     * null if it would always return EOPNOTSUPP. */
     int (*get_mtu)(const struct netdev *netdev, int *mtup);
+
+    /* Sets 'netdev''s MTU to 'mtu'.
+     *
+     * If 'netdev' does not have an MTU (e.g. as some tunnels do not), then
+     * this function should return EOPNOTSUPP.  This function may be set to
+     * null if it would always return EOPNOTSUPP. */
+    int (*set_mtu)(const struct netdev *netdev, int mtu);
 
     /* Returns the ifindex of 'netdev', if successful, as a positive number.
      * On failure, returns a negative errno value.
@@ -263,6 +269,12 @@ struct netdev_class {
      * up as long as device is up).
      */
     int (*get_carrier)(const struct netdev *netdev, bool *carrier);
+
+    /* Returns the number of times 'netdev''s carrier has changed since being
+     * initialized.
+     *
+     * If null, callers will assume the number of carrier resets is zero. */
+    long long int (*get_carrier_resets)(const struct netdev *netdev);
 
     /* Forces ->get_carrier() to poll 'netdev''s MII registers for link status
      * instead of checking 'netdev''s carrier.  'netdev''s MII registers will

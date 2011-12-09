@@ -22,8 +22,7 @@
 #   - Set the "iface-id" key in the Interface table.
 #   - Set the fail-mode on internal bridges.
 
-import getopt
-import logging, logging.handlers
+import argparse
 import os
 import signal
 import subprocess
@@ -32,23 +31,19 @@ import time
 
 import XenAPI
 
+import ovs.dirs
 from ovs.db import error
 from ovs.db import types
 import ovs.util
 import ovs.daemon
 import ovs.db.idl
 
-s_log     = logging.getLogger("ovs-xapi-sync")
-l_handler = logging.handlers.RotatingFileHandler(
-        "/var/log/openvswitch/ovs-xapi-sync.log")
-l_formatter = logging.Formatter('%(filename)s: %(levelname)s: %(message)s')
-l_handler.setFormatter(l_formatter)
-s_log.addHandler(l_handler)
-s_log.setLevel(logging.INFO)
-
-vsctl="/usr/bin/ovs-vsctl"
+root_prefix = ''                # Prefix for absolute file names, for testing.
+vlog = ovs.vlog.Vlog("ovs-xapi-sync")
+vsctl = "/usr/bin/ovs-vsctl"
 session = None
 force_run = False
+
 
 # Set up a session to interact with XAPI.
 #
@@ -63,16 +58,17 @@ def init_session():
     try:
         session = XenAPI.xapi_local()
         session.xenapi.login_with_password("", "")
-    except:
+    except XenAPI.Failure, e:
         session = None
-        s_log.warning("Couldn't login to XAPI")
+        vlog.warn("Couldn't login to XAPI (%s)" % e)
         return False
 
     return True
 
+
 def get_network_by_bridge(br_name):
     if not init_session():
-        s_log.warning("Failed to get bridge id %s because"
+        vlog.warn("Failed to get bridge id %s because"
                 " XAPI session could not be initialized" % br_name)
         return None
 
@@ -82,6 +78,7 @@ def get_network_by_bridge(br_name):
             return rec
 
     return None
+
 
 # By default, the "bridge-id" external id in the Bridge table is the
 # same as "xs-network-uuids".  This may be overridden by defining a
@@ -94,6 +91,7 @@ def get_bridge_id(br_name, default=None):
         return rec['other_config'].get('nicira-bridge-id', default)
     return None
 
+
 # By default, the "iface-id" external id in the Interface table is the
 # same as "xs-vif-uuid".  This may be overridden by defining a
 # "nicira-iface-id" key in the "other_config" field of the VIF
@@ -105,7 +103,7 @@ def get_iface_id(if_name, xs_vif_uuid):
         return xs_vif_uuid
 
     if not init_session():
-        s_log.warning("Failed to get interface id %s because"
+        vlog.warn("Failed to get interface id %s because"
                 " XAPI session could not be initialized" % if_name)
         return xs_vif_uuid
 
@@ -114,28 +112,39 @@ def get_iface_id(if_name, xs_vif_uuid):
         rec = session.xenapi.VIF.get_record(vif)
         return rec['other_config'].get('nicira-iface-id', xs_vif_uuid)
     except XenAPI.Failure:
-        s_log.warning("Could not find XAPI entry for VIF %s" % if_name)
+        vlog.warn("Could not find XAPI entry for VIF %s" % if_name)
         return xs_vif_uuid
+
 
 def call_vsctl(args):
     cmd = [vsctl, "--timeout=30", "-vANY:console:off"] + args
     exitcode = subprocess.call(cmd)
     if exitcode != 0:
-        s_log.warning("Couldn't call ovs-vsctl")
+        vlog.warn("Couldn't call ovs-vsctl")
 
-def set_external_id(table, record, key, value):
-    if value:
-        col = 'external-ids:"%s"="%s"' % (key, value)
-        call_vsctl(["set", table, record, col])
+
+def set_or_delete(d, key, value):
+    if value is None:
+        if key in d:
+            del d[key]
+            return True
     else:
-        call_vsctl(["remove", table, record, "external-ids", key])
+        if d.get(key) != value:
+            d[key] = value
+            return True
+    return False
+
+
+def set_external_id(row, key, value):
+    external_ids = row.external_ids
+    if set_or_delete(external_ids, key, value):
+        row.external_ids = external_ids
 
 
 # XenServer does not call interface-reconfigure on internal networks,
 # which is where the fail-mode would normally be set.
-def update_fail_mode(name):
-    rec = get_network_by_bridge(name)
-
+def update_fail_mode(row):
+    rec = get_network_by_bridge(row.name)
     if not rec:
         return
 
@@ -145,158 +154,109 @@ def update_fail_mode(name):
         pools = session.xenapi.pool.get_all()
         if len(pools) == 1:
             prec = session.xenapi.pool.get_record(pools[0])
-            fail_mode = prec['other_config'].get('vswitch-controller-fail-mode')
+            fail_mode = prec['other_config'].get(
+                    'vswitch-controller-fail-mode')
 
     if fail_mode not in ['standalone', 'secure']:
         fail_mode = 'standalone'
 
-    call_vsctl(["set", "bridge", name, "fail_mode=" + fail_mode])
+    if row.fail_mode != fail_mode:
+        row.fail_mode = fail_mode
 
-def update_in_band_mgmt(name):
-    rec = get_network_by_bridge(name)
 
+def update_in_band_mgmt(row):
+    rec = get_network_by_bridge(row.name)
     if not rec:
         return
 
     dib = rec['other_config'].get('vswitch-disable-in-band')
-    if not dib:
-        call_vsctl(['remove', 'bridge', name, 'other_config',
-                    'disable-in-band'])
-    elif dib in ['true', 'false']:
-        call_vsctl(['set', 'bridge', name,
-                    'other_config:disable-in-band=' + dib])
-    else:
-        s_log.warning('"' + dib + '"'
-                      "isn't a valid setting for other_config:disable-in-band on " +
-                      name)
 
-def update_bridge_id(name, ids):
-    id = get_bridge_id(name, ids.get("xs-network-uuids"))
+    other_config = row.other_config
+    if dib and dib not in ['true', 'false']:
+        vlog.warn('"%s" isn\'t a valid setting for '
+                "other_config:disable-in-band on %s" % (dib, row.name))
+    elif set_or_delete(other_config, 'disable-in-band', dib):
+        row.other_config = other_config
 
-    if not id:
+
+def update_bridge_id(row):
+    id_ = get_bridge_id(row.name, row.external_ids.get("xs-network-uuids"))
+    if not id_:
         return
 
-    primary_id = id.split(";")[0]
+    set_external_id(row, "bridge-id", id_.split(";")[0])
 
-    if ids.get("bridge-id") != primary_id:
-        set_external_id("Bridge", name, "bridge-id", primary_id)
-        ids["bridge-id"] = primary_id
 
-def update_iface(name, ids):
-    id = get_iface_id(name, ids.get("xs-vif-uuid"))
-    if ids.get("iface-id") != id and id:
-        set_external_id("Interface", name, "iface-id", id)
-        ids["iface-id"] = id
-
-    status = ids.get("iface-status")
-    if status:
-        set_external_id("Interface", name, "iface-status", status)
-
-def keep_table_columns(schema, table_name, column_types):
+def keep_table_columns(schema, table_name, columns):
     table = schema.tables.get(table_name)
     if not table:
         raise error.Error("schema has no %s table" % table_name)
 
     new_columns = {}
-    for column_name, column_type in column_types.iteritems():
+    for column_name in columns:
         column = table.columns.get(column_name)
         if not column:
             raise error.Error("%s table schema lacks %s column"
                               % (table_name, column_name))
-        if column.type != column_type:
-            raise error.Error("%s column in %s table has type \"%s\", "
-                              "expected type \"%s\""
-                              % (column_name, table_name,
-                                 column.type.toEnglish(),
-                                 column_type.toEnglish()))
         new_columns[column_name] = column
     table.columns = new_columns
     return table
 
-def monitor_uuid_schema_cb(schema):
-    string_type = types.Type(types.BaseType(types.StringType))
-    string_map_type = types.Type(types.BaseType(types.StringType),
-                                 types.BaseType(types.StringType),
-                                 0, sys.maxint)
 
+def prune_schema(schema):
     new_tables = {}
-    for table_name in ("Bridge", "Interface"):
-        new_tables[table_name] = keep_table_columns(
-            schema, table_name, {"name": string_type,
-                                 "external_ids": string_map_type})
+    new_tables["Bridge"] = keep_table_columns(
+        schema, "Bridge", ("name", "external_ids", "other_config",
+                           "fail_mode"))
+    new_tables["Interface"] = keep_table_columns(
+        schema, "Interface", ("name", "external_ids"))
     schema.tables = new_tables
 
-def usage():
-    print "usage: %s [OPTIONS] DATABASE" % sys.argv[0]
-    print "where DATABASE is a socket on which ovsdb-server is listening."
-    ovs.daemon.usage()
-    print "Other options:"
-    print "  -h, --help               display this help message"
-    sys.exit(0)
 
-def handler(signum, frame):
+def handler(signum, _):
     global force_run
     if (signum == signal.SIGHUP):
         force_run = True
 
-def update_tap_from_vif(idl, tap_name, vif_name):
-    ifaces = idl.data["Interface"]
-    tap = None
-    vif = None
 
-    for i in ifaces.values():
-        name = i.name.as_scalar().strip('"')
-        if name == tap_name:
-            tap = i
-        elif name == vif_name:
-            vif = i
-
-    if vif and tap:
-        vxid = vif.external_ids
-        txid = tap.external_ids
-
-        keys = ["attached-mac", "xs-network-uuid", "xs-vif-uuid", "xs-vm-uuid"]
-        for k in keys:
-            if vxid.get(k) != txid.get(k):
-                set_external_id("Interface", tap_name, k, vxid.get(k))
-
-def main(argv):
+def main():
     global force_run
 
-    try:
-        options, args = getopt.gnu_getopt(
-            argv[1:], 'h', ['help'] + ovs.daemon.LONG_OPTIONS)
-    except getopt.GetoptError, geo:
-        sys.stderr.write("%s: %s\n" % (ovs.util.PROGRAM_NAME, geo.msg))
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("database", metavar="DATABASE",
+            help="A socket on which ovsdb-server is listening.")
+    parser.add_argument("--root-prefix", metavar="DIR",
+                        help="Use DIR as alternate root directory"
+                        " (for testing).")
 
-    for key, value in options:
-        if key in ['-h', '--help']:
-            usage()
-        elif not ovs.daemon.parse_opt(key, value):
-            sys.stderr.write("%s: unhandled option %s\n"
-                             % (ovs.util.PROGRAM_NAME, key))
-            sys.exit(1)
+    ovs.vlog.add_args(parser)
+    ovs.daemon.add_args(parser)
+    args = parser.parse_args()
+    ovs.vlog.handle_args(args)
+    ovs.daemon.handle_args(args)
 
-    if len(args) != 1:
-        sys.stderr.write("%s: exactly one nonoption argument is required "
-                         "(use --help for help)\n" % ovs.util.PROGRAM_NAME)
-        sys.exit(1)
+    global root_prefix
+    if args.root_prefix:
+        root_prefix = args.root_prefix
 
-    remote = args[0]
-    idl = ovs.db.idl.Idl(remote, "Open_vSwitch", monitor_uuid_schema_cb)
+    remote = args.database
+    schema_file = "%s/vswitch.ovsschema" % ovs.dirs.PKGDATADIR
+    schema = ovs.db.schema.DbSchema.from_json(ovs.json.from_file(schema_file))
+    prune_schema(schema)
+    idl = ovs.db.idl.Idl(remote, schema)
 
     ovs.daemon.daemonize()
 
     # This daemon is usually started before XAPI, but to complete our
     # tasks, we need it.  Wait here until it's up.
-    while not os.path.exists("/var/run/xapi_init_complete.cookie"):
+    cookie_file = root_prefix + "/var/run/xapi_init_complete.cookie"
+    while not os.path.exists(cookie_file):
         time.sleep(1)
 
     signal.signal(signal.SIGHUP, handler)
 
-    bridges = {}
-    interfaces = {}
+    bridges = {}                # Map from bridge name to xs_network_uuids
+    interfaces = {}             # Map from interface name to xs-vif-uuid
     while True:
         if not force_run and not idl.run():
             poller = ovs.poller.Poller()
@@ -305,70 +265,90 @@ def main(argv):
             continue
 
         if force_run:
-            s_log.info("Forced to re-run as the result of a SIGHUP")
-            bridges    = {}
+            vlog.info("Forced to re-run as the result of a SIGHUP")
+            bridges = {}
             interfaces = {}
-            force_run  = False
+            force_run = False
+
+        txn = ovs.db.idl.Transaction(idl)
 
         new_bridges = {}
-        for rec in idl.data["Bridge"].itervalues():
-            name = rec.name.as_scalar()
-            xs_network_uuids = rec.external_ids.get("xs-network-uuids")
-            bridge_id = rec.external_ids.get("bridge-id")
-            new_bridges[name] = {"xs-network-uuids": xs_network_uuids,
-                                 "bridge-id": bridge_id}
+        for row in idl.tables["Bridge"].rows.itervalues():
+            old_xnu = bridges.get(row.name)
+            new_xnu = row.external_ids.get("xs-network-uuids", "")
+            if old_xnu is None:
+                # New bridge.
+                update_fail_mode(row)
+                update_in_band_mgmt(row)
+            if new_xnu != old_xnu:
+                # New bridge or bridge's xs-network-uuids has changed.
+                update_bridge_id(row)
+            new_bridges[row.name] = new_xnu
+        bridges = new_bridges
+
+        iface_by_name = {}
+        for row in idl.tables["Interface"].rows.itervalues():
+            iface_by_name[row.name] = row
 
         new_interfaces = {}
-        for rec in idl.data["Interface"].itervalues():
-            name = rec.name.as_scalar()
-            xs_vif_uuid = rec.external_ids.get("xs-vif-uuid")
-            iface_id = rec.external_ids.get("iface-id")
-            new_interfaces[name] = {"xs-vif-uuid": xs_vif_uuid,
-                                    "iface-id": iface_id}
+        for row in idl.tables["Interface"].rows.itervalues():
+            # Match up paired vif and tap devices.
+            if row.name.startswith("vif"):
+                vif = row
+                tap = iface_by_name.get("tap%s" % row.name[3:])
+            elif row.name.startswith("tap"):
+                tap = row
+                vif = iface_by_name.get("vif%s" % row.name[3:])
+            else:
+                tap = vif = None
 
-            if name.startswith("vif"):
-                new_interfaces[name]["iface-status"] = "active"
+            # Several tap external-ids need to be copied from the vif.
+            if row == tap and vif:
+                keys = ["attached-mac",
+                        "xs-network-uuid",
+                        "xs-vif-uuid",
+                        "xs-vm-uuid"]
+                for k in keys:
+                    set_external_id(row, k, vif.external_ids.get(k))
 
-        #Tap devices take their xs-vif-uuid from their corresponding vif and
-        #cause that vif to be labled inactive.
-        for name in new_interfaces:
-            if not name.startswith("tap"):
-                continue
+            # If it's a new interface or its xs-vif-uuid has changed, then
+            # obtain the iface-id from XAPI.
+            #
+            # (A tap's xs-vif-uuid comes from its vif.  That falls out
+            # naturally from the copy loop above.)
+            new_xvu = row.external_ids.get("xs-vif-uuid", "")
+            old_xvu = interfaces.get(row.name)
+            if old_xvu != new_xvu:
+                iface_id = get_iface_id(row.name, new_xvu)
+                if iface_id and row.external_ids.get("iface-id") != iface_id:
+                    set_external_id(row, "iface-id", iface_id)
 
-            vif = name.replace("tap", "vif", 1)
+            # When there's a vif and a tap, the tap is active (used for
+            # traffic).  When there's just a vif, the vif is active.
+            #
+            # A tap on its own shouldn't happen, and we don't know
+            # anything about other kinds of devices, so we don't use
+            # an iface-status for those devices at all.
+            if vif and tap:
+                set_external_id(tap, "iface-status", "active")
+                set_external_id(vif, "iface-status", "inactive")
+            elif vif:
+                set_external_id(vif, "iface-status", "active")
+            else:
+                set_external_id(row, "iface-status", None)
 
-            if vif in new_interfaces:
-                xs_vif_uuid = new_interfaces[vif]["xs-vif-uuid"]
-                new_interfaces[name]["xs-vif-uuid"] = xs_vif_uuid
+            new_interfaces[row.name] = new_xvu
+        interfaces = new_interfaces
 
-                new_interfaces[vif]["iface-status"] = "inactive"
-                new_interfaces[name]["iface-status"] = "active"
+        txn.commit_block()
 
-                update_tap_from_vif(idl, name, vif)
-
-        if bridges != new_bridges:
-            for name,ids in new_bridges.items():
-                if name not in bridges:
-                    update_fail_mode(name)
-                    update_in_band_mgmt(name)
-
-                if (name not in bridges) or (bridges[name] != ids):
-                    update_bridge_id(name, ids)
-
-            bridges = new_bridges
-
-        if interfaces != new_interfaces:
-            for name,ids in new_interfaces.items():
-                if (name not in interfaces) or (interfaces[name] != ids):
-                    update_iface(name, ids)
-            interfaces = new_interfaces
 
 if __name__ == '__main__':
     try:
-        main(sys.argv)
+        main()
     except SystemExit:
         # Let system.exit() calls complete normally
         raise
     except:
-        s_log.exception("traceback")
+        vlog.exception("traceback")
         sys.exit(ovs.daemon.RESTART_EXIT_CODE)

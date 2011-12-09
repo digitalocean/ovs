@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import getopt
+import argparse
 import logging
 import signal
 import sys
@@ -21,34 +21,26 @@ import time
 import ovs.daemon
 import ovs.util
 
-def handler(signum, frame):
+
+def handler(signum, _):
     raise Exception("Signal handler called with %d" % signum)
 
-def main(argv):
-    logging.basicConfig(level=logging.DEBUG)
+
+def main():
 
     signal.signal(signal.SIGHUP, handler)
 
-    try:
-        options, args = getopt.gnu_getopt(
-            argv[1:], 'b', ["bail", "help"] + ovs.daemon.LONG_OPTIONS)
-    except getopt.GetoptError, geo:
-        sys.stderr.write("%s: %s\n" % (ovs.util.PROGRAM_NAME, geo.msg))
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+            description="Open vSwitch daemonization test program for Python.")
+    parser.add_argument("-b", "--bail", action="store_true",
+            help="Exit with an error after daemonize_start().")
 
-    bail = False
-    for key, value in options:
-        if key == '--help':
-            usage()
-        elif key in ['-b', '--bail']:
-            bail = True
-        elif not ovs.daemon.parse_opt(key, value):
-            sys.stderr.write("%s: unhandled option %s\n"
-                             % (ovs.util.PROGRAM_NAME, key))
-            sys.exit(1)
+    ovs.daemon.add_args(parser)
+    args = parser.parse_args()
+    ovs.daemon.handle_args(args)
 
     ovs.daemon.daemonize_start()
-    if bail:
+    if args.bail:
         sys.stderr.write("%s: exiting after daemonize_start() as requested\n"
                          % ovs.util.PROGRAM_NAME)
         sys.exit(1)
@@ -57,22 +49,10 @@ def main(argv):
     while True:
         time.sleep(1)
 
-def usage():
-    sys.stdout.write("""\
-%s: Open vSwitch daemonization test program for Python
-usage: %s [OPTIONS]
-""" % ovs.util.PROGRAM_NAME)
-    ovs.daemon.usage()
-    sys.stdout.write("""
-Other options:
-  -h, --help              display this help message
-  -b, --bail              exit with an error after daemonize_start()
-""")
-    sys.exit(0)
 
 if __name__ == '__main__':
     try:
-        main(sys.argv)
+        main()
     except SystemExit:
         # Let system.exit() calls complete normally
         raise

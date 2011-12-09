@@ -532,7 +532,7 @@ bond_send_learning_packet(struct bond *bond,
     compose_benign_packet(&packet, "Open vSwitch Bond Failover", 0xf177,
                           eth_src);
     if (vlan) {
-        eth_set_vlan_tci(&packet, htons(vlan));
+        eth_push_vlan(&packet, htons(vlan));
     }
     error = netdev_send(slave->netdev, &packet);
     ofpbuf_uninit(&packet);
@@ -578,26 +578,40 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
         }
     }
 
-    /* Drop all packets which arrive on backup slaves.  This is similar to how
-     * Linux bonding handles active-backup bonds. */
-    if (bond->balance == BM_AB) {
+    switch (bond->balance) {
+    case BM_AB:
+        /* Drop all packets which arrive on backup slaves.  This is similar to
+         * how Linux bonding handles active-backup bonds. */
         *tags |= bond_get_active_slave_tag(bond);
         if (bond->active_slave != slave) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-            VLOG_WARN_RL(&rl, "active-backup bond received packet on backup"
-                         " slave (%s) destined for " ETH_ADDR_FMT,
-                         slave->name, ETH_ADDR_ARGS(eth_dst));
+            VLOG_DBG_RL(&rl, "active-backup bond received packet on backup"
+                        " slave (%s) destined for " ETH_ADDR_FMT,
+                        slave->name, ETH_ADDR_ARGS(eth_dst));
             return BV_DROP;
         }
+        return BV_ACCEPT;
+
+    case BM_TCP:
+        /* TCP balancing has degraded to SLB (otherwise the
+         * bond->lacp_negotiated check above would have processed this).
+         *
+         * Fall through. */
+    case BM_SLB:
+        /* Drop all packets for which we have learned a different input port,
+         * because we probably sent the packet on one slave and got it back on
+         * the other.  Gratuitous ARP packets are an exception to this rule:
+         * the host has moved to another switch.  The exception to the
+         * exception is if we locked the learning table to avoid reflections on
+         * bond slaves. */
+        return BV_DROP_IF_MOVED;
+
+    case BM_STABLE:
+        return BV_ACCEPT;
     }
 
-    /* Drop all packets for which we have learned a different input port,
-     * because we probably sent the packet on one slave and got it back on the
-     * other.  Gratuitous ARP packets are an exception to this rule: the host
-     * has moved to another switch.  The exception to the exception is if we
-     * locked the learning table to avoid reflections on bond slaves. */
-    return BV_DROP_IF_MOVED;
+    NOT_REACHED();
 }
 
 /* Returns the slave (registered on 'bond' by bond_slave_register()) to which
@@ -639,7 +653,6 @@ void
 bond_account(struct bond *bond, const struct flow *flow, uint16_t vlan,
              uint64_t n_bytes)
 {
-
     if (bond_is_balanced(bond)) {
         lookup_bond_entry(bond, flow, vlan)->tx_bytes += n_bytes;
     }
@@ -1179,7 +1192,7 @@ bond_unixctl_hash(struct unixctl_conn *conn, const char *args_,
             return;
         }
     } else {
-        vlan = OFP_VLAN_NONE;
+        vlan = 0;
     }
 
     if (basis_s) {
@@ -1206,16 +1219,18 @@ bond_unixctl_hash(struct unixctl_conn *conn, const char *args_,
 void
 bond_init(void)
 {
-    unixctl_command_register("bond/list", bond_unixctl_list, NULL);
-    unixctl_command_register("bond/show", bond_unixctl_show, NULL);
-    unixctl_command_register("bond/migrate", bond_unixctl_migrate, NULL);
-    unixctl_command_register("bond/set-active-slave",
+    unixctl_command_register("bond/list", "", bond_unixctl_list, NULL);
+    unixctl_command_register("bond/show", "port", bond_unixctl_show, NULL);
+    unixctl_command_register("bond/migrate", "port hash slave",
+                             bond_unixctl_migrate, NULL);
+    unixctl_command_register("bond/set-active-slave", "port slave",
                              bond_unixctl_set_active_slave, NULL);
-    unixctl_command_register("bond/enable-slave", bond_unixctl_enable_slave,
-                             NULL);
-    unixctl_command_register("bond/disable-slave", bond_unixctl_disable_slave,
-                             NULL);
-    unixctl_command_register("bond/hash", bond_unixctl_hash, NULL);
+    unixctl_command_register("bond/enable-slave", "port slave",
+                             bond_unixctl_enable_slave, NULL);
+    unixctl_command_register("bond/disable-slave", "port slave",
+                             bond_unixctl_disable_slave, NULL);
+    unixctl_command_register("bond/hash", "mac [vlan] [basis]",
+                             bond_unixctl_hash, NULL);
 }
 
 static void
@@ -1507,7 +1522,7 @@ bond_update_fake_slave_stats(struct bond *bond)
         }
     }
 
-    if (!netdev_open_default(bond->name, &bond_dev)) {
+    if (!netdev_open(bond->name, "system", &bond_dev)) {
         netdev_set_stats(bond_dev, &bond_stats);
         netdev_close(bond_dev);
     }

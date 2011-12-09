@@ -59,6 +59,9 @@ VLOG_DEFINE_THIS_MODULE(socket_util);
 #define O_DIRECTORY 0
 #endif
 
+static int getsockopt_int(int fd, int level, int option, const char *optname,
+                          int *valuep);
+
 /* Sets 'fd' to non-blocking mode.  Returns 0 if successful, otherwise a
  * positive errno value. */
 int
@@ -182,11 +185,9 @@ int
 get_socket_error(int fd)
 {
     int error;
-    socklen_t len = sizeof(error);
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 10);
+
+    if (getsockopt_int(fd, SOL_SOCKET, SO_ERROR, "SO_ERROR", &error)) {
         error = errno;
-        VLOG_ERR_RL(&rl, "getsockopt(SO_ERROR): %s", strerror(error));
     }
     return error;
 }
@@ -221,15 +222,13 @@ check_connection_completion(int fd)
 int
 drain_rcvbuf(int fd)
 {
-    socklen_t rcvbuf_len;
-    size_t rcvbuf;
+    int rcvbuf;
 
-    rcvbuf_len = sizeof rcvbuf;
-    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, &rcvbuf_len) < 0) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 10);
-        VLOG_ERR_RL(&rl, "getsockopt(SO_RCVBUF) failed: %s", strerror(errno));
-        return errno;
+    rcvbuf = get_socket_rcvbuf(fd);
+    if (rcvbuf < 0) {
+        return -rcvbuf;
     }
+
     while (rcvbuf > 0) {
         /* In Linux, specifying MSG_TRUNC in the flags argument causes the
          * datagram length to be returned, even if that is longer than the
@@ -248,6 +247,18 @@ drain_rcvbuf(int fd)
         rcvbuf -= n_bytes;
     }
     return 0;
+}
+
+/* Returns the size of socket 'sock''s receive buffer (SO_RCVBUF), or a
+ * negative errno value if an error occurs. */
+int
+get_socket_rcvbuf(int sock)
+{
+    int rcvbuf;
+    int error;
+
+    error = getsockopt_int(sock, SOL_SOCKET, SO_RCVBUF, "SO_RCVBUF", &rcvbuf);
+    return error ? -error : rcvbuf;
 }
 
 /* Reads and discards up to 'n' datagrams from 'fd', stopping as soon as no
@@ -598,7 +609,7 @@ exit:
  * If successful, stores the address into '*sinp' and returns true; otherwise
  * zeros '*sinp' and returns false. */
 bool
-inet_parse_passive(const char *target_, uint16_t default_port,
+inet_parse_passive(const char *target_, int default_port,
                    struct sockaddr_in *sinp)
 {
     char *target = xstrdup(target_);
@@ -662,7 +673,7 @@ inet_open_passive(int style, const char *target, int default_port,
     unsigned int yes = 1;
 
     if (!inet_parse_passive(target, default_port, &sin)) {
-        return EAFNOSUPPORT;
+        return -EAFNOSUPPORT;
     }
 
     /* Create non-blocking socket, set SO_REUSEADDR. */
@@ -670,7 +681,7 @@ inet_open_passive(int style, const char *target, int default_port,
     if (fd < 0) {
         error = errno;
         VLOG_ERR("%s: socket: %s", target, strerror(error));
-        return error;
+        return -error;
     }
     error = set_nonblocking(fd);
     if (error) {
@@ -705,6 +716,7 @@ inet_open_passive(int style, const char *target, int default_port,
             goto error;
         }
         if (sin.sin_family != AF_INET || sin_len != sizeof sin) {
+            error = EAFNOSUPPORT;
             VLOG_ERR("%s: getsockname: invalid socket name", target);
             goto error;
         }
@@ -715,7 +727,7 @@ inet_open_passive(int style, const char *target, int default_port,
 
 error:
     close(fd);
-    return error;
+    return -error;
 }
 
 /* Returns a readable and writable fd for /dev/null, if successful, otherwise
@@ -846,13 +858,27 @@ xpipe(int fds[2])
 }
 
 static int
-getsockopt_int(int fd, int level, int optname, int *valuep)
+getsockopt_int(int fd, int level, int option, const char *optname, int *valuep)
 {
-    socklen_t len = sizeof *valuep;
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 10);
+    socklen_t len;
+    int value;
+    int error;
 
-    return (getsockopt(fd, level, optname, valuep, &len) ? errno
-            : len == sizeof *valuep ? 0
-            : EINVAL);
+    len = sizeof value;
+    if (getsockopt(fd, level, option, &value, &len)) {
+        error = errno;
+        VLOG_ERR_RL(&rl, "getsockopt(%s): %s", optname, strerror(error));
+    } else if (len != sizeof value) {
+        error = EINVAL;
+        VLOG_ERR_RL(&rl, "getsockopt(%s): value is %u bytes (expected %zu)",
+                    optname, (unsigned int) len, sizeof value);
+    } else {
+        error = 0;
+    }
+
+    *valuep = error ? 0 : value;
+    return error;
 }
 
 static void
@@ -890,7 +916,8 @@ describe_sockaddr(struct ds *string, int fd,
 #define SO_PROTOCOL 38
 #endif
 
-            if (!getsockopt_int(fd, SOL_SOCKET, SO_PROTOCOL, &protocol)) {
+            if (!getsockopt_int(fd, SOL_SOCKET, SO_PROTOCOL, "SO_PROTOCOL",
+                                &protocol)) {
                 switch (protocol) {
                 case NETLINK_ROUTE:
                     ds_put_cstr(string, "NETLINK_ROUTE");

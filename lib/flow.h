@@ -24,7 +24,6 @@
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
 #include "hash.h"
-#include "openvswitch/datapath-protocol.h"
 #include "util.h"
 
 struct dpif_flow_stats;
@@ -33,12 +32,25 @@ struct flow_wildcards;
 struct ofp_match;
 struct ofpbuf;
 
-#define FLOW_N_REGS 4
+/* This sequence number should be incremented whenever anything involving flows
+ * or the wildcarding of flows changes.  This will cause build assertion
+ * failures in places which likely need to be updated. */
+#define FLOW_WC_SEQ 3
+
+#define FLOW_N_REGS 5
 BUILD_ASSERT_DECL(FLOW_N_REGS <= NXM_NX_MAX_REGS);
 
 /* Used for struct flow's dl_type member for frames that have no Ethernet
  * type, that is, pure 802.2 frames. */
 #define FLOW_DL_TYPE_NONE 0x5ff
+
+/* Fragment bits, used for IPv4 and IPv6, always zero for non-IP flows. */
+#define FLOW_FRAG_ANY   (1 << 0) /* Set for any IP fragment. */
+#define FLOW_FRAG_LATER (1 << 1) /* Set for IP fragment with nonzero offset. */
+#define FLOW_FRAG_MASK  (FLOW_FRAG_ANY | FLOW_FRAG_LATER)
+
+BUILD_ASSERT_DECL(FLOW_FRAG_ANY == NX_IP_FRAG_ANY);
+BUILD_ASSERT_DECL(FLOW_FRAG_LATER == NX_IP_FRAG_LATER);
 
 struct flow {
     ovs_be64 tun_id;            /* Encapsulating tunnel ID. */
@@ -53,33 +65,37 @@ struct flow {
     uint8_t dl_src[6];          /* Ethernet source address. */
     uint8_t dl_dst[6];          /* Ethernet destination address. */
     uint8_t nw_proto;           /* IP protocol or low 8 bits of ARP opcode. */
-    uint8_t nw_tos;             /* IP ToS (DSCP field, 6 bits). */
+    uint8_t tos_frag;           /* IP ToS in top bits, FLOW_FRAG_* in low. */
     uint8_t arp_sha[6];         /* ARP/ND source hardware address. */
     uint8_t arp_tha[6];         /* ARP/ND target hardware address. */
     struct in6_addr ipv6_src;   /* IPv6 source address. */
     struct in6_addr ipv6_dst;   /* IPv6 destination address. */
     struct in6_addr nd_target;  /* IPv6 neighbor discovery (ND) target. */
-    uint32_t reserved;          /* Reserved for 64-bit packing. */
 };
 
 /* Assert that there are FLOW_SIG_SIZE bytes of significant data in "struct
  * flow", followed by FLOW_PAD_SIZE bytes of padding. */
 #define FLOW_SIG_SIZE (100 + FLOW_N_REGS * 4)
-#define FLOW_PAD_SIZE 4
+#define FLOW_PAD_SIZE 0
 BUILD_ASSERT_DECL(offsetof(struct flow, nd_target) == FLOW_SIG_SIZE - 16);
 BUILD_ASSERT_DECL(sizeof(((struct flow *)0)->nd_target) == 16);
 BUILD_ASSERT_DECL(sizeof(struct flow) == FLOW_SIG_SIZE + FLOW_PAD_SIZE);
 
-int flow_extract(struct ofpbuf *, ovs_be64 tun_id, uint16_t in_port,
-                 struct flow *);
-void flow_extract_stats(const struct flow *flow, struct ofpbuf *packet,
-                        struct dpif_flow_stats *);
+/* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
+BUILD_ASSERT_DECL(FLOW_SIG_SIZE == 120 && FLOW_WC_SEQ == 3);
+
+void flow_extract(struct ofpbuf *, ovs_be64 tun_id, uint16_t in_port,
+                  struct flow *);
+void flow_zero_wildcards(struct flow *, const struct flow_wildcards *);
+
 char *flow_to_string(const struct flow *);
 void flow_format(struct ds *, const struct flow *);
 void flow_print(FILE *, const struct flow *);
 static inline int flow_compare(const struct flow *, const struct flow *);
 static inline bool flow_equal(const struct flow *, const struct flow *);
 static inline size_t flow_hash(const struct flow *, uint32_t basis);
+
+void flow_compose(struct ofpbuf *, const struct flow *);
 
 static inline int
 flow_compare(const struct flow *a, const struct flow *b)
@@ -116,15 +132,16 @@ typedef unsigned int OVS_BITWISE flow_wildcards_t;
 #define FWW_NW_PROTO    ((OVS_FORCE flow_wildcards_t) (1 << 5))
 #define FWW_TP_SRC      ((OVS_FORCE flow_wildcards_t) (1 << 6))
 #define FWW_TP_DST      ((OVS_FORCE flow_wildcards_t) (1 << 7))
-/* Same meanings as corresponding OFPFW_* bits, but differ in value. */
-#define FWW_NW_TOS      ((OVS_FORCE flow_wildcards_t) (1 << 1))
 /* No corresponding OFPFW_* bits. */
-#define FWW_ETH_MCAST   ((OVS_FORCE flow_wildcards_t) (1 << 8))
+#define FWW_ETH_MCAST   ((OVS_FORCE flow_wildcards_t) (1 << 1))
                                                        /* multicast bit only */
-#define FWW_ARP_SHA     ((OVS_FORCE flow_wildcards_t) (1 << 9))
-#define FWW_ARP_THA     ((OVS_FORCE flow_wildcards_t) (1 << 10))
-#define FWW_ND_TARGET   ((OVS_FORCE flow_wildcards_t) (1 << 11))
-#define FWW_ALL         ((OVS_FORCE flow_wildcards_t) (((1 << 12)) - 1))
+#define FWW_ARP_SHA     ((OVS_FORCE flow_wildcards_t) (1 << 8))
+#define FWW_ARP_THA     ((OVS_FORCE flow_wildcards_t) (1 << 9))
+#define FWW_ND_TARGET   ((OVS_FORCE flow_wildcards_t) (1 << 10))
+#define FWW_ALL         ((OVS_FORCE flow_wildcards_t) (((1 << 11)) - 1))
+
+/* Remember to update FLOW_WC_SEQ when adding or removing FWW_*. */
+BUILD_ASSERT_DECL(FWW_ALL == ((1 << 11) - 1) && FLOW_WC_SEQ == 3);
 
 /* Information on wildcards for a flow, as a supplement to "struct flow".
  *
@@ -139,13 +156,18 @@ struct flow_wildcards {
     struct in6_addr ipv6_src_mask; /* 1-bit in each signficant ipv6_src bit. */
     struct in6_addr ipv6_dst_mask; /* 1-bit in each signficant ipv6_dst bit. */
     ovs_be16 vlan_tci_mask;     /* 1-bit in each significant vlan_tci bit. */
-    uint16_t zero;              /* Padding field set to zero. */
+    uint8_t tos_frag_mask;      /* 1-bit in each significant tos_frag bit. */
+    uint8_t zeros[5];           /* Padding field set to zero. */
 };
+
+/* Remember to update FLOW_WC_SEQ when updating struct flow_wildcards. */
+BUILD_ASSERT_DECL(sizeof(struct flow_wildcards) == 80 && FLOW_WC_SEQ == 3);
 
 void flow_wildcards_init_catchall(struct flow_wildcards *);
 void flow_wildcards_init_exact(struct flow_wildcards *);
 
 bool flow_wildcards_is_exact(const struct flow_wildcards *);
+bool flow_wildcards_is_catchall(const struct flow_wildcards *);
 
 bool flow_wildcards_set_nw_src_mask(struct flow_wildcards *, ovs_be32);
 bool flow_wildcards_set_nw_dst_mask(struct flow_wildcards *, ovs_be32);

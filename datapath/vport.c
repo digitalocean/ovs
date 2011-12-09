@@ -6,8 +6,6 @@
  * kernel, by Linus Torvalds and others.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/dcache.h>
 #include <linux/etherdevice.h>
 #include <linux/if.h>
@@ -178,7 +176,7 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const stru
 
 	vport->dp = parms->dp;
 	vport->port_no = parms->port_no;
-	atomic_set(&vport->sflow_pool, 0);
+	vport->upcall_pid = parms->upcall_pid;
 	vport->ops = ops;
 
 	/* Initialize kobject for bridge.  This will be added as
@@ -186,13 +184,13 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const stru
 	vport->kobj.kset = NULL;
 	kobject_init(&vport->kobj, &brport_ktype);
 
-	if (vport->ops->flags & VPORT_F_GEN_STATS) {
-		vport->percpu_stats = alloc_percpu(struct vport_percpu_stats);
-		if (!vport->percpu_stats)
-			return ERR_PTR(-ENOMEM);
-
-		spin_lock_init(&vport->stats_lock);
+	vport->percpu_stats = alloc_percpu(struct vport_percpu_stats);
+	if (!vport->percpu_stats) {
+		kfree(vport);
+		return ERR_PTR(-ENOMEM);
 	}
+
+	spin_lock_init(&vport->stats_lock);
 
 	return vport;
 }
@@ -209,8 +207,7 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const stru
  */
 void vport_free(struct vport *vport)
 {
-	if (vport->ops->flags & VPORT_F_GEN_STATS)
-		free_percpu(vport->percpu_stats);
+	free_percpu(vport->percpu_stats);
 
 	kobject_put(&vport->kobj);
 }
@@ -221,7 +218,7 @@ void vport_free(struct vport *vport)
  * @parms: Information about new vport.
  *
  * Creates a new vport with the specified configuration (which is dependent on
- * device type) and attaches it to a datapath.  RTNL lock must be held.
+ * device type).  RTNL lock must be held.
  */
 struct vport *vport_add(const struct vport_parms *parms)
 {
@@ -277,43 +274,13 @@ int vport_set_options(struct vport *vport, struct nlattr *options)
  * Detaches @vport from its datapath and destroys it.  It is possible to fail
  * for reasons such as lack of memory.  RTNL lock must be held.
  */
-int vport_del(struct vport *vport)
+void vport_del(struct vport *vport)
 {
 	ASSERT_RTNL();
 
 	hlist_del_rcu(&vport->hash_node);
 
-	return vport->ops->destroy(vport);
-}
-
-/**
- *	vport_set_mtu - set device MTU (for kernel callers)
- *
- * @vport: vport on which to set MTU.
- * @mtu: New MTU.
- *
- * Sets the MTU of the given device.  Some devices may not support setting the
- * MTU, in which case the result will always be -EOPNOTSUPP.  RTNL lock must
- * be held.
- */
-int vport_set_mtu(struct vport *vport, int mtu)
-{
-	ASSERT_RTNL();
-
-	if (mtu < 68)
-		return -EINVAL;
-
-	if (vport->ops->set_mtu) {
-		int ret;
-
-		ret = vport->ops->set_mtu(vport, mtu);
-
-		if (!ret && !is_internal_vport(vport))
-			set_internal_devs_mtu(vport->dp);
-
-		return ret;
-	} else
-		return -EOPNOTSUPP;
+	vport->ops->destroy(vport);
 }
 
 /**
@@ -352,18 +319,13 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
  *
  * Must be called with RTNL lock.
  */
-int vport_set_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
+void vport_set_stats(struct vport *vport, struct ovs_vport_stats *stats)
 {
 	ASSERT_RTNL();
 
-	if (vport->ops->flags & VPORT_F_GEN_STATS) {
-		spin_lock_bh(&vport->stats_lock);
-		vport->offset_stats = *stats;
-		spin_unlock_bh(&vport->stats_lock);
-
-		return 0;
-	} else
-		return -EOPNOTSUPP;
+	spin_lock_bh(&vport->stats_lock);
+	vport->offset_stats = *stats;
+	spin_unlock_bh(&vport->stats_lock);
 }
 
 /**
@@ -386,7 +348,7 @@ const char *vport_get_name(const struct vport *vport)
  *
  * Retrieves the type of the given device.
  */
-enum odp_vport_type vport_get_type(const struct vport *vport)
+enum ovs_vport_type vport_get_type(const struct vport *vport)
 {
 	return vport->ops->type;
 }
@@ -421,17 +383,6 @@ struct kobject *vport_get_kobj(const struct vport *vport)
 		return NULL;
 }
 
-static int vport_call_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
-{
-	int err;
-
-	rcu_read_lock();
-	err = vport->ops->get_stats(vport, stats);
-	rcu_read_unlock();
-
-	return err;
-}
-
 /**
  *	vport_get_stats - retrieve device stats
  *
@@ -442,19 +393,20 @@ static int vport_call_get_stats(struct vport *vport, struct rtnl_link_stats64 *s
  *
  * Must be called with RTNL lock or rcu_read_lock.
  */
-int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
+void vport_get_stats(struct vport *vport, struct ovs_vport_stats *stats)
 {
 	int i;
-
-	if (!(vport->ops->flags & VPORT_F_GEN_STATS))
-		return vport_call_get_stats(vport, stats);
 
 	/* We potentially have 3 sources of stats that need to be
 	 * combined: those we have collected (split into err_stats and
 	 * percpu_stats), offset_stats from set_stats(), and device
-	 * error stats from get_stats() (for errors that happen
+	 * error stats from netdev->get_stats() (for errors that happen
 	 * downstream and therefore aren't reported through our
-	 * vport_record_error() function). */
+	 * vport_record_error() function).
+	 * Stats from first two sources are merged and reported by ovs over
+	 * OVS_VPORT_ATTR_STATS.
+	 * netdev-stats can be directly read over netlink-ioctl.
+	 */
 
 	spin_lock_bh(&vport->stats_lock);
 
@@ -466,35 +418,6 @@ int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 	stats->rx_dropped	+= vport->err_stats.rx_dropped;
 
 	spin_unlock_bh(&vport->stats_lock);
-
-	if (vport->ops->get_stats) {
-		struct rtnl_link_stats64 dev_stats;
-		int err;
-
-		err = vport_call_get_stats(vport, &dev_stats);
-		if (err)
-			return err;
-
-		stats->rx_errors           += dev_stats.rx_errors;
-		stats->tx_errors           += dev_stats.tx_errors;
-		stats->rx_dropped          += dev_stats.rx_dropped;
-		stats->tx_dropped          += dev_stats.tx_dropped;
-		stats->multicast           += dev_stats.multicast;
-		stats->collisions          += dev_stats.collisions;
-		stats->rx_length_errors    += dev_stats.rx_length_errors;
-		stats->rx_over_errors      += dev_stats.rx_over_errors;
-		stats->rx_crc_errors       += dev_stats.rx_crc_errors;
-		stats->rx_frame_errors     += dev_stats.rx_frame_errors;
-		stats->rx_fifo_errors      += dev_stats.rx_fifo_errors;
-		stats->rx_missed_errors    += dev_stats.rx_missed_errors;
-		stats->tx_aborted_errors   += dev_stats.tx_aborted_errors;
-		stats->tx_carrier_errors   += dev_stats.tx_carrier_errors;
-		stats->tx_fifo_errors      += dev_stats.tx_fifo_errors;
-		stats->tx_heartbeat_errors += dev_stats.tx_heartbeat_errors;
-		stats->tx_window_errors    += dev_stats.tx_window_errors;
-		stats->rx_compressed       += dev_stats.rx_compressed;
-		stats->tx_compressed       += dev_stats.tx_compressed;
-	}
 
 	for_each_possible_cpu(i) {
 		const struct vport_percpu_stats *percpu_stats;
@@ -513,8 +436,6 @@ int vport_get_stats(struct vport *vport, struct rtnl_link_stats64 *stats)
 		stats->tx_bytes		+= local_stats.tx_bytes;
 		stats->tx_packets	+= local_stats.tx_packets;
 	}
-
-	return 0;
 }
 
 /**
@@ -579,28 +500,6 @@ int vport_get_ifindex(const struct vport *vport)
 }
 
 /**
- *	vport_get_iflink - retrieve device system link index
- *
- * @vport: vport from which to retrieve index
- *
- * Retrieves the system link index of the given device.  The link is the index
- * of the interface on which the packet will actually be sent.  In most cases
- * this is the same as the ifindex but may be different for tunnel devices.
- * Returns a negative index on error.
- *
- * Must be called with RTNL lock or rcu_read_lock.
- */
-int vport_get_iflink(const struct vport *vport)
-{
-	if (vport->ops->get_iflink)
-		return vport->ops->get_iflink(vport);
-
-	/* If we don't have an iflink, use the ifindex.  In most cases they
-	 * are the same. */
-	return vport_get_ifindex(vport);
-}
-
-/**
  *	vport_get_mtu - retrieve device MTU
  *
  * @vport: vport from which to retrieve MTU
@@ -623,7 +522,7 @@ int vport_get_mtu(const struct vport *vport)
  * @skb: sk_buff where options should be appended.
  *
  * Retrieves the configuration of the given device, appending an
- * %ODP_VPORT_ATTR_OPTIONS attribute that in turn contains nested
+ * %OVS_VPORT_ATTR_OPTIONS attribute that in turn contains nested
  * vport-specific attributes to @skb.
  *
  * Returns 0 if successful, -EMSGSIZE if @skb has insufficient room, or another
@@ -636,7 +535,7 @@ int vport_get_options(const struct vport *vport, struct sk_buff *skb)
 {
 	struct nlattr *nla;
 
-	nla = nla_nest_start(skb, ODP_VPORT_ATTR_OPTIONS);
+	nla = nla_nest_start(skb, OVS_VPORT_ATTR_OPTIONS);
 	if (!nla)
 		return -EMSGSIZE;
 
@@ -664,19 +563,14 @@ int vport_get_options(const struct vport *vport, struct sk_buff *skb)
  */
 void vport_receive(struct vport *vport, struct sk_buff *skb)
 {
-	if (vport->ops->flags & VPORT_F_GEN_STATS) {
-		struct vport_percpu_stats *stats;
+	struct vport_percpu_stats *stats;
 
-		local_bh_disable();
-		stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
+	stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
 
-		write_seqcount_begin(&stats->seqlock);
-		stats->rx_packets++;
-		stats->rx_bytes += skb->len;
-		write_seqcount_end(&stats->seqlock);
-
-		local_bh_enable();
-	}
+	write_seqcount_begin(&stats->seqlock);
+	stats->rx_packets++;
+	stats->rx_bytes += skb->len;
+	write_seqcount_end(&stats->seqlock);
 
 	if (!(vport->ops->flags & VPORT_F_FLOW))
 		OVS_CB(skb)->flow = NULL;
@@ -685,16 +579,6 @@ void vport_receive(struct vport *vport, struct sk_buff *skb)
 		OVS_CB(skb)->tun_id = 0;
 
 	dp_process_received_packet(vport, skb);
-}
-
-static inline unsigned packet_length(const struct sk_buff *skb)
-{
-	unsigned length = skb->len - ETH_HLEN;
-
-	if (skb->protocol == htons(ETH_P_8021Q))
-		length -= VLAN_HLEN;
-
-	return length;
 }
 
 /**
@@ -708,39 +592,17 @@ static inline unsigned packet_length(const struct sk_buff *skb)
  */
 int vport_send(struct vport *vport, struct sk_buff *skb)
 {
-	int mtu;
-	int sent;
+	struct vport_percpu_stats *stats;
+	int sent = vport->ops->send(vport, skb);
 
-	mtu = vport_get_mtu(vport);
-	if (mtu && unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
-		if (net_ratelimit())
-			pr_warn("%s: dropped over-mtu packet: %d > %d\n",
-				dp_name(vport->dp), packet_length(skb), mtu);
-		goto error;
-	}
+	stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
 
-	sent = vport->ops->send(vport, skb);
-
-	if (vport->ops->flags & VPORT_F_GEN_STATS && sent > 0) {
-		struct vport_percpu_stats *stats;
-
-		local_bh_disable();
-		stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
-
-		write_seqcount_begin(&stats->seqlock);
-		stats->tx_packets++;
-		stats->tx_bytes += sent;
-		write_seqcount_end(&stats->seqlock);
-
-		local_bh_enable();
-	}
+	write_seqcount_begin(&stats->seqlock);
+	stats->tx_packets++;
+	stats->tx_bytes += sent;
+	write_seqcount_end(&stats->seqlock);
 
 	return sent;
-
-error:
-	kfree_skb(skb);
-	vport_record_error(vport, VPORT_E_TX_DROPPED);
-	return 0;
 }
 
 /**
@@ -754,28 +616,25 @@ error:
  */
 void vport_record_error(struct vport *vport, enum vport_err_type err_type)
 {
-	if (vport->ops->flags & VPORT_F_GEN_STATS) {
+	spin_lock(&vport->stats_lock);
 
-		spin_lock_bh(&vport->stats_lock);
+	switch (err_type) {
+	case VPORT_E_RX_DROPPED:
+		vport->err_stats.rx_dropped++;
+		break;
 
-		switch (err_type) {
-		case VPORT_E_RX_DROPPED:
-			vport->err_stats.rx_dropped++;
-			break;
+	case VPORT_E_RX_ERROR:
+		vport->err_stats.rx_errors++;
+		break;
 
-		case VPORT_E_RX_ERROR:
-			vport->err_stats.rx_errors++;
-			break;
+	case VPORT_E_TX_DROPPED:
+		vport->err_stats.tx_dropped++;
+		break;
 
-		case VPORT_E_TX_DROPPED:
-			vport->err_stats.tx_dropped++;
-			break;
+	case VPORT_E_TX_ERROR:
+		vport->err_stats.tx_errors++;
+		break;
+	};
 
-		case VPORT_E_TX_ERROR:
-			vport->err_stats.tx_errors++;
-			break;
-		};
-
-		spin_unlock_bh(&vport->stats_lock);
-	}
+	spin_unlock(&vport->stats_lock);
 }

@@ -134,6 +134,7 @@ enum ofp_config_flags {
     OFPC_FRAG_NORMAL   = 0,  /* No special handling for fragments. */
     OFPC_FRAG_DROP     = 1,  /* Drop fragments. */
     OFPC_FRAG_REASM    = 2,  /* Reassemble (only if OFPC_IP_REASM set). */
+    OFPC_FRAG_NX_MATCH = 3,  /* Make first fragments available for matching. */
     OFPC_FRAG_MASK     = 3
 };
 
@@ -535,11 +536,6 @@ struct ofp_match {
     ovs_be16 tp_dst;           /* TCP/UDP destination port. */
 };
 OFP_ASSERT(sizeof(struct ofp_match) == 40);
-
-/* The match fields for ICMP type and code use the transport source and
- * destination port fields, respectively. */
-#define icmp_type tp_src
-#define icmp_code tp_dst
 
 /* Value used in "idle_timeout" and "hard_timeout" to indicate that the entry
  * is permanent. */

@@ -97,10 +97,10 @@ struct ofopgroup {
     int error;                  /* 0 if no error yet, otherwise error code. */
 };
 
-static struct ofopgroup *ofopgroup_create(struct ofproto *);
-static struct ofopgroup *ofopgroup_create_for_ofconn(struct ofconn *,
-                                                     const struct ofp_header *,
-                                                     uint32_t buffer_id);
+static struct ofopgroup *ofopgroup_create_unattached(struct ofproto *);
+static struct ofopgroup *ofopgroup_create(struct ofproto *, struct ofconn *,
+                                          const struct ofp_header *,
+                                          uint32_t buffer_id);
 static void ofopgroup_submit(struct ofopgroup *);
 static void ofopgroup_destroy(struct ofopgroup *);
 
@@ -135,23 +135,19 @@ static void ofproto_rule_send_removed(struct rule *, uint8_t reason);
 
 static void ofopgroup_destroy(struct ofopgroup *);
 
-static int add_flow(struct ofproto *, struct ofconn *, struct flow_mod *,
+static int add_flow(struct ofproto *, struct ofconn *,
+                    const struct ofputil_flow_mod *,
                     const struct ofp_header *);
 
-/* This return value tells handle_openflow() that processing of the current
- * OpenFlow message must be postponed until some ongoing operations have
- * completed.
- *
- * This particular value is a good choice because it is negative (so it won't
- * collide with any errno value or any value returned by ofp_mkerr()) and large
- * (so it won't accidentally collide with EOF or a negative errno value). */
-enum { OFPROTO_POSTPONE = -100000 };
-
 static bool handle_openflow(struct ofconn *, struct ofpbuf *);
+static int handle_flow_mod__(struct ofproto *, struct ofconn *,
+                             const struct ofputil_flow_mod *,
+                             const struct ofp_header *);
 
 static void update_port(struct ofproto *, const char *devname);
 static int init_ports(struct ofproto *);
 static void reinit_ports(struct ofproto *);
+static void set_internal_devs_mtu(struct ofproto *);
 
 static void ofproto_unixctl_init(void);
 
@@ -289,7 +285,9 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
                struct ofproto **ofprotop)
 {
     const struct ofproto_class *class;
+    struct classifier *table;
     struct ofproto *ofproto;
+    int n_tables;
     int error;
 
     *ofprotop = NULL;
@@ -322,12 +320,14 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ofproto->datapath_id = 0;
     ofproto_set_flow_eviction_threshold(ofproto,
                                         OFPROTO_FLOW_EVICTON_THRESHOLD_DEFAULT);
+    ofproto->forward_bpdu = false;
     ofproto->fallback_dpid = pick_fallback_dpid();
     ofproto->mfr_desc = xstrdup(DEFAULT_MFR_DESC);
     ofproto->hw_desc = xstrdup(DEFAULT_HW_DESC);
     ofproto->sw_desc = xstrdup(DEFAULT_SW_DESC);
     ofproto->serial_desc = xstrdup(DEFAULT_SERIAL_DESC);
     ofproto->dp_desc = xstrdup(DEFAULT_DP_DESC);
+    ofproto->frag_handling = OFPC_FRAG_NORMAL;
     hmap_init(&ofproto->ports);
     shash_init(&ofproto->port_by_name);
     ofproto->tables = NULL;
@@ -335,16 +335,23 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ofproto->connmgr = connmgr_create(ofproto, datapath_name, datapath_name);
     ofproto->state = S_OPENFLOW;
     list_init(&ofproto->pending);
+    ofproto->n_pending = 0;
     hmap_init(&ofproto->deletions);
 
-    error = ofproto->ofproto_class->construct(ofproto);
+    error = ofproto->ofproto_class->construct(ofproto, &n_tables);
     if (error) {
         VLOG_ERR("failed to open datapath %s: %s",
                  datapath_name, strerror(error));
         ofproto_destroy__(ofproto);
         return error;
     }
-    assert(ofproto->n_tables > 0);
+
+    assert(n_tables >= 1 && n_tables <= 255);
+    ofproto->n_tables = n_tables;
+    ofproto->tables = xmalloc(n_tables * sizeof *ofproto->tables);
+    OFPROTO_FOR_EACH_TABLE (table, ofproto) {
+        classifier_init(table);
+    }
 
     ofproto->datapath_id = pick_datapath_id(ofproto);
     VLOG_INFO("using datapath ID %016"PRIx64, ofproto->datapath_id);
@@ -418,6 +425,21 @@ ofproto_set_flow_eviction_threshold(struct ofproto *ofproto, unsigned threshold)
         ofproto->flow_eviction_threshold = OFPROTO_FLOW_EVICTION_THRESHOLD_MIN;
     } else {
         ofproto->flow_eviction_threshold = threshold;
+    }
+}
+
+/* If forward_bpdu is true, the NORMAL action will forward frames with
+ * reserved (e.g. STP) destination Ethernet addresses. if forward_bpdu is false,
+ * the NORMAL action will drop these frames. */
+void
+ofproto_set_forward_bpdu(struct ofproto *ofproto, bool forward_bpdu)
+{
+    bool old_val = ofproto->forward_bpdu;
+    ofproto->forward_bpdu = forward_bpdu;
+    if (old_val != ofproto->forward_bpdu) {
+        if (ofproto->ofproto_class->forward_bpdu_changed) {
+            ofproto->ofproto_class->forward_bpdu_changed(ofproto);
+        }
     }
 }
 
@@ -506,6 +528,79 @@ ofproto_set_sflow(struct ofproto *ofproto,
     } else {
         return oso ? EOPNOTSUPP : 0;
     }
+}
+
+/* Spanning Tree Protocol (STP) configuration. */
+
+/* Configures STP on 'ofproto' using the settings defined in 's'.  If
+ * 's' is NULL, disables STP.
+ *
+ * Returns 0 if successful, otherwise a positive errno value. */
+int
+ofproto_set_stp(struct ofproto *ofproto,
+                const struct ofproto_stp_settings *s)
+{
+    return (ofproto->ofproto_class->set_stp
+            ? ofproto->ofproto_class->set_stp(ofproto, s)
+            : EOPNOTSUPP);
+}
+
+/* Retrieves STP status of 'ofproto' and stores it in 's'.  If the
+ * 'enabled' member of 's' is false, then the other members are not
+ * meaningful.
+ *
+ * Returns 0 if successful, otherwise a positive errno value. */
+int
+ofproto_get_stp_status(struct ofproto *ofproto,
+                       struct ofproto_stp_status *s)
+{
+    return (ofproto->ofproto_class->get_stp_status
+            ? ofproto->ofproto_class->get_stp_status(ofproto, s)
+            : EOPNOTSUPP);
+}
+
+/* Configures STP on 'ofp_port' of 'ofproto' using the settings defined
+ * in 's'.  The caller is responsible for assigning STP port numbers
+ * (using the 'port_num' member in the range of 1 through 255, inclusive)
+ * and ensuring there are no duplicates.  If the 's' is NULL, then STP
+ * is disabled on the port.
+ *
+ * Returns 0 if successful, otherwise a positive errno value.*/
+int
+ofproto_port_set_stp(struct ofproto *ofproto, uint16_t ofp_port,
+                     const struct ofproto_port_stp_settings *s)
+{
+    struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
+    if (!ofport) {
+        VLOG_WARN("%s: cannot configure STP on nonexistent port %"PRIu16,
+                  ofproto->name, ofp_port);
+        return ENODEV;
+    }
+
+    return (ofproto->ofproto_class->set_stp_port
+            ? ofproto->ofproto_class->set_stp_port(ofport, s)
+            : EOPNOTSUPP);
+}
+
+/* Retrieves STP port status of 'ofp_port' on 'ofproto' and stores it in
+ * 's'.  If the 'enabled' member in 's' is false, then the other members
+ * are not meaningful.
+ *
+ * Returns 0 if successful, otherwise a positive errno value.*/
+int
+ofproto_port_get_stp_status(struct ofproto *ofproto, uint16_t ofp_port,
+                            struct ofproto_port_stp_status *s)
+{
+    struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
+    if (!ofport) {
+        VLOG_WARN("%s: cannot get STP status on nonexistent port %"PRIu16,
+                  ofproto->name, ofp_port);
+        return ENODEV;
+    }
+
+    return (ofproto->ofproto_class->get_stp_port_status
+            ? ofproto->ofproto_class->get_stp_port_status(ofport, s)
+            : EOPNOTSUPP);
 }
 
 /* Connectivity Fault Management configuration. */
@@ -637,7 +732,7 @@ ofproto_set_flood_vlans(struct ofproto *ofproto, unsigned long *flood_vlans)
 /* Returns true if 'aux' is a registered bundle that is currently in use as the
  * output for a mirror. */
 bool
-ofproto_is_mirror_output_bundle(struct ofproto *ofproto, void *aux)
+ofproto_is_mirror_output_bundle(const struct ofproto *ofproto, void *aux)
 {
     return (ofproto->ofproto_class->is_mirror_output_bundle
             ? ofproto->ofproto_class->is_mirror_output_bundle(ofproto, aux)
@@ -666,9 +761,8 @@ ofproto_flush__(struct ofproto *ofproto)
         ofproto->ofproto_class->flush(ofproto);
     }
 
-    group = ofopgroup_create(ofproto);
-    for (table = ofproto->tables; table < &ofproto->tables[ofproto->n_tables];
-         table++) {
+    group = ofopgroup_create_unattached(ofproto);
+    OFPROTO_FOR_EACH_TABLE (table, ofproto) {
         struct rule *rule, *next_rule;
         struct cls_cursor cursor;
 
@@ -687,9 +781,10 @@ ofproto_flush__(struct ofproto *ofproto)
 static void
 ofproto_destroy__(struct ofproto *ofproto)
 {
-    size_t i;
+    struct classifier *table;
 
     assert(list_is_empty(&ofproto->pending));
+    assert(!ofproto->n_pending);
 
     connmgr_destroy(ofproto->connmgr);
 
@@ -704,9 +799,9 @@ ofproto_destroy__(struct ofproto *ofproto)
     hmap_destroy(&ofproto->ports);
     shash_destroy(&ofproto->port_by_name);
 
-    for (i = 0; i < ofproto->n_tables; i++) {
-        assert(classifier_is_empty(&ofproto->tables[i]));
-        classifier_destroy(&ofproto->tables[i]);
+    OFPROTO_FOR_EACH_TABLE (table, ofproto) {
+        assert(classifier_is_empty(table));
+        classifier_destroy(table);
     }
     free(ofproto->tables);
 
@@ -767,14 +862,8 @@ ofproto_run(struct ofproto *p)
     int error;
 
     error = p->ofproto_class->run(p);
-    if (error == ENODEV) {
-        /* Someone destroyed the datapath behind our back.  The caller
-         * better destroy us and give up, because we're just going to
-         * spin from here on out. */
-        static struct vlog_rate_limit rl2 = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_ERR_RL(&rl2, "%s: datapath was destroyed externally",
-                    p->name);
-        return ENODEV;
+    if (error && error != EAGAIN) {
+        VLOG_ERR_RL(&rl, "%s: run failed (%s)", p->name, strerror(error));
     }
 
     if (p->ofproto_class->port_poll) {
@@ -810,7 +899,26 @@ ofproto_run(struct ofproto *p)
         NOT_REACHED();
     }
 
-    return 0;
+    return error;
+}
+
+/* Performs periodic activity required by 'ofproto' that needs to be done
+ * with the least possible latency.
+ *
+ * It makes sense to call this function a couple of times per poll loop, to
+ * provide a significant performance boost on some benchmarks with the
+ * ofproto-dpif implementation. */
+int
+ofproto_run_fast(struct ofproto *p)
+{
+    int error;
+
+    error = p->ofproto_class->run_fast ? p->ofproto_class->run_fast(p) : 0;
+    if (error && error != EAGAIN) {
+        VLOG_ERR_RL(&rl, "%s: fastpath run failed (%s)",
+                    p->name, strerror(error));
+    }
+    return error;
 }
 
 void
@@ -1025,7 +1133,7 @@ ofproto_add_flow(struct ofproto *ofproto, const struct cls_rule *cls_rule,
                                     &ofproto->tables[0], cls_rule));
     if (!rule || !ofputil_actions_equal(rule->actions, rule->n_actions,
                                         actions, n_actions)) {
-        struct flow_mod fm;
+        struct ofputil_flow_mod fm;
 
         memset(&fm, 0, sizeof fm);
         fm.cr = *cls_rule;
@@ -1034,6 +1142,18 @@ ofproto_add_flow(struct ofproto *ofproto, const struct cls_rule *cls_rule,
         fm.n_actions = n_actions;
         add_flow(ofproto, NULL, &fm, NULL);
     }
+}
+
+/* Executes the flow modification specified in 'fm'.  Returns 0 on success, an
+ * OpenFlow error code as encoded by ofp_mkerr() on failure, or
+ * OFPROTO_POSTPONE if the operation cannot be initiated now but may be retried
+ * later.
+ *
+ * This is a helper function for in-band control and fail-open. */
+int
+ofproto_flow_mod(struct ofproto *ofproto, const struct ofputil_flow_mod *fm)
+{
+    return handle_flow_mod__(ofproto, NULL, fm, NULL);
 }
 
 /* Searches for a rule with matching criteria exactly equal to 'target' in
@@ -1056,7 +1176,7 @@ ofproto_delete_flow(struct ofproto *ofproto, const struct cls_rule *target)
         return false;
     } else {
         /* Initiate deletion -> success. */
-        struct ofopgroup *group = ofopgroup_create(ofproto);
+        struct ofopgroup *group = ofopgroup_create_unattached(ofproto);
         ofoperation_create(group, rule, OFOPERATION_DELETE);
         classifier_remove(&ofproto->tables[rule->table_id], &rule->cr);
         rule->ofproto->ofproto_class->rule_destruct(rule);
@@ -1107,17 +1227,11 @@ static struct netdev *
 ofport_open(const struct ofproto_port *ofproto_port, struct ofp_phy_port *opp)
 {
     uint32_t curr, advertised, supported, peer;
-    struct netdev_options netdev_options;
     enum netdev_flags flags;
     struct netdev *netdev;
     int error;
 
-    memset(&netdev_options, 0, sizeof netdev_options);
-    netdev_options.name = ofproto_port->name;
-    netdev_options.type = ofproto_port->type;
-    netdev_options.ethertype = NETDEV_ETH_TYPE_NONE;
-
-    error = netdev_open(&netdev_options, &netdev);
+    error = netdev_open(ofproto_port->name, ofproto_port->type, &netdev);
     if (error) {
         VLOG_WARN_RL(&rl, "ignoring port %s (%"PRIu16") because netdev %s "
                      "cannot be opened (%s)",
@@ -1167,6 +1281,7 @@ ofport_install(struct ofproto *p,
 {
     const char *netdev_name = netdev_get_name(netdev);
     struct ofport *ofport;
+    int dev_mtu;
     int error;
 
     /* Create ofport. */
@@ -1184,6 +1299,13 @@ ofport_install(struct ofproto *p,
     /* Add port to 'p'. */
     hmap_insert(&p->ports, &ofport->hmap_node, hash_int(ofport->ofp_port, 0));
     shash_add(&p->port_by_name, netdev_name, ofport);
+
+    if (!netdev_get_mtu(netdev, &dev_mtu)) {
+        set_internal_devs_mtu(p);
+        ofport->mtu = dev_mtu;
+    } else {
+        ofport->mtu = 0;
+    }
 
     /* Let the ofproto_class initialize its private data. */
     error = p->ofproto_class->port_construct(ofport);
@@ -1223,7 +1345,7 @@ ofport_remove_with_name(struct ofproto *ofproto, const char *name)
     }
 }
 
-/* Updates 'port' within 'ofproto' with the new 'netdev' and 'opp'.
+/* Updates 'port' with new 'opp' description.
  *
  * Does not handle a name or port number change.  The caller must implement
  * such a change as a delete followed by an add.  */
@@ -1242,11 +1364,25 @@ ofport_modified(struct ofport *port, struct ofp_phy_port *opp)
     connmgr_send_port_status(port->ofproto->connmgr, &port->opp, OFPPR_MODIFY);
 }
 
+/* Update OpenFlow 'state' in 'port' and notify controller. */
+void
+ofproto_port_set_state(struct ofport *port, ovs_be32 state)
+{
+    if (port->opp.state != state) {
+        port->opp.state = state;
+        connmgr_send_port_status(port->ofproto->connmgr, &port->opp,
+                                 OFPPR_MODIFY);
+    }
+}
+
 void
 ofproto_port_unregister(struct ofproto *ofproto, uint16_t ofp_port)
 {
     struct ofport *port = ofproto_get_port(ofproto, ofp_port);
     if (port) {
+        if (port->ofproto->ofproto_class->set_stp_port) {
+            port->ofproto->ofproto_class->set_stp_port(port, NULL);
+        }
         if (port->ofproto->ofproto_class->set_cfm) {
             port->ofproto->ofproto_class->set_cfm(port, NULL);
         }
@@ -1311,10 +1447,20 @@ update_port(struct ofproto *ofproto, const char *name)
         port = ofproto_get_port(ofproto, ofproto_port.ofp_port);
         if (port && !strcmp(netdev_get_name(port->netdev), name)) {
             struct netdev *old_netdev = port->netdev;
+            int dev_mtu;
 
             /* 'name' hasn't changed location.  Any properties changed? */
             if (!ofport_equal(&port->opp, &opp)) {
                 ofport_modified(port, &opp);
+            }
+
+            /* If this is a non-internal port and the MTU changed, check
+             * if the datapath's MTU needs to be updated. */
+            if (strcmp(netdev_get_type(netdev), "internal")
+                    && !netdev_get_mtu(netdev, &dev_mtu)
+                    && port->mtu != dev_mtu) {
+                set_internal_devs_mtu(ofproto);
+                port->mtu = dev_mtu;
             }
 
             /* Install the newly opened netdev in case it has changed.
@@ -1371,6 +1517,52 @@ init_ports(struct ofproto *p)
     }
 
     return 0;
+}
+
+/* Find the minimum MTU of all non-datapath devices attached to 'p'.
+ * Returns ETH_PAYLOAD_MAX or the minimum of the ports. */
+static int
+find_min_mtu(struct ofproto *p)
+{
+    struct ofport *ofport;
+    int mtu = 0;
+
+    HMAP_FOR_EACH (ofport, hmap_node, &p->ports) {
+        struct netdev *netdev = ofport->netdev;
+        int dev_mtu;
+
+        /* Skip any internal ports, since that's what we're trying to
+         * set. */
+        if (!strcmp(netdev_get_type(netdev), "internal")) {
+            continue;
+        }
+
+        if (netdev_get_mtu(netdev, &dev_mtu)) {
+            continue;
+        }
+        if (!mtu || dev_mtu < mtu) {
+            mtu = dev_mtu;
+        }
+    }
+
+    return mtu ? mtu: ETH_PAYLOAD_MAX;
+}
+
+/* Set the MTU of all datapath devices on 'p' to the minimum of the
+ * non-datapath ports. */
+static void
+set_internal_devs_mtu(struct ofproto *p)
+{
+    struct ofport *ofport;
+    int mtu = find_min_mtu(p);
+
+    HMAP_FOR_EACH (ofport, hmap_node, &p->ports) {
+        struct netdev *netdev = ofport->netdev;
+
+        if (!strcmp(netdev_get_type(netdev), "internal")) {
+            netdev_set_mtu(netdev, mtu);
+        }
+    }
 }
 
 static void
@@ -1471,7 +1663,7 @@ handle_features_request(struct ofconn *ofconn, const struct ofp_header *oh)
     osf->n_buffers = htonl(pktbuf_capacity());
     osf->n_tables = ofproto->n_tables;
     osf->capabilities = htonl(OFPC_FLOW_STATS | OFPC_TABLE_STATS |
-                              OFPC_PORT_STATS);
+                              OFPC_PORT_STATS | OFPC_QUEUE_STATS);
     if (arp_match_ip) {
         osf->capabilities |= htonl(OFPC_ARP_MATCH_IP);
     }
@@ -1489,18 +1681,12 @@ static int
 handle_get_config_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct ofpbuf *buf;
     struct ofp_switch_config *osc;
-    uint16_t flags;
-    bool drop_frags;
-
-    /* Figure out flags. */
-    drop_frags = ofproto->ofproto_class->get_drop_frags(ofproto);
-    flags = drop_frags ? OFPC_FRAG_DROP : OFPC_FRAG_NORMAL;
+    struct ofpbuf *buf;
 
     /* Send reply. */
     osc = make_openflow_xid(sizeof *osc, OFPT_GET_CONFIG_REPLY, oh->xid, &buf);
-    osc->flags = htons(flags);
+    osc->flags = htons(ofproto->frag_handling);
     osc->miss_send_len = htons(ofconn_get_miss_send_len(ofconn));
     ofconn_send_reply(ofconn, buf);
 
@@ -1513,19 +1699,20 @@ handle_set_config(struct ofconn *ofconn, const struct ofp_switch_config *osc)
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     uint16_t flags = ntohs(osc->flags);
 
-    if (ofconn_get_type(ofconn) == OFCONN_PRIMARY
-        && ofconn_get_role(ofconn) != NX_ROLE_SLAVE) {
-        switch (flags & OFPC_FRAG_MASK) {
-        case OFPC_FRAG_NORMAL:
-            ofproto->ofproto_class->set_drop_frags(ofproto, false);
-            break;
-        case OFPC_FRAG_DROP:
-            ofproto->ofproto_class->set_drop_frags(ofproto, true);
-            break;
-        default:
-            VLOG_WARN_RL(&rl, "requested bad fragment mode (flags=%"PRIx16")",
-                         osc->flags);
-            break;
+    if (ofconn_get_type(ofconn) != OFCONN_PRIMARY
+        || ofconn_get_role(ofconn) != NX_ROLE_SLAVE) {
+        enum ofp_config_flags cur = ofproto->frag_handling;
+        enum ofp_config_flags next = flags & OFPC_FRAG_MASK;
+
+        assert((cur & OFPC_FRAG_MASK) == cur);
+        if (cur != next) {
+            if (ofproto->ofproto_class->set_frag_handling(ofproto, next)) {
+                ofproto->frag_handling = next;
+            } else {
+                VLOG_WARN_RL(&rl, "%s: unsupported fragment handling mode %s",
+                             ofproto->name,
+                             ofputil_frag_handling_to_string(next));
+            }
         }
     }
 
@@ -1564,7 +1751,6 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     struct ofpbuf request;
     struct flow flow;
     size_t n_ofp_actions;
-    uint16_t in_port;
     int error;
 
     COVERAGE_INC(ofproto_packet_out);
@@ -1588,7 +1774,7 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     /* Get payload. */
     if (opo->buffer_id != htonl(UINT32_MAX)) {
         error = ofconn_pktbuf_retrieve(ofconn, ntohl(opo->buffer_id),
-                                       &buffer, &in_port);
+                                       &buffer, NULL);
         if (error || !buffer) {
             return error;
         }
@@ -1882,7 +2068,7 @@ handle_flow_stats_request(struct ofconn *ofconn,
                           const struct ofp_stats_msg *osm)
 {
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct flow_stats_request fsr;
+    struct ofputil_flow_stats_request fsr;
     struct list replies;
     struct list rules;
     struct rule *rule;
@@ -1954,7 +2140,7 @@ ofproto_get_all_flows(struct ofproto *p, struct ds *results)
 {
     struct classifier *cls;
 
-    for (cls = &p->tables[0]; cls < &p->tables[p->n_tables]; cls++) {
+    OFPROTO_FOR_EACH_TABLE (cls, p) {
         struct cls_cursor cursor;
         struct rule *rule;
 
@@ -1986,12 +2172,31 @@ ofproto_port_get_cfm_fault(const struct ofproto *ofproto, uint16_t ofp_port)
             : -1);
 }
 
+/* Gets the MPIDs of the remote maintenance points broadcasting to 'ofp_port'
+ * within 'ofproto'.  Populates 'rmps' with an array of MPIDs owned by
+ * 'ofproto', and 'n_rmps' with the number of MPIDs in 'rmps'.  Returns a
+ * number less than 0 if CFM is not enabled on 'ofp_port'. */
+int
+ofproto_port_get_cfm_remote_mpids(const struct ofproto *ofproto,
+                                  uint16_t ofp_port, const uint64_t **rmps,
+                                  size_t *n_rmps)
+{
+    struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
+
+    *rmps = NULL;
+    *n_rmps = 0;
+    return (ofport && ofproto->ofproto_class->get_cfm_remote_mpids
+            ? ofproto->ofproto_class->get_cfm_remote_mpids(ofport, rmps,
+                                                           n_rmps)
+            : -1);
+}
+
 static int
 handle_aggregate_stats_request(struct ofconn *ofconn,
                                const struct ofp_stats_msg *osm)
 {
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct flow_stats_request request;
+    struct ofputil_flow_stats_request request;
     struct ofputil_aggregate_stats stats;
     bool unknown_packets, unknown_bytes;
     struct ofpbuf *reply;
@@ -2151,14 +2356,15 @@ is_flow_deletion_pending(const struct ofproto *ofproto,
  * in which no matching flow already exists in the flow table.
  *
  * Adds the flow specified by 'ofm', which is followed by 'n_actions'
- * ofp_actions, to the ofproto's flow table.  Returns 0 on success or an
- * OpenFlow error code as encoded by ofp_mkerr() on failure.
+ * ofp_actions, to the ofproto's flow table.  Returns 0 on success, an OpenFlow
+ * error code as encoded by ofp_mkerr() on failure, or OFPROTO_POSTPONE if the
+ * operation cannot be initiated now but may be retried later.
  *
  * 'ofconn' is used to retrieve the packet buffer specified in ofm->buffer_id,
  * if any. */
 static int
-add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
-         const struct ofp_header *request)
+add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
+         const struct ofputil_flow_mod *fm, const struct ofp_header *request)
 {
     struct classifier *table;
     struct ofopgroup *group;
@@ -2166,21 +2372,10 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
     struct rule *rule;
     int error;
 
-    /* Check for overlap, if requested. */
-    if (fm->flags & OFPFF_CHECK_OVERLAP) {
-        struct classifier *cls;
-
-        FOR_EACH_MATCHING_TABLE (cls, fm->table_id, ofproto) {
-            if (classifier_rule_overlaps(cls, &fm->cr)) {
-                return ofp_mkerr(OFPET_FLOW_MOD_FAILED, OFPFMFC_OVERLAP);
-            }
-        }
-    }
-
     /* Pick table. */
     if (fm->table_id == 0xff) {
         uint8_t table_id;
-        if (ofproto->n_tables > 1) {
+        if (ofproto->ofproto_class->rule_choose_table) {
             error = ofproto->ofproto_class->rule_choose_table(ofproto, &fm->cr,
                                                               &table_id);
             if (error) {
@@ -2195,6 +2390,12 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
         table = &ofproto->tables[fm->table_id];
     } else {
         return ofp_mkerr_nicira(OFPET_FLOW_MOD_FAILED, NXFMFC_BAD_TABLE_ID);
+    }
+
+    /* Check for overlap, if requested. */
+    if (fm->flags & OFPFF_CHECK_OVERLAP
+        && classifier_rule_overlaps(table, &fm->cr)) {
+        return ofp_mkerr(OFPET_FLOW_MOD_FAILED, OFPFMFC_OVERLAP);
     }
 
     /* Serialize against pending deletion. */
@@ -2213,7 +2414,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
     rule->cr = fm->cr;
     rule->pending = NULL;
     rule->flow_cookie = fm->cookie;
-    rule->created = time_msec();
+    rule->created = rule->modified = time_msec();
     rule->idle_timeout = fm->idle_timeout;
     rule->hard_timeout = fm->hard_timeout;
     rule->table_id = table - ofproto->tables;
@@ -2226,9 +2427,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
     if (victim && victim->pending) {
         error = OFPROTO_POSTPONE;
     } else {
-        group = (ofconn
-                 ? ofopgroup_create_for_ofconn(ofconn, request, fm->buffer_id)
-                 : ofopgroup_create(ofproto));
+        group = ofopgroup_create(ofproto, ofconn, request, fm->buffer_id);
         ofoperation_create(group, rule, OFOPERATION_ADD);
         rule->pending->victim = victim;
 
@@ -2261,13 +2460,14 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn, struct flow_mod *fm,
  *
  * Returns 0 on success, otherwise an OpenFlow error code. */
 static int
-modify_flows__(struct ofconn *ofconn, const struct flow_mod *fm,
+modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
+               const struct ofputil_flow_mod *fm,
                const struct ofp_header *request, struct list *rules)
 {
     struct ofopgroup *group;
     struct rule *rule;
 
-    group = ofopgroup_create_for_ofconn(ofconn, request, fm->buffer_id);
+    group = ofopgroup_create(ofproto, ofconn, request, fm->buffer_id);
     LIST_FOR_EACH (rule, ofproto_node, rules) {
         if (!ofputil_actions_equal(fm->actions, fm->n_actions,
                                    rule->actions, rule->n_actions)) {
@@ -2277,6 +2477,8 @@ modify_flows__(struct ofconn *ofconn, const struct flow_mod *fm,
             rule->actions = ofputil_actions_clone(fm->actions, fm->n_actions);
             rule->n_actions = fm->n_actions;
             rule->ofproto->ofproto_class->rule_modify_actions(rule);
+        } else {
+            rule->modified = time_msec();
         }
         rule->flow_cookie = fm->cookie;
     }
@@ -2291,17 +2493,18 @@ modify_flows__(struct ofconn *ofconn, const struct flow_mod *fm,
  * 'ofconn' is used to retrieve the packet buffer specified in fm->buffer_id,
  * if any. */
 static int
-modify_flows_loose(struct ofconn *ofconn, struct flow_mod *fm,
+modify_flows_loose(struct ofproto *ofproto, struct ofconn *ofconn,
+                   const struct ofputil_flow_mod *fm,
                    const struct ofp_header *request)
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
     struct list rules;
     int error;
 
-    error = collect_rules_loose(p, fm->table_id, &fm->cr, OFPP_NONE, &rules);
+    error = collect_rules_loose(ofproto, fm->table_id, &fm->cr, OFPP_NONE,
+                                &rules);
     return (error ? error
-            : list_is_empty(&rules) ? add_flow(p, ofconn, fm, request)
-            : modify_flows__(ofconn, fm, request, &rules));
+            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
+            : modify_flows__(ofproto, ofconn, fm, request, &rules));
 }
 
 /* Implements OFPFC_MODIFY_STRICT.  Returns 0 on success or an OpenFlow error
@@ -2310,18 +2513,19 @@ modify_flows_loose(struct ofconn *ofconn, struct flow_mod *fm,
  * 'ofconn' is used to retrieve the packet buffer specified in fm->buffer_id,
  * if any. */
 static int
-modify_flow_strict(struct ofconn *ofconn, struct flow_mod *fm,
+modify_flow_strict(struct ofproto *ofproto, struct ofconn *ofconn,
+                   const struct ofputil_flow_mod *fm,
                    const struct ofp_header *request)
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
     struct list rules;
     int error;
 
-    error = collect_rules_strict(p, fm->table_id, &fm->cr, OFPP_NONE, &rules);
+    error = collect_rules_strict(ofproto, fm->table_id, &fm->cr, OFPP_NONE,
+                                 &rules);
     return (error ? error
-            : list_is_empty(&rules) ? add_flow(p, ofconn, fm, request)
-            : list_is_singleton(&rules) ? modify_flows__(ofconn, fm, request,
-                                                         &rules)
+            : list_is_empty(&rules) ? add_flow(ofproto, ofconn, fm, request)
+            : list_is_singleton(&rules) ? modify_flows__(ofproto, ofconn,
+                                                         fm, request, &rules)
             : 0);
 }
 
@@ -2331,14 +2535,13 @@ modify_flow_strict(struct ofconn *ofconn, struct flow_mod *fm,
  *
  * Returns 0 on success, otherwise an OpenFlow error code. */
 static int
-delete_flows__(struct ofconn *ofconn, const struct ofp_header *request,
-               struct list *rules)
+delete_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
+               const struct ofp_header *request, struct list *rules)
 {
-    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     struct rule *rule, *next;
     struct ofopgroup *group;
 
-    group = ofopgroup_create_for_ofconn(ofconn, request, UINT32_MAX);
+    group = ofopgroup_create(ofproto, ofconn, request, UINT32_MAX);
     LIST_FOR_EACH_SAFE (rule, next, ofproto_node, rules) {
         ofproto_rule_send_removed(rule, OFPRR_DELETE);
 
@@ -2353,34 +2556,35 @@ delete_flows__(struct ofconn *ofconn, const struct ofp_header *request,
 
 /* Implements OFPFC_DELETE. */
 static int
-delete_flows_loose(struct ofconn *ofconn, const struct flow_mod *fm,
+delete_flows_loose(struct ofproto *ofproto, struct ofconn *ofconn,
+                   const struct ofputil_flow_mod *fm,
                    const struct ofp_header *request)
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
     struct list rules;
     int error;
 
-    error = collect_rules_loose(p, fm->table_id, &fm->cr, fm->out_port,
+    error = collect_rules_loose(ofproto, fm->table_id, &fm->cr, fm->out_port,
                                 &rules);
     return (error ? error
-            : !list_is_empty(&rules) ? delete_flows__(ofconn, request, &rules)
+            : !list_is_empty(&rules) ? delete_flows__(ofproto, ofconn, request,
+                                                      &rules)
             : 0);
 }
 
 /* Implements OFPFC_DELETE_STRICT. */
 static int
-delete_flow_strict(struct ofconn *ofconn, struct flow_mod *fm,
+delete_flow_strict(struct ofproto *ofproto, struct ofconn *ofconn,
+                   const struct ofputil_flow_mod *fm,
                    const struct ofp_header *request)
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
     struct list rules;
     int error;
 
-    error = collect_rules_strict(p, fm->table_id, &fm->cr, fm->out_port,
+    error = collect_rules_strict(ofproto, fm->table_id, &fm->cr, fm->out_port,
                                  &rules);
     return (error ? error
-            : list_is_singleton(&rules) ? delete_flows__(ofconn, request,
-                                                         &rules)
+            : list_is_singleton(&rules) ? delete_flows__(ofproto, ofconn,
+                                                         request, &rules)
             : 0);
 }
 
@@ -2420,7 +2624,7 @@ ofproto_rule_expire(struct rule *rule, uint8_t reason)
 
     ofproto_rule_send_removed(rule, reason);
 
-    group = ofopgroup_create(ofproto);
+    group = ofopgroup_create_unattached(ofproto);
     ofoperation_create(group, rule, OFOPERATION_DELETE);
     classifier_remove(&ofproto->tables[rule->table_id], &rule->cr);
     rule->ofproto->ofproto_class->rule_destruct(rule);
@@ -2430,17 +2634,12 @@ ofproto_rule_expire(struct rule *rule, uint8_t reason)
 static int
 handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct flow_mod fm;
+    struct ofputil_flow_mod fm;
     int error;
 
     error = reject_slave_controller(ofconn, "flow_mod");
     if (error) {
         return error;
-    }
-
-    if (list_size(&ofproto->pending) >= 50) {
-        return OFPROTO_POSTPONE;
     }
 
     error = ofputil_decode_flow_mod(&fm, oh,
@@ -2457,24 +2656,37 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
         return ofp_mkerr(OFPET_FLOW_MOD_FAILED, OFPFMFC_ALL_TABLES_FULL);
     }
 
-    switch (fm.command) {
+    return handle_flow_mod__(ofconn_get_ofproto(ofconn), ofconn, &fm, oh);
+}
+
+static int
+handle_flow_mod__(struct ofproto *ofproto, struct ofconn *ofconn,
+                  const struct ofputil_flow_mod *fm,
+                  const struct ofp_header *oh)
+{
+    if (ofproto->n_pending >= 50) {
+        assert(!list_is_empty(&ofproto->pending));
+        return OFPROTO_POSTPONE;
+    }
+
+    switch (fm->command) {
     case OFPFC_ADD:
-        return add_flow(ofproto, ofconn, &fm, oh);
+        return add_flow(ofproto, ofconn, fm, oh);
 
     case OFPFC_MODIFY:
-        return modify_flows_loose(ofconn, &fm, oh);
+        return modify_flows_loose(ofproto, ofconn, fm, oh);
 
     case OFPFC_MODIFY_STRICT:
-        return modify_flow_strict(ofconn, &fm, oh);
+        return modify_flow_strict(ofproto, ofconn, fm, oh);
 
     case OFPFC_DELETE:
-        return delete_flows_loose(ofconn, &fm, oh);
+        return delete_flows_loose(ofproto, ofconn, fm, oh);
 
     case OFPFC_DELETE_STRICT:
-        return delete_flow_strict(ofconn, &fm, oh);
+        return delete_flow_strict(ofproto, ofconn, fm, oh);
 
     default:
-        if (fm.command > 0xff) {
+        if (fm->command > 0xff) {
             VLOG_WARN_RL(&rl, "flow_mod has explicit table_id but "
                          "flow_mod_table_id extension is not enabled");
         }
@@ -2696,7 +2908,7 @@ handle_openflow(struct ofconn *ofconn, struct ofpbuf *ofp_msg)
  * The caller should add operations to the returned group with
  * ofoperation_create() and then submit it with ofopgroup_submit(). */
 static struct ofopgroup *
-ofopgroup_create(struct ofproto *ofproto)
+ofopgroup_create_unattached(struct ofproto *ofproto)
 {
     struct ofopgroup *group = xzalloc(sizeof *group);
     group->ofproto = ofproto;
@@ -2706,26 +2918,33 @@ ofopgroup_create(struct ofproto *ofproto)
     return group;
 }
 
-/* Creates and returns a new ofopgroup that is associated with 'ofconn'.  If
- * the ofopgroup eventually fails, then the error reply will include 'request'.
- * If the ofopgroup eventually succeeds, then the packet with buffer id
- * 'buffer_id' on 'ofconn' will be sent by 'ofconn''s ofproto.
+/* Creates and returns a new ofopgroup for 'ofproto'.
+ *
+ * If 'ofconn' is NULL, the new ofopgroup is not associated with any OpenFlow
+ * connection.  The 'request' and 'buffer_id' arguments are ignored.
+ *
+ * If 'ofconn' is nonnull, then the new ofopgroup is associated with 'ofconn'.
+ * If the ofopgroup eventually fails, then the error reply will include
+ * 'request'.  If the ofopgroup eventually succeeds, then the packet with
+ * buffer id 'buffer_id' on 'ofconn' will be sent by 'ofconn''s ofproto.
  *
  * The caller should add operations to the returned group with
  * ofoperation_create() and then submit it with ofopgroup_submit(). */
 static struct ofopgroup *
-ofopgroup_create_for_ofconn(struct ofconn *ofconn,
-                            const struct ofp_header *request,
-                            uint32_t buffer_id)
+ofopgroup_create(struct ofproto *ofproto, struct ofconn *ofconn,
+                 const struct ofp_header *request, uint32_t buffer_id)
 {
-    struct ofopgroup *group = ofopgroup_create(ofconn_get_ofproto(ofconn));
-    size_t request_len = ntohs(request->length);
+    struct ofopgroup *group = ofopgroup_create_unattached(ofproto);
+    if (ofconn) {
+        size_t request_len = ntohs(request->length);
 
-    ofconn_add_opgroup(ofconn, &group->ofconn_node);
-    group->ofconn = ofconn;
-    group->request = xmemdup(request, MIN(request_len, 64));
-    group->buffer_id = buffer_id;
+        assert(ofconn_get_ofproto(ofconn) == ofproto);
 
+        ofconn_add_opgroup(ofconn, &group->ofconn_node);
+        group->ofconn = ofconn;
+        group->request = xmemdup(request, MIN(request_len, 64));
+        group->buffer_id = buffer_id;
+    }
     return group;
 }
 
@@ -2742,6 +2961,7 @@ ofopgroup_submit(struct ofopgroup *group)
         ofopgroup_destroy(group);
     } else {
         list_push_back(&group->ofproto->pending, &group->ofproto_node);
+        group->ofproto->n_pending++;
     }
 }
 
@@ -2750,6 +2970,8 @@ ofopgroup_destroy(struct ofopgroup *group)
 {
     assert(list_is_empty(&group->ops));
     if (!list_is_empty(&group->ofproto_node)) {
+        assert(group->ofproto->n_pending > 0);
+        group->ofproto->n_pending--;
         list_remove(&group->ofproto_node);
     }
     if (!list_is_empty(&group->ofconn_node)) {
@@ -2811,8 +3033,29 @@ ofoperation_destroy(struct ofoperation *op)
  * indicate success or an OpenFlow error code (constructed with
  * e.g. ofp_mkerr()).
  *
- * If 'op' is a "delete flow" operation, 'error' must be 0.  That is, flow
- * deletions are not allowed to fail.
+ * If 'error' is 0, indicating success, the operation will be committed
+ * permanently to the flow table.  There is one interesting subcase:
+ *
+ *   - If 'op' is an "add flow" operation that is replacing an existing rule in
+ *     the flow table (the "victim" rule) by a new one, then the caller must
+ *     have uninitialized any derived state in the victim rule, as in step 5 in
+ *     the "Life Cycle" in ofproto/ofproto-provider.h.  ofoperation_complete()
+ *     performs steps 6 and 7 for the victim rule, most notably by calling its
+ *     ->rule_dealloc() function.
+ *
+ * If 'error' is nonzero, then generally the operation will be rolled back:
+ *
+ *   - If 'op' is an "add flow" operation, ofproto removes the new rule or
+ *     restores the original rule.  The caller must have uninitialized any
+ *     derived state in the new rule, as in step 5 of in the "Life Cycle" in
+ *     ofproto/ofproto-provider.h.  ofoperation_complete() performs steps 6 and
+ *     and 7 for the new rule, calling its ->rule_dealloc() function.
+ *
+ *   - If 'op' is a "modify flow" operation, ofproto restores the original
+ *     actions.
+ *
+ *   - 'op' must not be a "delete flow" operation.  Removing a rule is not
+ *     allowed to fail.  It must always succeed.
  *
  * Please see the large comment in ofproto/ofproto-provider.h titled
  * "Asynchronous Operation Support" for more information. */
@@ -2872,7 +3115,9 @@ ofoperation_complete(struct ofoperation *op, int error)
         break;
 
     case OFOPERATION_MODIFY:
-        if (error) {
+        if (!error) {
+            rule->modified = time_msec();
+        } else {
             free(rule->actions);
             rule->actions = op->actions;
             rule->n_actions = op->n_actions;
@@ -2961,5 +3206,5 @@ ofproto_unixctl_init(void)
     }
     registered = true;
 
-    unixctl_command_register("ofproto/list", ofproto_unixctl_list, NULL);
+    unixctl_command_register("ofproto/list", "", ofproto_unixctl_list, NULL);
 }

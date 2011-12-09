@@ -45,7 +45,8 @@ EXTRA_DIST = \
 	REPORTING-BUGS \
 	SubmittingPatches \
 	WHY-OVS \
-	boot.sh
+	boot.sh \
+	$(MAN_FRAGMENTS)
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
@@ -56,7 +57,9 @@ dist_pkgdata_SCRIPTS =
 dist_sbin_SCRIPTS =
 dist_scripts_SCRIPTS =
 INSTALL_DATA_LOCAL =
+UNINSTALL_LOCAL =
 man_MANS =
+MAN_FRAGMENTS =
 noinst_DATA =
 noinst_HEADERS =
 noinst_LIBRARIES =
@@ -148,11 +151,23 @@ rate-limit-check:
 	    exit 1; \
 	 fi
 
+if HAVE_GROFF
+ALL_LOCAL += manpage-check
+manpage-check: $(MANS) $(MAN_FRAGMENTS)
+	@manpages=; \
+	for d in $(MANS); do \
+		manpages="$$manpages `test -f $$d || echo $(VPATH)/`$$d"; \
+	done; \
+	LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T ascii -man -p -z $$manpages && touch $@
+CLEANFILES += manpage-check
+endif
+
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
 clean-local: $(CLEAN_LOCAL)
 install-data-local: $(INSTALL_DATA_LOCAL)
-.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL)
+uninstall-local: $(UNINSTALL_LOCAL)
+.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL) $(UNINSTALL_LOCAL)
 
 include lib/automake.mk
 include ofproto/automake.mk
@@ -166,3 +181,4 @@ include ovsdb/automake.mk
 include rhel/automake.mk
 include xenserver/automake.mk
 include python/ovs/automake.mk
+include python/compat/automake.mk

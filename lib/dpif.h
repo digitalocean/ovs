@@ -21,8 +21,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <linux/openvswitch.h>
 #include "openflow/openflow.h"
-#include "openvswitch/datapath-protocol.h"
 #include "netdev.h"
 #include "util.h"
 
@@ -32,6 +32,7 @@ extern "C" {
 
 struct dpif;
 struct ds;
+struct flow;
 struct nlattr;
 struct ofpbuf;
 struct sset;
@@ -58,9 +59,17 @@ const char *dpif_base_name(const struct dpif *);
 
 int dpif_delete(struct dpif *);
 
-int dpif_get_dp_stats(const struct dpif *, struct odp_stats *);
-int dpif_get_drop_frags(const struct dpif *, bool *drop_frags);
-int dpif_set_drop_frags(struct dpif *, bool drop_frags);
+/* Statisticss for a dpif as a whole. */
+struct dpif_dp_stats {
+    uint64_t n_hit;             /* Number of flow table matches. */
+    uint64_t n_missed;          /* Number of flow table misses. */
+    uint64_t n_lost;            /* Number of misses not sent to userspace. */
+    uint64_t n_flows;           /* Number of flows present. */
+};
+int dpif_get_dp_stats(const struct dpif *, struct dpif_dp_stats *);
+
+
+/* Port operations. */
 
 int dpif_port_add(struct dpif *, struct netdev *, uint16_t *port_nop);
 int dpif_port_del(struct dpif *, uint16_t port_no);
@@ -72,7 +81,6 @@ struct dpif_port {
     char *name;                 /* Network device name, e.g. "eth0". */
     char *type;                 /* Network device type, e.g. "system". */
     uint32_t port_no;           /* Port number within datapath. */
-    struct netdev_stats stats;  /* Port statistics. */
 };
 void dpif_port_clone(struct dpif_port *, const struct dpif_port *);
 void dpif_port_destroy(struct dpif_port *);
@@ -83,6 +91,7 @@ int dpif_port_query_by_name(const struct dpif *, const char *devname,
 int dpif_port_get_name(struct dpif *, uint16_t port_no,
                        char *name, size_t name_size);
 int dpif_get_max_ports(const struct dpif *);
+uint32_t dpif_port_get_pid(const struct dpif *, uint16_t port_no);
 
 struct dpif_port_dump {
     const struct dpif *dpif;
@@ -108,6 +117,8 @@ int dpif_port_dump_done(struct dpif_port_dump *);
 
 int dpif_port_poll(const struct dpif *, char **devnamep);
 void dpif_port_poll_wait(const struct dpif *);
+
+/* Flow table operations. */
 
 struct dpif_flow_stats {
     uint64_t n_packets;
@@ -116,6 +127,8 @@ struct dpif_flow_stats {
     uint8_t tcp_flags;
 };
 
+void dpif_flow_stats_extract(const struct flow *, struct ofpbuf *packet,
+                             struct dpif_flow_stats *);
 void dpif_flow_stats_format(const struct dpif_flow_stats *, struct ds *);
 
 enum dpif_flow_put_flags {
@@ -147,16 +160,67 @@ bool dpif_flow_dump_next(struct dpif_flow_dump *,
                          const struct nlattr **actions, size_t *actions_len,
                          const struct dpif_flow_stats **);
 int dpif_flow_dump_done(struct dpif_flow_dump *);
+
+/* Packet operations. */
 
 int dpif_execute(struct dpif *,
                  const struct nlattr *key, size_t key_len,
                  const struct nlattr *actions, size_t actions_len,
                  const struct ofpbuf *);
+
+/* Operation batching interface.
+ *
+ * Some datapaths are faster at performing N operations together than the same
+ * N operations individually, hence an interface for batching.
+ */
+
+enum dpif_op_type {
+    DPIF_OP_FLOW_PUT = 1,
+    DPIF_OP_EXECUTE
+};
+
+struct dpif_flow_put {
+    enum dpif_op_type type;         /* Always DPIF_OP_FLOW_PUT. */
+
+    /* Input. */
+    enum dpif_flow_put_flags flags; /* DPIF_FP_*. */
+    const struct nlattr *key;       /* Flow to put. */
+    size_t key_len;                 /* Length of 'key' in bytes. */
+    const struct nlattr *actions;   /* Actions to perform on flow. */
+    size_t actions_len;             /* Length of 'actions' in bytes. */
+
+    /* Output. */
+    struct dpif_flow_stats *stats;  /* Optional flow statistics. */
+    int error;                      /* 0 or positive errno value. */
+};
+
+struct dpif_execute {
+    enum dpif_op_type type;         /* Always DPIF_OP_EXECUTE. */
+
+    /* Input. */
+    const struct nlattr *key;       /* Partial flow key (only for metadata). */
+    size_t key_len;                 /* Length of 'key' in bytes. */
+    const struct nlattr *actions;   /* Actions to execute on packet. */
+    size_t actions_len;             /* Length of 'actions' in bytes. */
+    const struct ofpbuf *packet;    /* Packet to execute. */
+
+    /* Output. */
+    int error;                      /* 0 or positive errno value. */
+};
+
+union dpif_op {
+    enum dpif_op_type type;
+    struct dpif_flow_put flow_put;
+    struct dpif_execute execute;
+};
+
+void dpif_operate(struct dpif *, union dpif_op **ops, size_t n_ops);
+
+/* Upcalls. */
 
 enum dpif_upcall_type {
     DPIF_UC_MISS,               /* Miss in flow table. */
-    DPIF_UC_ACTION,             /* ODP_ACTION_ATTR_USERSPACE action. */
-    DPIF_UC_SAMPLE,             /* Packet sampling. */
+    DPIF_UC_ACTION,             /* OVS_ACTION_ATTR_USERSPACE action. */
     DPIF_N_UC_TYPES
 };
 
@@ -177,21 +241,16 @@ struct dpif_upcall {
     size_t key_len;             /* Length of 'key' in bytes. */
 
     /* DPIF_UC_ACTION only. */
-    uint64_t userdata;          /* Argument to ODP_ACTION_ATTR_USERSPACE. */
-
-    /* DPIF_UC_SAMPLE only. */
-    uint32_t sample_pool;       /* # of sampling candidate packets so far. */
-    struct nlattr *actions;     /* Associated flow actions. */
-    size_t actions_len;
+    uint64_t userdata;          /* Argument to OVS_ACTION_ATTR_USERSPACE. */
 };
 
 int dpif_recv_get_mask(const struct dpif *, int *listen_mask);
 int dpif_recv_set_mask(struct dpif *, int listen_mask);
-int dpif_get_sflow_probability(const struct dpif *, uint32_t *probability);
-int dpif_set_sflow_probability(struct dpif *, uint32_t probability);
 int dpif_recv(struct dpif *, struct dpif_upcall *);
 void dpif_recv_purge(struct dpif *);
 void dpif_recv_wait(struct dpif *);
+
+/* Miscellaneous. */
 
 void dpif_get_netflow_ids(const struct dpif *,
                           uint8_t *engine_type, uint8_t *engine_id);

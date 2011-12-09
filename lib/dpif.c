@@ -378,40 +378,13 @@ dpif_delete(struct dpif *dpif)
 /* Retrieves statistics for 'dpif' into 'stats'.  Returns 0 if successful,
  * otherwise a positive errno value. */
 int
-dpif_get_dp_stats(const struct dpif *dpif, struct odp_stats *stats)
+dpif_get_dp_stats(const struct dpif *dpif, struct dpif_dp_stats *stats)
 {
     int error = dpif->dpif_class->get_stats(dpif, stats);
     if (error) {
         memset(stats, 0, sizeof *stats);
     }
     log_operation(dpif, "get_stats", error);
-    return error;
-}
-
-/* Retrieves the current IP fragment handling policy for 'dpif' into
- * '*drop_frags': true indicates that fragments are dropped, false indicates
- * that fragments are treated in the same way as other IP packets (except that
- * the L4 header cannot be read).  Returns 0 if successful, otherwise a
- * positive errno value. */
-int
-dpif_get_drop_frags(const struct dpif *dpif, bool *drop_frags)
-{
-    int error = dpif->dpif_class->get_drop_frags(dpif, drop_frags);
-    if (error) {
-        *drop_frags = false;
-    }
-    log_operation(dpif, "get_drop_frags", error);
-    return error;
-}
-
-/* Changes 'dpif''s treatment of IP fragments to 'drop_frags', whose meaning is
- * the same as for the get_drop_frags member function.  Returns 0 if
- * successful, otherwise a positive errno value. */
-int
-dpif_set_drop_frags(struct dpif *dpif, bool drop_frags)
-{
-    int error = dpif->dpif_class->set_drop_frags(dpif, drop_frags);
-    log_operation(dpif, "set_drop_frags", error);
     return error;
 }
 
@@ -469,7 +442,6 @@ dpif_port_clone(struct dpif_port *dst, const struct dpif_port *src)
     dst->name = xstrdup(src->name);
     dst->type = xstrdup(src->type);
     dst->port_no = src->port_no;
-    dst->stats = src->stats;
 }
 
 /* Frees memory allocated to members of 'dpif_port'.
@@ -541,6 +513,23 @@ int
 dpif_get_max_ports(const struct dpif *dpif)
 {
     return dpif->dpif_class->get_max_ports(dpif);
+}
+
+/* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE actions
+ * as the OVS_USERSPACE_ATTR_PID attribute's value, for use in flows whose
+ * packets arrived on port 'port_no'.
+ *
+ * The return value is only meaningful when DPIF_UC_ACTION has been enabled in
+ * the 'dpif''s listen mask.  It is allowed to change when DPIF_UC_ACTION is
+ * disabled and then re-enabled, so a client that does that must be prepared to
+ * update all of the flows that it installed that contain
+ * OVS_ACTION_ATTR_USERSPACE actions. */
+uint32_t
+dpif_port_get_pid(const struct dpif *dpif, uint16_t port_no)
+{
+    return (dpif->dpif_class->port_get_pid
+            ? (dpif->dpif_class->port_get_pid)(dpif, port_no)
+            : 0);
 }
 
 /* Looks up port number 'port_no' in 'dpif'.  On success, returns 0 and copies
@@ -662,6 +651,26 @@ dpif_port_poll_wait(const struct dpif *dpif)
     dpif->dpif_class->port_poll_wait(dpif);
 }
 
+/* Extracts the flow stats for a packet.  The 'flow' and 'packet'
+ * arguments must have been initialized through a call to flow_extract().
+ */
+void
+dpif_flow_stats_extract(const struct flow *flow, struct ofpbuf *packet,
+                        struct dpif_flow_stats *stats)
+{
+    memset(stats, 0, sizeof(*stats));
+
+    if ((flow->dl_type == htons(ETH_TYPE_IP)) && packet->l4) {
+        if ((flow->nw_proto == IPPROTO_TCP) && packet->l7) {
+            struct tcp_header *tcp = packet->l4;
+            stats->tcp_flags = TCP_FLAGS(tcp->tcp_ctl);
+        }
+    }
+
+    stats->n_bytes = packet->size;
+    stats->n_packets = 1;
+}
+
 /* Appends a human-readable representation of 'stats' to 's'. */
 void
 dpif_flow_stats_format(const struct dpif_flow_stats *stats, struct ds *s)
@@ -691,7 +700,7 @@ dpif_flow_flush(struct dpif *dpif)
 }
 
 /* Queries 'dpif' for a flow entry.  The flow is specified by the Netlink
- * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+ * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
  * 'key'.
  *
  * Returns 0 if successful.  If no flow matches, returns ENOENT.  On other
@@ -740,9 +749,9 @@ dpif_flow_get(const struct dpif *dpif,
 }
 
 /* Adds or modifies a flow in 'dpif'.  The flow is specified by the Netlink
- * attributes with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at
+ * attributes with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at
  * 'key'.  The associated actions are specified by the Netlink attributes with
- * types ODP_ACTION_ATTR_* in the 'actions_len' bytes starting at 'actions'.
+ * types OVS_ACTION_ATTR_* in the 'actions_len' bytes starting at 'actions'.
  *
  * - If the flow's key does not exist in 'dpif', then the flow will be added if
  *   'flags' includes DPIF_FP_CREATE.  Otherwise the operation will fail with
@@ -798,7 +807,7 @@ dpif_flow_put(struct dpif *dpif, enum dpif_flow_put_flags flags,
 
 /* Deletes a flow from 'dpif' and returns 0, or returns ENOENT if 'dpif' does
  * not contain such a flow.  The flow is specified by the Netlink attributes
- * with types ODP_KEY_ATTR_* in the 'key_len' bytes starting at 'key'.
+ * with types OVS_KEY_ATTR_* in the 'key_len' bytes starting at 'key'.
  *
  * If the operation succeeds, then 'stats', if nonnull, will be set to the
  * flow's statistics before its deletion. */
@@ -844,9 +853,9 @@ dpif_flow_dump_start(struct dpif_flow_dump *dump, const struct dpif *dpif)
  * completed by calling dpif_flow_dump_done().
  *
  * On success, if 'key' and 'key_len' are nonnull then '*key' and '*key_len'
- * will be set to Netlink attributes with types ODP_KEY_ATTR_* representing the
+ * will be set to Netlink attributes with types OVS_KEY_ATTR_* representing the
  * dumped flow's key.  If 'actions' and 'actions_len' are nonnull then they are
- * set to Netlink attributes with types ODP_ACTION_ATTR_* representing the
+ * set to Netlink attributes with types OVS_ACTION_ATTR_* representing the
  * dumped flow's actions.  If 'stats' is nonnull then it will be set to the
  * dumped flow's statistics.
  *
@@ -952,6 +961,51 @@ dpif_execute(struct dpif *dpif,
     return error;
 }
 
+/* Executes each of the 'n_ops' operations in 'ops' on 'dpif', in the order in
+ * which they are specified, placing each operation's results in the "output"
+ * members documented in comments.
+ *
+ * This function exists because some datapaths can perform batched operations
+ * faster than individual operations. */
+void
+dpif_operate(struct dpif *dpif, union dpif_op **ops, size_t n_ops)
+{
+    size_t i;
+
+    if (dpif->dpif_class->operate) {
+        dpif->dpif_class->operate(dpif, ops, n_ops);
+        return;
+    }
+
+    for (i = 0; i < n_ops; i++) {
+        union dpif_op *op = ops[i];
+        struct dpif_flow_put *put;
+        struct dpif_execute *execute;
+
+        switch (op->type) {
+        case DPIF_OP_FLOW_PUT:
+            put = &op->flow_put;
+            put->error = dpif_flow_put(dpif, put->flags,
+                                       put->key, put->key_len,
+                                       put->actions, put->actions_len,
+                                       put->stats);
+            break;
+
+        case DPIF_OP_EXECUTE:
+            execute = &op->execute;
+            execute->error = dpif_execute(dpif, execute->key, execute->key_len,
+                                          execute->actions,
+                                          execute->actions_len,
+                                          execute->packet);
+            break;
+
+        default:
+            NOT_REACHED();
+        }
+    }
+}
+
+
 /* Returns a string that represents 'type', for use in log messages. */
 const char *
 dpif_upcall_type_to_string(enum dpif_upcall_type type)
@@ -959,7 +1013,6 @@ dpif_upcall_type_to_string(enum dpif_upcall_type type)
     switch (type) {
     case DPIF_UC_MISS: return "miss";
     case DPIF_UC_ACTION: return "action";
-    case DPIF_UC_SAMPLE: return "sample";
     case DPIF_N_UC_TYPES: default: return "<unknown>";
     }
 }
@@ -968,8 +1021,7 @@ static bool OVS_UNUSED
 is_valid_listen_mask(int listen_mask)
 {
     return !(listen_mask & ~((1u << DPIF_UC_MISS) |
-                             (1u << DPIF_UC_ACTION) |
-                             (1u << DPIF_UC_SAMPLE)));
+                             (1u << DPIF_UC_ACTION)));
 }
 
 /* Retrieves 'dpif''s "listen mask" into '*listen_mask'.  A 1-bit of value 2**X
@@ -991,7 +1043,12 @@ dpif_recv_get_mask(const struct dpif *dpif, int *listen_mask)
 /* Sets 'dpif''s "listen mask" to 'listen_mask'.  A 1-bit of value 2**X set in
  * '*listen_mask' requests that dpif_recv() will receive messages of the type
  * (from "enum dpif_upcall_type") with value X.  Returns 0 if successful,
- * otherwise a positive errno value. */
+ * otherwise a positive errno value.
+ *
+ * Turning DPIF_UC_ACTION off and then back on may change the Netlink PID
+ * assignments returned by dpif_port_get_pid().  If the client does this, it
+ * must update all of the flows that have OVS_ACTION_ATTR_USERSPACE actions
+ * using the new PID assignment. */
 int
 dpif_recv_set_mask(struct dpif *dpif, int listen_mask)
 {
@@ -1001,41 +1058,6 @@ dpif_recv_set_mask(struct dpif *dpif, int listen_mask)
 
     error = dpif->dpif_class->recv_set_mask(dpif, listen_mask);
     log_operation(dpif, "recv_set_mask", error);
-    return error;
-}
-
-/* Retrieve the sFlow sampling probability.  '*probability' is expressed as the
- * number of packets out of UINT_MAX to sample, e.g. probability/UINT_MAX is
- * the probability of sampling a given packet.
- *
- * Returns 0 if successful, otherwise a positive errno value.  EOPNOTSUPP
- * indicates that 'dpif' does not support sFlow sampling. */
-int
-dpif_get_sflow_probability(const struct dpif *dpif, uint32_t *probability)
-{
-    int error = (dpif->dpif_class->get_sflow_probability
-                 ? dpif->dpif_class->get_sflow_probability(dpif, probability)
-                 : EOPNOTSUPP);
-    if (error) {
-        *probability = 0;
-    }
-    log_operation(dpif, "get_sflow_probability", error);
-    return error;
-}
-
-/* Set the sFlow sampling probability.  'probability' is expressed as the
- * number of packets out of UINT_MAX to sample, e.g. probability/UINT_MAX is
- * the probability of sampling a given packet.
- *
- * Returns 0 if successful, otherwise a positive errno value.  EOPNOTSUPP
- * indicates that 'dpif' does not support sFlow sampling. */
-int
-dpif_set_sflow_probability(struct dpif *dpif, uint32_t probability)
-{
-    int error = (dpif->dpif_class->set_sflow_probability
-                 ? dpif->dpif_class->set_sflow_probability(dpif, probability)
-                 : EOPNOTSUPP);
-    log_operation(dpif, "set_sflow_probability", error);
     return error;
 }
 
@@ -1073,6 +1095,8 @@ dpif_recv(struct dpif *dpif, struct dpif_upcall *upcall)
 
         ds_destroy(&flow);
         free(packet);
+    } else if (error && error != EAGAIN) {
+        log_operation(dpif, "recv", error);
     }
     return error;
 }
@@ -1107,7 +1131,7 @@ dpif_get_netflow_ids(const struct dpif *dpif,
 }
 
 /* Translates OpenFlow queue ID 'queue_id' (in host byte order) into a priority
- * value for use in the ODP_ACTION_ATTR_SET_PRIORITY action.  On success,
+ * value for use in the OVS_ACTION_ATTR_SET_PRIORITY action.  On success,
  * returns 0 and stores the priority into '*priority'.  On failure, returns a
  * positive errno value and stores 0 into '*priority'. */
 int

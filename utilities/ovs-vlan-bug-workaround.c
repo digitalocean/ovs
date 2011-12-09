@@ -23,6 +23,7 @@
 #include <net/if.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -130,7 +131,7 @@ parse_options(int argc, char *argv[])
             break;
 
         case 'V':
-            OVS_PRINT_VERSION(0, 0);
+            ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
         case '?':

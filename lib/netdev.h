@@ -44,12 +44,6 @@ enum netdev_flags {
     NETDEV_LOOPBACK = 0x0004    /* This is a loopback device. */
 };
 
-enum netdev_pseudo_ethertype {
-    NETDEV_ETH_TYPE_NONE = -128, /* Receive no frames. */
-    NETDEV_ETH_TYPE_ANY,         /* Receive all frames. */
-    NETDEV_ETH_TYPE_802_2        /* Receive all IEEE 802.2 frames. */
-};
-
 /* Network device statistics.
  *
  * Values of unsupported statistics are set to all-1-bits (UINT64_MAX). */
@@ -81,13 +75,6 @@ struct netdev_stats {
     uint64_t tx_window_errors;
 };
 
-struct netdev_options {
-    const char *name;
-    const char *type;
-    const struct shash *args;
-    int ethertype;
-};
-
 struct netdev;
 struct netdev_class;
 
@@ -97,26 +84,27 @@ void netdev_wait(void);
 void netdev_enumerate_types(struct sset *types);
 
 /* Open and close. */
-int netdev_open(struct netdev_options *, struct netdev **);
-int netdev_open_default(const char *name, struct netdev **);
+int netdev_open(const char *name, const char *type, struct netdev **);
 void netdev_close(struct netdev *);
 
 bool netdev_exists(const char *name);
 bool netdev_is_open(const char *name);
 
-int netdev_enumerate(struct sset *);
+void netdev_parse_name(const char *netdev_name, char **name, char **type);
 
 /* Options. */
 int netdev_set_config(struct netdev *, const struct shash *args);
-const struct shash *netdev_get_config(const struct netdev *);
+int netdev_get_config(const struct netdev *, struct shash *);
 
 /* Basic properties. */
 const char *netdev_get_name(const struct netdev *);
 const char *netdev_get_type(const struct netdev *);
 int netdev_get_mtu(const struct netdev *, int *mtup);
+int netdev_set_mtu(const struct netdev *, int mtu);
 int netdev_get_ifindex(const struct netdev *);
 
 /* Packet send and receive. */
+int netdev_listen(struct netdev *);
 int netdev_recv(struct netdev *, struct ofpbuf *);
 void netdev_recv_wait(struct netdev *);
 int netdev_drain(struct netdev *);
@@ -130,6 +118,7 @@ int netdev_get_etheraddr(const struct netdev *, uint8_t mac[6]);
 
 /* PHY interface. */
 bool netdev_get_carrier(const struct netdev *);
+long long int netdev_get_carrier_resets(const struct netdev *);
 int netdev_set_miimon_interval(struct netdev *, long long int interval);
 int netdev_get_features(const struct netdev *,
                         uint32_t *current, uint32_t *advertised,

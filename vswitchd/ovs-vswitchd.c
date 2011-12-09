@@ -34,6 +34,7 @@
 #include "dummy.h"
 #include "leak-checker.h"
 #include "netdev.h"
+#include "openflow/openflow.h"
 #include "ovsdb-idl.h"
 #include "poll-loop.h"
 #include "process.h"
@@ -80,7 +81,7 @@ main(int argc, char *argv[])
     if (retval) {
         exit(EXIT_FAILURE);
     }
-    unixctl_command_register("exit", ovs_vswitchd_exit, &exiting);
+    unixctl_command_register("exit", "", ovs_vswitchd_exit, &exiting);
 
     bridge_init(remote);
     free(remote);
@@ -90,7 +91,9 @@ main(int argc, char *argv[])
         if (signal_poll(sighup)) {
             vlog_reopen_log_file();
         }
+        bridge_run_fast();
         bridge_run();
+        bridge_run_fast();
         unixctl_server_run(unixctl);
         netdev_run();
 
@@ -146,12 +149,11 @@ parse_options(int argc, char *argv[])
         }
 
         switch (c) {
-        case 'H':
         case 'h':
             usage();
 
         case 'V':
-            OVS_PRINT_VERSION(OFP_VERSION, OFP_VERSION);
+            ovs_print_version(OFP_VERSION, OFP_VERSION);
             exit(EXIT_SUCCESS);
 
         case OPT_MLOCKALL:

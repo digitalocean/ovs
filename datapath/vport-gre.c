@@ -193,8 +193,8 @@ static void gre_err(struct sk_buff *skb, u32 info)
 	if (tunnel_hdr_len < 0)
 		return;
 
-	vport = tnl_find_port(iph->saddr, iph->daddr, key,
-			      TNL_T_PROTO_GRE | TNL_T_KEY_EITHER, &mutable);
+	vport = tnl_find_port(iph->saddr, iph->daddr, key, TNL_T_PROTO_GRE,
+			      &mutable);
 	if (!vport)
 		return;
 
@@ -207,7 +207,7 @@ static void gre_err(struct sk_buff *skb, u32 info)
 	 * out key as if it were the in key and then check to see if the input
 	 * and output keys are the same.
 	 */
-	if (mutable->in_key != mutable->out_key)
+	if (mutable->key.in_key != mutable->out_key)
 		return;
 
 	if (!!(mutable->flags & TNL_F_IN_KEY_MATCH) !=
@@ -330,8 +330,8 @@ static int gre_rcv(struct sk_buff *skb)
 		goto error;
 
 	iph = ip_hdr(skb);
-	vport = tnl_find_port(iph->daddr, iph->saddr, key,
-			      TNL_T_PROTO_GRE | TNL_T_KEY_EITHER, &mutable);
+	vport = tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_GRE,
+			      &mutable);
 	if (unlikely(!vport)) {
 		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
 		goto error;
@@ -388,8 +388,8 @@ static void gre_exit(void)
 }
 
 const struct vport_ops gre_vport_ops = {
-	.type		= ODP_VPORT_TYPE_GRE,
-	.flags		= VPORT_F_GEN_STATS | VPORT_F_TUN_ID,
+	.type		= OVS_VPORT_TYPE_GRE,
+	.flags		= VPORT_F_TUN_ID,
 	.init		= gre_init,
 	.exit		= gre_exit,
 	.create		= gre_create,

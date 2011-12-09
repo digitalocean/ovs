@@ -6,6 +6,8 @@
  * kernel, by Linus Torvalds and others.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/if_arp.h>
 #include <linux/if_bridge.h>
 #include <linux/if_vlan.h>
@@ -32,9 +34,6 @@ MODULE_PARM_DESC(vlan_tso, "Enable TSO for VLAN packets");
 #else
 #define vlan_tso true
 #endif
-
-/* If the native device stats aren't 64 bit use the vport stats tracking instead. */
-#define USE_VPORT_STATS (sizeof(((struct net_device_stats *)0)->rx_bytes) < sizeof(u64))
 
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb);
 
@@ -142,23 +141,15 @@ static struct vport *netdev_create(const struct vport_parms *parms)
 		goto error_put;
 	}
 
-	/* If we are using the vport stats layer initialize it to the current
-	 * values so we are roughly consistent with the device stats. */
-	if (USE_VPORT_STATS) {
-		struct rtnl_link_stats64 stats;
-
-		err = netdev_get_stats(vport, &stats);
-		if (!err)
-			vport_set_stats(vport, &stats);
-	}
-
 	err = netdev_rx_handler_register(netdev_vport->dev, netdev_frame_hook,
 					 vport);
 	if (err)
 		goto error_put;
 
 	dev_set_promiscuity(netdev_vport->dev, 1);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
 	dev_disable_lro(netdev_vport->dev);
+#endif
 	netdev_vport->dev->priv_flags |= IFF_OVS_DATAPATH;
 
 	return vport;
@@ -171,7 +162,7 @@ error:
 	return ERR_PTR(err);
 }
 
-static int netdev_destroy(struct vport *vport)
+static void netdev_destroy(struct vport *vport)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
@@ -183,14 +174,6 @@ static int netdev_destroy(struct vport *vport)
 
 	dev_put(netdev_vport->dev);
 	vport_free(vport);
-
-	return 0;
-}
-
-int netdev_set_mtu(struct vport *vport, int mtu)
-{
-	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	return dev_set_mtu(netdev_vport->dev, mtu);
 }
 
 int netdev_set_addr(struct vport *vport, const unsigned char *addr)
@@ -222,13 +205,6 @@ struct kobject *netdev_get_kobj(const struct vport *vport)
 	return &netdev_vport->dev->NETDEV_DEV_MEMBER.kobj;
 }
 
-int netdev_get_stats(const struct vport *vport, struct rtnl_link_stats64 *stats)
-{
-	const struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	dev_get_stats(netdev_vport->dev, stats);
-	return 0;
-}
-
 unsigned netdev_get_dev_flags(const struct vport *vport)
 {
 	const struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
@@ -253,12 +229,6 @@ int netdev_get_ifindex(const struct vport *vport)
 	return netdev_vport->dev->ifindex;
 }
 
-int netdev_get_iflink(const struct vport *vport)
-{
-	const struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
-	return netdev_vport->dev->iflink;
-}
-
 int netdev_get_mtu(const struct vport *vport)
 {
 	const struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
@@ -281,8 +251,6 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 	if (unlikely(!skb))
 		return;
 
-	skb_warn_if_lro(skb);
-
 	skb_push(skb, ETH_HLEN);
 
 	if (unlikely(compute_ip_summed(skb, false))) {
@@ -292,6 +260,16 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 	vlan_copy_skb_tci(skb);
 
 	vport_receive(vport, skb);
+}
+
+static inline unsigned packet_length(const struct sk_buff *skb)
+{
+	unsigned length = skb->len - ETH_HLEN;
+
+	if (skb->protocol == htons(ETH_P_8021Q))
+		length -= VLAN_HLEN;
+
+	return length;
 }
 
 static bool dev_supports_vlan_tx(struct net_device *dev)
@@ -310,25 +288,32 @@ static bool dev_supports_vlan_tx(struct net_device *dev)
 static int netdev_send(struct vport *vport, struct sk_buff *skb)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
+	int mtu = netdev_vport->dev->mtu;
 	int len;
+
+	if (unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
+		if (net_ratelimit())
+			pr_warn("%s: dropped over-mtu packet: %d > %d\n",
+				dp_name(vport->dp), packet_length(skb), mtu);
+		goto error;
+	}
+
+	if (unlikely(skb_warn_if_lro(skb)))
+		goto error;
 
 	skb->dev = netdev_vport->dev;
 	forward_ip_summed(skb, true);
 
 	if (vlan_tx_tag_present(skb) && !dev_supports_vlan_tx(skb->dev)) {
-		int features = 0;
+		int features;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26)
-		features = skb->dev->features & skb->dev->vlan_features;
-#endif
+		features = netif_skb_features(skb);
 
 		if (!vlan_tso)
 			features &= ~(NETIF_F_TSO | NETIF_F_TSO6 |
 				      NETIF_F_UFO | NETIF_F_FSO);
 
-		if (skb_is_gso(skb) &&
-		    (!skb_gso_ok(skb, features) ||
-		     unlikely(skb->ip_summed != CHECKSUM_PARTIAL))) {
+		if (netif_needs_gso(skb, features)) {
 			struct sk_buff *nskb;
 
 			nskb = skb_gso_segment(skb, features);
@@ -379,12 +364,17 @@ tag:
 	dev_queue_xmit(skb);
 
 	return len;
+
+error:
+	kfree_skb(skb);
+	vport_record_error(vport, VPORT_E_TX_DROPPED);
+	return 0;
 }
 
 /* Returns null if this device is not attached to a datapath. */
 struct vport *netdev_get_vport(struct net_device *dev)
 {
-#ifdef IFF_BRIDGE_PORT
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
 #if IFF_BRIDGE_PORT != IFF_OVS_DATAPATH
 	if (likely(dev->priv_flags & IFF_OVS_DATAPATH))
 #else
@@ -399,24 +389,20 @@ struct vport *netdev_get_vport(struct net_device *dev)
 }
 
 const struct vport_ops netdev_vport_ops = {
-	.type		= ODP_VPORT_TYPE_NETDEV,
-	.flags          = (VPORT_F_REQUIRED |
-			  (USE_VPORT_STATS ? VPORT_F_GEN_STATS : 0)),
+	.type		= OVS_VPORT_TYPE_NETDEV,
+	.flags          = VPORT_F_REQUIRED,
 	.init		= netdev_init,
 	.exit		= netdev_exit,
 	.create		= netdev_create,
 	.destroy	= netdev_destroy,
-	.set_mtu	= netdev_set_mtu,
 	.set_addr	= netdev_set_addr,
 	.get_name	= netdev_get_name,
 	.get_addr	= netdev_get_addr,
 	.get_kobj	= netdev_get_kobj,
-	.get_stats	= netdev_get_stats,
 	.get_dev_flags	= netdev_get_dev_flags,
 	.is_running	= netdev_is_running,
 	.get_operstate	= netdev_get_operstate,
 	.get_ifindex	= netdev_get_ifindex,
-	.get_iflink	= netdev_get_iflink,
 	.get_mtu	= netdev_get_mtu,
 	.send		= netdev_send,
 };

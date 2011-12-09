@@ -87,13 +87,16 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-aes128$(EXEEXT) \
 	tests/test-hmap$(EXEEXT) tests/test-json$(EXEEXT) \
 	tests/test-jsonrpc$(EXEEXT) tests/test-list$(EXEEXT) \
 	tests/test-lockfile$(EXEEXT) tests/test-multipath$(EXEEXT) \
-	tests/test-openflowd$(EXEEXT) tests/test-packets$(EXEEXT) \
-	tests/test-random$(EXEEXT) tests/test-unix-socket$(EXEEXT) \
-	tests/test-ovsdb$(EXEEXT) tests/test-reconnect$(EXEEXT) \
-	tests/test-sha1$(EXEEXT) tests/test-timeval$(EXEEXT) \
-	tests/test-strtok_r$(EXEEXT) tests/test-type-props$(EXEEXT) \
-	tests/test-util$(EXEEXT) tests/test-uuid$(EXEEXT) \
-	tests/test-vconn$(EXEEXT) tests/test-byte-order$(EXEEXT)
+	tests/test-packets$(EXEEXT) tests/test-random$(EXEEXT) \
+	tests/test-stp$(EXEEXT) tests/test-unix-socket$(EXEEXT) \
+	tests/test-odp$(EXEEXT) tests/test-ovsdb$(EXEEXT) \
+	tests/test-reconnect$(EXEEXT) tests/test-sha1$(EXEEXT) \
+	tests/test-timeval$(EXEEXT) tests/test-strtok_r$(EXEEXT) \
+	tests/test-type-props$(EXEEXT) tests/test-util$(EXEEXT) \
+	tests/test-uuid$(EXEEXT) tests/test-vconn$(EXEEXT) \
+	tests/test-byte-order$(EXEEXT)
+@HAVE_GROFF_TRUE@am__append_3 = manpage-check
+@HAVE_GROFF_TRUE@am__append_4 = manpage-check
 DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 	$(dist_check_SCRIPTS) $(dist_man_MANS) $(dist_pkgdata_DATA) \
 	$(dist_pkgdata_SCRIPTS) $(dist_sbin_SCRIPTS) \
@@ -106,6 +109,7 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 	$(srcdir)/include/sparse/automake.mk $(srcdir)/lib/automake.mk \
 	$(srcdir)/ofproto/automake.mk $(srcdir)/ovsdb/automake.mk \
 	$(srcdir)/ovsdb/ovsdbmonitor/automake.mk \
+	$(srcdir)/python/compat/automake.mk \
 	$(srcdir)/python/ovs/automake.mk $(srcdir)/rhel/automake.mk \
 	$(srcdir)/tests/automake.mk $(srcdir)/third-party/automake.mk \
 	$(srcdir)/utilities/automake.mk \
@@ -114,58 +118,60 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 	$(top_srcdir)/configure $(top_srcdir)/datapath/linux/Kbuild.in \
 	$(top_srcdir)/datapath/linux/Makefile.in \
 	$(top_srcdir)/datapath/linux/Makefile.main.in \
-	$(top_srcdir)/tests/atlocal.in AUTHORS COPYING ChangeLog \
+	$(top_srcdir)/tests/atlocal.in AUTHORS COPYING NEWS \
 	build-aux/compile build-aux/depcomp build-aux/install-sh \
 	build-aux/missing
-@HAVE_WNO_UNUSED_TRUE@am__append_3 = -Wno-unused
-@HAVE_WNO_UNUSED_PARAMETER_TRUE@am__append_4 = -Wno-unused-parameter
-@HAVE_NETLINK_TRUE@am__append_5 = \
+@HAVE_WNO_UNUSED_TRUE@am__append_5 = -Wno-unused
+@HAVE_WNO_UNUSED_PARAMETER_TRUE@am__append_6 = -Wno-unused-parameter
+@HAVE_NETLINK_TRUE@am__append_7 = \
 @HAVE_NETLINK_TRUE@	lib/dpif-linux.c \
 @HAVE_NETLINK_TRUE@	lib/dpif-linux.h \
 @HAVE_NETLINK_TRUE@	lib/netdev-linux.c \
 @HAVE_NETLINK_TRUE@	lib/netdev-linux.h \
 @HAVE_NETLINK_TRUE@	lib/netdev-vport.c \
 @HAVE_NETLINK_TRUE@	lib/netdev-vport.h \
+@HAVE_NETLINK_TRUE@	lib/netlink-notifier.c \
+@HAVE_NETLINK_TRUE@	lib/netlink-notifier.h \
 @HAVE_NETLINK_TRUE@	lib/netlink-protocol.h \
 @HAVE_NETLINK_TRUE@	lib/netlink-socket.c \
 @HAVE_NETLINK_TRUE@	lib/netlink-socket.h \
-@HAVE_NETLINK_TRUE@	lib/rtnetlink.c \
-@HAVE_NETLINK_TRUE@	lib/rtnetlink.h \
 @HAVE_NETLINK_TRUE@	lib/rtnetlink-link.c \
 @HAVE_NETLINK_TRUE@	lib/rtnetlink-link.h \
 @HAVE_NETLINK_TRUE@	lib/route-table.c \
 @HAVE_NETLINK_TRUE@	lib/route-table.h
 
-@HAVE_OPENSSL_TRUE@am__append_6 = lib/stream-ssl.c
-@HAVE_OPENSSL_TRUE@am__append_7 = lib/dhparams.c
-@HAVE_OPENSSL_FALSE@am__append_8 = lib/stream-nossl.c
-@USE_LINKER_SECTIONS_FALSE@am__append_9 = lib/coverage.def \
+@HAVE_OPENSSL_TRUE@am__append_8 = lib/stream-ssl.c
+@HAVE_OPENSSL_TRUE@am__append_9 = lib/dhparams.c
+@HAVE_OPENSSL_FALSE@am__append_10 = lib/stream-nossl.c
+@USE_LINKER_SECTIONS_FALSE@am__append_11 = lib/coverage.def \
 @USE_LINKER_SECTIONS_FALSE@	lib/stress.def lib/vlog-modules.def
-@HAVE_PYTHON_TRUE@am__append_10 = \
+@HAVE_PYTHON_TRUE@am__append_12 = \
 @HAVE_PYTHON_TRUE@	utilities/ovs-pcap \
 @HAVE_PYTHON_TRUE@	utilities/ovs-tcpundump \
 @HAVE_PYTHON_TRUE@	utilities/ovs-vlan-test
 
-@HAVE_NETLINK_TRUE@am__append_11 = utilities/ovs-vlan-bug-workaround
-@HAVE_NETLINK_TRUE@am__append_12 = utilities/nlmon
-@HAVE_PYTHON_TRUE@am__append_13 = utilities/bugtool/ovs-bugtool
-@HAVE_PYTHON_TRUE@am__append_14 = utilities/bugtool/ovs-bugtool.8
-@HAVE_PYTHON_TRUE@am__append_15 = $(bugtool_scripts)
-@HAVE_PYTHON_TRUE@am__append_16 = bugtool-install-data-local
-@HAVE_OPENSSL_TRUE@am__append_17 = $(TESTPKI_FILES)
-@HAVE_OPENSSL_TRUE@am__append_18 = $(TESTPKI_FILES) tests/ovs-pki.log
-@HAVE_OPENSSL_TRUE@am__append_19 = clean-pki
-@HAVE_PYTHON_TRUE@am__append_20 = include/openflow/openflow.h.stamp \
+@HAVE_NETLINK_TRUE@am__append_13 = utilities/ovs-vlan-bug-workaround
+@HAVE_NETLINK_TRUE@am__append_14 = utilities/nlmon
+@HAVE_PYTHON_TRUE@am__append_15 = utilities/bugtool/ovs-bugtool
+@HAVE_PYTHON_TRUE@am__append_16 = utilities/bugtool/ovs-bugtool
+@HAVE_PYTHON_TRUE@am__append_17 = utilities/bugtool/ovs-bugtool.8
+@HAVE_PYTHON_TRUE@am__append_18 = $(bugtool_scripts)
+@HAVE_PYTHON_TRUE@am__append_19 = bugtool-install-data-local
+@HAVE_PYTHON_TRUE@am__append_20 = bugtool-uninstall-local
+@HAVE_OPENSSL_TRUE@am__append_21 = $(TESTPKI_FILES)
+@HAVE_OPENSSL_TRUE@am__append_22 = $(TESTPKI_FILES) tests/ovs-pki.log
+@HAVE_OPENSSL_TRUE@am__append_23 = clean-pki
+@HAVE_PYTHON_TRUE@am__append_24 = include/openflow/openflow.h.stamp \
 @HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
-@HAVE_PYTHON_TRUE@am__append_21 = include/openflow/openflow.h.stamp \
+@HAVE_PYTHON_TRUE@am__append_25 = include/openflow/openflow.h.stamp \
 @HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
-@HAVE_NETLINK_TRUE@am__append_22 = vswitchd/ovs-brcompatd
-@BUILD_OVSDBMONITOR_TRUE@am__append_23 = ovsdb/ovsdbmonitor/ovsdbmonitor
-@BUILD_OVSDBMONITOR_TRUE@am__append_24 = \
+@HAVE_NETLINK_TRUE@am__append_26 = vswitchd/ovs-brcompatd
+@BUILD_OVSDBMONITOR_TRUE@am__append_27 = ovsdb/ovsdbmonitor/ovsdbmonitor
+@BUILD_OVSDBMONITOR_TRUE@am__append_28 = \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
 
-@BUILD_OVSDBMONITOR_TRUE@am__append_25 = ovsdb/ovsdbmonitor/ovsdbmonitor.1
+@BUILD_OVSDBMONITOR_TRUE@am__append_29 = ovsdb/ovsdbmonitor/ovsdbmonitor.1
 subdir = .
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/nx-build.m4 \
@@ -200,25 +206,27 @@ am__lib_libopenvswitch_a_SOURCES_DIST = lib/aes128.c lib/aes128.h \
 	lib/hash.c lib/hash.h lib/hmap.c lib/hmap.h lib/hmapx.c \
 	lib/hmapx.h lib/json.c lib/json.h lib/jsonrpc.c lib/jsonrpc.h \
 	lib/lacp.c lib/lacp.h lib/leak-checker.c lib/leak-checker.h \
-	lib/learning-switch.c lib/learning-switch.h lib/list.c \
-	lib/list.h lib/lockfile.c lib/lockfile.h lib/mac-learning.c \
-	lib/mac-learning.h lib/multipath.c lib/multipath.h \
-	lib/netdev-dummy.c lib/netdev-provider.h lib/netdev.c \
-	lib/netdev.h lib/netlink.c lib/netlink.h lib/nx-match.c \
-	lib/nx-match.def lib/nx-match.h lib/odp-util.c lib/odp-util.h \
-	lib/ofp-errors.c lib/ofp-errors.h lib/ofp-parse.c \
-	lib/ofp-parse.h lib/ofp-print.c lib/ofp-print.h lib/ofp-util.c \
-	lib/ofp-util.h lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c \
-	lib/ovsdb-data.h lib/ovsdb-error.c lib/ovsdb-error.h \
-	lib/ovsdb-idl-provider.h lib/ovsdb-idl.c lib/ovsdb-idl.h \
-	lib/ovsdb-parser.c lib/ovsdb-parser.h lib/ovsdb-types.c \
-	lib/ovsdb-types.h lib/packets.c lib/packets.h lib/pcap.c \
-	lib/pcap.h lib/poll-loop.c lib/poll-loop.h lib/process.c \
-	lib/process.h lib/random.c lib/random.h lib/rconn.c \
-	lib/rconn.h lib/reconnect.c lib/reconnect.h lib/sat-math.h \
-	lib/sha1.c lib/sha1.h lib/shash.c lib/shash.h lib/signals.c \
-	lib/signals.h lib/socket-util.c lib/socket-util.h lib/sort.c \
-	lib/sort.h lib/sset.c lib/sset.h lib/stream-fd.c \
+	lib/learn.c lib/learn.h lib/learning-switch.c \
+	lib/learning-switch.h lib/list.c lib/list.h lib/lockfile.c \
+	lib/lockfile.h lib/mac-learning.c lib/mac-learning.h \
+	lib/meta-flow.c lib/meta-flow.h lib/multipath.c \
+	lib/multipath.h lib/netdev-dummy.c lib/netdev-provider.h \
+	lib/netdev.c lib/netdev.h lib/netlink.c lib/netlink.h \
+	lib/nx-match.c lib/nx-match.def lib/nx-match.h lib/odp-util.c \
+	lib/odp-util.h lib/ofp-errors.c lib/ofp-errors.h \
+	lib/ofp-parse.c lib/ofp-parse.h lib/ofp-print.c \
+	lib/ofp-print.h lib/ofp-util.c lib/ofp-util.def lib/ofp-util.h \
+	lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c lib/ovsdb-data.h \
+	lib/ovsdb-error.c lib/ovsdb-error.h lib/ovsdb-idl-provider.h \
+	lib/ovsdb-idl.c lib/ovsdb-idl.h lib/ovsdb-parser.c \
+	lib/ovsdb-parser.h lib/ovsdb-types.c lib/ovsdb-types.h \
+	lib/packets.c lib/packets.h lib/pcap.c lib/pcap.h \
+	lib/poll-loop.c lib/poll-loop.h lib/process.c lib/process.h \
+	lib/random.c lib/random.h lib/rconn.c lib/rconn.h \
+	lib/reconnect.c lib/reconnect.h lib/sat-math.h lib/sha1.c \
+	lib/sha1.h lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
+	lib/socket-util.c lib/socket-util.h lib/sort.c lib/sort.h \
+	lib/sset.c lib/sset.h lib/stp.c lib/stp.h lib/stream-fd.c \
 	lib/stream-fd.h lib/stream-provider.h lib/stream-ssl.h \
 	lib/stream-tcp.c lib/stream-unix.c lib/stream.c lib/stream.h \
 	lib/stress.c lib/stress.h lib/string.c lib/string.h lib/svec.c \
@@ -230,17 +238,17 @@ am__lib_libopenvswitch_a_SOURCES_DIST = lib/aes128.c lib/aes128.h \
 	lib/vconn-stream.c lib/vconn.c lib/vconn.h lib/vlan-bitmap.c \
 	lib/vlan-bitmap.h lib/vlog.c lib/vlog.h lib/dpif-linux.c \
 	lib/dpif-linux.h lib/netdev-linux.c lib/netdev-linux.h \
-	lib/netdev-vport.c lib/netdev-vport.h lib/netlink-protocol.h \
-	lib/netlink-socket.c lib/netlink-socket.h lib/rtnetlink.c \
-	lib/rtnetlink.h lib/rtnetlink-link.c lib/rtnetlink-link.h \
-	lib/route-table.c lib/route-table.h lib/stream-ssl.c \
-	lib/stream-nossl.c
+	lib/netdev-vport.c lib/netdev-vport.h lib/netlink-notifier.c \
+	lib/netlink-notifier.h lib/netlink-protocol.h \
+	lib/netlink-socket.c lib/netlink-socket.h lib/rtnetlink-link.c \
+	lib/rtnetlink-link.h lib/route-table.c lib/route-table.h \
+	lib/stream-ssl.c lib/stream-nossl.c
 am__dirstamp = $(am__leading_dot)dirstamp
 @HAVE_NETLINK_TRUE@am__objects_1 = lib/dpif-linux.$(OBJEXT) \
 @HAVE_NETLINK_TRUE@	lib/netdev-linux.$(OBJEXT) \
 @HAVE_NETLINK_TRUE@	lib/netdev-vport.$(OBJEXT) \
+@HAVE_NETLINK_TRUE@	lib/netlink-notifier.$(OBJEXT) \
 @HAVE_NETLINK_TRUE@	lib/netlink-socket.$(OBJEXT) \
-@HAVE_NETLINK_TRUE@	lib/rtnetlink.$(OBJEXT) \
 @HAVE_NETLINK_TRUE@	lib/rtnetlink-link.$(OBJEXT) \
 @HAVE_NETLINK_TRUE@	lib/route-table.$(OBJEXT)
 @HAVE_OPENSSL_TRUE@am__objects_2 = lib/stream-ssl.$(OBJEXT)
@@ -256,9 +264,10 @@ am_lib_libopenvswitch_a_OBJECTS = lib/aes128.$(OBJEXT) \
 	lib/fatal-signal.$(OBJEXT) lib/flow.$(OBJEXT) \
 	lib/hash.$(OBJEXT) lib/hmap.$(OBJEXT) lib/hmapx.$(OBJEXT) \
 	lib/json.$(OBJEXT) lib/jsonrpc.$(OBJEXT) lib/lacp.$(OBJEXT) \
-	lib/leak-checker.$(OBJEXT) lib/learning-switch.$(OBJEXT) \
-	lib/list.$(OBJEXT) lib/lockfile.$(OBJEXT) \
-	lib/mac-learning.$(OBJEXT) lib/multipath.$(OBJEXT) \
+	lib/leak-checker.$(OBJEXT) lib/learn.$(OBJEXT) \
+	lib/learning-switch.$(OBJEXT) lib/list.$(OBJEXT) \
+	lib/lockfile.$(OBJEXT) lib/mac-learning.$(OBJEXT) \
+	lib/meta-flow.$(OBJEXT) lib/multipath.$(OBJEXT) \
 	lib/netdev-dummy.$(OBJEXT) lib/netdev.$(OBJEXT) \
 	lib/netlink.$(OBJEXT) lib/nx-match.$(OBJEXT) \
 	lib/odp-util.$(OBJEXT) lib/ofp-errors.$(OBJEXT) \
@@ -271,16 +280,16 @@ am_lib_libopenvswitch_a_OBJECTS = lib/aes128.$(OBJEXT) \
 	lib/process.$(OBJEXT) lib/random.$(OBJEXT) lib/rconn.$(OBJEXT) \
 	lib/reconnect.$(OBJEXT) lib/sha1.$(OBJEXT) lib/shash.$(OBJEXT) \
 	lib/signals.$(OBJEXT) lib/socket-util.$(OBJEXT) \
-	lib/sort.$(OBJEXT) lib/sset.$(OBJEXT) lib/stream-fd.$(OBJEXT) \
-	lib/stream-tcp.$(OBJEXT) lib/stream-unix.$(OBJEXT) \
-	lib/stream.$(OBJEXT) lib/stress.$(OBJEXT) lib/string.$(OBJEXT) \
-	lib/svec.$(OBJEXT) lib/table.$(OBJEXT) lib/tag.$(OBJEXT) \
-	lib/timer.$(OBJEXT) lib/timeval.$(OBJEXT) \
-	lib/unicode.$(OBJEXT) lib/unixctl.$(OBJEXT) lib/util.$(OBJEXT) \
-	lib/uuid.$(OBJEXT) lib/vconn-stream.$(OBJEXT) \
-	lib/vconn.$(OBJEXT) lib/vlan-bitmap.$(OBJEXT) \
-	lib/vlog.$(OBJEXT) $(am__objects_1) $(am__objects_2) \
-	$(am__objects_3)
+	lib/sort.$(OBJEXT) lib/sset.$(OBJEXT) lib/stp.$(OBJEXT) \
+	lib/stream-fd.$(OBJEXT) lib/stream-tcp.$(OBJEXT) \
+	lib/stream-unix.$(OBJEXT) lib/stream.$(OBJEXT) \
+	lib/stress.$(OBJEXT) lib/string.$(OBJEXT) lib/svec.$(OBJEXT) \
+	lib/table.$(OBJEXT) lib/tag.$(OBJEXT) lib/timer.$(OBJEXT) \
+	lib/timeval.$(OBJEXT) lib/unicode.$(OBJEXT) \
+	lib/unixctl.$(OBJEXT) lib/util.$(OBJEXT) lib/uuid.$(OBJEXT) \
+	lib/vconn-stream.$(OBJEXT) lib/vconn.$(OBJEXT) \
+	lib/vlan-bitmap.$(OBJEXT) lib/vlog.$(OBJEXT) $(am__objects_1) \
+	$(am__objects_2) $(am__objects_3)
 @HAVE_OPENSSL_TRUE@am__objects_4 = lib/dhparams.$(OBJEXT)
 nodist_lib_libopenvswitch_a_OBJECTS = lib/dirs.$(OBJEXT) \
 	$(am__objects_4)
@@ -382,10 +391,9 @@ tests_test_lockfile_DEPENDENCIES = lib/libopenvswitch.a
 am_tests_test_multipath_OBJECTS = tests/test-multipath.$(OBJEXT)
 tests_test_multipath_OBJECTS = $(am_tests_test_multipath_OBJECTS)
 tests_test_multipath_DEPENDENCIES = lib/libopenvswitch.a
-am_tests_test_openflowd_OBJECTS = tests/test-openflowd.$(OBJEXT)
-tests_test_openflowd_OBJECTS = $(am_tests_test_openflowd_OBJECTS)
-tests_test_openflowd_DEPENDENCIES = ofproto/libofproto.a \
-	lib/libsflow.a lib/libopenvswitch.a $(am__DEPENDENCIES_1)
+am_tests_test_odp_OBJECTS = tests/test-odp.$(OBJEXT)
+tests_test_odp_OBJECTS = $(am_tests_test_odp_OBJECTS)
+tests_test_odp_DEPENDENCIES = lib/libopenvswitch.a
 am_tests_test_ovsdb_OBJECTS = tests/test-ovsdb.$(OBJEXT) \
 	tests/idltest.$(OBJEXT)
 tests_test_ovsdb_OBJECTS = $(am_tests_test_ovsdb_OBJECTS)
@@ -403,6 +411,9 @@ tests_test_reconnect_DEPENDENCIES = lib/libopenvswitch.a
 am_tests_test_sha1_OBJECTS = tests/test-sha1.$(OBJEXT)
 tests_test_sha1_OBJECTS = $(am_tests_test_sha1_OBJECTS)
 tests_test_sha1_DEPENDENCIES = lib/libopenvswitch.a
+am_tests_test_stp_OBJECTS = tests/test-stp.$(OBJEXT)
+tests_test_stp_OBJECTS = $(am_tests_test_stp_OBJECTS)
+tests_test_stp_DEPENDENCIES = lib/libopenvswitch.a
 am_tests_test_strtok_r_OBJECTS = tests/test-strtok_r.$(OBJEXT)
 tests_test_strtok_r_OBJECTS = $(am_tests_test_strtok_r_OBJECTS)
 tests_test_strtok_r_LDADD = $(LDADD)
@@ -523,10 +534,10 @@ SOURCES = $(lib_libopenvswitch_a_SOURCES) \
 	$(tests_test_hash_SOURCES) $(tests_test_hmap_SOURCES) \
 	$(tests_test_json_SOURCES) $(tests_test_jsonrpc_SOURCES) \
 	$(tests_test_list_SOURCES) $(tests_test_lockfile_SOURCES) \
-	$(tests_test_multipath_SOURCES) \
-	$(tests_test_openflowd_SOURCES) $(tests_test_ovsdb_SOURCES) \
-	$(tests_test_packets_SOURCES) $(tests_test_random_SOURCES) \
-	$(tests_test_reconnect_SOURCES) $(tests_test_sha1_SOURCES) \
+	$(tests_test_multipath_SOURCES) $(tests_test_odp_SOURCES) \
+	$(tests_test_ovsdb_SOURCES) $(tests_test_packets_SOURCES) \
+	$(tests_test_random_SOURCES) $(tests_test_reconnect_SOURCES) \
+	$(tests_test_sha1_SOURCES) $(tests_test_stp_SOURCES) \
 	$(tests_test_strtok_r_SOURCES) $(tests_test_timeval_SOURCES) \
 	$(tests_test_type_props_SOURCES) \
 	$(tests_test_unix_socket_SOURCES) $(tests_test_util_SOURCES) \
@@ -550,10 +561,10 @@ DIST_SOURCES = $(am__lib_libopenvswitch_a_SOURCES_DIST) \
 	$(tests_test_hash_SOURCES) $(tests_test_hmap_SOURCES) \
 	$(tests_test_json_SOURCES) $(tests_test_jsonrpc_SOURCES) \
 	$(tests_test_list_SOURCES) $(tests_test_lockfile_SOURCES) \
-	$(tests_test_multipath_SOURCES) \
-	$(tests_test_openflowd_SOURCES) $(tests_test_ovsdb_SOURCES) \
-	$(tests_test_packets_SOURCES) $(tests_test_random_SOURCES) \
-	$(tests_test_reconnect_SOURCES) $(tests_test_sha1_SOURCES) \
+	$(tests_test_multipath_SOURCES) $(tests_test_odp_SOURCES) \
+	$(tests_test_ovsdb_SOURCES) $(tests_test_packets_SOURCES) \
+	$(tests_test_random_SOURCES) $(tests_test_reconnect_SOURCES) \
+	$(tests_test_sha1_SOURCES) $(tests_test_stp_SOURCES) \
 	$(tests_test_strtok_r_SOURCES) $(tests_test_timeval_SOURCES) \
 	$(tests_test_type_props_SOURCES) \
 	$(tests_test_unix_socket_SOURCES) $(tests_test_util_SOURCES) \
@@ -584,16 +595,18 @@ DATA = $(dist_pkgdata_DATA) $(nobase_pkgdata_DATA) $(noinst_DATA) \
 am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	INSTALL.RHEL INSTALL.SSL INSTALL.XenServer INSTALL.bridge \
 	INSTALL.userspace NOTICE PORTING README-gcov REPORTING-BUGS \
-	SubmittingPatches WHY-OVS boot.sh soexpand.pl lib/dh1024.pem \
-	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in lib/common.man \
+	SubmittingPatches WHY-OVS boot.sh lib/common.man \
 	lib/common-syn.man lib/daemon.man lib/daemon-syn.man \
 	lib/leak-checker.man lib/ssl-bootstrap.man \
 	lib/ssl-bootstrap-syn.man lib/ssl-peer-ca-cert.man lib/ssl.man \
 	lib/ssl-syn.man lib/stress-unixctl.man lib/table.man \
 	lib/unixctl.man lib/unixctl-syn.man lib/vconn-active.man \
 	lib/vconn-passive.man lib/vlog-unixctl.man lib/vlog-syn.man \
-	lib/vlog.man build-aux/extract-ofp-errors \
-	ofproto/ofproto-unixctl.man utilities/ovs-appctl.8.in \
+	lib/vlog.man ofproto/ofproto-unixctl.man \
+	utilities/ovs-vlan-bugs.man ovsdb/remote-active.man \
+	ovsdb/remote-passive.man soexpand.pl lib/dh1024.pem \
+	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
+	build-aux/extract-ofp-errors utilities/ovs-appctl.8.in \
 	utilities/ovs-benchmark.1.in utilities/ovs-controller.8.in \
 	utilities/ovs-ctl.in utilities/ovs-dpctl.8.in \
 	utilities/ovs-lib.sh.in utilities/ovs-ofctl.8.in \
@@ -602,7 +615,7 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	utilities/ovs-pki-cgi.in utilities/ovs-pki.8.in \
 	utilities/ovs-pki.in utilities/ovs-save \
 	utilities/ovs-tcpundump.1.in utilities/ovs-tcpundump.in \
-	utilities/ovs-vlan-bugs.man utilities/ovs-vlan-test.in \
+	utilities/ovs-vlan-test.in \
 	utilities/ovs-vlan-bug-workaround.8.in \
 	utilities/ovs-vlan-test.8.in utilities/ovs-vsctl.8.in \
 	utilities/bugtool/plugins/kernel-info/openvswitch.xml \
@@ -610,6 +623,8 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	utilities/bugtool/plugins/system-configuration.xml \
 	utilities/bugtool/plugins/system-logs/openvswitch.xml \
 	utilities/bugtool/plugins/system-configuration/openvswitch.xml \
+	utilities/bugtool/ovs-bugtool-cfm-show \
+	utilities/bugtool/ovs-bugtool-lacp-show \
 	utilities/bugtool/ovs-bugtool-tc-class-show \
 	utilities/bugtool/ovs-bugtool-ovsdb-dump \
 	utilities/bugtool/ovs-bugtool.8 \
@@ -617,31 +632,35 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	tests/ovsdb-macros.at tests/library.at tests/bundle.at \
 	tests/classifier.at tests/check-structs.at tests/daemon.at \
 	tests/daemon-py.at tests/ofp-print.at tests/ovs-ofctl.at \
-	tests/multipath.at tests/autopath.at tests/vconn.at \
-	tests/file_name.at tests/aes128.at tests/uuid.at tests/json.at \
-	tests/jsonrpc.at tests/jsonrpc-py.at tests/timeval.at \
-	tests/lockfile.at tests/reconnect.at tests/ofproto-macros.at \
-	tests/ofproto.at tests/ovsdb.at tests/ovsdb-log.at \
-	tests/ovsdb-types.at tests/ovsdb-data.at tests/ovsdb-column.at \
-	tests/ovsdb-table.at tests/ovsdb-row.at tests/ovsdb-schema.at \
-	tests/ovsdb-condition.at tests/ovsdb-mutation.at \
-	tests/ovsdb-query.at tests/ovsdb-transaction.at \
-	tests/ovsdb-execution.at tests/ovsdb-trigger.at \
-	tests/ovsdb-tool.at tests/ovsdb-server.at \
-	tests/ovsdb-monitor.at tests/ovsdb-idl.at \
-	tests/ovsdb-idl-py.at tests/ovs-vsctl.at \
-	tests/interface-reconfigure.at $(srcdir)/tests/testsuite \
-	tests/atlocal.in $(srcdir)/package.m4 tests/lcov-wrapper.in \
-	tests/valgrind-wrapper.in tests/openssl.supp \
-	tests/test-openflowd.8.in tests/uuidfilt.pl \
+	tests/odp.at tests/multipath.at tests/autopath.at \
+	tests/learn.at tests/vconn.at tests/file_name.at \
+	tests/aes128.at tests/uuid.at tests/json.at tests/jsonrpc.at \
+	tests/jsonrpc-py.at tests/timeval.at tests/lockfile.at \
+	tests/reconnect.at tests/ofproto-dpif.at \
+	tests/ofproto-macros.at tests/ofproto.at tests/ovsdb.at \
+	tests/ovsdb-log.at tests/ovsdb-types.at tests/ovsdb-data.at \
+	tests/ovsdb-column.at tests/ovsdb-table.at tests/ovsdb-row.at \
+	tests/ovsdb-schema.at tests/ovsdb-condition.at \
+	tests/ovsdb-mutation.at tests/ovsdb-query.at \
+	tests/ovsdb-transaction.at tests/ovsdb-execution.at \
+	tests/ovsdb-trigger.at tests/ovsdb-tool.at \
+	tests/ovsdb-server.at tests/ovsdb-monitor.at \
+	tests/ovsdb-idl.at tests/ovs-vsctl.at \
+	tests/ovs-monitor-ipsec.at tests/ovs-xapi-sync.at tests/stp.at \
+	tests/interface-reconfigure.at tests/vlog.at \
+	$(srcdir)/tests/testsuite tests/atlocal.in \
+	$(srcdir)/package.m4 tests/compare-odp-actions.pl \
+	tests/lcov-wrapper.in tests/valgrind-wrapper.in \
+	tests/openssl.supp tests/uuidfilt.pl \
 	tests/ovsdb-monitor-sort.pl tests/idltest.ovsschema \
 	tests/idltest.ann tests/test-daemon.py tests/test-json.py \
 	tests/test-jsonrpc.py tests/test-ovsdb.py \
-	tests/test-reconnect.py build-aux/check-structs \
-	third-party/README third-party/ofp-tcpdump.patch \
-	debian/changelog debian/compat debian/control \
-	debian/control.modules.in debian/copyright debian/copyright.in \
-	debian/dirs debian/openvswitch-brcompat.install \
+	tests/test-reconnect.py tests/MockXenAPI.py tests/test-vlog.py \
+	build-aux/check-structs third-party/README \
+	third-party/ofp-tcpdump.patch debian/changelog debian/compat \
+	debian/control debian/control.modules.in debian/copyright \
+	debian/copyright.in debian/dkms.conf.in debian/dirs \
+	debian/openvswitch-brcompat.install \
 	debian/openvswitch-brcompat.manpages \
 	debian/openvswitch-brcompat.postinst \
 	debian/openvswitch-common.dirs \
@@ -655,6 +674,8 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	debian/openvswitch-controller.manpages \
 	debian/openvswitch-controller.postinst \
 	debian/openvswitch-datapath-module-_KVERS_.postinst.modules.in \
+	debian/openvswitch-datapath-dkms.postinst \
+	debian/openvswitch-datapath-dkms.prerm \
 	debian/openvswitch-datapath-source.README.Debian \
 	debian/openvswitch-datapath-source.copyright \
 	debian/openvswitch-datapath-source.dirs \
@@ -678,7 +699,6 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	vswitchd/ovs-brcompatd.8.in vswitchd/vswitch.ovsschema \
 	vswitchd/vswitch-idl.ann vswitchd/vswitch.gv \
 	vswitchd/vswitch.pic vswitchd/vswitch.xml \
-	ovsdb/remote-active.man ovsdb/remote-passive.man \
 	ovsdb/ovsdb-tool.1.in ovsdb/ovsdb-client.1.in \
 	ovsdb/ovsdb-server.1.in ovsdb/SPECS ovsdb/ovsdb-idlc.in \
 	ovsdb/ovsdb-idlc.1 tests/idltest.c tests/idltest.h \
@@ -733,7 +753,7 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py \
 	xenserver/usr_share_openvswitch_scripts_ovs-xapi-sync \
 	xenserver/usr_share_openvswitch_scripts_sysconfig.template \
-	xenserver/uuid.py python/ovs/__init__.py python/ovs/daemon.py \
+	python/ovs/__init__.py python/ovs/daemon.py \
 	python/ovs/db/__init__.py python/ovs/db/data.py \
 	python/ovs/db/error.py python/ovs/db/idl.py \
 	python/ovs/db/parser.py python/ovs/db/schema.py \
@@ -741,11 +761,13 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	python/ovs/json.py python/ovs/jsonrpc.py python/ovs/ovsuuid.py \
 	python/ovs/poller.py python/ovs/process.py \
 	python/ovs/reconnect.py python/ovs/socket_util.py \
-	python/ovs/stream.py python/ovs/timeval.py python/ovs/util.py \
-	python/ovs/dirs.py include/linux/if_link.h \
-	include/openflow/nicira-ext.h include/openflow/openflow.h \
+	python/ovs/stream.py python/ovs/timeval.py python/ovs/vlog.py \
+	python/ovs/util.py python/ovs/dirs.py python/compat/uuid.py \
+	python/compat/argparse.py include/linux/openvswitch.h \
+	include/linux/types.h include/openflow/nicira-ext.h \
+	include/openflow/openflow.h \
 	include/openvswitch/brcompat-netlink.h \
-	include/openvswitch/datapath-protocol.h \
+	include/openvswitch/datapath-compat.h \
 	include/openvswitch/tunnel.h include/openvswitch/types.h \
 	include/sparse/arpa/inet.h include/sparse/assert.h \
 	include/sparse/math.h include/sparse/netinet/in.h \
@@ -918,15 +940,16 @@ AM_CFLAGS = -Wstrict-prototypes $(WARNING_FLAGS) $(am__append_2)
 # Check that "struct vlog_ratelimit" is always declared "static".
 
 # Version checking for vswitch.ovsschema.
-ALL_LOCAL = dist-hook-git rate-limit-check $(am__append_20) \
-	check-debian-changelog-version \
+ALL_LOCAL = dist-hook-git rate-limit-check $(am__append_3) \
+	$(am__append_24) check-debian-changelog-version \
 	vswitchd/vswitch.ovsschema.stamp
 BUILT_SOURCES = $(OVSIDL_BUILT)
 CLEANFILES = all-distfiles all-gitfiles missing-distfiles distfiles \
-	$(nodist_lib_libopenvswitch_a_SOURCES) $(am__append_9) \
-	$(lcov_wrappers) $(valgrind_wrappers) $(am__append_18) \
+	$(am__append_4) $(nodist_lib_libopenvswitch_a_SOURCES) \
+	$(am__append_11) $(am__append_16) $(lcov_wrappers) \
+	$(valgrind_wrappers) $(am__append_22) \
 	vswitchd/vswitch.ovsschema.stamp
-CLEAN_LOCAL = $(am__append_19)
+CLEAN_LOCAL = $(am__append_23)
 DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 	utilities/ovs-benchmark.1 utilities/ovs-controller.8 \
 	utilities/ovs-dpctl.8 utilities/ovs-lib.sh \
@@ -936,11 +959,11 @@ DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 	utilities/ovs-tcpundump utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-test utilities/ovs-vlan-test.8 \
 	utilities/ovs-vlan-bug-workaround.8 utilities/ovs-vsctl.8 \
-	tests/atconfig tests/atlocal tests/test-openflowd.8 \
-	$(am__append_21) debian/copyright vswitchd/ovs-vswitchd.8 \
-	vswitchd/ovs-brcompatd.8 ovsdb/ovsdb-tool.1 \
-	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 ovsdb/ovsdb-idlc \
-	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_24)
+	tests/atconfig tests/atlocal $(am__append_25) debian/copyright \
+	vswitchd/ovs-vswitchd.8 vswitchd/ovs-brcompatd.8 \
+	ovsdb/ovsdb-tool.1 ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 \
+	ovsdb/ovsdb-idlc ovsdb/ovsdb-doc ovsdb/ovsdb-dot \
+	$(am__append_28)
 
 # Python tests.
 
@@ -954,40 +977,35 @@ DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	INSTALL.SSL INSTALL.XenServer INSTALL.bridge INSTALL.userspace \
 	NOTICE PORTING README-gcov REPORTING-BUGS SubmittingPatches \
-	WHY-OVS boot.sh soexpand.pl lib/dh1024.pem lib/dh2048.pem \
-	lib/dh4096.pem lib/dirs.c.in lib/common.man lib/common-syn.man \
-	lib/daemon.man lib/daemon-syn.man lib/leak-checker.man \
-	lib/ssl-bootstrap.man lib/ssl-bootstrap-syn.man \
-	lib/ssl-peer-ca-cert.man lib/ssl.man lib/ssl-syn.man \
-	lib/stress-unixctl.man lib/table.man lib/unixctl.man \
-	lib/unixctl-syn.man lib/vconn-active.man lib/vconn-passive.man \
-	lib/vlog-unixctl.man lib/vlog-syn.man lib/vlog.man \
-	build-aux/extract-ofp-errors ofproto/ofproto-unixctl.man \
-	utilities/ovs-appctl.8.in utilities/ovs-benchmark.1.in \
-	utilities/ovs-controller.8.in utilities/ovs-ctl.in \
-	utilities/ovs-dpctl.8.in utilities/ovs-lib.sh.in \
-	utilities/ovs-ofctl.8.in utilities/ovs-parse-leaks.8 \
-	utilities/ovs-parse-leaks.in utilities/ovs-pcap.1.in \
-	utilities/ovs-pcap.in utilities/ovs-pki-cgi.in \
-	utilities/ovs-pki.8.in utilities/ovs-pki.in utilities/ovs-save \
+	WHY-OVS boot.sh $(MAN_FRAGMENTS) soexpand.pl lib/dh1024.pem \
+	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
+	build-aux/extract-ofp-errors utilities/ovs-appctl.8.in \
+	utilities/ovs-benchmark.1.in utilities/ovs-controller.8.in \
+	utilities/ovs-ctl.in utilities/ovs-dpctl.8.in \
+	utilities/ovs-lib.sh.in utilities/ovs-ofctl.8.in \
+	utilities/ovs-parse-leaks.8 utilities/ovs-parse-leaks.in \
+	utilities/ovs-pcap.1.in utilities/ovs-pcap.in \
+	utilities/ovs-pki-cgi.in utilities/ovs-pki.8.in \
+	utilities/ovs-pki.in utilities/ovs-save \
 	utilities/ovs-tcpundump.1.in utilities/ovs-tcpundump.in \
-	utilities/ovs-vlan-bugs.man utilities/ovs-vlan-test.in \
+	utilities/ovs-vlan-test.in \
 	utilities/ovs-vlan-bug-workaround.8.in \
 	utilities/ovs-vlan-test.8.in utilities/ovs-vsctl.8.in \
 	$(bugtool_plugins) $(bugtool_scripts) \
 	utilities/bugtool/ovs-bugtool.8 \
 	utilities/bugtool/ovs-bugtool.in $(TESTSUITE_AT) $(TESTSUITE) \
 	tests/atlocal.in $(srcdir)/package.m4 \
-	$(srcdir)/tests/testsuite tests/lcov-wrapper.in \
-	tests/valgrind-wrapper.in tests/openssl.supp \
-	tests/test-openflowd.8.in tests/uuidfilt.pl \
+	$(srcdir)/tests/testsuite tests/compare-odp-actions.pl \
+	tests/lcov-wrapper.in tests/valgrind-wrapper.in \
+	tests/openssl.supp tests/uuidfilt.pl \
 	tests/ovsdb-monitor-sort.pl $(IDLTEST_IDL_FILES) \
 	tests/test-daemon.py tests/test-json.py tests/test-jsonrpc.py \
 	tests/test-ovsdb.py tests/test-reconnect.py \
-	build-aux/check-structs third-party/README \
-	third-party/ofp-tcpdump.patch debian/changelog debian/compat \
-	debian/control debian/control.modules.in debian/copyright \
-	debian/copyright.in debian/dirs \
+	tests/MockXenAPI.py tests/test-vlog.py build-aux/check-structs \
+	third-party/README third-party/ofp-tcpdump.patch \
+	debian/changelog debian/compat debian/control \
+	debian/control.modules.in debian/copyright debian/copyright.in \
+	debian/dkms.conf.in debian/dirs \
 	debian/openvswitch-brcompat.install \
 	debian/openvswitch-brcompat.manpages \
 	debian/openvswitch-brcompat.postinst \
@@ -1002,6 +1020,8 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	debian/openvswitch-controller.manpages \
 	debian/openvswitch-controller.postinst \
 	debian/openvswitch-datapath-module-_KVERS_.postinst.modules.in \
+	debian/openvswitch-datapath-dkms.postinst \
+	debian/openvswitch-datapath-dkms.prerm \
 	debian/openvswitch-datapath-source.README.Debian \
 	debian/openvswitch-datapath-source.copyright \
 	debian/openvswitch-datapath-source.dirs \
@@ -1024,7 +1044,6 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	vswitchd/ovs-vswitchd.8.in vswitchd/INTERNALS \
 	vswitchd/ovs-brcompatd.8.in $(VSWITCH_IDL_FILES) \
 	vswitchd/vswitch.gv vswitchd/vswitch.pic vswitchd/vswitch.xml \
-	ovsdb/remote-active.man ovsdb/remote-passive.man \
 	ovsdb/ovsdb-tool.1.in ovsdb/ovsdb-client.1.in \
 	ovsdb/ovsdb-server.1.in ovsdb/SPECS ovsdb/ovsdb-idlc.in \
 	ovsdb/ovsdb-idlc.1 $(OVSIDL_BUILT) ovsdb/ovsdb-doc.in \
@@ -1059,16 +1078,19 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py \
 	xenserver/usr_share_openvswitch_scripts_ovs-xapi-sync \
 	xenserver/usr_share_openvswitch_scripts_sysconfig.template \
-	xenserver/uuid.py $(ovs_pyfiles) python/ovs/dirs.py
+	$(ovs_pyfiles) python/ovs/dirs.py python/compat/uuid.py \
+	python/compat/argparse.py
 bin_SCRIPTS = utilities/ovs-pki utilities/ovs-vsctl \
-	utilities/ovs-parse-leaks $(am__append_10)
+	utilities/ovs-parse-leaks $(am__append_12)
 DIST_HOOKS = check-debian-changelog-version
 dist_man_MANS = utilities/ovs-ctl.8 vswitchd/ovs-vswitchd.conf.db.5
 dist_pkgdata_DATA = 
 dist_pkgdata_SCRIPTS = 
 dist_sbin_SCRIPTS = 
 dist_scripts_SCRIPTS = 
-INSTALL_DATA_LOCAL = lib-install-data-local $(am__append_16)
+INSTALL_DATA_LOCAL = lib-install-data-local $(am__append_19)
+UNINSTALL_LOCAL = $(am__append_20) ovsdbmonitor-uninstall-local \
+	ovs-uninstall-local
 # ovsdb-tool.1
 # ovsdb-client.1
 # ovsdb-server.1
@@ -1078,19 +1100,29 @@ man_MANS = utilities/ovs-appctl.8 utilities/ovs-benchmark.1 \
 	utilities/ovs-pcap.1 utilities/ovs-pki.8 \
 	utilities/ovs-tcpundump.1 utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vlan-test.8 utilities/ovs-vsctl.8 \
-	$(am__append_14) vswitchd/ovs-vswitchd.8 \
+	$(am__append_17) vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-brcompatd.8 ovsdb/ovsdb-tool.1 \
-	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 $(am__append_25)
+	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 $(am__append_29)
+MAN_FRAGMENTS = lib/common.man lib/common-syn.man lib/daemon.man \
+	lib/daemon-syn.man lib/leak-checker.man lib/ssl-bootstrap.man \
+	lib/ssl-bootstrap-syn.man lib/ssl-peer-ca-cert.man lib/ssl.man \
+	lib/ssl-syn.man lib/stress-unixctl.man lib/table.man \
+	lib/unixctl.man lib/unixctl-syn.man lib/vconn-active.man \
+	lib/vconn-passive.man lib/vlog-unixctl.man lib/vlog-syn.man \
+	lib/vlog.man ofproto/ofproto-unixctl.man \
+	utilities/ovs-vlan-bugs.man ovsdb/remote-active.man \
+	ovsdb/remote-passive.man
 noinst_DATA = 
 
 # This ensures that files added to EXTRA_DIST are always distributed,
 # even if they are inside an Automake if...endif conditional block that is
 # disabled by some particular "configure" run.  For more information, see:
 # http://article.gmane.org/gmane.comp.sysutils.automake.general/10891
-noinst_HEADERS = $(EXTRA_DIST) include/linux/if_link.h \
-	include/openflow/nicira-ext.h include/openflow/openflow.h \
+noinst_HEADERS = $(EXTRA_DIST) include/linux/openvswitch.h \
+	include/linux/types.h include/openflow/nicira-ext.h \
+	include/openflow/openflow.h \
 	include/openvswitch/brcompat-netlink.h \
-	include/openvswitch/datapath-protocol.h \
+	include/openvswitch/datapath-compat.h \
 	include/openvswitch/tunnel.h include/openvswitch/types.h \
 	include/sparse/arpa/inet.h include/sparse/assert.h \
 	include/sparse/math.h include/sparse/netinet/in.h \
@@ -1100,9 +1132,9 @@ noinst_HEADERS = $(EXTRA_DIST) include/linux/if_link.h \
 # libovsdb
 noinst_LIBRARIES = lib/libopenvswitch.a lib/libsflow.a \
 	ofproto/libofproto.a ovsdb/libovsdb.a
-noinst_man_MANS = tests/ovs-openflowd.8
+noinst_man_MANS = 
 noinst_SCRIPTS = utilities/ovs-pki-cgi ovsdb/ovsdb-idlc \
-	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_23)
+	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_27)
 
 # idltest schema and IDL
 
@@ -1111,11 +1143,11 @@ OVSIDL_BUILT = tests/idltest.c tests/idltest.h tests/idltest.ovsidl \
 	vswitchd/vswitch-idl.c vswitchd/vswitch-idl.h \
 	vswitchd/vswitch-idl.ovsidl
 pkgdata_DATA = vswitchd/vswitch.ovsschema
-sbin_SCRIPTS = $(am__append_13)
+sbin_SCRIPTS = $(am__append_15)
 scripts_SCRIPTS = utilities/ovs-ctl utilities/ovs-lib.sh \
-	utilities/ovs-save $(am__append_15)
-SUFFIXES = .in .ovsidl .ui .py
-check_DATA = $(am__append_17)
+	utilities/ovs-save $(am__append_18)
+SUFFIXES = .in .ovsidl .ovsschema .ui .py
+check_DATA = $(am__append_21)
 scriptsdir = $(pkgdatadir)/scripts
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
@@ -1134,25 +1166,27 @@ lib_libopenvswitch_a_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/hash.c lib/hash.h lib/hmap.c lib/hmap.h lib/hmapx.c \
 	lib/hmapx.h lib/json.c lib/json.h lib/jsonrpc.c lib/jsonrpc.h \
 	lib/lacp.c lib/lacp.h lib/leak-checker.c lib/leak-checker.h \
-	lib/learning-switch.c lib/learning-switch.h lib/list.c \
-	lib/list.h lib/lockfile.c lib/lockfile.h lib/mac-learning.c \
-	lib/mac-learning.h lib/multipath.c lib/multipath.h \
-	lib/netdev-dummy.c lib/netdev-provider.h lib/netdev.c \
-	lib/netdev.h lib/netlink.c lib/netlink.h lib/nx-match.c \
-	lib/nx-match.def lib/nx-match.h lib/odp-util.c lib/odp-util.h \
-	lib/ofp-errors.c lib/ofp-errors.h lib/ofp-parse.c \
-	lib/ofp-parse.h lib/ofp-print.c lib/ofp-print.h lib/ofp-util.c \
-	lib/ofp-util.h lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c \
-	lib/ovsdb-data.h lib/ovsdb-error.c lib/ovsdb-error.h \
-	lib/ovsdb-idl-provider.h lib/ovsdb-idl.c lib/ovsdb-idl.h \
-	lib/ovsdb-parser.c lib/ovsdb-parser.h lib/ovsdb-types.c \
-	lib/ovsdb-types.h lib/packets.c lib/packets.h lib/pcap.c \
-	lib/pcap.h lib/poll-loop.c lib/poll-loop.h lib/process.c \
-	lib/process.h lib/random.c lib/random.h lib/rconn.c \
-	lib/rconn.h lib/reconnect.c lib/reconnect.h lib/sat-math.h \
-	lib/sha1.c lib/sha1.h lib/shash.c lib/shash.h lib/signals.c \
-	lib/signals.h lib/socket-util.c lib/socket-util.h lib/sort.c \
-	lib/sort.h lib/sset.c lib/sset.h lib/stream-fd.c \
+	lib/learn.c lib/learn.h lib/learning-switch.c \
+	lib/learning-switch.h lib/list.c lib/list.h lib/lockfile.c \
+	lib/lockfile.h lib/mac-learning.c lib/mac-learning.h \
+	lib/meta-flow.c lib/meta-flow.h lib/multipath.c \
+	lib/multipath.h lib/netdev-dummy.c lib/netdev-provider.h \
+	lib/netdev.c lib/netdev.h lib/netlink.c lib/netlink.h \
+	lib/nx-match.c lib/nx-match.def lib/nx-match.h lib/odp-util.c \
+	lib/odp-util.h lib/ofp-errors.c lib/ofp-errors.h \
+	lib/ofp-parse.c lib/ofp-parse.h lib/ofp-print.c \
+	lib/ofp-print.h lib/ofp-util.c lib/ofp-util.def lib/ofp-util.h \
+	lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c lib/ovsdb-data.h \
+	lib/ovsdb-error.c lib/ovsdb-error.h lib/ovsdb-idl-provider.h \
+	lib/ovsdb-idl.c lib/ovsdb-idl.h lib/ovsdb-parser.c \
+	lib/ovsdb-parser.h lib/ovsdb-types.c lib/ovsdb-types.h \
+	lib/packets.c lib/packets.h lib/pcap.c lib/pcap.h \
+	lib/poll-loop.c lib/poll-loop.h lib/process.c lib/process.h \
+	lib/random.c lib/random.h lib/rconn.c lib/rconn.h \
+	lib/reconnect.c lib/reconnect.h lib/sat-math.h lib/sha1.c \
+	lib/sha1.h lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
+	lib/socket-util.c lib/socket-util.h lib/sort.c lib/sort.h \
+	lib/sset.c lib/sset.h lib/stp.c lib/stp.h lib/stream-fd.c \
 	lib/stream-fd.h lib/stream-provider.h lib/stream-ssl.h \
 	lib/stream-tcp.c lib/stream-unix.c lib/stream.c lib/stream.h \
 	lib/stress.c lib/stress.h lib/string.c lib/string.h lib/svec.c \
@@ -1162,9 +1196,9 @@ lib_libopenvswitch_a_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/unixctl.c lib/unixctl.h lib/util.c lib/util.h lib/uuid.c \
 	lib/uuid.h lib/valgrind.h lib/vconn-provider.h \
 	lib/vconn-stream.c lib/vconn.c lib/vconn.h lib/vlan-bitmap.c \
-	lib/vlan-bitmap.h lib/vlog.c lib/vlog.h $(am__append_5) \
-	$(am__append_6) $(am__append_8)
-nodist_lib_libopenvswitch_a_SOURCES = lib/dirs.c $(am__append_7)
+	lib/vlan-bitmap.h lib/vlog.c lib/vlog.h $(am__append_7) \
+	$(am__append_8) $(am__append_10)
+nodist_lib_libopenvswitch_a_SOURCES = lib/dirs.c $(am__append_9)
 lib_libsflow_a_SOURCES = \
 	lib/sflow_api.h \
 	lib/sflow.h \
@@ -1173,7 +1207,7 @@ lib_libsflow_a_SOURCES = \
 	lib/sflow_poller.c \
 	lib/sflow_receiver.c
 
-lib_libsflow_a_CFLAGS = $(AM_CFLAGS) $(am__append_3) $(am__append_4)
+lib_libsflow_a_CFLAGS = $(AM_CFLAGS) $(am__append_5) $(am__append_6)
 
 # All distributed sources, with names adjust properly for referencing
 # from $(builddir).
@@ -1237,6 +1271,8 @@ utilities_ovs_benchmark_LDADD = lib/libopenvswitch.a
 @HAVE_PYTHON_TRUE@	utilities/bugtool/plugins/system-configuration/openvswitch.xml
 
 @HAVE_PYTHON_TRUE@bugtool_scripts = \
+@HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-cfm-show \
+@HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-lacp-show \
 @HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-tc-class-show \
 @HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-ovsdb-dump
 
@@ -1252,8 +1288,10 @@ TESTSUITE_AT = \
 	tests/daemon-py.at \
 	tests/ofp-print.at \
 	tests/ovs-ofctl.at \
+	tests/odp.at \
 	tests/multipath.at \
 	tests/autopath.at \
+	tests/learn.at \
 	tests/vconn.at \
 	tests/file_name.at \
 	tests/aes128.at \
@@ -1264,6 +1302,7 @@ TESTSUITE_AT = \
 	tests/timeval.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
+	tests/ofproto-dpif.at \
 	tests/ofproto-macros.at \
 	tests/ofproto.at \
 	tests/ovsdb.at \
@@ -1284,9 +1323,12 @@ TESTSUITE_AT = \
 	tests/ovsdb-server.at \
 	tests/ovsdb-monitor.at \
 	tests/ovsdb-idl.at \
-	tests/ovsdb-idl-py.at \
 	tests/ovs-vsctl.at \
-	tests/interface-reconfigure.at
+	tests/ovs-monitor-ipsec.at \
+	tests/ovs-xapi-sync.at \
+	tests/stp.at \
+	tests/interface-reconfigure.at \
+	tests/vlog.at
 
 TESTSUITE = $(srcdir)/tests/testsuite
 AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
@@ -1312,11 +1354,13 @@ lcov_wrappers = \
 	tests/lcov/test-list \
 	tests/lcov/test-lockfile \
 	tests/lcov/test-multipath \
+	tests/lcov/test-odp \
 	tests/lcov/test-ovsdb \
 	tests/lcov/test-packets \
 	tests/lcov/test-random \
 	tests/lcov/test-reconnect \
 	tests/lcov/test-sha1 \
+	tests/lcov/test-stp \
 	tests/lcov/test-timeval \
 	tests/lcov/test-type-props \
 	tests/lcov/test-unix-socket \
@@ -1346,12 +1390,13 @@ valgrind_wrappers = \
 	tests/valgrind/test-list \
 	tests/valgrind/test-lockfile \
 	tests/valgrind/test-multipath \
-	tests/valgrind/test-openflowd \
+	tests/valgrind/test-odp \
 	tests/valgrind/test-ovsdb \
 	tests/valgrind/test-packets \
 	tests/valgrind/test-random \
 	tests/valgrind/test-reconnect \
 	tests/valgrind/test-sha1 \
+	tests/valgrind/test-stp \
 	tests/valgrind/test-timeval \
 	tests/valgrind/test-type-props \
 	tests/valgrind/test-unix-socket \
@@ -1390,19 +1435,16 @@ tests_test_lockfile_SOURCES = tests/test-lockfile.c
 tests_test_lockfile_LDADD = lib/libopenvswitch.a
 tests_test_multipath_SOURCES = tests/test-multipath.c
 tests_test_multipath_LDADD = lib/libopenvswitch.a
-tests_test_openflowd_SOURCES = tests/test-openflowd.c
-tests_test_openflowd_LDADD = \
-	ofproto/libofproto.a \
-	lib/libsflow.a \
-	lib/libopenvswitch.a \
-	$(SSL_LIBS)
-
 tests_test_packets_SOURCES = tests/test-packets.c
 tests_test_packets_LDADD = lib/libopenvswitch.a
 tests_test_random_SOURCES = tests/test-random.c
 tests_test_random_LDADD = lib/libopenvswitch.a
+tests_test_stp_SOURCES = tests/test-stp.c
+tests_test_stp_LDADD = lib/libopenvswitch.a
 tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
 tests_test_unix_socket_LDADD = lib/libopenvswitch.a
+tests_test_odp_SOURCES = tests/test-odp.c
+tests_test_odp_LDADD = lib/libopenvswitch.a
 tests_test_ovsdb_SOURCES = \
 	tests/test-ovsdb.c \
 	tests/idltest.c \
@@ -1521,6 +1563,11 @@ ovsdbmonitor_pyfiles = \
 
 ovsdbmonitordir = ${pkgdatadir}/ovsdbmonitor
 @BUILD_OVSDBMONITOR_TRUE@ovsdbmonitor_DATA = $(ovsdbmonitor_pyfiles)
+update_spec = \
+  ($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
+    < $(srcdir)/rhel/$(@F).in > $(@F).tmp || exit 1; \
+  if cmp -s $(@F).tmp $@; then touch $@; rm $(@F).tmp; else mv $(@F).tmp $@; fi
+
 run_python = PYTHONPATH=$(top_srcdir)/python:$$PYTHON_PATH $(PYTHON)
 ovs_pyfiles = \
 	python/ovs/__init__.py \
@@ -1542,6 +1589,7 @@ ovs_pyfiles = \
 	python/ovs/socket_util.py \
 	python/ovs/stream.py \
 	python/ovs/timeval.py \
+	python/ovs/vlog.py \
 	python/ovs/util.py
 
 @HAVE_PYTHON_TRUE@nobase_pkgdata_DATA = $(ovs_pyfiles)
@@ -1549,10 +1597,10 @@ all: $(BUILT_SOURCES) config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 
 .SUFFIXES:
-.SUFFIXES: .in .ovsidl .ui .py .c .h .o .obj
+.SUFFIXES: .in .ovsidl .ovsschema .ui .py .c .h .o .obj
 am--refresh:
 	@:
-$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/ovs/automake.mk $(am__configure_deps)
+$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/ovs/automake.mk $(srcdir)/python/compat/automake.mk $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
 	    *$$dep*) \
@@ -1660,12 +1708,15 @@ lib/jsonrpc.$(OBJEXT): lib/$(am__dirstamp) \
 lib/lacp.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/leak-checker.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
+lib/learn.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/learning-switch.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/list.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/lockfile.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/mac-learning.$(OBJEXT): lib/$(am__dirstamp) \
+	lib/$(DEPDIR)/$(am__dirstamp)
+lib/meta-flow.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/multipath.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
@@ -1719,6 +1770,7 @@ lib/socket-util.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/sort.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/sset.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
+lib/stp.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/stream-fd.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/stream-tcp.$(OBJEXT): lib/$(am__dirstamp) \
@@ -1755,9 +1807,9 @@ lib/netdev-linux.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/netdev-vport.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
-lib/netlink-socket.$(OBJEXT): lib/$(am__dirstamp) \
+lib/netlink-notifier.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
-lib/rtnetlink.$(OBJEXT): lib/$(am__dirstamp) \
+lib/netlink-socket.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/rtnetlink-link.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
@@ -2024,11 +2076,11 @@ tests/test-multipath.$(OBJEXT): tests/$(am__dirstamp) \
 tests/test-multipath$(EXEEXT): $(tests_test_multipath_OBJECTS) $(tests_test_multipath_DEPENDENCIES) tests/$(am__dirstamp)
 	@rm -f tests/test-multipath$(EXEEXT)
 	$(LINK) $(tests_test_multipath_OBJECTS) $(tests_test_multipath_LDADD) $(LIBS)
-tests/test-openflowd.$(OBJEXT): tests/$(am__dirstamp) \
+tests/test-odp.$(OBJEXT): tests/$(am__dirstamp) \
 	tests/$(DEPDIR)/$(am__dirstamp)
-tests/test-openflowd$(EXEEXT): $(tests_test_openflowd_OBJECTS) $(tests_test_openflowd_DEPENDENCIES) tests/$(am__dirstamp)
-	@rm -f tests/test-openflowd$(EXEEXT)
-	$(LINK) $(tests_test_openflowd_OBJECTS) $(tests_test_openflowd_LDADD) $(LIBS)
+tests/test-odp$(EXEEXT): $(tests_test_odp_OBJECTS) $(tests_test_odp_DEPENDENCIES) tests/$(am__dirstamp)
+	@rm -f tests/test-odp$(EXEEXT)
+	$(LINK) $(tests_test_odp_OBJECTS) $(tests_test_odp_LDADD) $(LIBS)
 tests/test-ovsdb.$(OBJEXT): tests/$(am__dirstamp) \
 	tests/$(DEPDIR)/$(am__dirstamp)
 tests/idltest.$(OBJEXT): tests/$(am__dirstamp) \
@@ -2056,6 +2108,11 @@ tests/test-sha1.$(OBJEXT): tests/$(am__dirstamp) \
 tests/test-sha1$(EXEEXT): $(tests_test_sha1_OBJECTS) $(tests_test_sha1_DEPENDENCIES) tests/$(am__dirstamp)
 	@rm -f tests/test-sha1$(EXEEXT)
 	$(LINK) $(tests_test_sha1_OBJECTS) $(tests_test_sha1_LDADD) $(LIBS)
+tests/test-stp.$(OBJEXT): tests/$(am__dirstamp) \
+	tests/$(DEPDIR)/$(am__dirstamp)
+tests/test-stp$(EXEEXT): $(tests_test_stp_OBJECTS) $(tests_test_stp_DEPENDENCIES) tests/$(am__dirstamp)
+	@rm -f tests/test-stp$(EXEEXT)
+	$(LINK) $(tests_test_stp_OBJECTS) $(tests_test_stp_LDADD) $(LIBS)
 tests/test-strtok_r.$(OBJEXT): tests/$(am__dirstamp) \
 	tests/$(DEPDIR)/$(am__dirstamp)
 tests/test-strtok_r$(EXEEXT): $(tests_test_strtok_r_OBJECTS) $(tests_test_strtok_r_DEPENDENCIES) tests/$(am__dirstamp)
@@ -2398,6 +2455,7 @@ mostlyclean-compile:
 	-rm -f lib/jsonrpc.$(OBJEXT)
 	-rm -f lib/lacp.$(OBJEXT)
 	-rm -f lib/leak-checker.$(OBJEXT)
+	-rm -f lib/learn.$(OBJEXT)
 	-rm -f lib/learning-switch.$(OBJEXT)
 	-rm -f lib/lib_libsflow_a-sflow_agent.$(OBJEXT)
 	-rm -f lib/lib_libsflow_a-sflow_poller.$(OBJEXT)
@@ -2406,11 +2464,13 @@ mostlyclean-compile:
 	-rm -f lib/list.$(OBJEXT)
 	-rm -f lib/lockfile.$(OBJEXT)
 	-rm -f lib/mac-learning.$(OBJEXT)
+	-rm -f lib/meta-flow.$(OBJEXT)
 	-rm -f lib/multipath.$(OBJEXT)
 	-rm -f lib/netdev-dummy.$(OBJEXT)
 	-rm -f lib/netdev-linux.$(OBJEXT)
 	-rm -f lib/netdev-vport.$(OBJEXT)
 	-rm -f lib/netdev.$(OBJEXT)
+	-rm -f lib/netlink-notifier.$(OBJEXT)
 	-rm -f lib/netlink-socket.$(OBJEXT)
 	-rm -f lib/netlink.$(OBJEXT)
 	-rm -f lib/nx-match.$(OBJEXT)
@@ -2434,13 +2494,13 @@ mostlyclean-compile:
 	-rm -f lib/reconnect.$(OBJEXT)
 	-rm -f lib/route-table.$(OBJEXT)
 	-rm -f lib/rtnetlink-link.$(OBJEXT)
-	-rm -f lib/rtnetlink.$(OBJEXT)
 	-rm -f lib/sha1.$(OBJEXT)
 	-rm -f lib/shash.$(OBJEXT)
 	-rm -f lib/signals.$(OBJEXT)
 	-rm -f lib/socket-util.$(OBJEXT)
 	-rm -f lib/sort.$(OBJEXT)
 	-rm -f lib/sset.$(OBJEXT)
+	-rm -f lib/stp.$(OBJEXT)
 	-rm -f lib/stream-fd.$(OBJEXT)
 	-rm -f lib/stream-nossl.$(OBJEXT)
 	-rm -f lib/stream-ssl.$(OBJEXT)
@@ -2505,12 +2565,13 @@ mostlyclean-compile:
 	-rm -f tests/test-list.$(OBJEXT)
 	-rm -f tests/test-lockfile.$(OBJEXT)
 	-rm -f tests/test-multipath.$(OBJEXT)
-	-rm -f tests/test-openflowd.$(OBJEXT)
+	-rm -f tests/test-odp.$(OBJEXT)
 	-rm -f tests/test-ovsdb.$(OBJEXT)
 	-rm -f tests/test-packets.$(OBJEXT)
 	-rm -f tests/test-random.$(OBJEXT)
 	-rm -f tests/test-reconnect.$(OBJEXT)
 	-rm -f tests/test-sha1.$(OBJEXT)
+	-rm -f tests/test-stp.$(OBJEXT)
 	-rm -f tests/test-strtok_r.$(OBJEXT)
 	-rm -f tests/test-timeval.$(OBJEXT)
 	-rm -f tests/test-type-props.$(OBJEXT)
@@ -2566,6 +2627,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/jsonrpc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/lacp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/leak-checker.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/learn.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/learning-switch.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/lib_libsflow_a-sflow_agent.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/lib_libsflow_a-sflow_poller.Po@am__quote@
@@ -2574,11 +2636,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/list.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/lockfile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/mac-learning.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/meta-flow.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/multipath.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netdev-dummy.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netdev-linux.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netdev-vport.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netdev.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netlink-notifier.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netlink-socket.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/netlink.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/nx-match.Po@am__quote@
@@ -2602,13 +2666,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/reconnect.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/route-table.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/rtnetlink-link.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/rtnetlink.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/sha1.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/shash.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/signals.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/socket-util.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/sort.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/sset.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/stp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/stream-fd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/stream-nossl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/stream-ssl.Po@am__quote@
@@ -2673,12 +2737,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-list.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-lockfile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-multipath.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-openflowd.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-odp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-ovsdb.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-packets.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-random.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-reconnect.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-sha1.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-stp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-strtok_r.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-timeval.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tests/$(DEPDIR)/test-type-props.Po@am__quote@
@@ -3529,12 +3594,19 @@ rate-limit-check:
 	    echo "'struct vlog_rate_limit' must always be 'static'"; \
 	    exit 1; \
 	 fi
+@HAVE_GROFF_TRUE@manpage-check: $(MANS) $(MAN_FRAGMENTS)
+@HAVE_GROFF_TRUE@	@manpages=; \
+@HAVE_GROFF_TRUE@	for d in $(MANS); do \
+@HAVE_GROFF_TRUE@		manpages="$$manpages `test -f $$d || echo $(VPATH)/`$$d"; \
+@HAVE_GROFF_TRUE@	done; \
+@HAVE_GROFF_TRUE@	LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T ascii -man -p -z $$manpages && touch $@
 
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
 clean-local: $(CLEAN_LOCAL)
 install-data-local: $(INSTALL_DATA_LOCAL)
-.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL)
+uninstall-local: $(UNINSTALL_LOCAL)
+.PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL) $(UNINSTALL_LOCAL)
 @HAVE_OPENSSL_TRUE@lib/dhparams.c: lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem
 @HAVE_OPENSSL_TRUE@	(echo '#include "lib/dhparams.h"' &&				\
 @HAVE_OPENSSL_TRUE@	 openssl dhparam -C -in $(srcdir)/lib/dh1024.pem -noout &&	\
@@ -3583,6 +3655,16 @@ lib-install-data-local:
 @HAVE_PYTHON_TRUE@	  $(MKDIR_P) "$(DESTDIR)$(bugtoolpluginsdir)/$$dir"; \
 @HAVE_PYTHON_TRUE@	  $(INSTALL_DATA) "$(srcdir)/$$plugin" "$(DESTDIR)$(bugtoolpluginsdir)/$$stem"; \
 @HAVE_PYTHON_TRUE@	done
+@HAVE_PYTHON_TRUE@bugtool-uninstall-local:
+@HAVE_PYTHON_TRUE@	for plugin in $(bugtool_plugins); do \
+@HAVE_PYTHON_TRUE@	  stem=`echo "$$plugin" | sed 's,utilities/bugtool/plugins/,,'`; \
+@HAVE_PYTHON_TRUE@	  rm -f "$(DESTDIR)$(bugtoolpluginsdir)/$$stem"; \
+@HAVE_PYTHON_TRUE@	done
+@HAVE_PYTHON_TRUE@	for plugin in $(bugtool_plugins); do \
+@HAVE_PYTHON_TRUE@	  stem=`echo "$$plugin" | sed 's,utilities/bugtool/plugins/,,'`; \
+@HAVE_PYTHON_TRUE@	  dir=`expr "$$stem" : '\(.*\)/[^/]*$$'`; \
+@HAVE_PYTHON_TRUE@	  rmdir "$(DESTDIR)$(bugtoolpluginsdir)/$$dir"; \
+@HAVE_PYTHON_TRUE@	done; exit 0
 
 check-local: tests/atconfig tests/atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
@@ -3707,7 +3789,7 @@ $(srcdir)/vswitchd/vswitch.pic: $(srcdir)/vswitchd/vswitch.gv ovsdb/dot2pic
 @HAVE_DOT_TRUE@	    | $(srcdir)/ovsdb/dot2pic) > $@;				\
 @HAVE_DOT_TRUE@	fi
 @HAVE_DOT_FALSE@	touch $@
-vswitchd/ovs-vswitchd.conf.db.5: \
+$(srcdir)/vswitchd/ovs-vswitchd.conf.db.5: \
 	ovsdb/ovsdb-doc.in vswitchd/vswitch.xml vswitchd/vswitch.ovsschema \
 	$(srcdir)/vswitchd/vswitch.pic
 	$(OVSDB_DOC) \
@@ -3747,8 +3829,6 @@ $(OVSIDL_BUILT): ovsdb/ovsdb-idlc.in
 @BUILD_OVSDBMONITOR_TRUE@	chmod +x ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
 @BUILD_OVSDBMONITOR_TRUE@	$(INSTALL_PROGRAM) ovsdb/ovsdbmonitor/ovsdbmonitor.tmp $(DESTDIR)$(bindir)/ovsdbmonitor
 @BUILD_OVSDBMONITOR_TRUE@	rm ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
-
-uninstall-local: ovsdbmonitor-uninstall-local
 ovsdbmonitor-uninstall-local:
 	rm -f $(DESTDIR)$(bindir)/ovsdbmonitor
 .ui.py:
@@ -3762,16 +3842,13 @@ except:\
     from PySide import QtCore, QtGui/' > $@
 
 $(srcdir)/rhel/openvswitch-kmod-rhel5.spec: rhel/openvswitch-kmod-rhel5.spec.in $(top_builddir)/config.status
-	($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
-		< $(srcdir)/rhel/openvswitch-kmod-rhel5.spec.in > $@
+	$(update_spec)
 
 $(srcdir)/rhel/openvswitch-kmod-rhel6.spec: rhel/openvswitch-kmod-rhel6.spec.in $(top_builddir)/config.status
-	($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
-		< $(srcdir)/rhel/openvswitch-kmod-rhel6.spec.in > $@
+	$(update_spec)
 
 $(srcdir)/rhel/openvswitch.spec: rhel/openvswitch.spec.in $(top_builddir)/config.status
-	($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
-		< $(srcdir)/rhel/openvswitch.spec.in > $@
+	$(update_spec)
 @HAVE_PYTHON_TRUE@ovs-install-data-local:
 @HAVE_PYTHON_TRUE@	$(MKDIR_P) python/ovs
 @HAVE_PYTHON_TRUE@	(echo "import os" && \
@@ -3786,8 +3863,6 @@ $(srcdir)/rhel/openvswitch.spec: rhel/openvswitch.spec.in $(top_builddir)/config
 @HAVE_PYTHON_FALSE@ovs-install-data-local:
 @HAVE_PYTHON_FALSE@	@:
 install-data-local: ovs-install-data-local
-
-uninstall-local: ovs-uninstall-local
 ovs-uninstall-local:
 	rm -f $(DESTDIR)$(pkgdatadir)/python/ovs/dirs.py
 

@@ -22,6 +22,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <syslog.h>
 #include <time.h>
@@ -322,7 +323,25 @@ vlog_set_log_file(const char *file_name)
 int
 vlog_reopen_log_file(void)
 {
-    return log_file_name ? vlog_set_log_file(log_file_name) : 0;
+    struct stat old, new;
+
+    /* Skip re-opening if there's nothing to reopen. */
+    if (!log_file_name) {
+        return 0;
+    }
+
+    /* Skip re-opening if it would be a no-op because the old and new files are
+     * the same.  (This avoids writing "closing log file" followed immediately
+     * by "opened log file".) */
+    if (log_file
+        && !fstat(fileno(log_file), &old)
+        && !stat(log_file_name, &new)
+        && old.st_dev == new.st_dev
+        && old.st_ino == new.st_ino) {
+        return 0;
+    }
+
+    return vlog_set_log_file(log_file_name);
 }
 
 /* Set debugging levels:
@@ -346,7 +365,7 @@ vlog_set_levels_from_string(const char *s_)
 
         facility = strtok_r(NULL, ":", &save_ptr);
 
-        if (!facility || !strcmp(facility, "ANY")) {
+        if (!facility || !strcasecmp(facility, "ANY")) {
             e_facility = VLF_ANY_FACILITY;
         } else {
             e_facility = vlog_get_facility_val(facility);
@@ -357,14 +376,14 @@ vlog_set_levels_from_string(const char *s_)
             }
         }
 
-        if (!strcmp(module, "PATTERN")) {
+        if (!strcasecmp(module, "PATTERN")) {
             vlog_set_pattern(e_facility, save_ptr);
             break;
         } else {
             char *level;
             enum vlog_level e_level;
 
-            if (!strcmp(module, "ANY")) {
+            if (!strcasecmp(module, "ANY")) {
                 e_module = NULL;
             } else {
                 e_module = vlog_module_from_name(module);
@@ -464,9 +483,11 @@ vlog_init(void)
         VLOG_ERR("current time is negative: %s (%ld)", s, (long int) now);
     }
 
-    unixctl_command_register("vlog/set", vlog_unixctl_set, NULL);
-    unixctl_command_register("vlog/list", vlog_unixctl_list, NULL);
-    unixctl_command_register("vlog/reopen", vlog_unixctl_reopen, NULL);
+    unixctl_command_register("vlog/set",
+                   "{module[:facility[:level]] | PATTERN:facility:pattern}",
+                   vlog_unixctl_set, NULL);
+    unixctl_command_register("vlog/list", "", vlog_unixctl_list, NULL);
+    unixctl_command_register("vlog/reopen", "", vlog_unixctl_reopen, NULL);
 }
 
 /* Closes the logging subsystem. */

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.2.0, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 1.3.0, ovs-bugs@openvswitch.org)
 NX_BUILDNR
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -47,7 +47,6 @@ OVS_CHECK_NDEBUG
 OVS_CHECK_NETLINK
 OVS_CHECK_OPENSSL
 OVS_CHECK_LOGDIR
-OVS_CHECK_RTNL_LINK_STATS64
 OVS_CHECK_PYTHON
 OVS_CHECK_PYUIC4
 OVS_CHECK_OVSDBMONITOR
@@ -57,7 +56,7 @@ OVS_CHECK_STRTOK_R
 AC_CHECK_MEMBERS([struct stat.st_mtim.tv_nsec, struct stat.st_mtimensec],
   [], [], [[#include <sys/stat.h>]])
 AC_CHECK_FUNCS([mlockall strnlen strsignal getloadavg statvfs setmntent])
-AC_CHECK_HEADERS([mntent.h sys/statvfs.h])
+AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h])
 
 OVS_CHECK_PKIDIR
 OVS_CHECK_RUNDIR
@@ -67,6 +66,7 @@ OVS_CHECK_VALGRIND
 OVS_CHECK_SOCKET_LIBS
 OVS_CHECK_LINKER_SECTIONS
 OVS_CHECK_XENSERVER_VERSION
+OVS_CHECK_GROFF
 
 OVS_ENABLE_OPTION([-Wall])
 OVS_ENABLE_OPTION([-Wno-sign-compare])

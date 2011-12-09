@@ -32,6 +32,10 @@
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* A flow classifier. */
 struct classifier {
     int n_rules;                /* Total number of rules. */
@@ -40,11 +44,23 @@ struct classifier {
 
 /* A set of rules that all have the same fields wildcarded. */
 struct cls_table {
-    struct hmap_node hmap_node; /* Within struct classifier 'wctables'. */
+    struct hmap_node hmap_node; /* Within struct classifier 'tables' hmap. */
     struct hmap rules;          /* Contains "struct cls_rule"s. */
     struct flow_wildcards wc;   /* Wildcards for fields. */
     int n_table_rules;          /* Number of rules, including duplicates. */
 };
+
+/* Returns true if 'table' is a "catch-all" table that will match every
+ * packet (if there is no higher-priority match). */
+static inline bool
+cls_table_is_catchall(const struct cls_table *table)
+{
+    /* A catch-all table can only have one rule, so use hmap_count() as a cheap
+     * check to rule out other kinds of match before doing the full check with
+     * flow_wildcards_is_catchall(). */
+    return (hmap_count(&table->rules) == 1
+            && flow_wildcards_is_catchall(&table->wc));
+}
 
 /* A flow classification rule.
  *
@@ -101,6 +117,8 @@ bool cls_rule_set_nw_src_masked(struct cls_rule *, ovs_be32 ip, ovs_be32 mask);
 void cls_rule_set_nw_dst(struct cls_rule *, ovs_be32);
 bool cls_rule_set_nw_dst_masked(struct cls_rule *, ovs_be32 ip, ovs_be32 mask);
 void cls_rule_set_nw_tos(struct cls_rule *, uint8_t);
+void cls_rule_set_frag(struct cls_rule *, uint8_t frag);
+void cls_rule_set_frag_masked(struct cls_rule *, uint8_t frag, uint8_t mask);
 void cls_rule_set_icmp_type(struct cls_rule *, uint8_t);
 void cls_rule_set_icmp_code(struct cls_rule *, uint8_t);
 void cls_rule_set_arp_sha(struct cls_rule *, const uint8_t[6]);
@@ -111,7 +129,7 @@ bool cls_rule_set_ipv6_src_masked(struct cls_rule *, const struct in6_addr *,
 void cls_rule_set_ipv6_dst(struct cls_rule *, const struct in6_addr *);
 bool cls_rule_set_ipv6_dst_masked(struct cls_rule *, const struct in6_addr *,
                                   const struct in6_addr *);
-void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr);
+void cls_rule_set_nd_target(struct cls_rule *, const struct in6_addr *);
 
 bool cls_rule_equal(const struct cls_rule *, const struct cls_rule *);
 uint32_t cls_rule_hash(const struct cls_rule *, uint32_t basis);
@@ -163,5 +181,9 @@ struct cls_rule *cls_cursor_next(struct cls_cursor *, struct cls_rule *);
                              MEMBER)                                    \
           : 0);                                                         \
          (RULE) = (NEXT))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* classifier.h */

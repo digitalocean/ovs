@@ -25,6 +25,7 @@
 #include "byte-order.h"
 #include "classifier.h"
 #include "dynamic-string.h"
+#include "learn.h"
 #include "multipath.h"
 #include "nx-match.h"
 #include "ofp-errors.h"
@@ -59,22 +60,12 @@ ofputil_wcbits_to_netmask(int wcbits)
 }
 
 /* Given the IP netmask 'netmask', returns the number of bits of the IP address
- * that it wildcards.  'netmask' must be a CIDR netmask (see ip_is_cidr()). */
+ * that it wildcards, that is, the number of 0-bits in 'netmask'.  'netmask'
+ * must be a CIDR netmask (see ip_is_cidr()). */
 int
 ofputil_netmask_to_wcbits(ovs_be32 netmask)
 {
-    assert(ip_is_cidr(netmask));
-#if __GNUC__ >= 4
-    return netmask == htonl(0) ? 32 : __builtin_ctz(ntohl(netmask));
-#else
-    int wcbits;
-
-    for (wcbits = 32; netmask; wcbits--) {
-        netmask &= netmask - 1;
-    }
-
-    return wcbits;
-#endif
+    return 32 - ip_count_cidr_bits(netmask);
 }
 
 /* A list of the FWW_* and OFPFW_ bits that have the same value, meaning, and
@@ -108,6 +99,8 @@ static const flow_wildcards_t WC_INVARIANTS = 0
 void
 ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
 {
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+
     /* Initialize most of rule->wc. */
     flow_wildcards_init_catchall(wc);
     wc->wildcards = (OVS_FORCE flow_wildcards_t) ofpfw & WC_INVARIANTS;
@@ -115,9 +108,10 @@ ofputil_wildcard_from_openflow(uint32_t ofpfw, struct flow_wildcards *wc)
     /* Wildcard fields that aren't defined by ofp_match or tun_id. */
     wc->wildcards |= (FWW_ARP_SHA | FWW_ARP_THA | FWW_ND_TARGET);
 
-    if (ofpfw & OFPFW_NW_TOS) {
-        wc->wildcards |= FWW_NW_TOS;
+    if (!(ofpfw & OFPFW_NW_TOS)) {
+        wc->tos_frag_mask |= IP_DSCP_MASK;
     }
+
     wc->nw_src_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW_NW_SRC_SHIFT);
     wc->nw_dst_mask = ofputil_wcbits_to_netmask(ofpfw >> OFPFW_NW_DST_SHIFT);
 
@@ -158,7 +152,7 @@ ofputil_cls_rule_from_match(const struct ofp_match *match,
     rule->flow.tp_dst = match->tp_dst;
     memcpy(rule->flow.dl_src, match->dl_src, ETH_ADDR_LEN);
     memcpy(rule->flow.dl_dst, match->dl_dst, ETH_ADDR_LEN);
-    rule->flow.nw_tos = match->nw_tos;
+    rule->flow.tos_frag = match->nw_tos & IP_DSCP_MASK;
     rule->flow.nw_proto = match->nw_proto;
 
     /* Translate VLANs. */
@@ -197,7 +191,7 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule, struct ofp_match *match)
     ofpfw = (OVS_FORCE uint32_t) (wc->wildcards & WC_INVARIANTS);
     ofpfw |= ofputil_netmask_to_wcbits(wc->nw_src_mask) << OFPFW_NW_SRC_SHIFT;
     ofpfw |= ofputil_netmask_to_wcbits(wc->nw_dst_mask) << OFPFW_NW_DST_SHIFT;
-    if (wc->wildcards & FWW_NW_TOS) {
+    if (!(wc->tos_frag_mask & IP_DSCP_MASK)) {
         ofpfw |= OFPFW_NW_TOS;
     }
 
@@ -231,7 +225,7 @@ ofputil_cls_rule_to_match(const struct cls_rule *rule, struct ofp_match *match)
     match->dl_type = ofputil_dl_type_to_openflow(rule->flow.dl_type);
     match->nw_src = rule->flow.nw_src;
     match->nw_dst = rule->flow.nw_dst;
-    match->nw_tos = rule->flow.nw_tos;
+    match->nw_tos = rule->flow.tos_frag & IP_DSCP_MASK;
     match->nw_proto = rule->flow.nw_proto;
     match->tp_src = rule->flow.tp_src;
     match->tp_dst = rule->flow.tp_dst;
@@ -351,9 +345,6 @@ static int
 ofputil_decode_vendor(const struct ofp_header *oh,
                       const struct ofputil_msg_type **typep)
 {
-    BUILD_ASSERT_DECL(sizeof(struct nxt_set_flow_format)
-                      != sizeof(struct nxt_flow_mod_table_id));
-
     static const struct ofputil_msg_type nxt_messages[] = {
         { OFPUTIL_NXT_ROLE_REQUEST,
           NXT_ROLE_REQUEST, "NXT_ROLE_REQUEST",
@@ -800,6 +791,8 @@ ofputil_min_flow_format(const struct cls_rule *rule)
 {
     const struct flow_wildcards *wc = &rule->wc;
 
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+
     /* Only NXM supports separately wildcards the Ethernet multicast bit. */
     if (!(wc->wildcards & FWW_DL_DST) != !(wc->wildcards & FWW_ETH_MCAST)) {
         return NXFF_NXM;
@@ -823,6 +816,11 @@ ofputil_min_flow_format(const struct cls_rule *rule)
 
     /* Only NXM supports matching tun_id. */
     if (wc->tun_id_mask != htonll(0)) {
+        return NXFF_NXM;
+    }
+
+    /* Only NXM supports matching fragments. */
+    if (wc->tos_frag_mask & FLOW_FRAG_MASK) {
         return NXFF_NXM;
     }
 
@@ -866,8 +864,8 @@ ofputil_make_flow_mod_table_id(bool flow_mod_table_id)
  *
  * Does not validate the flow_mod actions. */
 int
-ofputil_decode_flow_mod(struct flow_mod *fm, const struct ofp_header *oh,
-                        bool flow_mod_table_id)
+ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
+                        const struct ofp_header *oh, bool flow_mod_table_id)
 {
     const struct ofputil_msg_type *type;
     uint16_t command;
@@ -956,7 +954,7 @@ ofputil_decode_flow_mod(struct flow_mod *fm, const struct ofp_header *oh,
  * 'flow_mod_table_id' should be true if the NXT_FLOW_MOD_TABLE_ID extension is
  * enabled, false otherwise. */
 struct ofpbuf *
-ofputil_encode_flow_mod(const struct flow_mod *fm,
+ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
                         enum nx_flow_format flow_format,
                         bool flow_mod_table_id)
 {
@@ -1010,7 +1008,7 @@ ofputil_encode_flow_mod(const struct flow_mod *fm,
 }
 
 static int
-ofputil_decode_ofpst_flow_request(struct flow_stats_request *fsr,
+ofputil_decode_ofpst_flow_request(struct ofputil_flow_stats_request *fsr,
                                   const struct ofp_header *oh,
                                   bool aggregate)
 {
@@ -1026,7 +1024,7 @@ ofputil_decode_ofpst_flow_request(struct flow_stats_request *fsr,
 }
 
 static int
-ofputil_decode_nxst_flow_request(struct flow_stats_request *fsr,
+ofputil_decode_nxst_flow_request(struct ofputil_flow_stats_request *fsr,
                                  const struct ofp_header *oh,
                                  bool aggregate)
 {
@@ -1056,7 +1054,7 @@ ofputil_decode_nxst_flow_request(struct flow_stats_request *fsr,
  * request 'oh', into an abstract flow_stats_request in 'fsr'.  Returns 0 if
  * successful, otherwise an OpenFlow error code. */
 int
-ofputil_decode_flow_stats_request(struct flow_stats_request *fsr,
+ofputil_decode_flow_stats_request(struct ofputil_flow_stats_request *fsr,
                                   const struct ofp_header *oh)
 {
     const struct ofputil_msg_type *type;
@@ -1090,7 +1088,7 @@ ofputil_decode_flow_stats_request(struct flow_stats_request *fsr,
  * OFPST_AGGREGATE, NXST_FLOW, or NXST_AGGREGATE request 'oh' according to
  * 'flow_format', and returns the message. */
 struct ofpbuf *
-ofputil_encode_flow_stats_request(const struct flow_stats_request *fsr,
+ofputil_encode_flow_stats_request(const struct ofputil_flow_stats_request *fsr,
                                   enum nx_flow_format flow_format)
 {
     struct ofpbuf *msg;
@@ -1457,7 +1455,7 @@ ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
                         struct ofpbuf *rw_packet)
 {
     int total_len = pin->packet->size;
-    struct ofp_packet_in *opi;
+    struct ofp_packet_in opi;
 
     if (rw_packet) {
         if (pin->send_len < rw_packet->size) {
@@ -1470,13 +1468,14 @@ ofputil_encode_packet_in(const struct ofputil_packet_in *pin,
     }
 
     /* Add OFPT_PACKET_IN. */
-    opi = ofpbuf_push_zeros(rw_packet, offsetof(struct ofp_packet_in, data));
-    opi->header.version = OFP_VERSION;
-    opi->header.type = OFPT_PACKET_IN;
-    opi->total_len = htons(total_len);
-    opi->in_port = htons(pin->in_port);
-    opi->reason = pin->reason;
-    opi->buffer_id = htonl(pin->buffer_id);
+    memset(&opi, 0, sizeof opi);
+    opi.header.version = OFP_VERSION;
+    opi.header.type = OFPT_PACKET_IN;
+    opi.total_len = htons(total_len);
+    opi.in_port = htons(pin->in_port);
+    opi.reason = pin->reason;
+    opi.buffer_id = htonl(pin->buffer_id);
+    ofpbuf_push(rw_packet, &opi, offsetof(struct ofp_packet_in, data));
     update_openflow_length(rw_packet);
 
     return rw_packet;
@@ -1831,10 +1830,7 @@ make_add_simple_flow(const struct cls_rule *rule,
         struct ofpbuf *buffer;
 
         buffer = make_add_flow(rule, buffer_id, idle_timeout, sizeof *oao);
-        oao = ofpbuf_put_zeros(buffer, sizeof *oao);
-        oao->type = htons(OFPAT_OUTPUT);
-        oao->len = htons(sizeof *oao);
-        oao->port = htons(out_port);
+        ofputil_put_OFPAT_OUTPUT(buffer)->port = htons(out_port);
         return buffer;
     } else {
         return make_add_flow(rule, buffer_id, idle_timeout, 0);
@@ -1879,7 +1875,7 @@ make_packet_out(const struct ofpbuf *packet, uint32_t buffer_id,
     opo->header.length = htons(size);
     opo->header.xid = htonl(0);
     opo->buffer_id = htonl(buffer_id);
-    opo->in_port = htons(in_port == ODPP_LOCAL ? OFPP_LOCAL : in_port);
+    opo->in_port = htons(in_port);
     opo->actions_len = htons(actions_len);
     ofpbuf_put(out, actions, actions_len);
     if (packet) {
@@ -1942,6 +1938,36 @@ make_echo_reply(const struct ofp_header *rq)
     return out;
 }
 
+const char *
+ofputil_frag_handling_to_string(enum ofp_config_flags flags)
+{
+    switch (flags & OFPC_FRAG_MASK) {
+    case OFPC_FRAG_NORMAL:   return "normal";
+    case OFPC_FRAG_DROP:     return "drop";
+    case OFPC_FRAG_REASM:    return "reassemble";
+    case OFPC_FRAG_NX_MATCH: return "nx-match";
+    }
+
+    NOT_REACHED();
+}
+
+bool
+ofputil_frag_handling_from_string(const char *s, enum ofp_config_flags *flags)
+{
+    if (!strcasecmp(s, "normal")) {
+        *flags = OFPC_FRAG_NORMAL;
+    } else if (!strcasecmp(s, "drop")) {
+        *flags = OFPC_FRAG_DROP;
+    } else if (!strcasecmp(s, "reassemble")) {
+        *flags = OFPC_FRAG_REASM;
+    } else if (!strcasecmp(s, "nx-match")) {
+        *flags = OFPC_FRAG_NX_MATCH;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 /* Checks that 'port' is a valid output port for the OFPAT_OUTPUT action, given
  * that the switch will never have more than 'max_ports' ports.  Returns 0 if
  * 'port' is valid, otherwise an ofp_mkerr() return code. */
@@ -1964,6 +1990,93 @@ ofputil_check_output_port(uint16_t port, int max_ports)
         }
         return ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_OUT_PORT);
     }
+}
+
+#define OFPUTIL_NAMED_PORTS                     \
+        OFPUTIL_NAMED_PORT(IN_PORT)             \
+        OFPUTIL_NAMED_PORT(TABLE)               \
+        OFPUTIL_NAMED_PORT(NORMAL)              \
+        OFPUTIL_NAMED_PORT(FLOOD)               \
+        OFPUTIL_NAMED_PORT(ALL)                 \
+        OFPUTIL_NAMED_PORT(CONTROLLER)          \
+        OFPUTIL_NAMED_PORT(LOCAL)               \
+        OFPUTIL_NAMED_PORT(NONE)
+
+/* Checks whether 's' is the string representation of an OpenFlow port number,
+ * either as an integer or a string name (e.g. "LOCAL").  If it is, stores the
+ * number in '*port' and returns true.  Otherwise, returns false. */
+bool
+ofputil_port_from_string(const char *name, uint16_t *port)
+{
+    struct pair {
+        const char *name;
+        uint16_t value;
+    };
+    static const struct pair pairs[] = {
+#define OFPUTIL_NAMED_PORT(NAME) {#NAME, OFPP_##NAME},
+        OFPUTIL_NAMED_PORTS
+#undef OFPUTIL_NAMED_PORT
+    };
+    static const int n_pairs = ARRAY_SIZE(pairs);
+    int i;
+
+    if (str_to_int(name, 0, &i) && i >= 0 && i < UINT16_MAX) {
+        *port = i;
+        return true;
+    }
+
+    for (i = 0; i < n_pairs; i++) {
+        if (!strcasecmp(name, pairs[i].name)) {
+            *port = pairs[i].value;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Appends to 's' a string representation of the OpenFlow port number 'port'.
+ * Most ports' string representation is just the port number, but for special
+ * ports, e.g. OFPP_LOCAL, it is the name, e.g. "LOCAL". */
+void
+ofputil_format_port(uint16_t port, struct ds *s)
+{
+    const char *name;
+
+    switch (port) {
+#define OFPUTIL_NAMED_PORT(NAME) case OFPP_##NAME: name = #NAME; break;
+        OFPUTIL_NAMED_PORTS
+#undef OFPUTIL_NAMED_PORT
+
+    default:
+        ds_put_format(s, "%"PRIu16, port);
+        return;
+    }
+    ds_put_cstr(s, name);
+}
+
+static int
+check_resubmit_table(const struct nx_action_resubmit *nar)
+{
+    if (nar->pad[0] || nar->pad[1] || nar->pad[2]) {
+        return ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT);
+    }
+    return 0;
+}
+
+static int
+check_output_reg(const struct nx_action_output_reg *naor,
+                 const struct flow *flow)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof naor->zero; i++) {
+        if (naor->zero[i]) {
+            return ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT);
+        }
+    }
+
+    return nxm_src_check(naor->src, nxm_decode_ofs(naor->ofs_nbits),
+                         nxm_decode_n_bits(naor->ofs_nbits), flow);
 }
 
 int
@@ -2044,6 +2157,20 @@ validate_actions(const union ofp_action *actions, size_t n_actions,
                                  max_ports, flow);
             break;
 
+        case OFPUTIL_NXAST_OUTPUT_REG:
+            error = check_output_reg((const struct nx_action_output_reg *) a,
+                                     flow);
+            break;
+
+        case OFPUTIL_NXAST_RESUBMIT_TABLE:
+            error = check_resubmit_table(
+                (const struct nx_action_resubmit *) a);
+            break;
+
+        case OFPUTIL_NXAST_LEARN:
+            error = learn_check((const struct nx_action_learn *) a, flow);
+            break;
+
         case OFPUTIL_OFPAT_STRIP_VLAN:
         case OFPUTIL_OFPAT_SET_NW_SRC:
         case OFPUTIL_OFPAT_SET_NW_DST:
@@ -2077,89 +2204,64 @@ validate_actions(const union ofp_action *actions, size_t n_actions,
     return 0;
 }
 
-struct ofputil_ofpat_action {
-    enum ofputil_action_code code;
-    unsigned int len;
-};
-
-static const struct ofputil_ofpat_action ofpat_actions[] = {
-    { OFPUTIL_OFPAT_OUTPUT,        8 },
-    { OFPUTIL_OFPAT_SET_VLAN_VID,  8 },
-    { OFPUTIL_OFPAT_SET_VLAN_PCP,  8 },
-    { OFPUTIL_OFPAT_STRIP_VLAN,    8 },
-    { OFPUTIL_OFPAT_SET_DL_SRC,   16 },
-    { OFPUTIL_OFPAT_SET_DL_DST,   16 },
-    { OFPUTIL_OFPAT_SET_NW_SRC,    8 },
-    { OFPUTIL_OFPAT_SET_NW_DST,    8 },
-    { OFPUTIL_OFPAT_SET_NW_TOS,    8 },
-    { OFPUTIL_OFPAT_SET_TP_SRC,    8 },
-    { OFPUTIL_OFPAT_SET_TP_DST,    8 },
-    { OFPUTIL_OFPAT_ENQUEUE,      16 },
-};
-
-struct ofputil_nxast_action {
-    enum ofputil_action_code code;
+struct ofputil_action {
+    int code;
     unsigned int min_len;
     unsigned int max_len;
 };
 
-static const struct ofputil_nxast_action nxast_actions[] = {
-    { 0, UINT_MAX, UINT_MAX }, /* NXAST_SNAT__OBSOLETE */
-    { OFPUTIL_NXAST_RESUBMIT,     16, 16 },
-    { OFPUTIL_NXAST_SET_TUNNEL,   16, 16 },
-    { 0, UINT_MAX, UINT_MAX }, /* NXAST_DROP_SPOOFED_ARP__OBSOLETE */
-    { OFPUTIL_NXAST_SET_QUEUE,    16, 16 },
-    { OFPUTIL_NXAST_POP_QUEUE,    16, 16 },
-    { OFPUTIL_NXAST_REG_MOVE,     24, 24 },
-    { OFPUTIL_NXAST_REG_LOAD,     24, 24 },
-    { OFPUTIL_NXAST_NOTE,         16, UINT_MAX },
-    { OFPUTIL_NXAST_SET_TUNNEL64, 24, 24 },
-    { OFPUTIL_NXAST_MULTIPATH,    32, 32 },
-    { OFPUTIL_NXAST_AUTOPATH,     24, 24 },
-    { OFPUTIL_NXAST_BUNDLE,       32, UINT_MAX },
-    { OFPUTIL_NXAST_BUNDLE_LOAD,  32, UINT_MAX },
-};
+static const struct ofputil_action action_bad_type
+    = { -OFP_MKERR(OFPET_BAD_ACTION, OFPBAC_BAD_TYPE),   0, UINT_MAX };
+static const struct ofputil_action action_bad_len
+    = { -OFP_MKERR(OFPET_BAD_ACTION, OFPBAC_BAD_LEN),    0, UINT_MAX };
+static const struct ofputil_action action_bad_vendor
+    = { -OFP_MKERR(OFPET_BAD_ACTION, OFPBAC_BAD_VENDOR), 0, UINT_MAX };
 
-static int
+static const struct ofputil_action *
 ofputil_decode_ofpat_action(const union ofp_action *a)
 {
-    int type = ntohs(a->type);
+    enum ofp_action_type type = ntohs(a->type);
 
-    if (type < ARRAY_SIZE(ofpat_actions)) {
-        const struct ofputil_ofpat_action *ooa = &ofpat_actions[type];
-        unsigned int len = ntohs(a->header.len);
+    switch (type) {
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)                    \
+        case ENUM: {                                        \
+            static const struct ofputil_action action = {   \
+                OFPUTIL_##ENUM,                             \
+                sizeof(struct STRUCT),                      \
+                sizeof(struct STRUCT)                       \
+            };                                              \
+            return &action;                                 \
+        }
+#include "ofp-util.def"
 
-        return (len == ooa->len
-                ? ooa->code
-                : -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_LEN));
-    } else {
-        return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_TYPE);
+    case OFPAT_VENDOR:
+    default:
+        return &action_bad_type;
     }
 }
 
-static int
+static const struct ofputil_action *
 ofputil_decode_nxast_action(const union ofp_action *a)
 {
-    unsigned int len = ntohs(a->header.len);
+    const struct nx_action_header *nah = (const struct nx_action_header *) a;
+    enum nx_action_subtype subtype = ntohs(nah->subtype);
 
-    if (len < sizeof(struct nx_action_header)) {
-        return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_LEN);
-    } else {
-        const struct nx_action_header *nah = (const void *) a;
-        int subtype = ntohs(nah->subtype);
-
-        if (subtype <= ARRAY_SIZE(nxast_actions)) {
-            const struct ofputil_nxast_action *ona = &nxast_actions[subtype];
-            if (len >= ona->min_len && len <= ona->max_len) {
-                return ona->code;
-            } else if (ona->min_len == UINT_MAX) {
-                return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_TYPE);
-            } else {
-                return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_LEN);
-            }
-        } else {
-            return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_TYPE);
+    switch (subtype) {
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)            \
+        case ENUM: {                                            \
+            static const struct ofputil_action action = {       \
+                OFPUTIL_##ENUM,                                 \
+                sizeof(struct STRUCT),                          \
+                EXTENSIBLE ? UINT_MAX : sizeof(struct STRUCT)   \
+            };                                                  \
+            return &action;                                     \
         }
+#include "ofp-util.def"
+
+    case NXAST_SNAT__OBSOLETE:
+    case NXAST_DROP_SPOOFED_ARP__OBSOLETE:
+    default:
+        return &action_bad_type;
     }
 }
 
@@ -2176,13 +2278,28 @@ ofputil_decode_nxast_action(const union ofp_action *a)
 int
 ofputil_decode_action(const union ofp_action *a)
 {
+    const struct ofputil_action *action;
+    uint16_t len = ntohs(a->header.len);
+
     if (a->type != htons(OFPAT_VENDOR)) {
-        return ofputil_decode_ofpat_action(a);
-    } else if (a->vendor.vendor == htonl(NX_VENDOR_ID)) {
-        return ofputil_decode_nxast_action(a);
+        action = ofputil_decode_ofpat_action(a);
     } else {
-        return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_VENDOR);
+        switch (ntohl(a->vendor.vendor)) {
+        case NX_VENDOR_ID:
+            if (len < sizeof(struct nx_action_header)) {
+                return -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_LEN);
+            }
+            action = ofputil_decode_nxast_action(a);
+            break;
+        default:
+            action = &action_bad_vendor;
+            break;
+        }
     }
+
+    return (len >= action->min_len && len <= action->max_len
+            ? action->code
+            : -ofp_mkerr(OFPET_BAD_ACTION, OFPBAC_BAD_LEN));
 }
 
 /* Parses 'a' and returns its type as an OFPUTIL_OFPAT_* or OFPUTIL_NXAST_*
@@ -2192,14 +2309,94 @@ ofputil_decode_action(const union ofp_action *a)
 enum ofputil_action_code
 ofputil_decode_action_unsafe(const union ofp_action *a)
 {
-    if (a->type != htons(OFPAT_VENDOR)) {
-        return ofpat_actions[ntohs(a->type)].code;
-    } else {
-        const struct nx_action_header *nah = (const void *) a;
+    const struct ofputil_action *action;
 
-        return nxast_actions[ntohs(nah->subtype)].code;
+    if (a->type != htons(OFPAT_VENDOR)) {
+        action = ofputil_decode_ofpat_action(a);
+    } else {
+        action = ofputil_decode_nxast_action(a);
     }
+
+    return action->code;
 }
+
+/* Returns the 'enum ofputil_action_code' corresponding to 'name' (e.g. if
+ * 'name' is "output" then the return value is OFPUTIL_OFPAT_OUTPUT), or -1 if
+ * 'name' is not the name of any action.
+ *
+ * ofp-util.def lists the mapping from names to action. */
+int
+ofputil_action_code_from_name(const char *name)
+{
+    static const char *names[OFPUTIL_N_ACTIONS] = {
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)             NAME,
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME) NAME,
+#include "ofp-util.def"
+    };
+
+    const char **p;
+
+    for (p = names; p < &names[ARRAY_SIZE(names)]; p++) {
+        if (*p && !strcasecmp(name, *p)) {
+            return p - names;
+        }
+    }
+    return -1;
+}
+
+/* Appends an action of the type specified by 'code' to 'buf' and returns the
+ * action.  Initializes the parts of 'action' that identify it as having type
+ * <ENUM> and length 'sizeof *action' and zeros the rest.  For actions that
+ * have variable length, the length used and cleared is that of struct
+ * <STRUCT>.  */
+void *
+ofputil_put_action(enum ofputil_action_code code, struct ofpbuf *buf)
+{
+    switch (code) {
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)                    \
+    case OFPUTIL_##ENUM: return ofputil_put_##ENUM(buf);
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)        \
+    case OFPUTIL_##ENUM: return ofputil_put_##ENUM(buf);
+#include "ofp-util.def"
+    }
+    NOT_REACHED();
+}
+
+#define OFPAT_ACTION(ENUM, STRUCT, NAME)                        \
+    void                                                        \
+    ofputil_init_##ENUM(struct STRUCT *s)                       \
+    {                                                           \
+        memset(s, 0, sizeof *s);                                \
+        s->type = htons(ENUM);                                  \
+        s->len = htons(sizeof *s);                              \
+    }                                                           \
+                                                                \
+    struct STRUCT *                                             \
+    ofputil_put_##ENUM(struct ofpbuf *buf)                      \
+    {                                                           \
+        struct STRUCT *s = ofpbuf_put_uninit(buf, sizeof *s);   \
+        ofputil_init_##ENUM(s);                                 \
+        return s;                                               \
+    }
+#define NXAST_ACTION(ENUM, STRUCT, EXTENSIBLE, NAME)            \
+    void                                                        \
+    ofputil_init_##ENUM(struct STRUCT *s)                       \
+    {                                                           \
+        memset(s, 0, sizeof *s);                                \
+        s->type = htons(OFPAT_VENDOR);                          \
+        s->len = htons(sizeof *s);                              \
+        s->vendor = htonl(NX_VENDOR_ID);                        \
+        s->subtype = htons(ENUM);                               \
+    }                                                           \
+                                                                \
+    struct STRUCT *                                             \
+    ofputil_put_##ENUM(struct ofpbuf *buf)                      \
+    {                                                           \
+        struct STRUCT *s = ofpbuf_put_uninit(buf, sizeof *s);   \
+        ofputil_init_##ENUM(s);                                 \
+        return s;                                               \
+    }
+#include "ofp-util.def"
 
 /* Returns true if 'action' outputs to 'port', false otherwise. */
 bool
@@ -2240,7 +2437,7 @@ ofputil_normalize_rule(struct cls_rule *rule, enum nx_flow_format flow_format)
         MAY_NW_ADDR     = 1 << 0, /* nw_src, nw_dst */
         MAY_TP_ADDR     = 1 << 1, /* tp_src, tp_dst */
         MAY_NW_PROTO    = 1 << 2, /* nw_proto */
-        MAY_NW_TOS      = 1 << 3, /* nw_tos */
+        MAY_TOS_FRAG    = 1 << 3, /* tos_frag */
         MAY_ARP_SHA     = 1 << 4, /* arp_sha */
         MAY_ARP_THA     = 1 << 5, /* arp_tha */
         MAY_IPV6_ADDR   = 1 << 6, /* ipv6_src, ipv6_dst */
@@ -2251,7 +2448,7 @@ ofputil_normalize_rule(struct cls_rule *rule, enum nx_flow_format flow_format)
 
     /* Figure out what fields may be matched. */
     if (rule->flow.dl_type == htons(ETH_TYPE_IP)) {
-        may_match = MAY_NW_PROTO | MAY_NW_TOS | MAY_NW_ADDR;
+        may_match = MAY_NW_PROTO | MAY_TOS_FRAG | MAY_NW_ADDR;
         if (rule->flow.nw_proto == IPPROTO_TCP ||
             rule->flow.nw_proto == IPPROTO_UDP ||
             rule->flow.nw_proto == IPPROTO_ICMP) {
@@ -2259,7 +2456,7 @@ ofputil_normalize_rule(struct cls_rule *rule, enum nx_flow_format flow_format)
         }
     } else if (rule->flow.dl_type == htons(ETH_TYPE_IPV6)
                && flow_format == NXFF_NXM) {
-        may_match = MAY_NW_PROTO | MAY_NW_TOS | MAY_IPV6_ADDR;
+        may_match = MAY_NW_PROTO | MAY_TOS_FRAG | MAY_IPV6_ADDR;
         if (rule->flow.nw_proto == IPPROTO_TCP ||
             rule->flow.nw_proto == IPPROTO_UDP) {
             may_match |= MAY_TP_ADDR;
@@ -2291,8 +2488,8 @@ ofputil_normalize_rule(struct cls_rule *rule, enum nx_flow_format flow_format)
     if (!(may_match & MAY_NW_PROTO)) {
         wc.wildcards |= FWW_NW_PROTO;
     }
-    if (!(may_match & MAY_NW_TOS)) {
-        wc.wildcards |= FWW_NW_TOS;
+    if (!(may_match & MAY_TOS_FRAG)) {
+        wc.tos_frag_mask = 0;
     }
     if (!(may_match & MAY_ARP_SHA)) {
         wc.wildcards |= FWW_ARP_SHA;
@@ -2576,4 +2773,73 @@ union ofp_action *
 ofputil_actions_clone(const union ofp_action *actions, size_t n)
 {
     return n ? xmemdup(actions, n * sizeof *actions) : NULL;
+}
+
+/* Parses a key or a key-value pair from '*stringp'.
+ *
+ * On success: Stores the key into '*keyp'.  Stores the value, if present, into
+ * '*valuep', otherwise an empty string.  Advances '*stringp' past the end of
+ * the key-value pair, preparing it for another call.  '*keyp' and '*valuep'
+ * are substrings of '*stringp' created by replacing some of its bytes by null
+ * terminators.  Returns true.
+ *
+ * If '*stringp' is just white space or commas, sets '*keyp' and '*valuep' to
+ * NULL and returns false. */
+bool
+ofputil_parse_key_value(char **stringp, char **keyp, char **valuep)
+{
+    char *pos, *key, *value;
+    size_t key_len;
+
+    pos = *stringp;
+    pos += strspn(pos, ", \t\r\n");
+    if (*pos == '\0') {
+        *keyp = *valuep = NULL;
+        return false;
+    }
+
+    key = pos;
+    key_len = strcspn(pos, ":=(, \t\r\n");
+    if (key[key_len] == ':' || key[key_len] == '=') {
+        /* The value can be separated by a colon. */
+        size_t value_len;
+
+        value = key + key_len + 1;
+        value_len = strcspn(value, ", \t\r\n");
+        pos = value + value_len + (value[value_len] != '\0');
+        value[value_len] = '\0';
+    } else if (key[key_len] == '(') {
+        /* The value can be surrounded by balanced parentheses.  The outermost
+         * set of parentheses is removed. */
+        int level = 1;
+        size_t value_len;
+
+        value = key + key_len + 1;
+        for (value_len = 0; level > 0; value_len++) {
+            switch (value[value_len]) {
+            case '\0':
+                ovs_fatal(0, "unbalanced parentheses in argument to %s", key);
+
+            case '(':
+                level++;
+                break;
+
+            case ')':
+                level--;
+                break;
+            }
+        }
+        value[value_len - 1] = '\0';
+        pos = value + value_len;
+    } else {
+        /* There might be no value at all. */
+        value = key + key_len;  /* Will become the empty string below. */
+        pos = key + key_len + (key[key_len] != '\0');
+    }
+    key[key_len] = '\0';
+
+    *stringp = pos;
+    *keyp = key;
+    *valuep = value;
+    return true;
 }

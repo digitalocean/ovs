@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <linux/openvswitch.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -35,15 +36,15 @@
 #include "netdev-linux.h"
 #include "netdev-provider.h"
 #include "netlink.h"
+#include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "ofpbuf.h"
-#include "openvswitch/datapath-protocol.h"
 #include "openvswitch/tunnel.h"
 #include "packets.h"
 #include "route-table.h"
-#include "rtnetlink.h"
 #include "shash.h"
 #include "socket-util.h"
+#include "unaligned.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(netdev_vport);
@@ -61,24 +62,23 @@ struct netdev_vport {
 };
 
 struct vport_class {
-    enum odp_vport_type type;
+    enum ovs_vport_type type;
     struct netdev_class netdev_class;
     int (*parse_config)(const char *name, const char *type,
                         const struct shash *args, struct ofpbuf *options);
     int (*unparse_config)(const char *name, const char *type,
                           const struct nlattr *options, size_t options_len,
                           struct shash *args);
-    bool (*config_equal)(const struct shash *nd_args, const struct shash *args);
 };
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 static int netdev_vport_create(const struct netdev_class *, const char *,
-                               const struct shash *, struct netdev_dev **);
+                               struct netdev_dev **);
 static void netdev_vport_poll_notify(const struct netdev *);
 static int tnl_port_config_from_nlattr(const struct nlattr *options,
                                        size_t options_len,
-                                       struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1]);
+                                       struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1]);
 
 static const char *netdev_vport_get_tnl_iface(const struct netdev *netdev);
 
@@ -111,7 +111,7 @@ netdev_vport_cast(const struct netdev *netdev)
 }
 
 /* If 'netdev' is a vport netdev, returns an ofpbuf that contains Netlink
- * options to include in ODP_VPORT_ATTR_OPTIONS for configuring that vport.
+ * options to include in OVS_VPORT_ATTR_OPTIONS for configuring that vport.
  * Otherwise returns NULL. */
 const struct ofpbuf *
 netdev_vport_get_options(const struct netdev *netdev)
@@ -123,48 +123,49 @@ netdev_vport_get_options(const struct netdev *netdev)
             : NULL);
 }
 
-enum odp_vport_type
+enum ovs_vport_type
 netdev_vport_get_vport_type(const struct netdev *netdev)
 {
     const struct netdev_dev *dev = netdev_get_dev(netdev);
     const struct netdev_class *class = netdev_dev_get_class(dev);
 
     return (is_vport_class(class) ? vport_class_cast(class)->type
-            : class == &netdev_internal_class ? ODP_VPORT_TYPE_INTERNAL
-            : class == &netdev_linux_class ? ODP_VPORT_TYPE_NETDEV
-            : ODP_VPORT_TYPE_UNSPEC);
+            : class == &netdev_internal_class ? OVS_VPORT_TYPE_INTERNAL
+            : (class == &netdev_linux_class ||
+               class == &netdev_tap_class) ? OVS_VPORT_TYPE_NETDEV
+            : OVS_VPORT_TYPE_UNSPEC);
 }
 
 const char *
 netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
 {
-    struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1];
+    struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
 
     switch (vport->type) {
-    case ODP_VPORT_TYPE_UNSPEC:
+    case OVS_VPORT_TYPE_UNSPEC:
         break;
 
-    case ODP_VPORT_TYPE_NETDEV:
+    case OVS_VPORT_TYPE_NETDEV:
         return "system";
 
-    case ODP_VPORT_TYPE_INTERNAL:
+    case OVS_VPORT_TYPE_INTERNAL:
         return "internal";
 
-    case ODP_VPORT_TYPE_PATCH:
+    case OVS_VPORT_TYPE_PATCH:
         return "patch";
 
-    case ODP_VPORT_TYPE_GRE:
+    case OVS_VPORT_TYPE_GRE:
         if (tnl_port_config_from_nlattr(vport->options, vport->options_len,
                                         a)) {
             break;
         }
-        return (nl_attr_get_u32(a[ODP_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
+        return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
                 ? "ipsec_gre" : "gre");
 
-    case ODP_VPORT_TYPE_CAPWAP:
+    case OVS_VPORT_TYPE_CAPWAP:
         return "capwap";
 
-    case __ODP_VPORT_TYPE_MAX:
+    case __OVS_VPORT_TYPE_MAX:
         break;
     }
 
@@ -175,77 +176,21 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
 
 static int
 netdev_vport_create(const struct netdev_class *netdev_class, const char *name,
-                    const struct shash *args,
                     struct netdev_dev **netdev_devp)
 {
-    const struct vport_class *vport_class = vport_class_cast(netdev_class);
-    struct ofpbuf *options = NULL;
-    struct shash fetched_args;
-    int dp_ifindex;
-    uint32_t port_no;
-    int error;
+    struct netdev_dev_vport *dev;
 
-    shash_init(&fetched_args);
+    dev = xmalloc(sizeof *dev);
+    netdev_dev_init(&dev->netdev_dev, name, netdev_class);
+    dev->options = NULL;
+    dev->dp_ifindex = -1;
+    dev->port_no = UINT32_MAX;
+    dev->change_seq = 1;
 
-    dp_ifindex = -1;
-    port_no = UINT32_MAX;
-    if (!shash_is_empty(args)) {
-        /* Parse the provided configuration. */
-        options = ofpbuf_new(64);
-        error = vport_class->parse_config(name, netdev_class->type,
-                                          args, options);
-    } else {
-        /* Fetch an existing configuration from the kernel.
-         *
-         * This case could be ambiguous with initializing a new vport with an
-         * empty configuration, but none of the existing vport classes accept
-         * an empty configuration. */
-        struct dpif_linux_vport reply;
-        struct ofpbuf *buf;
+    *netdev_devp = &dev->netdev_dev;
+    route_table_register();
 
-        error = dpif_linux_vport_get(name, &reply, &buf);
-        if (!error) {
-            /* XXX verify correct type */
-            error = vport_class->unparse_config(name, netdev_class->type,
-                                                reply.options,
-                                                reply.options_len,
-                                                &fetched_args);
-            if (error) {
-                VLOG_ERR_RL(&rl, "%s: failed to parse kernel config (%s)",
-                            name, strerror(error));
-            } else {
-                options = ofpbuf_clone_data(reply.options, reply.options_len);
-                dp_ifindex = reply.dp_ifindex;
-                port_no = reply.port_no;
-            }
-            ofpbuf_delete(buf);
-        } else {
-            VLOG_ERR_RL(&rl, "%s: vport query failed (%s)",
-                        name, strerror(error));
-        }
-    }
-
-    if (!error) {
-        struct netdev_dev_vport *dev;
-
-        dev = xmalloc(sizeof *dev);
-        netdev_dev_init(&dev->netdev_dev, name,
-                        shash_is_empty(&fetched_args) ? args : &fetched_args,
-                        netdev_class);
-        dev->options = options;
-        dev->dp_ifindex = dp_ifindex;
-        dev->port_no = port_no;
-        dev->change_seq = 1;
-
-        *netdev_devp = &dev->netdev_dev;
-        route_table_register();
-    } else {
-        ofpbuf_delete(options);
-    }
-
-    shash_destroy(&fetched_args);
-
-    return error;
+    return 0;
 }
 
 static void
@@ -258,8 +203,7 @@ netdev_vport_destroy(struct netdev_dev *netdev_dev_)
 }
 
 static int
-netdev_vport_open(struct netdev_dev *netdev_dev_, int ethertype OVS_UNUSED,
-                struct netdev **netdevp)
+netdev_vport_open(struct netdev_dev *netdev_dev_, struct netdev **netdevp)
 {
     struct netdev_vport *netdev;
 
@@ -278,6 +222,43 @@ netdev_vport_close(struct netdev *netdev_)
 }
 
 static int
+netdev_vport_get_config(struct netdev_dev *dev_, struct shash *args)
+{
+    const struct netdev_class *netdev_class = netdev_dev_get_class(dev_);
+    const struct vport_class *vport_class = vport_class_cast(netdev_class);
+    struct netdev_dev_vport *dev = netdev_dev_vport_cast(dev_);
+    const char *name = netdev_dev_get_name(dev_);
+    int error;
+
+    if (!dev->options) {
+        struct dpif_linux_vport reply;
+        struct ofpbuf *buf;
+
+        error = dpif_linux_vport_get(name, &reply, &buf);
+        if (error) {
+            VLOG_ERR_RL(&rl, "%s: vport query failed (%s)",
+                        name, strerror(error));
+            return error;
+        }
+
+        dev->options = ofpbuf_clone_data(reply.options, reply.options_len);
+        dev->dp_ifindex = reply.dp_ifindex;
+        dev->port_no = reply.port_no;
+        ofpbuf_delete(buf);
+    }
+
+    error = vport_class->unparse_config(name, netdev_class->type,
+                                        dev->options->data,
+                                        dev->options->size,
+                                        args);
+    if (error) {
+        VLOG_ERR_RL(&rl, "%s: failed to parse kernel config (%s)",
+                    name, strerror(error));
+    }
+    return error;
+}
+
+static int
 netdev_vport_set_config(struct netdev_dev *dev_, const struct shash *args)
 {
     const struct netdev_class *netdev_class = netdev_dev_get_class(dev_);
@@ -291,12 +272,13 @@ netdev_vport_set_config(struct netdev_dev *dev_, const struct shash *args)
     error = vport_class->parse_config(name, netdev_dev_get_type(dev_),
                                       args, options);
     if (!error
-        && (options->size != dev->options->size
+        && (!dev->options
+            || options->size != dev->options->size
             || memcmp(options->data, dev->options->data, options->size))) {
         struct dpif_linux_vport vport;
 
         dpif_linux_vport_init(&vport);
-        vport.cmd = ODP_VPORT_CMD_SET;
+        vport.cmd = OVS_VPORT_CMD_SET;
         vport.name = name;
         vport.options = options->data;
         vport.options_len = options->size;
@@ -314,20 +296,6 @@ netdev_vport_set_config(struct netdev_dev *dev_, const struct shash *args)
     ofpbuf_delete(options);
 
     return error;
-}
-
-static bool
-netdev_vport_config_equal(const struct netdev_dev *dev_,
-                          const struct shash *args)
-{
-    const struct netdev_class *netdev_class = netdev_dev_get_class(dev_);
-    const struct vport_class *vport_class = vport_class_cast(netdev_class);
-
-    if (vport_class->config_equal) {
-        return vport_class->config_equal(&dev_->args, args);
-    } else {
-        return smap_equal(&dev_->args, args);
-    }
 }
 
 static int
@@ -364,7 +332,7 @@ netdev_vport_set_etheraddr(struct netdev *netdev,
     int error;
 
     dpif_linux_vport_init(&vport);
-    vport.cmd = ODP_VPORT_CMD_SET;
+    vport.cmd = OVS_VPORT_CMD_SET;
     vport.name = netdev_get_name(netdev);
     vport.address = mac;
 
@@ -395,19 +363,49 @@ netdev_vport_get_etheraddr(const struct netdev *netdev,
     return error;
 }
 
-static int
-netdev_vport_get_mtu(const struct netdev *netdev, int *mtup)
+/* Copies 'src' into 'dst', performing format conversion in the process.
+ *
+ * 'src' is allowed to be misaligned. */
+static void
+netdev_stats_from_ovs_vport_stats(struct netdev_stats *dst,
+                                  const struct ovs_vport_stats *src)
 {
-    struct dpif_linux_vport reply;
-    struct ofpbuf *buf;
-    int error;
+    dst->rx_packets = get_unaligned_u64(&src->rx_packets);
+    dst->tx_packets = get_unaligned_u64(&src->tx_packets);
+    dst->rx_bytes = get_unaligned_u64(&src->rx_bytes);
+    dst->tx_bytes = get_unaligned_u64(&src->tx_bytes);
+    dst->rx_errors = get_unaligned_u64(&src->rx_errors);
+    dst->tx_errors = get_unaligned_u64(&src->tx_errors);
+    dst->rx_dropped = get_unaligned_u64(&src->rx_dropped);
+    dst->tx_dropped = get_unaligned_u64(&src->tx_dropped);
+    dst->multicast = 0;
+    dst->collisions = 0;
+    dst->rx_length_errors = 0;
+    dst->rx_over_errors = 0;
+    dst->rx_crc_errors = 0;
+    dst->rx_frame_errors = 0;
+    dst->rx_fifo_errors = 0;
+    dst->rx_missed_errors = 0;
+    dst->tx_aborted_errors = 0;
+    dst->tx_carrier_errors = 0;
+    dst->tx_fifo_errors = 0;
+    dst->tx_heartbeat_errors = 0;
+    dst->tx_window_errors = 0;
+}
 
-    error = dpif_linux_vport_get(netdev_get_name(netdev), &reply, &buf);
-    if (!error) {
-        *mtup = reply.mtu;
-        ofpbuf_delete(buf);
-    }
-    return error;
+/* Copies 'src' into 'dst', performing format conversion in the process. */
+static void
+netdev_stats_to_ovs_vport_stats(struct ovs_vport_stats *dst,
+                                const struct netdev_stats *src)
+{
+    dst->rx_packets = src->rx_packets;
+    dst->tx_packets = src->tx_packets;
+    dst->rx_bytes = src->rx_bytes;
+    dst->tx_bytes = src->tx_bytes;
+    dst->rx_errors = src->rx_errors;
+    dst->tx_errors = src->tx_errors;
+    dst->rx_dropped = src->rx_dropped;
+    dst->tx_dropped = src->tx_dropped;
 }
 
 int
@@ -425,7 +423,7 @@ netdev_vport_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
         return EOPNOTSUPP;
     }
 
-    netdev_stats_from_rtnl_link_stats64(stats, reply.stats);
+    netdev_stats_from_ovs_vport_stats(stats, reply.stats);
 
     ofpbuf_delete(buf);
 
@@ -435,14 +433,14 @@ netdev_vport_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 int
 netdev_vport_set_stats(struct netdev *netdev, const struct netdev_stats *stats)
 {
-    struct rtnl_link_stats64 rtnl_stats;
+    struct ovs_vport_stats rtnl_stats;
     struct dpif_linux_vport vport;
     int err;
 
-    netdev_stats_to_rtnl_link_stats64(&rtnl_stats, stats);
+    netdev_stats_to_ovs_vport_stats(&rtnl_stats, stats);
 
     dpif_linux_vport_init(&vport);
-    vport.cmd = ODP_VPORT_CMD_SET;
+    vport.cmd = OVS_VPORT_CMD_SET;
     vport.name = netdev_get_name(netdev);
     vport.stats = &rtnl_stats;
 
@@ -469,7 +467,7 @@ netdev_vport_get_status(const struct netdev *netdev, struct shash *sh)
 
         shash_add(sh, "tunnel_egress_iface", xstrdup(iface));
 
-        if (!netdev_open_default(iface, &egress_netdev)) {
+        if (!netdev_open(iface, "system", &egress_netdev)) {
             shash_add(sh, "tunnel_egress_iface_carrier",
                       xstrdup(netdev_get_carrier(egress_netdev)
                               ? "up" : "down"));
@@ -515,7 +513,7 @@ netdev_vport_wait(void)
 static const char *
 netdev_vport_get_tnl_iface(const struct netdev *netdev)
 {
-    struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1];
+    struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
     ovs_be32 route;
     struct netdev_dev_vport *ndv;
     static char name[IFNAMSIZ];
@@ -525,7 +523,7 @@ netdev_vport_get_tnl_iface(const struct netdev *netdev)
                                     a)) {
         return NULL;
     }
-    route = nl_attr_get_be32(a[ODP_TUNNEL_ATTR_DST_IPV4]);
+    route = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
 
     if (route_table_get_name(route, name)) {
         return name;
@@ -606,20 +604,20 @@ parse_tunnel_config(const char *name, const char *type,
             if (lookup_ip(node->data, &in_addr)) {
                 VLOG_WARN("%s: bad %s 'local_ip'", name, type);
             } else {
-                nl_msg_put_be32(options, ODP_TUNNEL_ATTR_SRC_IPV4,
+                nl_msg_put_be32(options, OVS_TUNNEL_ATTR_SRC_IPV4,
                                 in_addr.s_addr);
             }
         } else if (!strcmp(node->name, "tos")) {
             if (!strcmp(node->data, "inherit")) {
                 flags |= TNL_F_TOS_INHERIT;
             } else {
-                nl_msg_put_u8(options, ODP_TUNNEL_ATTR_TOS, atoi(node->data));
+                nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TOS, atoi(node->data));
             }
         } else if (!strcmp(node->name, "ttl")) {
             if (!strcmp(node->data, "inherit")) {
                 flags |= TNL_F_TTL_INHERIT;
             } else {
-                nl_msg_put_u8(options, ODP_TUNNEL_ATTR_TTL, atoi(node->data));
+                nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->data));
             }
         } else if (!strcmp(node->name, "csum") && is_gre) {
             if (!strcmp(node->data, "true")) {
@@ -668,9 +666,9 @@ parse_tunnel_config(const char *name, const char *type,
                     || !strcmp(node->name, "private_key")
                     || !strcmp(node->name, "use_ssl_cert"))) {
             /* Ignore options not used by the netdev. */
-        } else if (is_gre && (!strcmp(node->name, "key") ||
-                              !strcmp(node->name, "in_key") ||
-                              !strcmp(node->name, "out_key"))) {
+        } else if (!strcmp(node->name, "key") ||
+                   !strcmp(node->name, "in_key") ||
+                   !strcmp(node->name, "out_key")) {
             /* Handled separately below. */
         } else {
             VLOG_WARN("%s: unknown %s argument '%s'", name, type, node->name);
@@ -700,41 +698,39 @@ parse_tunnel_config(const char *name, const char *type,
         }
     }
 
-    if (is_gre) {
-        set_key(args, "in_key", ODP_TUNNEL_ATTR_IN_KEY, options);
-        set_key(args, "out_key", ODP_TUNNEL_ATTR_OUT_KEY, options);
-    }
+    set_key(args, "in_key", OVS_TUNNEL_ATTR_IN_KEY, options);
+    set_key(args, "out_key", OVS_TUNNEL_ATTR_OUT_KEY, options);
 
     if (!daddr) {
         VLOG_ERR("%s: %s type requires valid 'remote_ip' argument",
                  name, type);
         return EINVAL;
     }
-    nl_msg_put_be32(options, ODP_TUNNEL_ATTR_DST_IPV4, daddr);
+    nl_msg_put_be32(options, OVS_TUNNEL_ATTR_DST_IPV4, daddr);
 
-    nl_msg_put_u32(options, ODP_TUNNEL_ATTR_FLAGS, flags);
+    nl_msg_put_u32(options, OVS_TUNNEL_ATTR_FLAGS, flags);
 
     return 0;
 }
 
 static int
 tnl_port_config_from_nlattr(const struct nlattr *options, size_t options_len,
-                            struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1])
+                            struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1])
 {
-    static const struct nl_policy odp_tunnel_policy[] = {
-        [ODP_TUNNEL_ATTR_FLAGS] = { .type = NL_A_U32 },
-        [ODP_TUNNEL_ATTR_DST_IPV4] = { .type = NL_A_BE32 },
-        [ODP_TUNNEL_ATTR_SRC_IPV4] = { .type = NL_A_BE32, .optional = true },
-        [ODP_TUNNEL_ATTR_IN_KEY] = { .type = NL_A_BE64, .optional = true },
-        [ODP_TUNNEL_ATTR_OUT_KEY] = { .type = NL_A_BE64, .optional = true },
-        [ODP_TUNNEL_ATTR_TOS] = { .type = NL_A_U8, .optional = true },
-        [ODP_TUNNEL_ATTR_TTL] = { .type = NL_A_U8, .optional = true },
+    static const struct nl_policy ovs_tunnel_policy[] = {
+        [OVS_TUNNEL_ATTR_FLAGS] = { .type = NL_A_U32 },
+        [OVS_TUNNEL_ATTR_DST_IPV4] = { .type = NL_A_BE32 },
+        [OVS_TUNNEL_ATTR_SRC_IPV4] = { .type = NL_A_BE32, .optional = true },
+        [OVS_TUNNEL_ATTR_IN_KEY] = { .type = NL_A_BE64, .optional = true },
+        [OVS_TUNNEL_ATTR_OUT_KEY] = { .type = NL_A_BE64, .optional = true },
+        [OVS_TUNNEL_ATTR_TOS] = { .type = NL_A_U8, .optional = true },
+        [OVS_TUNNEL_ATTR_TTL] = { .type = NL_A_U8, .optional = true },
     };
     struct ofpbuf buf;
 
     ofpbuf_use_const(&buf, options, options_len);
-    if (!nl_policy_parse(&buf, 0, odp_tunnel_policy,
-                         a, ARRAY_SIZE(odp_tunnel_policy))) {
+    if (!nl_policy_parse(&buf, 0, ovs_tunnel_policy,
+                         a, ARRAY_SIZE(ovs_tunnel_policy))) {
         return EINVAL;
     }
     return 0;
@@ -751,7 +747,7 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
                       const struct nlattr *options, size_t options_len,
                       struct shash *args)
 {
-    struct nlattr *a[ODP_TUNNEL_ATTR_MAX + 1];
+    struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
     ovs_be32 daddr;
     uint32_t flags;
     int error;
@@ -761,36 +757,36 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
         return error;
     }
 
-    flags = nl_attr_get_u32(a[ODP_TUNNEL_ATTR_FLAGS]);
+    flags = nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]);
     if (!(flags & TNL_F_HDR_CACHE) == !(flags & TNL_F_IPSEC)) {
         smap_add(args, "header_cache",
                  flags & TNL_F_HDR_CACHE ? "true" : "false");
     }
 
-    daddr = nl_attr_get_be32(a[ODP_TUNNEL_ATTR_DST_IPV4]);
+    daddr = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
     shash_add(args, "remote_ip", xasprintf(IP_FMT, IP_ARGS(&daddr)));
 
-    if (a[ODP_TUNNEL_ATTR_SRC_IPV4]) {
-        ovs_be32 saddr = nl_attr_get_be32(a[ODP_TUNNEL_ATTR_SRC_IPV4]);
+    if (a[OVS_TUNNEL_ATTR_SRC_IPV4]) {
+        ovs_be32 saddr = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_SRC_IPV4]);
         shash_add(args, "local_ip", xasprintf(IP_FMT, IP_ARGS(&saddr)));
     }
 
-    if (!a[ODP_TUNNEL_ATTR_IN_KEY] && !a[ODP_TUNNEL_ATTR_OUT_KEY]) {
+    if (!a[OVS_TUNNEL_ATTR_IN_KEY] && !a[OVS_TUNNEL_ATTR_OUT_KEY]) {
         smap_add(args, "key", "flow");
     } else {
-        uint64_t in_key = get_be64_or_zero(a[ODP_TUNNEL_ATTR_IN_KEY]);
-        uint64_t out_key = get_be64_or_zero(a[ODP_TUNNEL_ATTR_OUT_KEY]);
+        uint64_t in_key = get_be64_or_zero(a[OVS_TUNNEL_ATTR_IN_KEY]);
+        uint64_t out_key = get_be64_or_zero(a[OVS_TUNNEL_ATTR_OUT_KEY]);
 
         if (in_key && in_key == out_key) {
             shash_add(args, "key", xasprintf("%"PRIu64, in_key));
         } else {
-            if (!a[ODP_TUNNEL_ATTR_IN_KEY]) {
+            if (!a[OVS_TUNNEL_ATTR_IN_KEY]) {
                 smap_add(args, "in_key", "flow");
             } else if (in_key) {
                 shash_add(args, "in_key", xasprintf("%"PRIu64, in_key));
             }
 
-            if (!a[ODP_TUNNEL_ATTR_OUT_KEY]) {
+            if (!a[OVS_TUNNEL_ATTR_OUT_KEY]) {
                 smap_add(args, "out_key", "flow");
             } else if (out_key) {
                 shash_add(args, "out_key", xasprintf("%"PRIu64, out_key));
@@ -800,15 +796,15 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
 
     if (flags & TNL_F_TTL_INHERIT) {
         smap_add(args, "tos", "inherit");
-    } else if (a[ODP_TUNNEL_ATTR_TTL]) {
-        int ttl = nl_attr_get_u8(a[ODP_TUNNEL_ATTR_TTL]);
+    } else if (a[OVS_TUNNEL_ATTR_TTL]) {
+        int ttl = nl_attr_get_u8(a[OVS_TUNNEL_ATTR_TTL]);
         shash_add(args, "tos", xasprintf("%d", ttl));
     }
 
     if (flags & TNL_F_TOS_INHERIT) {
         smap_add(args, "tos", "inherit");
-    } else if (a[ODP_TUNNEL_ATTR_TOS]) {
-        int tos = nl_attr_get_u8(a[ODP_TUNNEL_ATTR_TOS]);
+    } else if (a[OVS_TUNNEL_ATTR_TOS]) {
+        int tos = nl_attr_get_u8(a[OVS_TUNNEL_ATTR_TOS]);
         shash_add(args, "tos", xasprintf("%d", tos));
     }
 
@@ -855,7 +851,7 @@ parse_patch_config(const char *name, const char *type OVS_UNUSED,
         return EINVAL;
     }
 
-    nl_msg_put_string(options, ODP_PATCH_ATTR_PEER, peer);
+    nl_msg_put_string(options, OVS_PATCH_ATTR_PEER, peer);
 
     return 0;
 }
@@ -865,61 +861,23 @@ unparse_patch_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
                      const struct nlattr *options, size_t options_len,
                      struct shash *args)
 {
-    static const struct nl_policy odp_patch_policy[] = {
-        [ODP_PATCH_ATTR_PEER] = { .type = NL_A_STRING,
+    static const struct nl_policy ovs_patch_policy[] = {
+        [OVS_PATCH_ATTR_PEER] = { .type = NL_A_STRING,
                                .max_len = IFNAMSIZ,
                                .optional = false }
     };
 
-    struct nlattr *a[ARRAY_SIZE(odp_patch_policy)];
+    struct nlattr *a[ARRAY_SIZE(ovs_patch_policy)];
     struct ofpbuf buf;
 
     ofpbuf_use_const(&buf, options, options_len);
-    if (!nl_policy_parse(&buf, 0, odp_patch_policy,
-                         a, ARRAY_SIZE(odp_patch_policy))) {
+    if (!nl_policy_parse(&buf, 0, ovs_patch_policy,
+                         a, ARRAY_SIZE(ovs_patch_policy))) {
         return EINVAL;
     }
 
-    smap_add(args, "peer", nl_attr_get_string(a[ODP_PATCH_ATTR_PEER]));
+    smap_add(args, "peer", nl_attr_get_string(a[OVS_PATCH_ATTR_PEER]));
     return 0;
-}
-
-/* Returns true if 'nd_args' is equivalent to 'args', otherwise false.
- * Typically, 'nd_args' is the result of a call to unparse_tunnel_config()
- * and 'args' is the original definition of the port.
- *
- * IPsec key configuration is handled by an external program, so it is not
- * pushed down into the kernel module.  Thus, when the "unparse_config"
- * method is called on an existing IPsec-based vport, a simple
- * comparison with the returned data will not match the original
- * configuration.  This function ignores configuration about keys when
- * doing a comparison.
- */
-static bool
-config_equal_ipsec(const struct shash *nd_args, const struct shash *args)
-{
-        struct shash tmp1, tmp2;
-        bool result;
-
-        smap_clone(&tmp1, nd_args);
-        smap_clone(&tmp2, args);
-
-        shash_find_and_delete(&tmp1, "psk");
-        shash_find_and_delete(&tmp2, "psk");
-        shash_find_and_delete(&tmp1, "peer_cert");
-        shash_find_and_delete(&tmp2, "peer_cert");
-        shash_find_and_delete(&tmp1, "certificate");
-        shash_find_and_delete(&tmp2, "certificate");
-        shash_find_and_delete(&tmp1, "private_key");
-        shash_find_and_delete(&tmp2, "private_key");
-        shash_find_and_delete(&tmp1, "use_ssl_cert");
-        shash_find_and_delete(&tmp2, "use_ssl_cert");
-
-        result = smap_equal(&tmp1, &tmp2);
-        smap_destroy(&tmp1);
-        smap_destroy(&tmp2);
- 
-        return result;
 }
 
 #define VPORT_FUNCTIONS(GET_STATUS)                         \
@@ -929,14 +887,13 @@ config_equal_ipsec(const struct shash *nd_args, const struct shash *args)
                                                             \
     netdev_vport_create,                                    \
     netdev_vport_destroy,                                   \
+    netdev_vport_get_config,                                \
     netdev_vport_set_config,                                \
-    netdev_vport_config_equal,                              \
                                                             \
     netdev_vport_open,                                      \
     netdev_vport_close,                                     \
                                                             \
-    NULL,                       /* enumerate */             \
-                                                            \
+    NULL,                       /* listen */                \
     NULL,                       /* recv */                  \
     NULL,                       /* recv_wait */             \
     NULL,                       /* drain */                 \
@@ -946,9 +903,11 @@ config_equal_ipsec(const struct shash *nd_args, const struct shash *args)
                                                             \
     netdev_vport_set_etheraddr,                             \
     netdev_vport_get_etheraddr,                             \
-    netdev_vport_get_mtu,                                   \
+    NULL,                       /* get_mtu */               \
+    NULL,                       /* set_mtu */               \
     NULL,                       /* get_ifindex */           \
     NULL,                       /* get_carrier */           \
+    NULL,                       /* get_carrier_resets */    \
     NULL,                       /* get_miimon */            \
     netdev_vport_get_stats,                                 \
     netdev_vport_set_stats,                                 \
@@ -985,21 +944,21 @@ void
 netdev_vport_register(void)
 {
     static const struct vport_class vport_classes[] = {
-        { ODP_VPORT_TYPE_GRE,
+        { OVS_VPORT_TYPE_GRE,
           { "gre", VPORT_FUNCTIONS(netdev_vport_get_status) },
-          parse_tunnel_config, unparse_tunnel_config, NULL },
+          parse_tunnel_config, unparse_tunnel_config },
 
-        { ODP_VPORT_TYPE_GRE,
+        { OVS_VPORT_TYPE_GRE,
           { "ipsec_gre", VPORT_FUNCTIONS(netdev_vport_get_status) },
-          parse_tunnel_config, unparse_tunnel_config, config_equal_ipsec },
+          parse_tunnel_config, unparse_tunnel_config },
 
-        { ODP_VPORT_TYPE_CAPWAP,
+        { OVS_VPORT_TYPE_CAPWAP,
           { "capwap", VPORT_FUNCTIONS(netdev_vport_get_status) },
-          parse_tunnel_config, unparse_tunnel_config, NULL },
+          parse_tunnel_config, unparse_tunnel_config },
 
-        { ODP_VPORT_TYPE_PATCH,
+        { OVS_VPORT_TYPE_PATCH,
           { "patch", VPORT_FUNCTIONS(NULL) },
-          parse_patch_config, unparse_patch_config, NULL }
+          parse_patch_config, unparse_patch_config }
     };
 
     int i;

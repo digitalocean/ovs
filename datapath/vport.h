@@ -10,12 +10,12 @@
 #define VPORT_H 1
 
 #include <linux/list.h>
+#include <linux/openvswitch.h>
 #include <linux/seqlock.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 
 #include "datapath.h"
-#include "openvswitch/datapath-protocol.h"
 
 struct vport;
 struct vport_parms;
@@ -26,27 +26,25 @@ int vport_init(void);
 void vport_exit(void);
 
 struct vport *vport_add(const struct vport_parms *);
-int vport_del(struct vport *);
+void vport_del(struct vport *);
 
 struct vport *vport_locate(const char *name);
 
-int vport_set_mtu(struct vport *, int mtu);
 int vport_set_addr(struct vport *, const unsigned char *);
-int vport_set_stats(struct vport *, struct rtnl_link_stats64 *);
+void vport_set_stats(struct vport *, struct ovs_vport_stats *);
 
 const char *vport_get_name(const struct vport *);
-enum odp_vport_type vport_get_type(const struct vport *);
+enum ovs_vport_type vport_get_type(const struct vport *);
 const unsigned char *vport_get_addr(const struct vport *);
 
 struct kobject *vport_get_kobj(const struct vport *);
-int vport_get_stats(struct vport *, struct rtnl_link_stats64 *);
+void vport_get_stats(struct vport *, struct ovs_vport_stats *);
 
 unsigned vport_get_flags(const struct vport *);
 int vport_is_running(const struct vport *);
 unsigned char vport_get_operstate(const struct vport *);
 
 int vport_get_ifindex(const struct vport *);
-int vport_get_iflink(const struct vport *);
 
 int vport_get_mtu(const struct vport *);
 
@@ -82,15 +80,13 @@ struct vport_err_stats {
  * &struct vport.  (We keep this around so that we can delete it if the
  * device gets renamed.)  Set to the null string when no link exists.
  * @node: Element in @dp's @port_list.
- * @sflow_pool: Number of packets that were candidates for sFlow sampling,
- * regardless of whether they were actually chosen and sent down to userspace.
+ * @upcall_pid: The Netlink port to use for packets received on this port that
+ * miss the flow table.
  * @hash_node: Element in @dev_table hash table in vport.c.
  * @ops: Class structure.
- * @percpu_stats: Points to per-CPU statistics used and maintained by the vport
- * code if %VPORT_F_GEN_STATS is set to 1 in @ops flags, otherwise unused.
+ * @percpu_stats: Points to per-CPU statistics used and maintained by vport
  * @stats_lock: Protects @err_stats and @offset_stats.
- * @err_stats: Points to error statistics used and maintained by the vport code
- * if %VPORT_F_GEN_STATS is set to 1 in @ops flags, otherwise unused.
+ * @err_stats: Points to error statistics used and maintained by vport
  * @offset_stats: Added to actual statistics as a sop to compatibility with
  * XAPI for Citrix XenServer.  Deprecated.
  */
@@ -101,7 +97,7 @@ struct vport {
 	struct kobject kobj;
 	char linkname[IFNAMSIZ];
 	struct list_head node;
-	atomic_t sflow_pool;
+	u32 upcall_pid;
 
 	struct hlist_node hash_node;
 	const struct vport_ops *ops;
@@ -110,38 +106,38 @@ struct vport {
 
 	spinlock_t stats_lock;
 	struct vport_err_stats err_stats;
-	struct rtnl_link_stats64 offset_stats;
+	struct ovs_vport_stats offset_stats;
 };
 
 #define VPORT_F_REQUIRED	(1 << 0) /* If init fails, module loading fails. */
-#define VPORT_F_GEN_STATS	(1 << 1) /* Track stats at the generic layer. */
-#define VPORT_F_FLOW		(1 << 2) /* Sets OVS_CB(skb)->flow. */
-#define VPORT_F_TUN_ID		(1 << 3) /* Sets OVS_CB(skb)->tun_id. */
+#define VPORT_F_FLOW		(1 << 1) /* Sets OVS_CB(skb)->flow. */
+#define VPORT_F_TUN_ID		(1 << 2) /* Sets OVS_CB(skb)->tun_id. */
 
 /**
  * struct vport_parms - parameters for creating a new vport
  *
  * @name: New vport's name.
  * @type: New vport's type.
- * @options: %ODP_VPORT_ATTR_OPTIONS attribute from Netlink message, %NULL if
+ * @options: %OVS_VPORT_ATTR_OPTIONS attribute from Netlink message, %NULL if
  * none was supplied.
  * @dp: New vport's datapath.
  * @port_no: New vport's port number.
  */
 struct vport_parms {
 	const char *name;
-	enum odp_vport_type type;
+	enum ovs_vport_type type;
 	struct nlattr *options;
 
 	/* For vport_alloc(). */
 	struct datapath *dp;
 	u16 port_no;
+	u32 upcall_pid;
 };
 
 /**
  * struct vport_ops - definition of a type of virtual port
  *
- * @type: %ODP_VPORT_TYPE_* value for this type of virtual port.
+ * @type: %OVS_VPORT_TYPE_* value for this type of virtual port.
  * @flags: Flags of type VPORT_F_* that influence how the generic vport layer
  * handles this vport.
  * @init: Called at module initialization.  If VPORT_F_REQUIRED is set then the
@@ -157,30 +153,22 @@ struct vport_parms {
  * @get_options: Appends vport-specific attributes for the configuration of an
  * existing vport to a &struct sk_buff.  May be %NULL for a vport that does not
  * have any configuration.
- * @set_mtu: Set the device's MTU.  May be null if not supported.
  * @set_addr: Set the device's MAC address.  May be null if not supported.
  * @get_name: Get the device's name.
  * @get_addr: Get the device's MAC address.
  * @get_config: Get the device's configuration.
  * @get_kobj: Get the kobj associated with the device (may return null).
- * @get_stats: Fill in the transmit/receive stats.  May be null if stats are
- * not supported or if generic stats are in use.  If defined and
- * VPORT_F_GEN_STATS is also set, the error stats are added to those already
- * collected.
  * @get_dev_flags: Get the device's flags.
  * @is_running: Checks whether the device is running.
  * @get_operstate: Get the device's operating state.
  * @get_ifindex: Get the system interface index associated with the device.
  * May be null if the device does not have an ifindex.
- * @get_iflink: Get the system interface index associated with the device that
- * will be used to send packets (may be different than ifindex for tunnels).
- * May be null if the device does not have an iflink.
  * @get_mtu: Get the device's MTU.  May be %NULL if the device does not have an
  * MTU (as e.g. some tunnels do not).
  * @send: Send a packet on the device.  Returns the length of the packet sent.
  */
 struct vport_ops {
-	enum odp_vport_type type;
+	enum ovs_vport_type type;
 	u32 flags;
 
 	/* Called at module init and exit respectively. */
@@ -189,12 +177,11 @@ struct vport_ops {
 
 	/* Called with RTNL lock. */
 	struct vport *(*create)(const struct vport_parms *);
-	int (*destroy)(struct vport *);
+	void (*destroy)(struct vport *);
 
 	int (*set_options)(struct vport *, struct nlattr *);
 	int (*get_options)(const struct vport *, struct sk_buff *);
 
-	int (*set_mtu)(struct vport *, int mtu);
 	int (*set_addr)(struct vport *, const unsigned char *);
 
 	/* Called with rcu_read_lock or RTNL lock. */
@@ -202,14 +189,12 @@ struct vport_ops {
 	const unsigned char *(*get_addr)(const struct vport *);
 	void (*get_config)(const struct vport *, void *);
 	struct kobject *(*get_kobj)(const struct vport *);
-	int (*get_stats)(const struct vport *, struct rtnl_link_stats64 *);
 
 	unsigned (*get_dev_flags)(const struct vport *);
 	int (*is_running)(const struct vport *);
 	unsigned char (*get_operstate)(const struct vport *);
 
 	int (*get_ifindex)(const struct vport *);
-	int (*get_iflink)(const struct vport *);
 
 	int (*get_mtu)(const struct vport *);
 

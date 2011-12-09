@@ -27,9 +27,9 @@
 #include "hash.h"
 #include "hmap.h"
 #include "netlink.h"
+#include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "ofpbuf.h"
-#include "rtnetlink.h"
 #include "rtnetlink-link.h"
 #include "vlog.h"
 
@@ -67,10 +67,10 @@ struct name_node {
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 static unsigned int register_count = 0;
-static struct rtnetlink *rtn = NULL;
+static struct nln *nln = NULL;
 static struct route_table_msg rtmsg;
-static struct rtnetlink_notifier route_notifier;
-static struct rtnetlink_notifier name_notifier;
+static struct nln_notifier *route_notifier = NULL;
+static struct nln_notifier *name_notifier = NULL;
 
 static bool route_table_valid = false;
 static bool name_table_valid = false;
@@ -161,16 +161,15 @@ void
 route_table_register(void)
 {
     if (!register_count) {
-        rtnetlink_parse_func *pf;
-        rtnetlink_notify_func *nf;
+        assert(!nln);
+        assert(!route_notifier);
 
-        assert(!rtn);
+        nln = nln_create(NETLINK_ROUTE, RTNLGRP_IPV4_ROUTE,
+                         (nln_parse_func *) route_table_parse, &rtmsg);
 
-        pf = (rtnetlink_parse_func *)  route_table_parse;
-        nf = (rtnetlink_notify_func *) route_table_change;
-
-        rtn = rtnetlink_create(RTNLGRP_IPV4_ROUTE, pf, &rtmsg);
-        rtnetlink_notifier_register(rtn, &route_notifier, nf, NULL);
+        route_notifier =
+            nln_notifier_create(nln, (nln_notify_func *) route_table_change,
+                                NULL);
 
         hmap_init(&route_map);
         route_table_reset();
@@ -189,8 +188,10 @@ route_table_unregister(void)
     register_count--;
 
     if (!register_count) {
-        rtnetlink_destroy(rtn);
-        rtn = NULL;
+        nln_notifier_destroy(route_notifier);
+        route_notifier = NULL;
+        nln_destroy(nln);
+        nln = NULL;
 
         route_map_clear();
         hmap_destroy(&route_map);
@@ -202,9 +203,9 @@ route_table_unregister(void)
 void
 route_table_run(void)
 {
-    if (rtn) {
-        rtnetlink_link_notifier_run();
-        rtnetlink_notifier_run(rtn);
+    if (nln) {
+        rtnetlink_link_run();
+        nln_run(nln);
     }
 }
 
@@ -212,9 +213,9 @@ route_table_run(void)
 void
 route_table_wait(void)
 {
-    if (rtn) {
-        rtnetlink_link_notifier_wait();
-        rtnetlink_notifier_wait(rtn);
+    if (nln) {
+        rtnetlink_link_wait();
+        nln_wait(nln);
     }
 }
 
@@ -400,14 +401,15 @@ static void
 name_table_init(void)
 {
     hmap_init(&name_map);
-    rtnetlink_link_notifier_register(&name_notifier, name_table_change, NULL);
+    name_notifier = rtnetlink_link_notifier_create(name_table_change, NULL);
     name_table_valid = false;
 }
 
 static void
 name_table_uninit(void)
 {
-    rtnetlink_link_notifier_unregister(&name_notifier);
+    rtnetlink_link_notifier_destroy(name_notifier);
+    name_notifier = NULL;
     name_map_clear();
     hmap_destroy(&name_map);
 }

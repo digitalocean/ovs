@@ -23,10 +23,10 @@
 #include <net/if.h>
 
 #include "netlink.h"
+#include "netlink-notifier.h"
 #include "ofpbuf.h"
-#include "rtnetlink.h"
 
-static struct rtnetlink *rtn = NULL;
+static struct nln *nln = NULL;
 static struct rtnetlink_link_change rtn_change;
 
 /* Parses a rtnetlink message 'buf' into 'change'.  If 'buf' is unparseable,
@@ -63,6 +63,7 @@ rtnetlink_link_parse(struct ofpbuf *buf,
         change->nlmsg_type     = nlmsg->nlmsg_type;
         change->ifi_index      = ifinfo->ifi_index;
         change->ifname         = nl_attr_get_string(attrs[IFLA_IFNAME]);
+        change->running        = ifinfo->ifi_flags & IFF_RUNNING;
         change->master_ifindex = (attrs[IFLA_MASTER]
                                   ? nl_attr_get_u32(attrs[IFLA_MASTER])
                                   : 0);
@@ -85,45 +86,42 @@ rtnetlink_link_parse_cb(struct ofpbuf *buf, void *change)
  * using dpif_port_poll() or netdev_change_seq(), which unlike this function
  * are not Linux-specific.
  *
- * Returns 0 if successful, otherwise a positive errno value. */
-int
-rtnetlink_link_notifier_register(struct rtnetlink_notifier *notifier,
-                                 rtnetlink_link_notify_func *cb, void *aux)
+ * Returns an initialized nln_notifier if successful, NULL otherwise. */
+struct nln_notifier *
+rtnetlink_link_notifier_create(rtnetlink_link_notify_func *cb, void *aux)
 {
-    rtnetlink_notify_func *nf = (rtnetlink_notify_func *) cb;
-
-    if (!rtn) {
-        rtn = rtnetlink_create(RTNLGRP_LINK, rtnetlink_link_parse_cb,
-                               &rtn_change);
+    if (!nln) {
+        nln = nln_create(NETLINK_ROUTE, RTNLGRP_LINK, rtnetlink_link_parse_cb,
+                         &rtn_change);
     }
 
-    return rtnetlink_notifier_register(rtn, notifier, nf, aux);
+    return nln_notifier_create(nln, (nln_notify_func *) cb, aux);
 }
 
-/* Cancels notification on 'notifier', which must have previously been
- * registered with rtnetlink_link_notifier_register(). */
+/* Destroys 'notifier', which must have previously been created with
+ * rtnetlink_link_notifier_register(). */
 void
-rtnetlink_link_notifier_unregister(struct rtnetlink_notifier *notifier)
+rtnetlink_link_notifier_destroy(struct nln_notifier *notifier)
 {
-    rtnetlink_notifier_unregister(rtn, notifier);
+    nln_notifier_destroy(notifier);
 }
 
 /* Calls all of the registered notifiers, passing along any as-yet-unreported
  * netdev change events. */
 void
-rtnetlink_link_notifier_run(void)
+rtnetlink_link_run(void)
 {
-    if (rtn) {
-        rtnetlink_notifier_run(rtn);
+    if (nln) {
+        nln_run(nln);
     }
 }
 
 /* Causes poll_block() to wake up when network device change notifications are
  * ready. */
 void
-rtnetlink_link_notifier_wait(void)
+rtnetlink_link_wait(void)
 {
-    if (rtn) {
-        rtnetlink_notifier_wait(rtn);
+    if (nln) {
+        nln_wait(nln);
     }
 }

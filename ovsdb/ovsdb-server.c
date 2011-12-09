@@ -135,11 +135,11 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    unixctl_command_register("exit", ovsdb_server_exit, &exiting);
-    unixctl_command_register("ovsdb-server/compact", ovsdb_server_compact,
-                             file);
-    unixctl_command_register("ovsdb-server/reconnect", ovsdb_server_reconnect,
-                             jsonrpc);
+    unixctl_command_register("exit", "", ovsdb_server_exit, &exiting);
+    unixctl_command_register("ovsdb-server/compact", "",
+                             ovsdb_server_compact, file);
+    unixctl_command_register("ovsdb-server/reconnect", "",
+                             ovsdb_server_reconnect, jsonrpc);
 
     exiting = false;
     while (!exiting) {
@@ -709,7 +709,7 @@ parse_options(int argc, char *argv[], char **file_namep,
             usage();
 
         case 'V':
-            OVS_PRINT_VERSION(0, 0);
+            ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
         VLOG_OPTION_HANDLERS
