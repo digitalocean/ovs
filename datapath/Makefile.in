@@ -32,7 +32,7 @@ NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
 @LINUX_ENABLED_TRUE@am__append_1 = linux
-DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
+DIST_COMMON = README $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
 	$(srcdir)/Modules.mk $(srcdir)/linux/Modules.mk
 subdir = datapath
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -222,11 +222,9 @@ openvswitch_sources = actions.c checksum.c datapath.c dp_notify.c \
 	linux/compat/ip_output-openvswitch.c linux/compat/kmemdup.c \
 	linux/compat/netdevice.c linux/compat/reciprocal_div.c \
 	linux/compat/skbuff-openvswitch.c linux/compat/time.c
-openvswitch_headers = actions.h checksum.h compat.h datapath.h \
-	dp_sysfs.h flow.h tunnel.h vlan.h vport.h vport-generic.h \
-	vport-internal_dev.h vport-netdev.h \
-	linux/compat/include/asm-generic/bug.h \
-	linux/compat/include/linux/compiler.h \
+openvswitch_headers = checksum.h compat.h datapath.h dp_sysfs.h flow.h \
+	tunnel.h vlan.h vport.h vport-generic.h vport-internal_dev.h \
+	vport-netdev.h linux/compat/include/linux/compiler.h \
 	linux/compat/include/linux/compiler-gcc.h \
 	linux/compat/include/linux/cpumask.h \
 	linux/compat/include/linux/dmi.h \
@@ -264,6 +262,7 @@ openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	linux/compat/include/linux/tcp.h \
 	linux/compat/include/linux/timer.h \
 	linux/compat/include/linux/types.h \
+	linux/compat/include/linux/u64_stats_sync.h \
 	linux/compat/include/linux/udp.h \
 	linux/compat/include/linux/workqueue.h \
 	linux/compat/include/net/checksum.h \
@@ -275,6 +274,7 @@ openvswitch_headers = actions.h checksum.h compat.h datapath.h \
 	linux/compat/include/net/protocol.h \
 	linux/compat/include/net/route.h linux/compat/genetlink.inc
 openvswitch_extras = \
+	README \
 	CAPWAP.txt
 
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
@@ -299,9 +299,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --gnu datapath/Makefile
+	  $(AUTOMAKE) --foreign datapath/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \

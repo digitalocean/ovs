@@ -1,5 +1,5 @@
 '\" p
-.TH Open_vSwitch 5 "December 2011" "Open vSwitch" "Open vSwitch Manual"
+.TH Open_vSwitch 5 "January 2012" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
@@ -92,7 +92,8 @@ sFlow configuration.
 .TQ 1in
 \fBCapability\fR
 Capability configuration.
-.if !'\*[.T]'ascii' \{
+.\" check if in troff mode (TTY)
+.if t \{
 .bp
 .SH "TABLE RELATIONSHIPS"
 .PP
@@ -782,6 +783,9 @@ optional integer, in range 0 to 4,095
 .TQ 2.75in
 \fBtrunks\fR
 set of up to 4,096 integers, in range 0 to 4,095
+.TQ 2.75in
+\fBother_config : priority-tags\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
 .RE
 .TQ .25in
 \fIBonding Configuration:\fR
@@ -935,20 +939,19 @@ specified in the \fBtrunks\fR column (often, on every
 VLAN).  A packet that ingresses on a trunk port is in the VLAN
 specified in its 802.1Q header, or VLAN 0 if the packet has no
 802.1Q header.  A packet that egresses through a trunk port will
-have a 802.1Q header if it has a nonzero VLAN ID (or a nonzero
-802.1Q priority).
+have an 802.1Q header if it has a nonzero VLAN ID.
 .IP
 Any packet that ingresses on a trunk port tagged with a VLAN that
 the port does not trunk is dropped.
 .TP
 access
 An access port carries packets on exactly one VLAN specified in the
-\fBtag\fR column.  Packets ingressing and egressing on an
-access port have no 802.1Q header.
+\fBtag\fR column.  Packets egressing on an access port
+have no 802.1Q header.
 .IP
-Any packet with an 802.1Q header that ingresses on an access port
-is dropped, regardless of whether the VLAN ID in the header is the
-access port\(cqs VLAN ID.
+Any packet with an 802.1Q header with a nonzero VLAN ID that
+ingresses on an access port is dropped, regardless of whether the
+VLAN ID in the header is the access port\(cqs VLAN ID.
 .TP
 native-tagged
 A native-tagged port resembles a trunk port, with the exception that
@@ -959,7 +962,7 @@ column).
 native-untagged
 A native-untagged port resembles a native-tagged port, with the
 exception that a packet that egresses on a native-untagged port in
-the native VLAN not have an 802.1Q header.
+the native VLAN will not have an 802.1Q header.
 .RE
 .PP
 A packet will only egress through bridge ports that carry the VLAN of
@@ -987,6 +990,23 @@ all VLANs.  Must be empty if this is an access port.
 A native-tagged or native-untagged port always trunks its native
 VLAN, regardless of whether \fBtrunks\fR includes that
 VLAN.
+.IP "\fBother_config : priority-tags\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+An 802.1Q header contains two important pieces of information: a VLAN
+ID and a priority.  A frame with a zero VLAN ID, called a
+``priority-tagged\(cq\(cq frame, is supposed to be treated the same way as
+a frame without an 802.1Q header at all (except for the priority).
+.IP
+However, some network elements ignore any frame that has 802.1Q
+header at all, even when the VLAN ID is zero.  Therefore, by default
+Open vSwitch does not output priority-tagged frames, instead omitting
+the 802.1Q header entirely if the VLAN ID is zero.  Set this key to
+\fBtrue\fR to enable priority-tagged frames on a port.
+.IP
+Regardless of this setting, Open vSwitch omits the 802.1Q header on
+output if both the VLAN ID and priority would be zero.
+.IP
+All frames output to native-tagged ports have a nonzero VLAN ID, so
+this setting is not meaningful on native-tagged ports.
 .ST "Bonding Configuration:"
 A port that has more than one interface is a ``bonded port.\(cq\(cq Bonding
 allows for load balancing and fail-over.  Some kinds of bonding will
@@ -1409,6 +1429,9 @@ optional string, either \fBtrue\fR or \fBfalse\fR
 .TQ 2.75in
 \fBother_config : cfm_opstate\fR
 optional string, either \fBdown\fR or \fBup\fR
+.TQ 2.75in
+\fBother_config : cfm_ccm_vlan\fR
+optional string, containing an integer, in range 1 to 4,095
 .RE
 .TQ .25in
 \fIBonding Configuration:\fR
@@ -1444,6 +1467,13 @@ optional string
 .TQ 2.75in
 \fBexternal_ids : xs-vm-uuid\fR
 optional string
+.RE
+.TQ .25in
+\fIVLAN Splinters:\fR
+.RS .25in
+.TQ 2.75in
+\fBother_config : enable-vlan-splinters\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
 .RE
 .TQ .25in
 \fICommon Columns:\fR
@@ -1553,10 +1583,15 @@ one is matched first.  \fBoptions:in_key\fR is
 considered more specific than \fBoptions:local_ip\fR if
 a port defines one and another port defines the other.
 .IP "\fBoptions : remote_ip\fR: optional string"
-Required.  The tunnel endpoint.
+Required.  The tunnel endpoint.  Unicast and multicast endpoints are
+both supported.
+.IP
+When a multicast endpoint is specified, a routing table lookup occurs
+only when the tunnel is created.  Following a routing change, delete
+and then re-create the tunnel to force a new routing table lookup.
 .IP "\fBoptions : local_ip\fR: optional string"
-Optional.  The destination IP that received packets must
-match.  Default is to match all addresses.
+Optional.  The destination IP that received packets must match.
+Default is to match all addresses.  Must be omitted when \fBoptions:remote_ip\fR is a multicast address.
 .IP "\fBoptions : in_key\fR: optional string"
 Optional.  The key that received packets must contain, one of:
 .RS
@@ -1891,6 +1926,9 @@ Currently, in Open vSwitch, the opdown bit of CCMs affects
 \fBInterface\fRs participating in bonds, and the bundle
 OpenFlow action. This setting is ignored when CFM is not in extended
 mode.  Defaults to \fBup\fR\.
+.IP "\fBother_config : cfm_ccm_vlan\fR: optional string, containing an integer, in range 1 to 4,095"
+When set, the CFM module will apply a VLAN tag to all CCMs it generates
+with the given value.
 .ST "Bonding Configuration:"
 .IP "\fBother_config : bond-stable-id\fR: optional string, containing an integer, at least 1"
 Used in \fBstable\fR bond mode to make slave
@@ -1932,6 +1970,49 @@ The virtual interface associated with this interface.
 The virtual network to which this interface is attached.
 .IP "\fBexternal_ids : xs-vm-uuid\fR: optional string"
 The VM to which this interface belongs.
+.ST "VLAN Splinters:"
+The ``VLAN splinters\(cq\(cq feature increases Open vSwitch compatibility
+with buggy network drivers in old versions of Linux that do not
+properly support VLANs when VLAN devices are not used, at some cost
+in memory and performance.
+.PP
+When VLAN splinters are enabled on a particular interface, Open vSwitch
+creates a VLAN device for each in-use VLAN.  For sending traffic tagged
+with a VLAN on the interface, it substitutes the VLAN device.  Traffic
+received on the VLAN device is treated as if it had been received on
+the interface on the particular VLAN.
+.PP
+VLAN splinters consider a VLAN to be in use if:
+.RS
+.IP \(bu
+The VLAN is the \fBtag\fR value in any \fBPort\fR record.
+.IP \(bu
+The VLAN is listed within the \fBtrunks\fR
+column of the \fBPort\fR record of an interface on which
+VLAN splinters are enabled.
+An empty \fBtrunks\fR does not influence the
+in-use VLANs: creating 4,096 VLAN devices is impractical because it
+will exceed the current 1,024 port per datapath limit.
+.IP \(bu
+An OpenFlow flow within any bridge matches the VLAN.
+.RE
+.PP
+The same set of in-use VLANs applies to every interface on which VLAN
+splinters are enabled.  That is, the set is not chosen separately for
+each interface but selected once as the union of all in-use VLANs based
+on the rules above.
+.PP
+It does not make sense to enable VLAN splinters on an interface for an
+access port, or on an interface that is not a physical port.
+.PP
+VLAN splinters are deprecated.  When broken device drivers are no
+longer in widespread use, we will delete this feature.
+.IP "\fBother_config : enable-vlan-splinters\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+Set to \fBtrue\fR to enable VLAN splinters on this interface.
+Defaults to \fBfalse\fR\.
+.IP
+VLAN splinters increase kernel and userspace memory overhead, so do
+not use them unless they are needed.
 .ST "Common Columns:"
 The overall purpose of these columns is described under \fBCommon
 Columns\fR at the beginning of this document.
@@ -2010,6 +2091,9 @@ Columns\fR at the beginning of this document.
 A configuration for a port output queue, used in configuring Quality of
 Service (QoS) features.  May be referenced by \fBqueues\fR column in \fBQoS\fR table.
 .SS "Summary:
+.TQ 3.00in
+\fBdscp\fR
+optional integer, in range 0 to 63
 .TQ .25in
 \fIConfiguration for min-rate QoS:\fR
 .RS .25in
@@ -2054,6 +2138,13 @@ map of string-string pairs
 map of string-string pairs
 .RE
 .SS "Details:
+.IP "\fBdscp\fR: optional integer, in range 0 to 63"
+If set, Open vSwitch will mark all traffic egressing this
+\fBQueue\fR with the given DSCP bits.  Traffic egressing the
+default \fBQueue\fR is only marked if it was explicitly selected
+as the \fBQueue\fR at the time the packet was output.  If unset,
+the DSCP bits of traffic egressing this \fBQueue\fR will remain
+unchanged.
 .ST "Configuration for min-rate QoS:"
 These key-value pairs are defined for \fBQoS\fR \fBtype\fR of \fBmin\-rate\fR\.
 .IP "\fBother_config : min-rate\fR: optional string, containing an integer, at least 12,000"
@@ -2131,6 +2222,16 @@ optional weak reference to \fBPort\fR
 optional integer, in range 1 to 4,095
 .RE
 .TQ .25in
+\fIStatistics: Mirror counters:\fR
+.RS .25in
+.TQ 2.75in
+\fBstatistics : tx_packets\fR
+optional integer
+.TQ 2.75in
+\fBstatistics : tx_bytes\fR
+optional integer
+.RE
+.TQ .25in
 \fICommon Columns:\fR
 .RS .25in
 .TQ 2.75in
@@ -2162,6 +2263,7 @@ Output port for selected packets, if nonempty.
 .IP
 Specifying a port for mirror output reserves that port exclusively
 for mirroring.  No frames other than those selected for mirroring
+via this column
 will be forwarded to the port, and any frames received on the port
 will be discarded.
 .IP
@@ -2236,6 +2338,12 @@ in the appropriate \fBBridge\fR table or tables.
 .IP
 Mirroring to a GRE tunnel has fewer caveats than mirroring to a
 VLAN and should generally be preferred.
+.ST "Statistics: Mirror counters:"
+Key-value pairs that report mirror statistics.
+.IP "\fBstatistics : tx_packets\fR: optional integer"
+Number of packets transmitted through this mirror.
+.IP "\fBstatistics : tx_bytes\fR: optional integer"
+Number of bytes transmitted through this mirror.
 .ST "Common Columns:"
 The overall purpose of these columns is described under \fBCommon
 Columns\fR at the beginning of this document.

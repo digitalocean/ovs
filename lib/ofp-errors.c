@@ -43,6 +43,9 @@ ofp_bad_request_code_to_string(uint16_t value)
     case NXBRC_NXM_BAD_MASK: return "NXBRC_NXM_BAD_MASK";
     case NXBRC_NXM_BAD_PREREQ: return "NXBRC_NXM_BAD_PREREQ";
     case NXBRC_NXM_DUP_TYPE: return "NXBRC_NXM_DUP_TYPE";
+    case NXBRC_BAD_TABLE_ID: return "NXBRC_BAD_TABLE_ID";
+    case NXBRC_BAD_ROLE: return "NXBRC_BAD_ROLE";
+    case NXBRC_BAD_IN_PORT: return "NXBRC_BAD_IN_PORT";
     }
     return NULL;
 }

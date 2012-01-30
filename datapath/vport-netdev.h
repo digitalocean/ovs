@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #ifndef VPORT_NETDEV_H
@@ -13,7 +23,7 @@
 
 #include "vport.h"
 
-struct vport *netdev_get_vport(struct net_device *dev);
+struct vport *ovs_netdev_get_vport(struct net_device *dev);
 
 struct netdev_vport {
 	struct net_device *dev;
@@ -25,15 +35,15 @@ netdev_vport_priv(const struct vport *vport)
 	return vport_priv(vport);
 }
 
-int netdev_set_addr(struct vport *, const unsigned char *addr);
-const char *netdev_get_name(const struct vport *);
-const unsigned char *netdev_get_addr(const struct vport *);
-const char *netdev_get_config(const struct vport *);
-struct kobject *netdev_get_kobj(const struct vport *);
-unsigned netdev_get_dev_flags(const struct vport *);
-int netdev_is_running(const struct vport *);
-unsigned char netdev_get_operstate(const struct vport *);
-int netdev_get_ifindex(const struct vport *);
-int netdev_get_mtu(const struct vport *);
+int ovs_netdev_set_addr(struct vport *, const unsigned char *addr);
+const char *ovs_netdev_get_name(const struct vport *);
+const unsigned char *ovs_netdev_get_addr(const struct vport *);
+const char *ovs_netdev_get_config(const struct vport *);
+struct kobject *ovs_netdev_get_kobj(const struct vport *);
+unsigned ovs_netdev_get_dev_flags(const struct vport *);
+int ovs_netdev_is_running(const struct vport *);
+unsigned char ovs_netdev_get_operstate(const struct vport *);
+int ovs_netdev_get_ifindex(const struct vport *);
+int ovs_netdev_get_mtu(const struct vport *);
 
 #endif /* vport_netdev.h */

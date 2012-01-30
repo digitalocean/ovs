@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #include <linux/dcache.h>
@@ -25,12 +35,12 @@
 /* List of statically compiled vport implementations.  Don't forget to also
  * add yours to the list at the bottom of vport.h. */
 static const struct vport_ops *base_vport_ops_list[] = {
-	&netdev_vport_ops,
-	&internal_vport_ops,
-	&patch_vport_ops,
-	&gre_vport_ops,
+	&ovs_netdev_vport_ops,
+	&ovs_internal_vport_ops,
+	&ovs_patch_vport_ops,
+	&ovs_gre_vport_ops,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26)
-	&capwap_vport_ops,
+	&ovs_capwap_vport_ops,
 #endif
 };
 
@@ -42,12 +52,12 @@ static struct hlist_head *dev_table;
 #define VPORT_HASH_BUCKETS 1024
 
 /**
- *	vport_init - initialize vport subsystem
+ *	ovs_vport_init - initialize vport subsystem
  *
  * Called at module load time to initialize the vport subsystem and any
  * compiled in vport types.
  */
-int vport_init(void)
+int ovs_vport_init(void)
 {
 	int err;
 	int i;
@@ -77,7 +87,7 @@ int vport_init(void)
 		if (!err)
 			vport_ops_list[n_vport_types++] = new_ops;
 		else if (new_ops->flags & VPORT_F_REQUIRED) {
-			vport_exit();
+			ovs_vport_exit();
 			goto error;
 		}
 	}
@@ -91,12 +101,12 @@ error:
 }
 
 /**
- *	vport_exit - shutdown vport subsystem
+ *	ovs_vport_exit - shutdown vport subsystem
  *
  * Called at module exit time to shutdown the vport subsystem and any
  * initialized vport types.
  */
-void vport_exit(void)
+void ovs_vport_exit(void)
 {
 	int i;
 
@@ -116,20 +126,20 @@ static struct hlist_head *hash_bucket(const char *name)
 }
 
 /**
- *	vport_locate - find a port that has already been created
+ *	ovs_vport_locate - find a port that has already been created
  *
  * @name: name of port to find
  *
  * Must be called with RTNL or RCU read lock.
  */
-struct vport *vport_locate(const char *name)
+struct vport *ovs_vport_locate(const char *name)
 {
 	struct hlist_head *bucket = hash_bucket(name);
 	struct vport *vport;
 	struct hlist_node *node;
 
 	hlist_for_each_entry_rcu(vport, node, bucket, hash_node)
-		if (!strcmp(name, vport_get_name(vport)))
+		if (!strcmp(name, vport->ops->get_name(vport)))
 			return vport;
 
 	return NULL;
@@ -143,13 +153,13 @@ static void release_vport(struct kobject *kobj)
 
 static struct kobj_type brport_ktype = {
 #ifdef CONFIG_SYSFS
-	.sysfs_ops = &brport_sysfs_ops,
+	.sysfs_ops = &ovs_brport_sysfs_ops,
 #endif
 	.release = release_vport
 };
 
 /**
- *	vport_alloc - allocate and initialize new vport
+ *	ovs_vport_alloc - allocate and initialize new vport
  *
  * @priv_size: Size of private data area to allocate.
  * @ops: vport device ops
@@ -157,9 +167,10 @@ static struct kobj_type brport_ktype = {
  * Allocate and initialize a new vport defined by @ops.  The vport will contain
  * a private data area of size @priv_size that can be accessed using
  * vport_priv().  vports that are no longer needed should be released with
- * vport_free().
+ * ovs_vport_free().
  */
-struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const struct vport_parms *parms)
+struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *ops,
+			      const struct vport_parms *parms)
 {
 	struct vport *vport;
 	size_t alloc_size;
@@ -196,16 +207,16 @@ struct vport *vport_alloc(int priv_size, const struct vport_ops *ops, const stru
 }
 
 /**
- *	vport_free - uninitialize and free vport
+ *	ovs_vport_free - uninitialize and free vport
  *
  * @vport: vport to free
  *
- * Frees a vport allocated with vport_alloc() when it is no longer needed.
+ * Frees a vport allocated with ovs_vport_alloc() when it is no longer needed.
  *
  * The caller must ensure that an RCU grace period has passed since the last
  * time @vport was in a datapath.
  */
-void vport_free(struct vport *vport)
+void ovs_vport_free(struct vport *vport)
 {
 	free_percpu(vport->percpu_stats);
 
@@ -213,14 +224,14 @@ void vport_free(struct vport *vport)
 }
 
 /**
- *	vport_add - add vport device (for kernel callers)
+ *	ovs_vport_add - add vport device (for kernel callers)
  *
  * @parms: Information about new vport.
  *
  * Creates a new vport with the specified configuration (which is dependent on
  * device type).  RTNL lock must be held.
  */
-struct vport *vport_add(const struct vport_parms *parms)
+struct vport *ovs_vport_add(const struct vport_parms *parms)
 {
 	struct vport *vport;
 	int err = 0;
@@ -237,7 +248,7 @@ struct vport *vport_add(const struct vport_parms *parms)
 			}
 
 			hlist_add_head_rcu(&vport->hash_node,
-					   hash_bucket(vport_get_name(vport)));
+					   hash_bucket(vport->ops->get_name(vport)));
 			return vport;
 		}
 	}
@@ -249,7 +260,7 @@ out:
 }
 
 /**
- *	vport_set_options - modify existing vport device (for kernel callers)
+ *	ovs_vport_set_options - modify existing vport device (for kernel callers)
  *
  * @vport: vport to modify.
  * @port: New configuration.
@@ -257,7 +268,7 @@ out:
  * Modifies an existing device with the specified configuration (which is
  * dependent on device type).  RTNL lock must be held.
  */
-int vport_set_options(struct vport *vport, struct nlattr *options)
+int ovs_vport_set_options(struct vport *vport, struct nlattr *options)
 {
 	ASSERT_RTNL();
 
@@ -267,14 +278,14 @@ int vport_set_options(struct vport *vport, struct nlattr *options)
 }
 
 /**
- *	vport_del - delete existing vport device
+ *	ovs_vport_del - delete existing vport device
  *
  * @vport: vport to delete.
  *
  * Detaches @vport from its datapath and destroys it.  It is possible to fail
  * for reasons such as lack of memory.  RTNL lock must be held.
  */
-void vport_del(struct vport *vport)
+void ovs_vport_del(struct vport *vport)
 {
 	ASSERT_RTNL();
 
@@ -284,7 +295,7 @@ void vport_del(struct vport *vport)
 }
 
 /**
- *	vport_set_addr - set device Ethernet address (for kernel callers)
+ *	ovs_vport_set_addr - set device Ethernet address (for kernel callers)
  *
  * @vport: vport on which to set Ethernet address.
  * @addr: New address.
@@ -293,7 +304,7 @@ void vport_del(struct vport *vport)
  * setting the Ethernet address, in which case the result will always be
  * -EOPNOTSUPP.  RTNL lock must be held.
  */
-int vport_set_addr(struct vport *vport, const unsigned char *addr)
+int ovs_vport_set_addr(struct vport *vport, const unsigned char *addr)
 {
 	ASSERT_RTNL();
 
@@ -307,7 +318,7 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
 }
 
 /**
- *	vport_set_stats - sets offset device stats
+ *	ovs_vport_set_stats - sets offset device stats
  *
  * @vport: vport on which to set stats
  * @stats: stats to set
@@ -319,7 +330,7 @@ int vport_set_addr(struct vport *vport, const unsigned char *addr)
  *
  * Must be called with RTNL lock.
  */
-void vport_set_stats(struct vport *vport, struct ovs_vport_stats *stats)
+void ovs_vport_set_stats(struct vport *vport, struct ovs_vport_stats *stats)
 {
 	ASSERT_RTNL();
 
@@ -329,62 +340,7 @@ void vport_set_stats(struct vport *vport, struct ovs_vport_stats *stats)
 }
 
 /**
- *	vport_get_name - retrieve device name
- *
- * @vport: vport from which to retrieve the name.
- *
- * Retrieves the name of the given device.  Either RTNL lock or rcu_read_lock
- * must be held for the entire duration that the name is in use.
- */
-const char *vport_get_name(const struct vport *vport)
-{
-	return vport->ops->get_name(vport);
-}
-
-/**
- *	vport_get_type - retrieve device type
- *
- * @vport: vport from which to retrieve the type.
- *
- * Retrieves the type of the given device.
- */
-enum ovs_vport_type vport_get_type(const struct vport *vport)
-{
-	return vport->ops->type;
-}
-
-/**
- *	vport_get_addr - retrieve device Ethernet address (for kernel callers)
- *
- * @vport: vport from which to retrieve the Ethernet address.
- *
- * Retrieves the Ethernet address of the given device.  Either RTNL lock or
- * rcu_read_lock must be held for the entire duration that the Ethernet address
- * is in use.
- */
-const unsigned char *vport_get_addr(const struct vport *vport)
-{
-	return vport->ops->get_addr(vport);
-}
-
-/**
- *	vport_get_kobj - retrieve associated kobj
- *
- * @vport: vport from which to retrieve the associated kobj
- *
- * Retrieves the associated kobj or null if no kobj.  The returned kobj is
- * valid for as long as the vport exists.
- */
-struct kobject *vport_get_kobj(const struct vport *vport)
-{
-	if (vport->ops->get_kobj)
-		return vport->ops->get_kobj(vport);
-	else
-		return NULL;
-}
-
-/**
- *	vport_get_stats - retrieve device stats
+ *	ovs_vport_get_stats - retrieve device stats
  *
  * @vport: vport from which to retrieve the stats
  * @stats: location to store stats
@@ -393,7 +349,7 @@ struct kobject *vport_get_kobj(const struct vport *vport)
  *
  * Must be called with RTNL lock or rcu_read_lock.
  */
-void vport_get_stats(struct vport *vport, struct ovs_vport_stats *stats)
+void ovs_vport_get_stats(struct vport *vport, struct ovs_vport_stats *stats)
 {
 	int i;
 
@@ -422,14 +378,14 @@ void vport_get_stats(struct vport *vport, struct ovs_vport_stats *stats)
 	for_each_possible_cpu(i) {
 		const struct vport_percpu_stats *percpu_stats;
 		struct vport_percpu_stats local_stats;
-		unsigned seqcount;
+		unsigned int start;
 
 		percpu_stats = per_cpu_ptr(vport->percpu_stats, i);
 
 		do {
-			seqcount = read_seqcount_begin(&percpu_stats->seqlock);
+			start = u64_stats_fetch_begin_bh(&percpu_stats->sync);
 			local_stats = *percpu_stats;
-		} while (read_seqcount_retry(&percpu_stats->seqlock, seqcount));
+		} while (u64_stats_fetch_retry_bh(&percpu_stats->sync, start));
 
 		stats->rx_bytes		+= local_stats.rx_bytes;
 		stats->rx_packets	+= local_stats.rx_packets;
@@ -439,84 +395,7 @@ void vport_get_stats(struct vport *vport, struct ovs_vport_stats *stats)
 }
 
 /**
- *	vport_get_flags - retrieve device flags
- *
- * @vport: vport from which to retrieve the flags
- *
- * Retrieves the flags of the given device.
- *
- * Must be called with RTNL lock or rcu_read_lock.
- */
-unsigned vport_get_flags(const struct vport *vport)
-{
-	return vport->ops->get_dev_flags(vport);
-}
-
-/**
- *	vport_get_flags - check whether device is running
- *
- * @vport: vport on which to check status.
- *
- * Checks whether the given device is running.
- *
- * Must be called with RTNL lock or rcu_read_lock.
- */
-int vport_is_running(const struct vport *vport)
-{
-	return vport->ops->is_running(vport);
-}
-
-/**
- *	vport_get_flags - retrieve device operating state
- *
- * @vport: vport from which to check status
- *
- * Retrieves the RFC2863 operstate of the given device.
- *
- * Must be called with RTNL lock or rcu_read_lock.
- */
-unsigned char vport_get_operstate(const struct vport *vport)
-{
-	return vport->ops->get_operstate(vport);
-}
-
-/**
- *	vport_get_ifindex - retrieve device system interface index
- *
- * @vport: vport from which to retrieve index
- *
- * Retrieves the system interface index of the given device or 0 if
- * the device does not have one (in the case of virtual ports).
- * Returns a negative index on error.
- *
- * Must be called with RTNL lock or rcu_read_lock.
- */
-int vport_get_ifindex(const struct vport *vport)
-{
-	if (vport->ops->get_ifindex)
-		return vport->ops->get_ifindex(vport);
-	else
-		return 0;
-}
-
-/**
- *	vport_get_mtu - retrieve device MTU
- *
- * @vport: vport from which to retrieve MTU
- *
- * Retrieves the MTU of the given device.  Returns 0 if @vport does not have an
- * MTU (as e.g. some tunnels do not).  Either RTNL lock or rcu_read_lock must
- * be held.
- */
-int vport_get_mtu(const struct vport *vport)
-{
-	if (!vport->ops->get_mtu)
-		return 0;
-	return vport->ops->get_mtu(vport);
-}
-
-/**
- *	vport_get_options - retrieve device options
+ *	ovs_vport_get_options - retrieve device options
  *
  * @vport: vport from which to retrieve the options.
  * @skb: sk_buff where options should be appended.
@@ -531,7 +410,7 @@ int vport_get_mtu(const struct vport *vport)
  *
  * Must be called with RTNL lock or rcu_read_lock.
  */
-int vport_get_options(const struct vport *vport, struct sk_buff *skb)
+int ovs_vport_get_options(const struct vport *vport, struct sk_buff *skb)
 {
 	struct nlattr *nla;
 
@@ -552,7 +431,7 @@ int vport_get_options(const struct vport *vport, struct sk_buff *skb)
 }
 
 /**
- *	vport_receive - pass up received packet to the datapath for processing
+ *	ovs_vport_receive - pass up received packet to the datapath for processing
  *
  * @vport: vport that received the packet
  * @skb: skb that was received
@@ -561,16 +440,16 @@ int vport_get_options(const struct vport *vport, struct sk_buff *skb)
  * skb->data should point to the Ethernet header.  The caller must have already
  * called compute_ip_summed() to initialize the checksumming fields.
  */
-void vport_receive(struct vport *vport, struct sk_buff *skb)
+void ovs_vport_receive(struct vport *vport, struct sk_buff *skb)
 {
 	struct vport_percpu_stats *stats;
 
 	stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
 
-	write_seqcount_begin(&stats->seqlock);
+	u64_stats_update_begin(&stats->sync);
 	stats->rx_packets++;
 	stats->rx_bytes += skb->len;
-	write_seqcount_end(&stats->seqlock);
+	u64_stats_update_end(&stats->sync);
 
 	if (!(vport->ops->flags & VPORT_F_FLOW))
 		OVS_CB(skb)->flow = NULL;
@@ -578,11 +457,11 @@ void vport_receive(struct vport *vport, struct sk_buff *skb)
 	if (!(vport->ops->flags & VPORT_F_TUN_ID))
 		OVS_CB(skb)->tun_id = 0;
 
-	dp_process_received_packet(vport, skb);
+	ovs_dp_process_received_packet(vport, skb);
 }
 
 /**
- *	vport_send - send a packet on a device
+ *	ovs_vport_send - send a packet on a device
  *
  * @vport: vport on which to send the packet
  * @skb: skb to send
@@ -590,23 +469,25 @@ void vport_receive(struct vport *vport, struct sk_buff *skb)
  * Sends the given packet and returns the length of data sent.  Either RTNL
  * lock or rcu_read_lock must be held.
  */
-int vport_send(struct vport *vport, struct sk_buff *skb)
+int ovs_vport_send(struct vport *vport, struct sk_buff *skb)
 {
-	struct vport_percpu_stats *stats;
 	int sent = vport->ops->send(vport, skb);
 
-	stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
+	if (likely(sent)) {
+		struct vport_percpu_stats *stats;
 
-	write_seqcount_begin(&stats->seqlock);
-	stats->tx_packets++;
-	stats->tx_bytes += sent;
-	write_seqcount_end(&stats->seqlock);
+		stats = per_cpu_ptr(vport->percpu_stats, smp_processor_id());
 
+		u64_stats_update_begin(&stats->sync);
+		stats->tx_packets++;
+		stats->tx_bytes += sent;
+		u64_stats_update_end(&stats->sync);
+	}
 	return sent;
 }
 
 /**
- *	vport_record_error - indicate device error to generic stats layer
+ *	ovs_vport_record_error - indicate device error to generic stats layer
  *
  * @vport: vport that encountered the error
  * @err_type: one of enum vport_err_type types to indicate the error type
@@ -614,7 +495,7 @@ int vport_send(struct vport *vport, struct sk_buff *skb)
  * If using the vport generic stats layer indicate that an error of the given
  * type has occured.
  */
-void vport_record_error(struct vport *vport, enum vport_err_type err_type)
+void ovs_vport_record_error(struct vport *vport, enum vport_err_type err_type)
 {
 	spin_lock(&vport->stats_lock);
 

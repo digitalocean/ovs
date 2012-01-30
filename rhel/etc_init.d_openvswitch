@@ -27,7 +27,7 @@
 # Short-Description: Open vSwitch switch
 ### END INIT INFO
 
-. /usr/share/openvswitch/scripts/ovs-lib.sh || exit 1
+. /usr/share/openvswitch/scripts/ovs-lib || exit 1
 test -e /etc/sysconfig/openvswitch && . /etc/sysconfig/openvswitch
 
 start () {
@@ -44,6 +44,9 @@ start () {
     fi
     if test X"$VSWITCHD_MLOCKALL" != X; then
 	set "$@" --mlockall="$VSWITCHD_MLOCKALL"
+    fi
+    if test X"$BRCOMPAT" = Xyes; then
+	set "$@" --brcompat
     fi
     "$@"
 

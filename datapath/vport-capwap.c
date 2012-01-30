@@ -32,7 +32,7 @@
 
 #define CAPWAP_FRAG_TIMEOUT (30 * HZ)
 #define CAPWAP_FRAG_MAX_MEM (256 * 1024)
-#define CAPWAP_FRAG_PRUNE_MEM (192 *1024)
+#define CAPWAP_FRAG_PRUNE_MEM (192 * 1024)
 #define CAPWAP_FRAG_SECRET_INTERVAL (10 * 60 * HZ)
 
 /*
@@ -100,7 +100,7 @@ struct capwaphdr_wsi_key {
 /* Flag indicating a 64bit key is stored in WSI data field */
 #define CAPWAP_WSI_F_KEY64 0x80
 
-static inline struct capwaphdr *capwap_hdr(const struct sk_buff *skb)
+static struct capwaphdr *capwap_hdr(const struct sk_buff *skb)
 {
 	return (struct capwaphdr *)(udp_hdr(skb) + 1);
 }
@@ -170,7 +170,7 @@ static int capwap_hdr_len(const struct tnl_mutable_config *mutable)
 	if (mutable->flags & TNL_F_CSUM)
 		return -EINVAL;
 
-        /* if keys are specified, then add WSI field */
+	/* if keys are specified, then add WSI field */
 	if (mutable->out_key || (mutable->flags & TNL_F_OUT_KEY_ACTION)) {
 		size += sizeof(struct capwaphdr_wsi) +
 			sizeof(struct capwaphdr_wsi_key);
@@ -282,8 +282,7 @@ static int process_capwap_wsi(struct sk_buff *skb, __be64 *key)
 	return 0;
 }
 
-static inline struct sk_buff *process_capwap_proto(struct sk_buff *skb,
-		                                   __be64 *key)
+static struct sk_buff *process_capwap_proto(struct sk_buff *skb, __be64 *key)
 {
 	struct capwaphdr *cwh = capwap_hdr(skb);
 	int hdr_len = sizeof(struct udphdr);
@@ -334,8 +333,8 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 		goto out;
 
 	iph = ip_hdr(skb);
-	vport = tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_CAPWAP,
-			      &mutable);
+	vport = ovs_tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_CAPWAP,
+				  &mutable);
 	if (unlikely(!vport)) {
 		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
 		goto error;
@@ -346,7 +345,7 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 	else
 		OVS_CB(skb)->tun_id = 0;
 
-	tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb, iph->tos);
 	goto out;
 
 error:
@@ -365,7 +364,7 @@ static const struct tnl_ops capwap_tnl_ops = {
 
 static struct vport *capwap_create(const struct vport_parms *parms)
 {
-	return tnl_create(parms, &capwap_vport_ops, &capwap_tnl_ops);
+	return ovs_tnl_create(parms, &ovs_capwap_vport_ops, &capwap_tnl_ops);
 }
 
 /* Random value.  Irrelevant as long as it's not 0 since we set the handler. */
@@ -511,14 +510,14 @@ static struct sk_buff *fragment(struct sk_buff *skb, const struct vport *vport,
 	return result;
 
 error:
-	tnl_free_linked_skbs(result);
+	ovs_tnl_free_linked_skbs(result);
 	kfree_skb(skb);
 	return NULL;
 }
 
 /* All of the following functions relate to fragmentation reassembly. */
 
-static inline struct frag_queue *ifq_cast(struct inet_frag_queue *ifq)
+static struct frag_queue *ifq_cast(struct inet_frag_queue *ifq)
 {
 	return container_of(ifq, struct frag_queue, ifq);
 }
@@ -786,22 +785,22 @@ static void capwap_frag_expire(unsigned long ifq)
 	inet_frag_put(&fq->ifq, &frag_state);
 }
 
-const struct vport_ops capwap_vport_ops = {
+const struct vport_ops ovs_capwap_vport_ops = {
 	.type		= OVS_VPORT_TYPE_CAPWAP,
 	.flags		= VPORT_F_TUN_ID,
 	.init		= capwap_init,
 	.exit		= capwap_exit,
 	.create		= capwap_create,
-	.destroy	= tnl_destroy,
-	.set_addr	= tnl_set_addr,
-	.get_name	= tnl_get_name,
-	.get_addr	= tnl_get_addr,
-	.get_options	= tnl_get_options,
-	.set_options	= tnl_set_options,
-	.get_dev_flags	= vport_gen_get_dev_flags,
-	.is_running	= vport_gen_is_running,
-	.get_operstate	= vport_gen_get_operstate,
-	.send		= tnl_send,
+	.destroy	= ovs_tnl_destroy,
+	.set_addr	= ovs_tnl_set_addr,
+	.get_name	= ovs_tnl_get_name,
+	.get_addr	= ovs_tnl_get_addr,
+	.get_options	= ovs_tnl_get_options,
+	.set_options	= ovs_tnl_set_options,
+	.get_dev_flags	= ovs_vport_gen_get_dev_flags,
+	.is_running	= ovs_vport_gen_is_running,
+	.get_operstate	= ovs_vport_gen_get_operstate,
+	.send		= ovs_tnl_send,
 };
 #else
 #warning CAPWAP tunneling will not be available on kernels before 2.6.26

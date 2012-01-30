@@ -1,15 +1,26 @@
 /*
- * Copyright (c) 2009, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2012 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/module.h>
 #include <linux/kernel.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/completion.h>
 #include <linux/etherdevice.h>
 #include <linux/if_bridge.h>
@@ -39,7 +50,8 @@ static DECLARE_COMPLETION(brc_done); /* Userspace signaled operation done? */
 static struct sk_buff *brc_reply;    /* Reply from userspace. */
 static u32 brc_seq;		     /* Sequence number for current op. */
 
-static struct sk_buff *brc_send_command(struct sk_buff *, struct nlattr **attrs);
+static struct sk_buff *brc_send_command(struct sk_buff *,
+					struct nlattr **attrs);
 static int brc_send_simple_command(struct sk_buff *);
 
 static struct sk_buff *brc_make_request(int op, const char *bridge,
@@ -342,18 +354,18 @@ static int brc_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	int err;
 
 	switch (cmd) {
-		case SIOCDEVPRIVATE:
-			err = old_dev_ioctl(dev, rq, cmd);
-			break;
+	case SIOCDEVPRIVATE:
+		err = old_dev_ioctl(dev, rq, cmd);
+		break;
 
-		case SIOCBRADDIF:
-			return brc_add_del_port(dev, rq->ifr_ifindex, 1);
-		case SIOCBRDELIF:
-			return brc_add_del_port(dev, rq->ifr_ifindex, 0);
+	case SIOCBRADDIF:
+		return brc_add_del_port(dev, rq->ifr_ifindex, 1);
+	case SIOCBRDELIF:
+		return brc_add_del_port(dev, rq->ifr_ifindex, 0);
 
-		default:
-			err = -EOPNOTSUPP;
-			break;
+	default:
+		err = -EOPNOTSUPP;
+		break;
 	}
 
 	return err;
@@ -472,7 +484,7 @@ static struct sk_buff *brc_send_command(struct sk_buff *request,
 	if (!wait_for_completion_timeout(&brc_done, BRC_TIMEOUT)) {
 		pr_warn("timed out waiting for userspace\n");
 		goto error;
-    }
+	}
 
 	/* Grab reply. */
 	spin_lock_irqsave(&brc_lock, flags);
@@ -499,13 +511,13 @@ static int __init brc_init(void)
 {
 	int err;
 
-	printk("Open vSwitch Bridge Compatibility, built "__DATE__" "__TIME__"\n");
+	pr_info("Open vSwitch Bridge Compatibility, built "__DATE__" "__TIME__"\n");
 
 	/* Set the bridge ioctl handler */
 	brioctl_set(brc_ioctl_deviceless_stub);
 
 	/* Set the openvswitch_mod device ioctl handler */
-	dp_ioctl_hook = brc_dev_ioctl;
+	ovs_dp_ioctl_hook = brc_dev_ioctl;
 
 	/* Randomize the initial sequence number.  This is not a security
 	 * feature; it only helps avoid crossed wires between userspace and
@@ -536,7 +548,7 @@ error:
 static void brc_cleanup(void)
 {
 	/* Unregister ioctl hooks */
-	dp_ioctl_hook = NULL;
+	ovs_dp_ioctl_hook = NULL;
 	brioctl_set(NULL);
 
 	genl_unregister_family(&brc_genl_family);
@@ -548,3 +560,12 @@ module_exit(brc_cleanup);
 MODULE_DESCRIPTION("Open vSwitch bridge compatibility");
 MODULE_AUTHOR("Nicira Networks");
 MODULE_LICENSE("GPL");
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
+/*
+ * In kernels 2.6.36 and later, Open vSwitch can safely coexist with
+ * the Linux bridge module, but it does not make sense to load both bridge and
+ * brcompat_mod, so this prevents it.
+ */
+BRIDGE_MUTUAL_EXCLUSION;
+#endif

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.3.0, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 1.4.0, ovs-bugs@openvswitch.org)
 NX_BUILDNR
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
@@ -41,6 +41,7 @@ AC_SYS_LARGEFILE
 
 AC_SEARCH_LIBS([pow], [m])
 AC_SEARCH_LIBS([clock_gettime], [rt])
+AC_SEARCH_LIBS([timer_create], [rt])
 
 OVS_CHECK_COVERAGE
 OVS_CHECK_NDEBUG

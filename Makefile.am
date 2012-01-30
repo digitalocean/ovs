@@ -46,7 +46,10 @@ EXTRA_DIST = \
 	SubmittingPatches \
 	WHY-OVS \
 	boot.sh \
-	$(MAN_FRAGMENTS)
+	build-aux/sodepends.pl \
+	build-aux/soexpand.pl \
+	$(MAN_FRAGMENTS) \
+	$(MAN_ROOTS)
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
@@ -56,10 +59,12 @@ dist_pkgdata_DATA =
 dist_pkgdata_SCRIPTS =
 dist_sbin_SCRIPTS =
 dist_scripts_SCRIPTS =
+dist_scripts_DATA =
 INSTALL_DATA_LOCAL =
 UNINSTALL_LOCAL =
 man_MANS =
 MAN_FRAGMENTS =
+MAN_ROOTS =
 noinst_DATA =
 noinst_HEADERS =
 noinst_LIBRARIES =
@@ -70,6 +75,7 @@ OVSIDL_BUILT =
 pkgdata_DATA =
 sbin_SCRIPTS =
 scripts_SCRIPTS =
+scripts_DATA =
 SUFFIXES =
 check_DATA =
 
@@ -81,15 +87,12 @@ scriptsdir = $(pkgdatadir)/scripts
 # http://article.gmane.org/gmane.comp.sysutils.automake.general/10891
 noinst_HEADERS += $(EXTRA_DIST)
 
-EXTRA_DIST += \
-	soexpand.pl
-
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
 
 SUFFIXES += .in
 .in:
-	$(PERL) $(srcdir)/soexpand.pl -I$(srcdir) < $< | \
+	$(PERL) $(srcdir)/build-aux/soexpand.pl -I$(srcdir) < $< | \
 	    sed \
 		-e 's,[@]PKIDIR[@],$(PKIDIR),g' \
                 -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
@@ -153,14 +156,27 @@ rate-limit-check:
 
 if HAVE_GROFF
 ALL_LOCAL += manpage-check
-manpage-check: $(MANS) $(MAN_FRAGMENTS)
-	@manpages=; \
-	for d in $(MANS); do \
-		manpages="$$manpages `test -f $$d || echo $(VPATH)/`$$d"; \
+manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
+	@error=false; \
+	for manpage in $?; do \
+		LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T utf8 -man -p -z $$manpage >$@.tmp 2>&1; \
+		if grep warning: $@.tmp; then error=:; fi; \
+		rm -f $@.tmp; \
 	done; \
-	LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T ascii -man -p -z $$manpages && touch $@
+	if $$error; then exit 1; else echo touch $@; touch $@; fi
 CLEANFILES += manpage-check
 endif
+
+include $(srcdir)/manpages.mk
+$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.pl
+	@$(PERL) $(srcdir)/build-aux/sodepends.pl -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
+	@if cmp -s $(@F).tmp $@; then \
+		touch $@; \
+		rm -f $(@F).tmp; \
+	else \
+		mv $(@F).tmp $@; \
+	fi
+CLEANFILES += manpage-dep-check
 
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
@@ -180,5 +196,5 @@ include vswitchd/automake.mk
 include ovsdb/automake.mk
 include rhel/automake.mk
 include xenserver/automake.mk
-include python/ovs/automake.mk
+include python/automake.mk
 include python/compat/automake.mk

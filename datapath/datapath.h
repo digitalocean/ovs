@@ -1,12 +1,20 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
-
-/* Interface exported by openvswitch_mod. */
 
 #ifndef DATAPATH_H
 #define DATAPATH_H 1
@@ -15,8 +23,8 @@
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
-#include <linux/seqlock.h>
 #include <linux/skbuff.h>
+#include <linux/u64_stats_sync.h>
 #include <linux/version.h>
 
 #include "checksum.h"
@@ -46,7 +54,7 @@ struct dp_stats_percpu {
 	u64 n_hit;
 	u64 n_missed;
 	u64 n_lost;
-	seqcount_t seqlock;
+	struct u64_stats_sync sync;
 };
 
 /**
@@ -83,7 +91,6 @@ struct datapath {
 
 /**
  * struct ovs_skb_cb - OVS data in skb CB
- * @vport: The datapath port on which the skb entered the switch.
  * @flow: The flow associated with this packet.  May be %NULL if no flow.
  * @tun_id: ID of the tunnel that encapsulated this packet.  It is 0 if the
  * @ip_summed: Consistently stores L4 checksumming status across different
@@ -95,7 +102,6 @@ struct datapath {
  * before 2.6.27.
  */
 struct ovs_skb_cb {
-	struct vport		*vport;
 	struct sw_flow		*flow;
 	__be64			tun_id;
 #ifdef NEED_CSUM_NORMALIZE
@@ -125,17 +131,18 @@ struct dp_upcall_info {
 	u32 pid;
 };
 
-extern struct notifier_block dp_device_notifier;
-extern struct genl_multicast_group dp_vport_multicast_group;
-extern int (*dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
+extern struct notifier_block ovs_dp_device_notifier;
+extern struct genl_multicast_group ovs_dp_vport_multicast_group;
+extern int (*ovs_dp_ioctl_hook)(struct net_device *dev, struct ifreq *rq, int cmd);
 
-void dp_process_received_packet(struct vport *, struct sk_buff *);
-void dp_detach_port(struct vport *);
-int dp_upcall(struct datapath *, struct sk_buff *, const struct dp_upcall_info *);
+void ovs_dp_process_received_packet(struct vport *, struct sk_buff *);
+void ovs_dp_detach_port(struct vport *);
+int ovs_dp_upcall(struct datapath *, struct sk_buff *,
+		  const struct dp_upcall_info *);
 
-struct datapath *get_dp(int dp_idx);
-const char *dp_name(const struct datapath *dp);
+const char *ovs_dp_name(const struct datapath *dp);
 struct sk_buff *ovs_vport_cmd_build_info(struct vport *, u32 pid, u32 seq,
 					 u8 cmd);
 
+int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb);
 #endif /* datapath.h */

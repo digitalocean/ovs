@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #ifndef VPORT_H
@@ -11,9 +21,9 @@
 
 #include <linux/list.h>
 #include <linux/openvswitch.h>
-#include <linux/seqlock.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
+#include <linux/u64_stats_sync.h>
 
 #include "datapath.h"
 
@@ -22,36 +32,22 @@ struct vport_parms;
 
 /* The following definitions are for users of the vport subsytem: */
 
-int vport_init(void);
-void vport_exit(void);
+int ovs_vport_init(void);
+void ovs_vport_exit(void);
 
-struct vport *vport_add(const struct vport_parms *);
-void vport_del(struct vport *);
+struct vport *ovs_vport_add(const struct vport_parms *);
+void ovs_vport_del(struct vport *);
 
-struct vport *vport_locate(const char *name);
+struct vport *ovs_vport_locate(const char *name);
 
-int vport_set_addr(struct vport *, const unsigned char *);
-void vport_set_stats(struct vport *, struct ovs_vport_stats *);
+int ovs_vport_set_addr(struct vport *, const unsigned char *);
+void ovs_vport_set_stats(struct vport *, struct ovs_vport_stats *);
+void ovs_vport_get_stats(struct vport *, struct ovs_vport_stats *);
 
-const char *vport_get_name(const struct vport *);
-enum ovs_vport_type vport_get_type(const struct vport *);
-const unsigned char *vport_get_addr(const struct vport *);
+int ovs_vport_set_options(struct vport *, struct nlattr *options);
+int ovs_vport_get_options(const struct vport *, struct sk_buff *);
 
-struct kobject *vport_get_kobj(const struct vport *);
-void vport_get_stats(struct vport *, struct ovs_vport_stats *);
-
-unsigned vport_get_flags(const struct vport *);
-int vport_is_running(const struct vport *);
-unsigned char vport_get_operstate(const struct vport *);
-
-int vport_get_ifindex(const struct vport *);
-
-int vport_get_mtu(const struct vport *);
-
-int vport_set_options(struct vport *, struct nlattr *options);
-int vport_get_options(const struct vport *, struct sk_buff *);
-
-int vport_send(struct vport *, struct sk_buff *);
+int ovs_vport_send(struct vport *, struct sk_buff *);
 
 /* The following definitions are for implementers of vport devices: */
 
@@ -60,7 +56,7 @@ struct vport_percpu_stats {
 	u64 rx_packets;
 	u64 tx_bytes;
 	u64 tx_packets;
-	seqcount_t seqlock;
+	struct u64_stats_sync sync;
 };
 
 struct vport_err_stats {
@@ -128,7 +124,7 @@ struct vport_parms {
 	enum ovs_vport_type type;
 	struct nlattr *options;
 
-	/* For vport_alloc(). */
+	/* For ovs_vport_alloc(). */
 	struct datapath *dp;
 	u16 port_no;
 	u32 upcall_pid;
@@ -145,7 +141,7 @@ struct vport_parms {
  * not set and initialzation fails then no vports of this type can be created.
  * @exit: Called at module unload.
  * @create: Create a new vport configured as specified.  On success returns
- * a new vport allocated with vport_alloc(), otherwise an ERR_PTR() value.
+ * a new vport allocated with ovs_vport_alloc(), otherwise an ERR_PTR() value.
  * @destroy: Destroys a vport.  Must call vport_free() on the vport but not
  * before an RCU grace period has elapsed.
  * @set_options: Modify the configuration of an existing vport.  May be %NULL
@@ -164,7 +160,8 @@ struct vport_parms {
  * @get_ifindex: Get the system interface index associated with the device.
  * May be null if the device does not have an ifindex.
  * @get_mtu: Get the device's MTU.  May be %NULL if the device does not have an
- * MTU (as e.g. some tunnels do not).
+ * MTU (as e.g. some tunnels do not).  Must be implemented if @get_ifindex is
+ * implemented.
  * @send: Send a packet on the device.  Returns the length of the packet sent.
  */
 struct vport_ops {
@@ -208,8 +205,9 @@ enum vport_err_type {
 	VPORT_E_TX_ERROR,
 };
 
-struct vport *vport_alloc(int priv_size, const struct vport_ops *, const struct vport_parms *);
-void vport_free(struct vport *);
+struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *,
+			      const struct vport_parms *);
+void ovs_vport_free(struct vport *);
 
 #define VPORT_ALIGN 8
 
@@ -242,15 +240,15 @@ static inline struct vport *vport_from_priv(const void *priv)
 	return (struct vport *)(priv - ALIGN(sizeof(struct vport), VPORT_ALIGN));
 }
 
-void vport_receive(struct vport *, struct sk_buff *);
-void vport_record_error(struct vport *, enum vport_err_type err_type);
+void ovs_vport_receive(struct vport *, struct sk_buff *);
+void ovs_vport_record_error(struct vport *, enum vport_err_type err_type);
 
 /* List of statically compiled vport implementations.  Don't forget to also
  * add yours to the list at the top of vport.c. */
-extern const struct vport_ops netdev_vport_ops;
-extern const struct vport_ops internal_vport_ops;
-extern const struct vport_ops patch_vport_ops;
-extern const struct vport_ops gre_vport_ops;
-extern const struct vport_ops capwap_vport_ops;
+extern const struct vport_ops ovs_netdev_vport_ops;
+extern const struct vport_ops ovs_internal_vport_ops;
+extern const struct vport_ops ovs_patch_vport_ops;
+extern const struct vport_ops ovs_gre_vport_ops;
+extern const struct vport_ops ovs_capwap_vport_ops;
 
 #endif /* vport.h */

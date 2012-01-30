@@ -1,16 +1,19 @@
 The following people, in alphabetical order, have either authored or
 signed off on commits in the Open vSwitch version control repository.
 
+Alexey I. Froloff       raorn@altlinux.org
 Andrew Evans            aevans@nicira.com
 Andrew Lambeth          wal@nicira.com
 Andy Southgate          andy.southgate@citrix.com
 Ben Pfaff               blp@nicira.com
 Bryan Phillippe         bp@toroki.com
 Casey Barker            crbarker@google.com
+Chris Wright            chrisw@sous-sol.org
 Chuck Short             zulcss@ubuntu.com
 Dan Wendlandt           dan@nicira.com
 Daniel Roman            droman@nicira.com
 David Erickson          derickso@stanford.edu
+Edward Tomasz Napierała trasz@freebsd.org
 Ethan Jackson           ethan@nicira.com
 Gaetano Catalli         gaetano.catalli@gmail.com
 Glen Gibb               grg@stanford.edu
@@ -40,6 +43,7 @@ Thomas Lacroix          thomas.lacroix@citrix.com
 Todd Deshane            deshantm@gmail.com
 Tom Everman             teverman@google.com
 Tsvi Slonim             tsvi@toroki.com
+Tyler Coumbes           coumbes@gmail.com
 Valient Gough           vgough@pobox.com
 Vivien Bernet-Rollande  vbr@soprive.net
 Wei Yongjun             yjwei@cn.fujitsu.com
@@ -56,6 +60,7 @@ Alexey I. Froloff       raorn@altlinux.org
 Bob Ball                bob.ball@citrix.com
 Brad Hall               brad@nicira.com
 Brandon Heller          brandonh@stanford.edu
+Brendan Kelley          bkelley@nicira.com
 Bryan Fulton            bryan@nicira.com
 Bryan Osoro             bosoro@nicira.com
 Cedric Hobbs            cedric@nicira.com
@@ -63,6 +68,7 @@ Dave Walker             DaveWalker@ubuntu.com
 Derek Cormier           derek.cormier@lab.ntt.co.jp
 Duffie Cooley           dcooley@nicira.com
 DK Moon                 dkmoon@nicira.com
+Edwin Chiu              echiu@nicira.com
 Eivind Bulie Haanaes
 Gaetano Catalli         gaetano.catalli@gmail.com
 George Shuklin          amarao@desunote.ru
@@ -84,8 +90,10 @@ John Galgay             john@galgay.net
 Koichi Yagishita        yagishita.koichi@jrc.co.jp
 Krishna Miriyala        krishna@nicira.com
 Luiz Henrique Ozaki     luiz.ozaki@gmail.com
+Michael A. Collins      mike.a.collins@ark-net.org
 Michael Hu              mhu@nicira.com
 Michael Mao             mmao@nicira.com
+Mike Kruze              mkruze@nicira.com
 Murphy McCauley         murphy.mccauley@gmail.com
 Mikael Doverhag         mdoverhag@nicira.com
 Niklas Andersson        nandersson@nicira.com
@@ -104,7 +112,6 @@ Srini Seetharaman       seethara@stanford.edu
 Stephen Hemminger       shemminger@vyatta.com
 Takayuki HAMA           t-hama@cb.jp.nec.com
 Teemu Koponen           koponen@nicira.com
-Tyler Coumbes           coumbes@gmail.com
 Vishal Swarankar        vishal.swarnkar@gmail.com
 Voravit T.              voravit@kth.se
 YAMAMOTO Takashi        yamamoto@valinux.co.jp

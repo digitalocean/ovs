@@ -72,7 +72,6 @@
 
 VLOG_DEFINE_THIS_MODULE(netdev_linux);
 
-COVERAGE_DEFINE(netdev_get_vlan_vid);
 COVERAGE_DEFINE(netdev_set_policing);
 COVERAGE_DEFINE(netdev_arp_lookup);
 COVERAGE_DEFINE(netdev_get_ifindex);
@@ -1544,60 +1543,6 @@ netdev_linux_set_advertisements(struct netdev *netdev, uint32_t advertise)
                                    ETHTOOL_SSET, "ETHTOOL_SSET");
 }
 
-/* If 'netdev_name' is the name of a VLAN network device (e.g. one created with
- * vconfig(8)), sets '*vlan_vid' to the VLAN VID associated with that device
- * and returns 0.  Otherwise returns a errno value (specifically ENOENT if
- * 'netdev_name' is the name of a network device that is not a VLAN device) and
- * sets '*vlan_vid' to -1. */
-static int
-netdev_linux_get_vlan_vid(const struct netdev *netdev, int *vlan_vid)
-{
-    const char *netdev_name = netdev_get_name(netdev);
-    struct ds line = DS_EMPTY_INITIALIZER;
-    FILE *stream = NULL;
-    int error;
-    char *fn;
-
-    COVERAGE_INC(netdev_get_vlan_vid);
-    fn = xasprintf("/proc/net/vlan/%s", netdev_name);
-    stream = fopen(fn, "r");
-    if (!stream) {
-        error = errno;
-        goto done;
-    }
-
-    if (ds_get_line(&line, stream)) {
-        if (ferror(stream)) {
-            error = errno;
-            VLOG_ERR_RL(&rl, "error reading \"%s\": %s", fn, strerror(errno));
-        } else {
-            error = EPROTO;
-            VLOG_ERR_RL(&rl, "unexpected end of file reading \"%s\"", fn);
-        }
-        goto done;
-    }
-
-    if (!sscanf(ds_cstr(&line), "%*s VID: %d", vlan_vid)) {
-        error = EPROTO;
-        VLOG_ERR_RL(&rl, "parse error reading \"%s\" line 1: \"%s\"",
-                    fn, ds_cstr(&line));
-        goto done;
-    }
-
-    error = 0;
-
-done:
-    free(fn);
-    if (stream) {
-        fclose(stream);
-    }
-    ds_destroy(&line);
-    if (error) {
-        *vlan_vid = -1;
-    }
-    return error;
-}
-
 #define POLICE_ADD_CMD "/sbin/tc qdisc add dev %s handle ffff: ingress"
 #define POLICE_CONFIG_CMD "/sbin/tc filter add dev %s parent ffff: protocol ip prio 50 u32 match ip src 0.0.0.0/0 police rate %dkbit burst %dk mtu 65535 drop flowid :1"
 
@@ -2331,7 +2276,6 @@ netdev_linux_change_seq(const struct netdev *netdev)
                                                                 \
     netdev_linux_get_features,                                  \
     netdev_linux_set_advertisements,                            \
-    netdev_linux_get_vlan_vid,                                  \
                                                                 \
     netdev_linux_set_policing,                                  \
     netdev_linux_get_qos_types,                                 \
@@ -3986,6 +3930,63 @@ tc_calc_buffer(unsigned int Bps, int mtu, uint64_t burst_bytes)
     return tc_bytes_to_ticks(Bps, MAX(burst_bytes, min_burst));
 }
 
+/* Linux-only functions declared in netdev-linux.h  */
+
+/* Returns a fd for an AF_INET socket or a negative errno value. */
+int
+netdev_linux_get_af_inet_sock(void)
+{
+    int error = netdev_linux_init();
+    return error ? -error : af_inet_sock;
+}
+
+/* Modifies the 'flag' bit in ethtool's flags field for 'netdev'.  If
+ * 'enable' is true, the bit is set.  Otherwise, it is cleared. */
+int
+netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
+                              const char *flag_name, bool enable)
+{
+    const char *netdev_name = netdev_get_name(netdev);
+    struct ethtool_value evalue;
+    uint32_t new_flags;
+    int error;
+
+    memset(&evalue, 0, sizeof evalue);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
+    if (error) {
+        return error;
+    }
+
+    evalue.data = new_flags = (evalue.data & ~flag) | (enable ? flag : 0);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_SFLAGS, "ETHTOOL_SFLAGS");
+    if (error) {
+        return error;
+    }
+
+    memset(&evalue, 0, sizeof evalue);
+    error = netdev_linux_do_ethtool(netdev_name,
+                                    (struct ethtool_cmd *)&evalue,
+                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
+    if (error) {
+        return error;
+    }
+
+    if (new_flags != evalue.data) {
+        VLOG_WARN_RL(&rl, "attempt to %s ethtool %s flag on network "
+                     "device %s failed", enable ? "enable" : "disable",
+                     flag_name, netdev_name);
+        return EOPNOTSUPP;
+    }
+
+    return 0;
+}
+
+/* Utility functions. */
+
 /* Copies 'src' into 'dst', performing format conversion in the process. */
 static void
 netdev_stats_from_rtnl_link_stats(struct netdev_stats *dst,
@@ -4013,9 +4014,6 @@ netdev_stats_from_rtnl_link_stats(struct netdev_stats *dst,
     dst->tx_heartbeat_errors = src->tx_heartbeat_errors;
     dst->tx_window_errors = src->tx_window_errors;
 }
-
-
-/* Utility functions. */
 
 static int
 get_stats_via_netlink(int ifindex, struct netdev_stats *stats)
@@ -4301,51 +4299,6 @@ netdev_linux_do_ethtool(const char *name, struct ethtool_cmd *ecmd,
         }
         return errno;
     }
-}
-
-/* Modifies the 'flag' bit in ethtool's flags field for 'netdev'.  If
- * 'enable' is true, the bit is set.  Otherwise, it is cleared. */
-int
-netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
-                              const char *flag_name, bool enable)
-{
-    const char *netdev_name = netdev_get_name(netdev);
-    struct ethtool_value evalue;
-    uint32_t new_flags;
-    int error;
-
-    memset(&evalue, 0, sizeof evalue);
-    error = netdev_linux_do_ethtool(netdev_name,
-                                    (struct ethtool_cmd *)&evalue,
-                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
-    if (error) {
-        return error;
-    }
-
-    evalue.data = new_flags = (evalue.data & ~flag) | (enable ? flag : 0);
-    error = netdev_linux_do_ethtool(netdev_name,
-                                    (struct ethtool_cmd *)&evalue,
-                                    ETHTOOL_SFLAGS, "ETHTOOL_SFLAGS");
-    if (error) {
-        return error;
-    }
-
-    memset(&evalue, 0, sizeof evalue);
-    error = netdev_linux_do_ethtool(netdev_name,
-                                    (struct ethtool_cmd *)&evalue,
-                                    ETHTOOL_GFLAGS, "ETHTOOL_GFLAGS");
-    if (error) {
-        return error;
-    }
-
-    if (new_flags != evalue.data) {
-        VLOG_WARN_RL(&rl, "attempt to %s ethtool %s flag on network "
-                     "device %s failed", enable ? "enable" : "disable",
-                     flag_name, netdev_name);
-        return EOPNOTSUPP;
-    }
-
-    return 0;
 }
 
 static int

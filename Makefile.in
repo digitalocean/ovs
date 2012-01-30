@@ -22,6 +22,8 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without warranty of any kind.
 
+# Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
+
 # Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
@@ -100,17 +102,19 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-aes128$(EXEEXT) \
 DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 	$(dist_check_SCRIPTS) $(dist_man_MANS) $(dist_pkgdata_DATA) \
 	$(dist_pkgdata_SCRIPTS) $(dist_sbin_SCRIPTS) \
-	$(dist_scripts_SCRIPTS) $(srcdir)/Makefile.am \
-	$(srcdir)/Makefile.in $(srcdir)/config.h.in \
-	$(srcdir)/debian/automake.mk $(srcdir)/include/automake.mk \
+	$(dist_scripts_DATA) $(dist_scripts_SCRIPTS) \
+	$(srcdir)/Makefile.am $(srcdir)/Makefile.in \
+	$(srcdir)/config.h.in $(srcdir)/debian/automake.mk \
+	$(srcdir)/include/automake.mk \
 	$(srcdir)/include/linux/automake.mk \
 	$(srcdir)/include/openflow/automake.mk \
 	$(srcdir)/include/openvswitch/automake.mk \
 	$(srcdir)/include/sparse/automake.mk $(srcdir)/lib/automake.mk \
-	$(srcdir)/ofproto/automake.mk $(srcdir)/ovsdb/automake.mk \
+	$(srcdir)/manpages.mk $(srcdir)/ofproto/automake.mk \
+	$(srcdir)/ovsdb/automake.mk \
 	$(srcdir)/ovsdb/ovsdbmonitor/automake.mk \
-	$(srcdir)/python/compat/automake.mk \
-	$(srcdir)/python/ovs/automake.mk $(srcdir)/rhel/automake.mk \
+	$(srcdir)/python/automake.mk \
+	$(srcdir)/python/compat/automake.mk $(srcdir)/rhel/automake.mk \
 	$(srcdir)/tests/automake.mk $(srcdir)/third-party/automake.mk \
 	$(srcdir)/utilities/automake.mk \
 	$(srcdir)/utilities/bugtool/automake.mk \
@@ -148,6 +152,7 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 @HAVE_PYTHON_TRUE@am__append_12 = \
 @HAVE_PYTHON_TRUE@	utilities/ovs-pcap \
 @HAVE_PYTHON_TRUE@	utilities/ovs-tcpundump \
+@HAVE_PYTHON_TRUE@	utilities/ovs-test \
 @HAVE_PYTHON_TRUE@	utilities/ovs-vlan-test
 
 @HAVE_NETLINK_TRUE@am__append_13 = utilities/ovs-vlan-bug-workaround
@@ -155,23 +160,24 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 @HAVE_PYTHON_TRUE@am__append_15 = utilities/bugtool/ovs-bugtool
 @HAVE_PYTHON_TRUE@am__append_16 = utilities/bugtool/ovs-bugtool
 @HAVE_PYTHON_TRUE@am__append_17 = utilities/bugtool/ovs-bugtool.8
-@HAVE_PYTHON_TRUE@am__append_18 = $(bugtool_scripts)
-@HAVE_PYTHON_TRUE@am__append_19 = bugtool-install-data-local
-@HAVE_PYTHON_TRUE@am__append_20 = bugtool-uninstall-local
-@HAVE_OPENSSL_TRUE@am__append_21 = $(TESTPKI_FILES)
-@HAVE_OPENSSL_TRUE@am__append_22 = $(TESTPKI_FILES) tests/ovs-pki.log
-@HAVE_OPENSSL_TRUE@am__append_23 = clean-pki
-@HAVE_PYTHON_TRUE@am__append_24 = include/openflow/openflow.h.stamp \
-@HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
+@HAVE_PYTHON_TRUE@am__append_18 = utilities/bugtool/ovs-bugtool.8
+@HAVE_PYTHON_TRUE@am__append_19 = $(bugtool_scripts)
+@HAVE_PYTHON_TRUE@am__append_20 = bugtool-install-data-local
+@HAVE_PYTHON_TRUE@am__append_21 = bugtool-uninstall-local
+@HAVE_OPENSSL_TRUE@am__append_22 = $(TESTPKI_FILES)
+@HAVE_OPENSSL_TRUE@am__append_23 = $(TESTPKI_FILES) tests/ovs-pki.log
+@HAVE_OPENSSL_TRUE@am__append_24 = clean-pki
 @HAVE_PYTHON_TRUE@am__append_25 = include/openflow/openflow.h.stamp \
 @HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
-@HAVE_NETLINK_TRUE@am__append_26 = vswitchd/ovs-brcompatd
-@BUILD_OVSDBMONITOR_TRUE@am__append_27 = ovsdb/ovsdbmonitor/ovsdbmonitor
-@BUILD_OVSDBMONITOR_TRUE@am__append_28 = \
+@HAVE_PYTHON_TRUE@am__append_26 = include/openflow/openflow.h.stamp \
+@HAVE_PYTHON_TRUE@	include/openflow/nicira-ext.h.stamp
+@HAVE_NETLINK_TRUE@am__append_27 = vswitchd/ovs-brcompatd
+@BUILD_OVSDBMONITOR_TRUE@am__append_28 = ovsdb/ovsdbmonitor/ovsdbmonitor
+@BUILD_OVSDBMONITOR_TRUE@am__append_29 = \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor \
 @BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
 
-@BUILD_OVSDBMONITOR_TRUE@am__append_29 = ovsdb/ovsdbmonitor/ovsdbmonitor.1
+@BUILD_OVSDBMONITOR_TRUE@am__append_30 = ovsdb/ovsdbmonitor/ovsdbmonitor.1
 subdir = .
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/nx-build.m4 \
@@ -212,19 +218,19 @@ am__lib_libopenvswitch_a_SOURCES_DIST = lib/aes128.c lib/aes128.h \
 	lib/meta-flow.c lib/meta-flow.h lib/multipath.c \
 	lib/multipath.h lib/netdev-dummy.c lib/netdev-provider.h \
 	lib/netdev.c lib/netdev.h lib/netlink.c lib/netlink.h \
-	lib/nx-match.c lib/nx-match.def lib/nx-match.h lib/odp-util.c \
-	lib/odp-util.h lib/ofp-errors.c lib/ofp-errors.h \
-	lib/ofp-parse.c lib/ofp-parse.h lib/ofp-print.c \
-	lib/ofp-print.h lib/ofp-util.c lib/ofp-util.def lib/ofp-util.h \
-	lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c lib/ovsdb-data.h \
-	lib/ovsdb-error.c lib/ovsdb-error.h lib/ovsdb-idl-provider.h \
-	lib/ovsdb-idl.c lib/ovsdb-idl.h lib/ovsdb-parser.c \
-	lib/ovsdb-parser.h lib/ovsdb-types.c lib/ovsdb-types.h \
-	lib/packets.c lib/packets.h lib/pcap.c lib/pcap.h \
-	lib/poll-loop.c lib/poll-loop.h lib/process.c lib/process.h \
-	lib/random.c lib/random.h lib/rconn.c lib/rconn.h \
-	lib/reconnect.c lib/reconnect.h lib/sat-math.h lib/sha1.c \
-	lib/sha1.h lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
+	lib/nx-match.c lib/nx-match.h lib/odp-util.c lib/odp-util.h \
+	lib/ofp-errors.c lib/ofp-errors.h lib/ofp-parse.c \
+	lib/ofp-parse.h lib/ofp-print.c lib/ofp-print.h lib/ofp-util.c \
+	lib/ofp-util.def lib/ofp-util.h lib/ofpbuf.c lib/ofpbuf.h \
+	lib/ovsdb-data.c lib/ovsdb-data.h lib/ovsdb-error.c \
+	lib/ovsdb-error.h lib/ovsdb-idl-provider.h lib/ovsdb-idl.c \
+	lib/ovsdb-idl.h lib/ovsdb-parser.c lib/ovsdb-parser.h \
+	lib/ovsdb-types.c lib/ovsdb-types.h lib/packets.c \
+	lib/packets.h lib/pcap.c lib/pcap.h lib/poll-loop.c \
+	lib/poll-loop.h lib/process.c lib/process.h lib/random.c \
+	lib/random.h lib/rconn.c lib/rconn.h lib/reconnect.c \
+	lib/reconnect.h lib/sat-math.h lib/sha1.c lib/sha1.h \
+	lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
 	lib/socket-util.c lib/socket-util.h lib/sort.c lib/sort.h \
 	lib/sset.c lib/sset.h lib/stp.c lib/stp.h lib/stream-fd.c \
 	lib/stream-fd.h lib/stream-provider.h lib/stream-ssl.h \
@@ -236,9 +242,10 @@ am__lib_libopenvswitch_a_SOURCES_DIST = lib/aes128.c lib/aes128.h \
 	lib/unixctl.c lib/unixctl.h lib/util.c lib/util.h lib/uuid.c \
 	lib/uuid.h lib/valgrind.h lib/vconn-provider.h \
 	lib/vconn-stream.c lib/vconn.c lib/vconn.h lib/vlan-bitmap.c \
-	lib/vlan-bitmap.h lib/vlog.c lib/vlog.h lib/dpif-linux.c \
-	lib/dpif-linux.h lib/netdev-linux.c lib/netdev-linux.h \
-	lib/netdev-vport.c lib/netdev-vport.h lib/netlink-notifier.c \
+	lib/vlan-bitmap.h lib/vlandev.c lib/vlandev.h lib/vlog.c \
+	lib/vlog.h lib/dpif-linux.c lib/dpif-linux.h \
+	lib/netdev-linux.c lib/netdev-linux.h lib/netdev-vport.c \
+	lib/netdev-vport.h lib/netlink-notifier.c \
 	lib/netlink-notifier.h lib/netlink-protocol.h \
 	lib/netlink-socket.c lib/netlink-socket.h lib/rtnetlink-link.c \
 	lib/rtnetlink-link.h lib/route-table.c lib/route-table.h \
@@ -288,8 +295,9 @@ am_lib_libopenvswitch_a_OBJECTS = lib/aes128.$(OBJEXT) \
 	lib/timeval.$(OBJEXT) lib/unicode.$(OBJEXT) \
 	lib/unixctl.$(OBJEXT) lib/util.$(OBJEXT) lib/uuid.$(OBJEXT) \
 	lib/vconn-stream.$(OBJEXT) lib/vconn.$(OBJEXT) \
-	lib/vlan-bitmap.$(OBJEXT) lib/vlog.$(OBJEXT) $(am__objects_1) \
-	$(am__objects_2) $(am__objects_3)
+	lib/vlan-bitmap.$(OBJEXT) lib/vlandev.$(OBJEXT) \
+	lib/vlog.$(OBJEXT) $(am__objects_1) $(am__objects_2) \
+	$(am__objects_3)
 @HAVE_OPENSSL_TRUE@am__objects_4 = lib/dhparams.$(OBJEXT)
 nodist_lib_libopenvswitch_a_OBJECTS = lib/dirs.$(OBJEXT) \
 	$(am__objects_4)
@@ -329,8 +337,9 @@ am__installdirs = "$(DESTDIR)$(bindir)" "$(DESTDIR)$(sbindir)" \
 	"$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" \
 	"$(DESTDIR)$(man1dir)" "$(DESTDIR)$(man5dir)" \
 	"$(DESTDIR)$(man8dir)" "$(DESTDIR)$(pkgdatadir)" \
-	"$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(ovsdbmonitordir)" \
-	"$(DESTDIR)$(pkgdatadir)"
+	"$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(pkgdatadir)" \
+	"$(DESTDIR)$(ovsdbmonitordir)" "$(DESTDIR)$(pkgdatadir)" \
+	"$(DESTDIR)$(scriptsdir)"
 @HAVE_NETLINK_TRUE@am__EXEEXT_1 = utilities/nlmon$(EXEEXT)
 @HAVE_NETLINK_TRUE@am__EXEEXT_2 =  \
 @HAVE_NETLINK_TRUE@	utilities/ovs-vlan-bug-workaround$(EXEEXT)
@@ -590,34 +599,40 @@ man5dir = $(mandir)/man5
 man8dir = $(mandir)/man8
 NROFF = nroff
 MANS = $(dist_man_MANS) $(man_MANS)
-DATA = $(dist_pkgdata_DATA) $(nobase_pkgdata_DATA) $(noinst_DATA) \
-	$(ovsdbmonitor_DATA) $(pkgdata_DATA)
+DATA = $(dist_pkgdata_DATA) $(dist_scripts_DATA) \
+	$(nobase_pkgdata_DATA) $(noinst_DATA) $(ovsdbmonitor_DATA) \
+	$(pkgdata_DATA) $(scripts_DATA)
 am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	INSTALL.RHEL INSTALL.SSL INSTALL.XenServer INSTALL.bridge \
 	INSTALL.userspace NOTICE PORTING README-gcov REPORTING-BUGS \
-	SubmittingPatches WHY-OVS boot.sh lib/common.man \
-	lib/common-syn.man lib/daemon.man lib/daemon-syn.man \
-	lib/leak-checker.man lib/ssl-bootstrap.man \
-	lib/ssl-bootstrap-syn.man lib/ssl-peer-ca-cert.man lib/ssl.man \
-	lib/ssl-syn.man lib/stress-unixctl.man lib/table.man \
-	lib/unixctl.man lib/unixctl-syn.man lib/vconn-active.man \
-	lib/vconn-passive.man lib/vlog-unixctl.man lib/vlog-syn.man \
-	lib/vlog.man ofproto/ofproto-unixctl.man \
-	utilities/ovs-vlan-bugs.man ovsdb/remote-active.man \
-	ovsdb/remote-passive.man soexpand.pl lib/dh1024.pem \
-	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
-	build-aux/extract-ofp-errors utilities/ovs-appctl.8.in \
-	utilities/ovs-benchmark.1.in utilities/ovs-controller.8.in \
-	utilities/ovs-ctl.in utilities/ovs-dpctl.8.in \
-	utilities/ovs-lib.sh.in utilities/ovs-ofctl.8.in \
-	utilities/ovs-parse-leaks.8 utilities/ovs-parse-leaks.in \
-	utilities/ovs-pcap.1.in utilities/ovs-pcap.in \
-	utilities/ovs-pki-cgi.in utilities/ovs-pki.8.in \
-	utilities/ovs-pki.in utilities/ovs-save \
-	utilities/ovs-tcpundump.1.in utilities/ovs-tcpundump.in \
-	utilities/ovs-vlan-test.in \
-	utilities/ovs-vlan-bug-workaround.8.in \
+	SubmittingPatches WHY-OVS boot.sh build-aux/sodepends.pl \
+	build-aux/soexpand.pl lib/common.man lib/common-syn.man \
+	lib/daemon.man lib/daemon-syn.man lib/leak-checker.man \
+	lib/ovs.tmac lib/ssl-bootstrap.man lib/ssl-bootstrap-syn.man \
+	lib/ssl-peer-ca-cert.man lib/ssl.man lib/ssl-syn.man \
+	lib/stress-unixctl.man lib/table.man lib/unixctl.man \
+	lib/unixctl-syn.man lib/vconn-active.man lib/vconn-passive.man \
+	lib/vlog-unixctl.man lib/vlog-syn.man lib/vlog.man \
+	ofproto/ofproto-unixctl.man utilities/ovs-vlan-bugs.man \
+	ovsdb/remote-active.man ovsdb/remote-passive.man \
+	utilities/ovs-appctl.8.in utilities/ovs-benchmark.1.in \
+	utilities/ovs-controller.8.in utilities/ovs-ctl.8 \
+	utilities/ovs-dpctl.8.in utilities/ovs-ofctl.8.in \
+	utilities/ovs-parse-leaks.8 utilities/ovs-pcap.1.in \
+	utilities/ovs-pki.8.in utilities/ovs-tcpundump.1.in \
+	utilities/ovs-vlan-bug-workaround.8.in utilities/ovs-test.8.in \
 	utilities/ovs-vlan-test.8.in utilities/ovs-vsctl.8.in \
+	utilities/bugtool/ovs-bugtool.8 vswitchd/ovs-vswitchd.8.in \
+	vswitchd/ovs-brcompatd.8.in ovsdb/ovsdb-tool.1.in \
+	ovsdb/ovsdb-client.1.in ovsdb/ovsdb-server.1.in \
+	ovsdb/ovsdb-idlc.1 ovsdb/ovsdbmonitor/ovsdbmonitor.1 \
+	lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
+	build-aux/extract-ofp-errors utilities/ovs-ctl.in \
+	utilities/ovs-lib.in utilities/ovs-parse-leaks.in \
+	utilities/ovs-pcap.in utilities/ovs-pki-cgi.in \
+	utilities/ovs-pki.in utilities/ovs-save \
+	utilities/ovs-tcpundump.in utilities/ovs-test.in \
+	utilities/ovs-vlan-test.in \
 	utilities/bugtool/plugins/kernel-info/openvswitch.xml \
 	utilities/bugtool/plugins/network-status/openvswitch.xml \
 	utilities/bugtool/plugins/system-configuration.xml \
@@ -627,13 +642,12 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	utilities/bugtool/ovs-bugtool-lacp-show \
 	utilities/bugtool/ovs-bugtool-tc-class-show \
 	utilities/bugtool/ovs-bugtool-ovsdb-dump \
-	utilities/bugtool/ovs-bugtool.8 \
 	utilities/bugtool/ovs-bugtool.in tests/testsuite.at \
 	tests/ovsdb-macros.at tests/library.at tests/bundle.at \
 	tests/classifier.at tests/check-structs.at tests/daemon.at \
 	tests/daemon-py.at tests/ofp-print.at tests/ovs-ofctl.at \
 	tests/odp.at tests/multipath.at tests/autopath.at \
-	tests/learn.at tests/vconn.at tests/file_name.at \
+	tests/lacp.at tests/learn.at tests/vconn.at tests/file_name.at \
 	tests/aes128.at tests/uuid.at tests/json.at tests/jsonrpc.at \
 	tests/jsonrpc-py.at tests/timeval.at tests/lockfile.at \
 	tests/reconnect.at tests/ofproto-dpif.at \
@@ -649,9 +663,8 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	tests/ovs-monitor-ipsec.at tests/ovs-xapi-sync.at tests/stp.at \
 	tests/interface-reconfigure.at tests/vlog.at \
 	$(srcdir)/tests/testsuite tests/atlocal.in \
-	$(srcdir)/package.m4 tests/compare-odp-actions.pl \
-	tests/lcov-wrapper.in tests/valgrind-wrapper.in \
-	tests/openssl.supp tests/uuidfilt.pl \
+	$(srcdir)/package.m4 tests/lcov-wrapper.in \
+	tests/valgrind-wrapper.in tests/openssl.supp tests/uuidfilt.pl \
 	tests/ovsdb-monitor-sort.pl tests/idltest.ovsschema \
 	tests/idltest.ann tests/test-daemon.py tests/test-json.py \
 	tests/test-jsonrpc.py tests/test-ovsdb.py \
@@ -663,6 +676,7 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	debian/openvswitch-brcompat.install \
 	debian/openvswitch-brcompat.manpages \
 	debian/openvswitch-brcompat.postinst \
+	debian/openvswitch-brcompat.postrm \
 	debian/openvswitch-common.dirs \
 	debian/openvswitch-common.install \
 	debian/openvswitch-common.manpages \
@@ -682,7 +696,7 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	debian/openvswitch-datapath-source.install \
 	debian/openvswitch-ipsec.dirs debian/openvswitch-ipsec.init \
 	debian/openvswitch-ipsec.install \
-	debian/openvswitch-pki.postinst \
+	debian/openvswitch-pki.postinst debian/openvswitch-pki.postrm \
 	debian/openvswitch-switch.README.Debian \
 	debian/openvswitch-switch.dirs debian/openvswitch-switch.init \
 	debian/openvswitch-switch.install \
@@ -690,19 +704,17 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
-	debian/openvswitch-switch.template debian/ovsdbmonitor.install \
+	debian/openvswitch-switch.template \
+	debian/openvswitch-test.dirs debian/openvswitch-test.install \
+	debian/openvswitch-test.manpages debian/ovsdbmonitor.install \
 	debian/ovsdbmonitor.manpages debian/ovs-monitor-ipsec \
 	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install debian/rules \
-	debian/rules.modules debian/source/format \
-	vswitchd/ovs-vswitchd.8.in vswitchd/INTERNALS \
-	vswitchd/ovs-brcompatd.8.in vswitchd/vswitch.ovsschema \
-	vswitchd/vswitch-idl.ann vswitchd/vswitch.gv \
-	vswitchd/vswitch.pic vswitchd/vswitch.xml \
-	ovsdb/ovsdb-tool.1.in ovsdb/ovsdb-client.1.in \
-	ovsdb/ovsdb-server.1.in ovsdb/SPECS ovsdb/ovsdb-idlc.in \
-	ovsdb/ovsdb-idlc.1 tests/idltest.c tests/idltest.h \
-	tests/idltest.ovsidl vswitchd/vswitch-idl.c \
+	debian/rules.modules debian/source/format vswitchd/INTERNALS \
+	vswitchd/vswitch.ovsschema vswitchd/vswitch-idl.ann \
+	vswitchd/vswitch.gv vswitchd/vswitch.pic vswitchd/vswitch.xml \
+	ovsdb/SPECS ovsdb/ovsdb-idlc.in tests/idltest.c \
+	tests/idltest.h tests/idltest.ovsidl vswitchd/vswitch-idl.c \
 	vswitchd/vswitch-idl.h vswitchd/vswitch-idl.ovsidl \
 	ovsdb/ovsdb-doc.in ovsdb/ovsdb-dot.in ovsdb/dot2pic \
 	ovsdb/ovsdbmonitor/OVEApp.py \
@@ -728,9 +740,11 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	ovsdb/ovsdbmonitor/HostWindow.ui \
 	ovsdb/ovsdbmonitor/LogWindow.ui \
 	ovsdb/ovsdbmonitor/MainWindow.ui \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.in \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.1 rhel/automake.mk \
-	rhel/etc_init.d_openvswitch rhel/etc_logrotate.d_openvswitch \
+	ovsdb/ovsdbmonitor/ovsdbmonitor.in rhel/README.RHEL \
+	rhel/automake.mk rhel/etc_init.d_openvswitch \
+	rhel/etc_logrotate.d_openvswitch \
+	rhel/etc_sysconfig_network-scripts_ifdown-ovs \
+	rhel/etc_sysconfig_network-scripts_ifup-ovs \
 	rhel/kmodtool-openvswitch-el5.sh \
 	rhel/openvswitch-kmod-rhel5.spec \
 	rhel/openvswitch-kmod-rhel5.spec.in \
@@ -762,10 +776,13 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	python/ovs/poller.py python/ovs/process.py \
 	python/ovs/reconnect.py python/ovs/socket_util.py \
 	python/ovs/stream.py python/ovs/timeval.py python/ovs/vlog.py \
-	python/ovs/util.py python/ovs/dirs.py python/compat/uuid.py \
-	python/compat/argparse.py include/linux/openvswitch.h \
-	include/linux/types.h include/openflow/nicira-ext.h \
-	include/openflow/openflow.h \
+	python/ovs/util.py python/ovs/dirs.py \
+	python/ovstest/__init__.py python/ovstest/args.py \
+	python/ovstest/rpcserver.py python/ovstest/tcp.py \
+	python/ovstest/udp.py python/ovstest/util.py \
+	python/compat/uuid.py python/compat/argparse.py \
+	include/linux/openvswitch.h include/linux/types.h \
+	include/openflow/nicira-ext.h include/openflow/openflow.h \
 	include/openvswitch/brcompat-netlink.h \
 	include/openvswitch/datapath-compat.h \
 	include/openvswitch/tunnel.h include/openvswitch/types.h \
@@ -941,29 +958,29 @@ AM_CFLAGS = -Wstrict-prototypes $(WARNING_FLAGS) $(am__append_2)
 
 # Version checking for vswitch.ovsschema.
 ALL_LOCAL = dist-hook-git rate-limit-check $(am__append_3) \
-	$(am__append_24) check-debian-changelog-version \
+	$(am__append_25) check-debian-changelog-version \
 	vswitchd/vswitch.ovsschema.stamp
 BUILT_SOURCES = $(OVSIDL_BUILT)
 CLEANFILES = all-distfiles all-gitfiles missing-distfiles distfiles \
-	$(am__append_4) $(nodist_lib_libopenvswitch_a_SOURCES) \
-	$(am__append_11) $(am__append_16) $(lcov_wrappers) \
-	$(valgrind_wrappers) $(am__append_22) \
-	vswitchd/vswitch.ovsschema.stamp
-CLEAN_LOCAL = $(am__append_23)
+	$(am__append_4) manpage-dep-check \
+	$(nodist_lib_libopenvswitch_a_SOURCES) $(am__append_11) \
+	$(am__append_16) $(lcov_wrappers) $(valgrind_wrappers) \
+	$(am__append_23) vswitchd/vswitch.ovsschema.stamp
+CLEAN_LOCAL = $(am__append_24)
 DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 	utilities/ovs-benchmark.1 utilities/ovs-controller.8 \
-	utilities/ovs-dpctl.8 utilities/ovs-lib.sh \
-	utilities/ovs-ofctl.8 utilities/ovs-parse-leaks \
-	utilities/ovs-pcap utilities/ovs-pcap.1 utilities/ovs-pki \
-	utilities/ovs-pki-cgi utilities/ovs-pki.8 \
-	utilities/ovs-tcpundump utilities/ovs-tcpundump.1 \
-	utilities/ovs-vlan-test utilities/ovs-vlan-test.8 \
-	utilities/ovs-vlan-bug-workaround.8 utilities/ovs-vsctl.8 \
-	tests/atconfig tests/atlocal $(am__append_25) debian/copyright \
-	vswitchd/ovs-vswitchd.8 vswitchd/ovs-brcompatd.8 \
-	ovsdb/ovsdb-tool.1 ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 \
-	ovsdb/ovsdb-idlc ovsdb/ovsdb-doc ovsdb/ovsdb-dot \
-	$(am__append_28)
+	utilities/ovs-dpctl.8 utilities/ovs-lib utilities/ovs-ofctl.8 \
+	utilities/ovs-parse-leaks utilities/ovs-pcap \
+	utilities/ovs-pcap.1 utilities/ovs-pki utilities/ovs-pki-cgi \
+	utilities/ovs-pki.8 utilities/ovs-tcpundump \
+	utilities/ovs-tcpundump.1 utilities/ovs-test \
+	utilities/ovs-test.8 utilities/ovs-vlan-test \
+	utilities/ovs-vlan-test.8 utilities/ovs-vlan-bug-workaround.8 \
+	utilities/ovs-vsctl.8 tests/atconfig tests/atlocal \
+	$(am__append_26) debian/copyright vswitchd/ovs-vswitchd.8 \
+	vswitchd/ovs-brcompatd.8 ovsdb/ovsdb-tool.1 \
+	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 ovsdb/ovsdb-idlc \
+	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_29)
 
 # Python tests.
 
@@ -977,27 +994,20 @@ DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	INSTALL.SSL INSTALL.XenServer INSTALL.bridge INSTALL.userspace \
 	NOTICE PORTING README-gcov REPORTING-BUGS SubmittingPatches \
-	WHY-OVS boot.sh $(MAN_FRAGMENTS) soexpand.pl lib/dh1024.pem \
-	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
-	build-aux/extract-ofp-errors utilities/ovs-appctl.8.in \
-	utilities/ovs-benchmark.1.in utilities/ovs-controller.8.in \
-	utilities/ovs-ctl.in utilities/ovs-dpctl.8.in \
-	utilities/ovs-lib.sh.in utilities/ovs-ofctl.8.in \
-	utilities/ovs-parse-leaks.8 utilities/ovs-parse-leaks.in \
-	utilities/ovs-pcap.1.in utilities/ovs-pcap.in \
-	utilities/ovs-pki-cgi.in utilities/ovs-pki.8.in \
-	utilities/ovs-pki.in utilities/ovs-save \
-	utilities/ovs-tcpundump.1.in utilities/ovs-tcpundump.in \
-	utilities/ovs-vlan-test.in \
-	utilities/ovs-vlan-bug-workaround.8.in \
-	utilities/ovs-vlan-test.8.in utilities/ovs-vsctl.8.in \
+	WHY-OVS boot.sh build-aux/sodepends.pl build-aux/soexpand.pl \
+	$(MAN_FRAGMENTS) $(MAN_ROOTS) lib/dh1024.pem lib/dh2048.pem \
+	lib/dh4096.pem lib/dirs.c.in build-aux/extract-ofp-errors \
+	utilities/ovs-ctl.in utilities/ovs-lib.in \
+	utilities/ovs-parse-leaks.in utilities/ovs-pcap.in \
+	utilities/ovs-pki-cgi.in utilities/ovs-pki.in \
+	utilities/ovs-save utilities/ovs-tcpundump.in \
+	utilities/ovs-test.in utilities/ovs-vlan-test.in \
 	$(bugtool_plugins) $(bugtool_scripts) \
 	utilities/bugtool/ovs-bugtool.8 \
 	utilities/bugtool/ovs-bugtool.in $(TESTSUITE_AT) $(TESTSUITE) \
 	tests/atlocal.in $(srcdir)/package.m4 \
-	$(srcdir)/tests/testsuite tests/compare-odp-actions.pl \
-	tests/lcov-wrapper.in tests/valgrind-wrapper.in \
-	tests/openssl.supp tests/uuidfilt.pl \
+	$(srcdir)/tests/testsuite tests/lcov-wrapper.in \
+	tests/valgrind-wrapper.in tests/openssl.supp tests/uuidfilt.pl \
 	tests/ovsdb-monitor-sort.pl $(IDLTEST_IDL_FILES) \
 	tests/test-daemon.py tests/test-json.py tests/test-jsonrpc.py \
 	tests/test-ovsdb.py tests/test-reconnect.py \
@@ -1009,6 +1019,7 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	debian/openvswitch-brcompat.install \
 	debian/openvswitch-brcompat.manpages \
 	debian/openvswitch-brcompat.postinst \
+	debian/openvswitch-brcompat.postrm \
 	debian/openvswitch-common.dirs \
 	debian/openvswitch-common.install \
 	debian/openvswitch-common.manpages \
@@ -1028,7 +1039,7 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	debian/openvswitch-datapath-source.install \
 	debian/openvswitch-ipsec.dirs debian/openvswitch-ipsec.init \
 	debian/openvswitch-ipsec.install \
-	debian/openvswitch-pki.postinst \
+	debian/openvswitch-pki.postinst debian/openvswitch-pki.postrm \
 	debian/openvswitch-switch.README.Debian \
 	debian/openvswitch-switch.dirs debian/openvswitch-switch.init \
 	debian/openvswitch-switch.install \
@@ -1036,26 +1047,27 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
-	debian/openvswitch-switch.template debian/ovsdbmonitor.install \
+	debian/openvswitch-switch.template \
+	debian/openvswitch-test.dirs debian/openvswitch-test.install \
+	debian/openvswitch-test.manpages debian/ovsdbmonitor.install \
 	debian/ovsdbmonitor.manpages debian/ovs-monitor-ipsec \
 	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install debian/rules \
-	debian/rules.modules debian/source/format \
-	vswitchd/ovs-vswitchd.8.in vswitchd/INTERNALS \
-	vswitchd/ovs-brcompatd.8.in $(VSWITCH_IDL_FILES) \
-	vswitchd/vswitch.gv vswitchd/vswitch.pic vswitchd/vswitch.xml \
-	ovsdb/ovsdb-tool.1.in ovsdb/ovsdb-client.1.in \
-	ovsdb/ovsdb-server.1.in ovsdb/SPECS ovsdb/ovsdb-idlc.in \
-	ovsdb/ovsdb-idlc.1 $(OVSIDL_BUILT) ovsdb/ovsdb-doc.in \
-	ovsdb/ovsdb-dot.in ovsdb/dot2pic $(ovsdbmonitor_pyfiles) \
+	debian/rules.modules debian/source/format vswitchd/INTERNALS \
+	$(VSWITCH_IDL_FILES) vswitchd/vswitch.gv vswitchd/vswitch.pic \
+	vswitchd/vswitch.xml ovsdb/SPECS ovsdb/ovsdb-idlc.in \
+	$(OVSIDL_BUILT) ovsdb/ovsdb-doc.in ovsdb/ovsdb-dot.in \
+	ovsdb/dot2pic $(ovsdbmonitor_pyfiles) \
 	ovsdb/ovsdbmonitor/COPYING ovsdb/ovsdbmonitor/ConfigWindow.ui \
 	ovsdb/ovsdbmonitor/FlowWindow.ui \
 	ovsdb/ovsdbmonitor/HostWindow.ui \
 	ovsdb/ovsdbmonitor/LogWindow.ui \
 	ovsdb/ovsdbmonitor/MainWindow.ui \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.in \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.1 rhel/automake.mk \
-	rhel/etc_init.d_openvswitch rhel/etc_logrotate.d_openvswitch \
+	ovsdb/ovsdbmonitor/ovsdbmonitor.in rhel/README.RHEL \
+	rhel/automake.mk rhel/etc_init.d_openvswitch \
+	rhel/etc_logrotate.d_openvswitch \
+	rhel/etc_sysconfig_network-scripts_ifdown-ovs \
+	rhel/etc_sysconfig_network-scripts_ifup-ovs \
 	rhel/kmodtool-openvswitch-el5.sh \
 	rhel/openvswitch-kmod-rhel5.spec \
 	rhel/openvswitch-kmod-rhel5.spec.in \
@@ -1078,8 +1090,8 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	xenserver/usr_lib_xsconsole_plugins-base_XSFeatureVSwitch.py \
 	xenserver/usr_share_openvswitch_scripts_ovs-xapi-sync \
 	xenserver/usr_share_openvswitch_scripts_sysconfig.template \
-	$(ovs_pyfiles) python/ovs/dirs.py python/compat/uuid.py \
-	python/compat/argparse.py
+	$(ovs_pyfiles) python/ovs/dirs.py $(ovstest_pyfiles) \
+	python/compat/uuid.py python/compat/argparse.py
 bin_SCRIPTS = utilities/ovs-pki utilities/ovs-vsctl \
 	utilities/ovs-parse-leaks $(am__append_12)
 DIST_HOOKS = check-debian-changelog-version
@@ -1088,8 +1100,9 @@ dist_pkgdata_DATA =
 dist_pkgdata_SCRIPTS = 
 dist_sbin_SCRIPTS = 
 dist_scripts_SCRIPTS = 
-INSTALL_DATA_LOCAL = lib-install-data-local $(am__append_19)
-UNINSTALL_LOCAL = $(am__append_20) ovsdbmonitor-uninstall-local \
+dist_scripts_DATA = 
+INSTALL_DATA_LOCAL = lib-install-data-local $(am__append_20)
+UNINSTALL_LOCAL = $(am__append_21) ovsdbmonitor-uninstall-local \
 	ovs-uninstall-local
 # ovsdb-tool.1
 # ovsdb-client.1
@@ -1099,19 +1112,30 @@ man_MANS = utilities/ovs-appctl.8 utilities/ovs-benchmark.1 \
 	utilities/ovs-ofctl.8 utilities/ovs-parse-leaks.8 \
 	utilities/ovs-pcap.1 utilities/ovs-pki.8 \
 	utilities/ovs-tcpundump.1 utilities/ovs-vlan-bug-workaround.8 \
-	utilities/ovs-vlan-test.8 utilities/ovs-vsctl.8 \
-	$(am__append_17) vswitchd/ovs-vswitchd.8 \
+	utilities/ovs-test.8 utilities/ovs-vlan-test.8 \
+	utilities/ovs-vsctl.8 $(am__append_17) vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-brcompatd.8 ovsdb/ovsdb-tool.1 \
-	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 $(am__append_29)
+	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 $(am__append_30)
 MAN_FRAGMENTS = lib/common.man lib/common-syn.man lib/daemon.man \
-	lib/daemon-syn.man lib/leak-checker.man lib/ssl-bootstrap.man \
-	lib/ssl-bootstrap-syn.man lib/ssl-peer-ca-cert.man lib/ssl.man \
-	lib/ssl-syn.man lib/stress-unixctl.man lib/table.man \
-	lib/unixctl.man lib/unixctl-syn.man lib/vconn-active.man \
-	lib/vconn-passive.man lib/vlog-unixctl.man lib/vlog-syn.man \
-	lib/vlog.man ofproto/ofproto-unixctl.man \
-	utilities/ovs-vlan-bugs.man ovsdb/remote-active.man \
-	ovsdb/remote-passive.man
+	lib/daemon-syn.man lib/leak-checker.man lib/ovs.tmac \
+	lib/ssl-bootstrap.man lib/ssl-bootstrap-syn.man \
+	lib/ssl-peer-ca-cert.man lib/ssl.man lib/ssl-syn.man \
+	lib/stress-unixctl.man lib/table.man lib/unixctl.man \
+	lib/unixctl-syn.man lib/vconn-active.man lib/vconn-passive.man \
+	lib/vlog-unixctl.man lib/vlog-syn.man lib/vlog.man \
+	ofproto/ofproto-unixctl.man utilities/ovs-vlan-bugs.man \
+	ovsdb/remote-active.man ovsdb/remote-passive.man
+MAN_ROOTS = utilities/ovs-appctl.8.in utilities/ovs-benchmark.1.in \
+	utilities/ovs-controller.8.in utilities/ovs-ctl.8 \
+	utilities/ovs-dpctl.8.in utilities/ovs-ofctl.8.in \
+	utilities/ovs-parse-leaks.8 utilities/ovs-pcap.1.in \
+	utilities/ovs-pki.8.in utilities/ovs-tcpundump.1.in \
+	utilities/ovs-vlan-bug-workaround.8.in utilities/ovs-test.8.in \
+	utilities/ovs-vlan-test.8.in utilities/ovs-vsctl.8.in \
+	$(am__append_18) vswitchd/ovs-vswitchd.8.in \
+	vswitchd/ovs-brcompatd.8.in ovsdb/ovsdb-tool.1.in \
+	ovsdb/ovsdb-client.1.in ovsdb/ovsdb-server.1.in \
+	ovsdb/ovsdb-idlc.1 ovsdb/ovsdbmonitor/ovsdbmonitor.1
 noinst_DATA = 
 
 # This ensures that files added to EXTRA_DIST are always distributed,
@@ -1134,7 +1158,7 @@ noinst_LIBRARIES = lib/libopenvswitch.a lib/libsflow.a \
 	ofproto/libofproto.a ovsdb/libovsdb.a
 noinst_man_MANS = 
 noinst_SCRIPTS = utilities/ovs-pki-cgi ovsdb/ovsdb-idlc \
-	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_27)
+	ovsdb/ovsdb-doc ovsdb/ovsdb-dot $(am__append_28)
 
 # idltest schema and IDL
 
@@ -1144,10 +1168,11 @@ OVSIDL_BUILT = tests/idltest.c tests/idltest.h tests/idltest.ovsidl \
 	vswitchd/vswitch-idl.ovsidl
 pkgdata_DATA = vswitchd/vswitch.ovsschema
 sbin_SCRIPTS = $(am__append_15)
-scripts_SCRIPTS = utilities/ovs-ctl utilities/ovs-lib.sh \
-	utilities/ovs-save $(am__append_18)
+scripts_SCRIPTS = utilities/ovs-ctl utilities/ovs-save \
+	$(am__append_19)
+scripts_DATA = utilities/ovs-lib
 SUFFIXES = .in .ovsidl .ovsschema .ui .py
-check_DATA = $(am__append_21)
+check_DATA = $(am__append_22)
 scriptsdir = $(pkgdatadir)/scripts
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
 ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-read-only: t -*-\n'
@@ -1172,19 +1197,19 @@ lib_libopenvswitch_a_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/meta-flow.c lib/meta-flow.h lib/multipath.c \
 	lib/multipath.h lib/netdev-dummy.c lib/netdev-provider.h \
 	lib/netdev.c lib/netdev.h lib/netlink.c lib/netlink.h \
-	lib/nx-match.c lib/nx-match.def lib/nx-match.h lib/odp-util.c \
-	lib/odp-util.h lib/ofp-errors.c lib/ofp-errors.h \
-	lib/ofp-parse.c lib/ofp-parse.h lib/ofp-print.c \
-	lib/ofp-print.h lib/ofp-util.c lib/ofp-util.def lib/ofp-util.h \
-	lib/ofpbuf.c lib/ofpbuf.h lib/ovsdb-data.c lib/ovsdb-data.h \
-	lib/ovsdb-error.c lib/ovsdb-error.h lib/ovsdb-idl-provider.h \
-	lib/ovsdb-idl.c lib/ovsdb-idl.h lib/ovsdb-parser.c \
-	lib/ovsdb-parser.h lib/ovsdb-types.c lib/ovsdb-types.h \
-	lib/packets.c lib/packets.h lib/pcap.c lib/pcap.h \
-	lib/poll-loop.c lib/poll-loop.h lib/process.c lib/process.h \
-	lib/random.c lib/random.h lib/rconn.c lib/rconn.h \
-	lib/reconnect.c lib/reconnect.h lib/sat-math.h lib/sha1.c \
-	lib/sha1.h lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
+	lib/nx-match.c lib/nx-match.h lib/odp-util.c lib/odp-util.h \
+	lib/ofp-errors.c lib/ofp-errors.h lib/ofp-parse.c \
+	lib/ofp-parse.h lib/ofp-print.c lib/ofp-print.h lib/ofp-util.c \
+	lib/ofp-util.def lib/ofp-util.h lib/ofpbuf.c lib/ofpbuf.h \
+	lib/ovsdb-data.c lib/ovsdb-data.h lib/ovsdb-error.c \
+	lib/ovsdb-error.h lib/ovsdb-idl-provider.h lib/ovsdb-idl.c \
+	lib/ovsdb-idl.h lib/ovsdb-parser.c lib/ovsdb-parser.h \
+	lib/ovsdb-types.c lib/ovsdb-types.h lib/packets.c \
+	lib/packets.h lib/pcap.c lib/pcap.h lib/poll-loop.c \
+	lib/poll-loop.h lib/process.c lib/process.h lib/random.c \
+	lib/random.h lib/rconn.c lib/rconn.h lib/reconnect.c \
+	lib/reconnect.h lib/sat-math.h lib/sha1.c lib/sha1.h \
+	lib/shash.c lib/shash.h lib/signals.c lib/signals.h \
 	lib/socket-util.c lib/socket-util.h lib/sort.c lib/sort.h \
 	lib/sset.c lib/sset.h lib/stp.c lib/stp.h lib/stream-fd.c \
 	lib/stream-fd.h lib/stream-provider.h lib/stream-ssl.h \
@@ -1196,8 +1221,8 @@ lib_libopenvswitch_a_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/unixctl.c lib/unixctl.h lib/util.c lib/util.h lib/uuid.c \
 	lib/uuid.h lib/valgrind.h lib/vconn-provider.h \
 	lib/vconn-stream.c lib/vconn.c lib/vconn.h lib/vlan-bitmap.c \
-	lib/vlan-bitmap.h lib/vlog.c lib/vlog.h $(am__append_7) \
-	$(am__append_8) $(am__append_10)
+	lib/vlan-bitmap.h lib/vlandev.c lib/vlandev.h lib/vlog.c \
+	lib/vlog.h $(am__append_7) $(am__append_8) $(am__append_10)
 nodist_lib_libopenvswitch_a_SOURCES = lib/dirs.c $(am__append_9)
 lib_libsflow_a_SOURCES = \
 	lib/sflow_api.h \
@@ -1276,7 +1301,7 @@ utilities_ovs_benchmark_LDADD = lib/libopenvswitch.a
 @HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-tc-class-show \
 @HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool-ovsdb-dump
 
-@HAVE_PYTHON_TRUE@bugtoolpluginsdir = $(sysconfdir)/openvswitch/bugtool-plugins
+@HAVE_PYTHON_TRUE@bugtoolpluginsdir = $(pkgdatadir)/bugtool-plugins
 TESTSUITE_AT = \
 	tests/testsuite.at \
 	tests/ovsdb-macros.at \
@@ -1291,6 +1316,7 @@ TESTSUITE_AT = \
 	tests/odp.at \
 	tests/multipath.at \
 	tests/autopath.at \
+	tests/lacp.at \
 	tests/learn.at \
 	tests/vconn.at \
 	tests/file_name.at \
@@ -1337,6 +1363,7 @@ AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
 lcov_wrappers = \
 	tests/lcov/ovs-appctl \
 	tests/lcov/ovs-vsctl \
+	tests/lcov/ovs-vswitchd \
 	tests/lcov/ovsdb-client \
 	tests/lcov/ovsdb-server \
 	tests/lcov/ovsdb-tool \
@@ -1373,6 +1400,7 @@ LCOV = lcov -b $(abs_top_builddir) -d $(abs_top_builddir) -q
 valgrind_wrappers = \
 	tests/valgrind/ovs-appctl \
 	tests/valgrind/ovs-vsctl \
+	tests/valgrind/ovs-vswitchd \
 	tests/valgrind/ovsdb-client \
 	tests/valgrind/ovsdb-server \
 	tests/valgrind/ovsdb-tool \
@@ -1569,6 +1597,14 @@ update_spec = \
   if cmp -s $(@F).tmp $@; then touch $@; rm $(@F).tmp; else mv $(@F).tmp $@; fi
 
 run_python = PYTHONPATH=$(top_srcdir)/python:$$PYTHON_PATH $(PYTHON)
+ovstest_pyfiles = \
+	python/ovstest/__init__.py \
+	python/ovstest/args.py \
+	python/ovstest/rpcserver.py \
+	python/ovstest/tcp.py \
+	python/ovstest/udp.py \
+	python/ovstest/util.py
+
 ovs_pyfiles = \
 	python/ovs/__init__.py \
 	python/ovs/daemon.py \
@@ -1592,7 +1628,7 @@ ovs_pyfiles = \
 	python/ovs/vlog.py \
 	python/ovs/util.py
 
-@HAVE_PYTHON_TRUE@nobase_pkgdata_DATA = $(ovs_pyfiles)
+@HAVE_PYTHON_TRUE@nobase_pkgdata_DATA = $(ovs_pyfiles) $(ovstest_pyfiles)
 all: $(BUILT_SOURCES) config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 
@@ -1600,7 +1636,7 @@ all: $(BUILT_SOURCES) config.h
 .SUFFIXES: .in .ovsidl .ovsschema .ui .py .c .h .o .obj
 am--refresh:
 	@:
-$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/ovs/automake.mk $(srcdir)/python/compat/automake.mk $(am__configure_deps)
+$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/manpages.mk $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/automake.mk $(srcdir)/python/compat/automake.mk $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
 	    *$$dep*) \
@@ -1799,6 +1835,8 @@ lib/vconn-stream.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/vconn.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/vlan-bitmap.$(OBJEXT): lib/$(am__dirstamp) \
+	lib/$(DEPDIR)/$(am__dirstamp)
+lib/vlandev.$(OBJEXT): lib/$(am__dirstamp) \
 	lib/$(DEPDIR)/$(am__dirstamp)
 lib/vlog.$(OBJEXT): lib/$(am__dirstamp) lib/$(DEPDIR)/$(am__dirstamp)
 lib/dpif-linux.$(OBJEXT): lib/$(am__dirstamp) \
@@ -2521,6 +2559,7 @@ mostlyclean-compile:
 	-rm -f lib/vconn-stream.$(OBJEXT)
 	-rm -f lib/vconn.$(OBJEXT)
 	-rm -f lib/vlan-bitmap.$(OBJEXT)
+	-rm -f lib/vlandev.$(OBJEXT)
 	-rm -f lib/vlog.$(OBJEXT)
 	-rm -f ofproto/collectors.$(OBJEXT)
 	-rm -f ofproto/connmgr.$(OBJEXT)
@@ -2693,6 +2732,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/vconn-stream.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/vconn.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/vlan-bitmap.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/vlandev.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@lib/$(DEPDIR)/vlog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@ofproto/$(DEPDIR)/collectors.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@ofproto/$(DEPDIR)/connmgr.Po@am__quote@
@@ -2971,6 +3011,26 @@ uninstall-dist_pkgdataDATA:
 	test -n "$$files" || exit 0; \
 	echo " ( cd '$(DESTDIR)$(pkgdatadir)' && rm -f" $$files ")"; \
 	cd "$(DESTDIR)$(pkgdatadir)" && rm -f $$files
+install-dist_scriptsDATA: $(dist_scripts_DATA)
+	@$(NORMAL_INSTALL)
+	test -z "$(scriptsdir)" || $(MKDIR_P) "$(DESTDIR)$(scriptsdir)"
+	@list='$(dist_scripts_DATA)'; test -n "$(scriptsdir)" || list=; \
+	for p in $$list; do \
+	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
+	  echo "$$d$$p"; \
+	done | $(am__base_list) | \
+	while read files; do \
+	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(scriptsdir)'"; \
+	  $(INSTALL_DATA) $$files "$(DESTDIR)$(scriptsdir)" || exit $$?; \
+	done
+
+uninstall-dist_scriptsDATA:
+	@$(NORMAL_UNINSTALL)
+	@list='$(dist_scripts_DATA)'; test -n "$(scriptsdir)" || list=; \
+	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
+	test -n "$$files" || exit 0; \
+	echo " ( cd '$(DESTDIR)$(scriptsdir)' && rm -f" $$files ")"; \
+	cd "$(DESTDIR)$(scriptsdir)" && rm -f $$files
 install-nobase_pkgdataDATA: $(nobase_pkgdata_DATA)
 	@$(NORMAL_INSTALL)
 	test -z "$(pkgdatadir)" || $(MKDIR_P) "$(DESTDIR)$(pkgdatadir)"
@@ -3034,6 +3094,26 @@ uninstall-pkgdataDATA:
 	test -n "$$files" || exit 0; \
 	echo " ( cd '$(DESTDIR)$(pkgdatadir)' && rm -f" $$files ")"; \
 	cd "$(DESTDIR)$(pkgdatadir)" && rm -f $$files
+install-scriptsDATA: $(scripts_DATA)
+	@$(NORMAL_INSTALL)
+	test -z "$(scriptsdir)" || $(MKDIR_P) "$(DESTDIR)$(scriptsdir)"
+	@list='$(scripts_DATA)'; test -n "$(scriptsdir)" || list=; \
+	for p in $$list; do \
+	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
+	  echo "$$d$$p"; \
+	done | $(am__base_list) | \
+	while read files; do \
+	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(scriptsdir)'"; \
+	  $(INSTALL_DATA) $$files "$(DESTDIR)$(scriptsdir)" || exit $$?; \
+	done
+
+uninstall-scriptsDATA:
+	@$(NORMAL_UNINSTALL)
+	@list='$(scripts_DATA)'; test -n "$(scriptsdir)" || list=; \
+	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
+	test -n "$$files" || exit 0; \
+	echo " ( cd '$(DESTDIR)$(scriptsdir)' && rm -f" $$files ")"; \
+	cd "$(DESTDIR)$(scriptsdir)" && rm -f $$files
 
 # This directory's subdirectories are mostly independent; you can cd
 # into them and run `make' without going through this Makefile.
@@ -3370,7 +3450,7 @@ all-am: Makefile $(LIBRARIES) $(PROGRAMS) $(SCRIPTS) $(MANS) $(DATA) \
 		$(HEADERS) config.h all-local
 installdirs: installdirs-recursive
 installdirs-am:
-	for dir in "$(DESTDIR)$(bindir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(man1dir)" "$(DESTDIR)$(man5dir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(ovsdbmonitordir)" "$(DESTDIR)$(pkgdatadir)"; do \
+	for dir in "$(DESTDIR)$(bindir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(man1dir)" "$(DESTDIR)$(man5dir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(ovsdbmonitordir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)"; do \
 	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
 	done
 install: $(BUILT_SOURCES)
@@ -3441,10 +3521,10 @@ info: info-recursive
 info-am:
 
 install-data-am: install-data-local install-dist_pkgdataDATA \
-	install-dist_pkgdataSCRIPTS install-dist_scriptsSCRIPTS \
-	install-man install-nobase_pkgdataDATA \
-	install-ovsdbmonitorDATA install-pkgdataDATA \
-	install-scriptsSCRIPTS
+	install-dist_pkgdataSCRIPTS install-dist_scriptsDATA \
+	install-dist_scriptsSCRIPTS install-man \
+	install-nobase_pkgdataDATA install-ovsdbmonitorDATA \
+	install-pkgdataDATA install-scriptsDATA install-scriptsSCRIPTS
 
 install-dvi: install-dvi-recursive
 
@@ -3496,10 +3576,11 @@ ps-am:
 
 uninstall-am: uninstall-binPROGRAMS uninstall-binSCRIPTS \
 	uninstall-dist_pkgdataDATA uninstall-dist_pkgdataSCRIPTS \
-	uninstall-dist_sbinSCRIPTS uninstall-dist_scriptsSCRIPTS \
-	uninstall-local uninstall-man uninstall-nobase_pkgdataDATA \
-	uninstall-ovsdbmonitorDATA uninstall-pkgdataDATA \
-	uninstall-sbinPROGRAMS uninstall-sbinSCRIPTS \
+	uninstall-dist_sbinSCRIPTS uninstall-dist_scriptsDATA \
+	uninstall-dist_scriptsSCRIPTS uninstall-local uninstall-man \
+	uninstall-nobase_pkgdataDATA uninstall-ovsdbmonitorDATA \
+	uninstall-pkgdataDATA uninstall-sbinPROGRAMS \
+	uninstall-sbinSCRIPTS uninstall-scriptsDATA \
 	uninstall-scriptsSCRIPTS
 
 uninstall-man: uninstall-man1 uninstall-man5 uninstall-man8
@@ -3520,29 +3601,31 @@ uninstall-man: uninstall-man1 uninstall-man5 uninstall-man8
 	install install-am install-binPROGRAMS install-binSCRIPTS \
 	install-data install-data-am install-data-local \
 	install-dist_pkgdataDATA install-dist_pkgdataSCRIPTS \
-	install-dist_sbinSCRIPTS install-dist_scriptsSCRIPTS \
-	install-dvi install-dvi-am install-exec install-exec-am \
-	install-exec-hook install-html install-html-am install-info \
-	install-info-am install-man install-man1 install-man5 \
-	install-man8 install-nobase_pkgdataDATA \
-	install-ovsdbmonitorDATA install-pdf install-pdf-am \
-	install-pkgdataDATA install-ps install-ps-am \
-	install-sbinPROGRAMS install-sbinSCRIPTS \
-	install-scriptsSCRIPTS install-strip installcheck \
-	installcheck-am installdirs installdirs-am maintainer-clean \
-	maintainer-clean-generic mostlyclean mostlyclean-compile \
-	mostlyclean-generic pdf pdf-am ps ps-am tags tags-recursive \
-	uninstall uninstall-am uninstall-binPROGRAMS \
-	uninstall-binSCRIPTS uninstall-dist_pkgdataDATA \
-	uninstall-dist_pkgdataSCRIPTS uninstall-dist_sbinSCRIPTS \
+	install-dist_sbinSCRIPTS install-dist_scriptsDATA \
+	install-dist_scriptsSCRIPTS install-dvi install-dvi-am \
+	install-exec install-exec-am install-exec-hook install-html \
+	install-html-am install-info install-info-am install-man \
+	install-man1 install-man5 install-man8 \
+	install-nobase_pkgdataDATA install-ovsdbmonitorDATA \
+	install-pdf install-pdf-am install-pkgdataDATA install-ps \
+	install-ps-am install-sbinPROGRAMS install-sbinSCRIPTS \
+	install-scriptsDATA install-scriptsSCRIPTS install-strip \
+	installcheck installcheck-am installdirs installdirs-am \
+	maintainer-clean maintainer-clean-generic mostlyclean \
+	mostlyclean-compile mostlyclean-generic pdf pdf-am ps ps-am \
+	tags tags-recursive uninstall uninstall-am \
+	uninstall-binPROGRAMS uninstall-binSCRIPTS \
+	uninstall-dist_pkgdataDATA uninstall-dist_pkgdataSCRIPTS \
+	uninstall-dist_sbinSCRIPTS uninstall-dist_scriptsDATA \
 	uninstall-dist_scriptsSCRIPTS uninstall-local uninstall-man \
 	uninstall-man1 uninstall-man5 uninstall-man8 \
 	uninstall-nobase_pkgdataDATA uninstall-ovsdbmonitorDATA \
 	uninstall-pkgdataDATA uninstall-sbinPROGRAMS \
-	uninstall-sbinSCRIPTS uninstall-scriptsSCRIPTS
+	uninstall-sbinSCRIPTS uninstall-scriptsDATA \
+	uninstall-scriptsSCRIPTS
 
 .in:
-	$(PERL) $(srcdir)/soexpand.pl -I$(srcdir) < $< | \
+	$(PERL) $(srcdir)/build-aux/soexpand.pl -I$(srcdir) < $< | \
 	    sed \
 		-e 's,[@]PKIDIR[@],$(PKIDIR),g' \
                 -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
@@ -3594,12 +3677,265 @@ rate-limit-check:
 	    echo "'struct vlog_rate_limit' must always be 'static'"; \
 	    exit 1; \
 	 fi
-@HAVE_GROFF_TRUE@manpage-check: $(MANS) $(MAN_FRAGMENTS)
-@HAVE_GROFF_TRUE@	@manpages=; \
-@HAVE_GROFF_TRUE@	for d in $(MANS); do \
-@HAVE_GROFF_TRUE@		manpages="$$manpages `test -f $$d || echo $(VPATH)/`$$d"; \
+@HAVE_GROFF_TRUE@manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
+@HAVE_GROFF_TRUE@	@error=false; \
+@HAVE_GROFF_TRUE@	for manpage in $?; do \
+@HAVE_GROFF_TRUE@		LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T utf8 -man -p -z $$manpage >$@.tmp 2>&1; \
+@HAVE_GROFF_TRUE@		if grep warning: $@.tmp; then error=:; fi; \
+@HAVE_GROFF_TRUE@		rm -f $@.tmp; \
 @HAVE_GROFF_TRUE@	done; \
-@HAVE_GROFF_TRUE@	LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T ascii -man -p -z $$manpages && touch $@
+@HAVE_GROFF_TRUE@	if $$error; then exit 1; else echo touch $@; touch $@; fi
+
+ovsdb/ovsdb-client.1: \
+	ovsdb/ovsdb-client.1.in \
+	lib/common-syn.man \
+	lib/common.man \
+	lib/daemon-syn.man \
+	lib/daemon.man \
+	lib/ssl-bootstrap-syn.man \
+	lib/ssl-bootstrap.man \
+	lib/ssl-syn.man \
+	lib/ssl.man \
+	lib/table.man \
+	lib/vlog-syn.man \
+	lib/vlog.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-passive.man
+ovsdb/ovsdb-client.1.in:
+lib/common-syn.man:
+lib/common.man:
+lib/daemon-syn.man:
+lib/daemon.man:
+lib/ssl-bootstrap-syn.man:
+lib/ssl-bootstrap.man:
+lib/ssl-syn.man:
+lib/ssl.man:
+lib/table.man:
+lib/vlog-syn.man:
+lib/vlog.man:
+ovsdb/remote-active.man:
+ovsdb/remote-passive.man:
+
+ovsdb/ovsdb-server.1: \
+	ovsdb/ovsdb-server.1.in \
+	lib/common-syn.man \
+	lib/common.man \
+	lib/daemon-syn.man \
+	lib/daemon.man \
+	lib/ssl-bootstrap-syn.man \
+	lib/ssl-bootstrap.man \
+	lib/ssl-syn.man \
+	lib/ssl.man \
+	lib/stress-unixctl.man \
+	lib/unixctl-syn.man \
+	lib/unixctl.man \
+	lib/vlog-syn.man \
+	lib/vlog-unixctl.man \
+	lib/vlog.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-passive.man
+ovsdb/ovsdb-server.1.in:
+lib/common-syn.man:
+lib/common.man:
+lib/daemon-syn.man:
+lib/daemon.man:
+lib/ssl-bootstrap-syn.man:
+lib/ssl-bootstrap.man:
+lib/ssl-syn.man:
+lib/ssl.man:
+lib/stress-unixctl.man:
+lib/unixctl-syn.man:
+lib/unixctl.man:
+lib/vlog-syn.man:
+lib/vlog-unixctl.man:
+lib/vlog.man:
+ovsdb/remote-active.man:
+ovsdb/remote-passive.man:
+
+ovsdb/ovsdb-tool.1: \
+	ovsdb/ovsdb-tool.1.in \
+	lib/common-syn.man \
+	lib/common.man \
+	lib/vlog-syn.man \
+	lib/vlog.man
+ovsdb/ovsdb-tool.1.in:
+lib/common-syn.man:
+lib/common.man:
+lib/vlog-syn.man:
+lib/vlog.man:
+
+utilities/ovs-appctl.8: \
+	utilities/ovs-appctl.8.in \
+	lib/common.man
+utilities/ovs-appctl.8.in:
+lib/common.man:
+
+utilities/ovs-benchmark.1: \
+	utilities/ovs-benchmark.1.in \
+	lib/ovs.tmac
+utilities/ovs-benchmark.1.in:
+lib/ovs.tmac:
+
+utilities/ovs-controller.8: \
+	utilities/ovs-controller.8.in \
+	lib/common.man \
+	lib/daemon.man \
+	lib/ssl-peer-ca-cert.man \
+	lib/ssl.man \
+	lib/unixctl.man \
+	lib/vconn-active.man \
+	lib/vconn-passive.man \
+	lib/vlog.man
+utilities/ovs-controller.8.in:
+lib/common.man:
+lib/daemon.man:
+lib/ssl-peer-ca-cert.man:
+lib/ssl.man:
+lib/unixctl.man:
+lib/vconn-active.man:
+lib/vconn-passive.man:
+lib/vlog.man:
+
+utilities/ovs-dpctl.8: \
+	utilities/ovs-dpctl.8.in \
+	lib/common.man \
+	lib/vlog.man
+utilities/ovs-dpctl.8.in:
+lib/common.man:
+lib/vlog.man:
+
+utilities/ovs-ofctl.8: \
+	utilities/ovs-ofctl.8.in \
+	lib/common.man \
+	lib/ssl.man \
+	lib/vconn-active.man \
+	lib/vlog.man
+utilities/ovs-ofctl.8.in:
+lib/common.man:
+lib/ssl.man:
+lib/vconn-active.man:
+lib/vlog.man:
+
+utilities/ovs-pcap.1: \
+	utilities/ovs-pcap.1.in \
+	lib/common-syn.man \
+	lib/common.man
+utilities/ovs-pcap.1.in:
+lib/common-syn.man:
+lib/common.man:
+
+utilities/ovs-pki.8: \
+	utilities/ovs-pki.8.in
+utilities/ovs-pki.8.in:
+
+utilities/ovs-tcpundump.1: \
+	utilities/ovs-tcpundump.1.in \
+	lib/common-syn.man \
+	lib/common.man
+utilities/ovs-tcpundump.1.in:
+lib/common-syn.man:
+lib/common.man:
+
+utilities/ovs-test.8: \
+	utilities/ovs-test.8.in \
+	lib/common-syn.man \
+	lib/common.man \
+	utilities/ovs-vlan-bugs.man
+utilities/ovs-test.8.in:
+lib/common-syn.man:
+lib/common.man:
+utilities/ovs-vlan-bugs.man:
+
+utilities/ovs-vlan-bug-workaround.8: \
+	utilities/ovs-vlan-bug-workaround.8.in \
+	lib/common.man \
+	utilities/ovs-vlan-bugs.man
+utilities/ovs-vlan-bug-workaround.8.in:
+lib/common.man:
+utilities/ovs-vlan-bugs.man:
+
+utilities/ovs-vlan-test.8: \
+	utilities/ovs-vlan-test.8.in \
+	lib/common-syn.man \
+	lib/common.man \
+	utilities/ovs-vlan-bugs.man
+utilities/ovs-vlan-test.8.in:
+lib/common-syn.man:
+lib/common.man:
+utilities/ovs-vlan-bugs.man:
+
+utilities/ovs-vsctl.8: \
+	utilities/ovs-vsctl.8.in \
+	lib/ssl-bootstrap.man \
+	lib/ssl-peer-ca-cert.man \
+	lib/ssl.man \
+	lib/table.man \
+	lib/vconn-active.man \
+	lib/vconn-passive.man \
+	lib/vlog.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-passive.man \
+	ovsdb/remote-passive.man
+utilities/ovs-vsctl.8.in:
+lib/ssl-bootstrap.man:
+lib/ssl-peer-ca-cert.man:
+lib/ssl.man:
+lib/table.man:
+lib/vconn-active.man:
+lib/vconn-passive.man:
+lib/vlog.man:
+ovsdb/remote-active.man:
+ovsdb/remote-active.man:
+ovsdb/remote-passive.man:
+ovsdb/remote-passive.man:
+
+vswitchd/ovs-brcompatd.8: \
+	vswitchd/ovs-brcompatd.8.in \
+	lib/common.man \
+	lib/daemon.man \
+	lib/leak-checker.man \
+	lib/vlog.man
+vswitchd/ovs-brcompatd.8.in:
+lib/common.man:
+lib/daemon.man:
+lib/leak-checker.man:
+lib/vlog.man:
+
+vswitchd/ovs-vswitchd.8: \
+	vswitchd/ovs-vswitchd.8.in \
+	lib/common.man \
+	lib/daemon.man \
+	lib/leak-checker.man \
+	lib/ssl-bootstrap.man \
+	lib/ssl.man \
+	lib/stress-unixctl.man \
+	lib/vlog-unixctl.man \
+	lib/vlog.man \
+	ofproto/ofproto-unixctl.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-passive.man
+vswitchd/ovs-vswitchd.8.in:
+lib/common.man:
+lib/daemon.man:
+lib/leak-checker.man:
+lib/ssl-bootstrap.man:
+lib/ssl.man:
+lib/stress-unixctl.man:
+lib/vlog-unixctl.man:
+lib/vlog.man:
+ofproto/ofproto-unixctl.man:
+ovsdb/remote-active.man:
+ovsdb/remote-passive.man:
+
+$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.pl
+	@$(PERL) $(srcdir)/build-aux/sodepends.pl -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
+	@if cmp -s $(@F).tmp $@; then \
+		touch $@; \
+		rm -f $(@F).tmp; \
+	else \
+		mv $(@F).tmp $@; \
+	fi
 
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)

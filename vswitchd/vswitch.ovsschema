@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "6.3.0",
- "cksum": "1659474737 15341",
+ "version": "6.4.0",
+ "cksum": "923041702 15687",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -256,6 +256,11 @@
      "isRoot": true},
    "Queue": {
      "columns": {
+       "dscp": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 63},
+                  "min": 0, "max": 1}},
        "other_config": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}},
@@ -294,6 +299,10 @@
                           "minInteger": 1,
                           "maxInteger": 4095},
                   "min": 0, "max": 1}},
+       "statistics": {
+         "type": {"key": "string", "value": "integer",
+                  "min": 0, "max": "unlimited"},
+         "ephemeral": true},
        "external_ids": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}}}},

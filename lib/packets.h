@@ -132,6 +132,7 @@ void compose_benign_packet(struct ofpbuf *, const char *tag,
                            const uint8_t eth_src[ETH_ADDR_LEN]);
 
 void eth_push_vlan(struct ofpbuf *, ovs_be16 tci);
+void eth_pop_vlan(struct ofpbuf *);
 
 /* Example:
  *
@@ -291,6 +292,11 @@ ip_is_cidr(ovs_be32 netmask)
     uint32_t x = ~ntohl(netmask);
     return !(x & (x + 1));
 }
+static inline bool
+ip_is_multicast(ovs_be32 ip)
+{
+    return (ip & htonl(0xf0000000)) == htonl(0xe0000000);
+}
 int ip_count_cidr_bits(ovs_be32 netmask);
 void ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *);
 
@@ -325,11 +331,23 @@ struct ip_header {
 };
 BUILD_ASSERT_DECL(IP_HEADER_LEN == sizeof(struct ip_header));
 
-#define ICMP_HEADER_LEN 4
+#define ICMP_HEADER_LEN 8
 struct icmp_header {
     uint8_t icmp_type;
     uint8_t icmp_code;
     ovs_be16 icmp_csum;
+    union {
+        struct {
+            ovs_be16 id;
+            ovs_be16 seq;
+        } echo;
+        struct {
+            ovs_be16 empty;
+            ovs_be16 mtu;
+        } frag;
+        ovs_be32 gateway;
+    } icmp_fields;
+    uint8_t icmp_data[0];
 };
 BUILD_ASSERT_DECL(ICMP_HEADER_LEN == sizeof(struct icmp_header));
 
@@ -386,6 +404,9 @@ struct arp_eth_header {
     ovs_be32 ar_tpa;           /* Target protocol address. */
 } __attribute__((packed));
 BUILD_ASSERT_DECL(ARP_ETH_HEADER_LEN == sizeof(struct arp_eth_header));
+
+/* The IPv6 flow label is in the lower 20 bits of the first 32-bit word. */
+#define IPV6_LABEL_MASK 0x000fffff
 
 /* Example:
  *

@@ -88,7 +88,6 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/netlink.c \
 	lib/netlink.h \
 	lib/nx-match.c \
-	lib/nx-match.def \
 	lib/nx-match.h \
 	lib/odp-util.c \
 	lib/odp-util.h \
@@ -182,6 +181,8 @@ lib_libopenvswitch_a_SOURCES = \
 	lib/vconn.h \
 	lib/vlan-bitmap.c \
 	lib/vlan-bitmap.h \
+	lib/vlandev.c \
+	lib/vlandev.h \
 	lib/vlog.c \
 	lib/vlog.h
 nodist_lib_libopenvswitch_a_SOURCES = \
@@ -249,6 +250,7 @@ MAN_FRAGMENTS += \
 	lib/daemon.man \
 	lib/daemon-syn.man \
 	lib/leak-checker.man \
+	lib/ovs.tmac \
 	lib/ssl-bootstrap.man \
 	lib/ssl-bootstrap-syn.man \
 	lib/ssl-peer-ca-cert.man \

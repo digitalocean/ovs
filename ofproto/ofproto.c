@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
  * Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +21,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include "bitmap.h"
 #include "byte-order.h"
 #include "classifier.h"
 #include "connmgr.h"
@@ -337,6 +338,8 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     list_init(&ofproto->pending);
     ofproto->n_pending = 0;
     hmap_init(&ofproto->deletions);
+    ofproto->vlan_bitmap = NULL;
+    ofproto->vlans_changed = false;
 
     error = ofproto->ofproto_class->construct(ofproto, &n_tables);
     if (error) {
@@ -603,6 +606,33 @@ ofproto_port_get_stp_status(struct ofproto *ofproto, uint16_t ofp_port,
             : EOPNOTSUPP);
 }
 
+/* Queue DSCP configuration. */
+
+/* Registers meta-data associated with the 'n_qdscp' Qualities of Service
+ * 'queues' attached to 'ofport'.  This data is not intended to be sufficient
+ * to implement QoS.  Instead, it is used to implement features which require
+ * knowledge of what queues exist on a port, and some basic information about
+ * them.
+ *
+ * Returns 0 if successful, otherwise a positive errno value. */
+int
+ofproto_port_set_queues(struct ofproto *ofproto, uint16_t ofp_port,
+                        const struct ofproto_port_queue *queues,
+                        size_t n_queues)
+{
+    struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
+
+    if (!ofport) {
+        VLOG_WARN("%s: cannot set queues on nonexistent port %"PRIu16,
+                  ofproto->name, ofp_port);
+        return ENODEV;
+    }
+
+    return (ofproto->ofproto_class->set_queues
+            ? ofproto->ofproto_class->set_queues(ofport, queues, n_queues)
+            : EOPNOTSUPP);
+}
+
 /* Connectivity Fault Management configuration. */
 
 /* Clears the CFM configuration from 'ofp_port' on 'ofproto'. */
@@ -694,10 +724,7 @@ ofproto_bundle_unregister(struct ofproto *ofproto, void *aux)
 
 /* Registers a mirror associated with client data pointer 'aux' in 'ofproto'.
  * If 'aux' is already registered then this function updates its configuration
- * to 's'.  Otherwise, this function registers a new mirror.
- *
- * Mirrors affect only the treatment of packets output to the OFPP_NORMAL
- * port.  */
+ * to 's'.  Otherwise, this function registers a new mirror. */
 int
 ofproto_mirror_register(struct ofproto *ofproto, void *aux,
                         const struct ofproto_mirror_settings *s)
@@ -713,6 +740,23 @@ int
 ofproto_mirror_unregister(struct ofproto *ofproto, void *aux)
 {
     return ofproto_mirror_register(ofproto, aux, NULL);
+}
+
+/* Retrieves statistics from mirror associated with client data pointer
+ * 'aux' in 'ofproto'.  Stores packet and byte counts in 'packets' and
+ * 'bytes', respectively.  If a particular counters is not supported,
+ * the appropriate argument is set to UINT64_MAX. */
+int
+ofproto_mirror_get_stats(struct ofproto *ofproto, void *aux,
+                         uint64_t *packets, uint64_t *bytes)
+{
+    if (!ofproto->ofproto_class->mirror_get_stats) {
+        *packets = *bytes = UINT64_MAX;
+        return EOPNOTSUPP;
+    }
+
+    return ofproto->ofproto_class->mirror_get_stats(ofproto, aux,
+                                                    packets, bytes);
 }
 
 /* Configures the VLANs whose bits are set to 1 in 'flood_vlans' as VLANs on
@@ -806,6 +850,8 @@ ofproto_destroy__(struct ofproto *ofproto)
     free(ofproto->tables);
 
     hmap_destroy(&ofproto->deletions);
+
+    free(ofproto->vlan_bitmap);
 
     ofproto->ofproto_class->dealloc(ofproto);
 }
@@ -1380,6 +1426,9 @@ ofproto_port_unregister(struct ofproto *ofproto, uint16_t ofp_port)
 {
     struct ofport *port = ofproto_get_port(ofproto, ofp_port);
     if (port) {
+        if (port->ofproto->ofproto_class->set_realdev) {
+            port->ofproto->ofproto_class->set_realdev(port, 0, 0);
+        }
         if (port->ofproto->ofproto_class->set_stp_port) {
             port->ofproto->ofproto_class->set_stp_port(port, NULL);
         }
@@ -1623,7 +1672,7 @@ rule_execute(struct rule *rule, uint16_t in_port, struct ofpbuf *packet)
 
     assert(ofpbuf_headroom(packet) >= sizeof(struct ofp_packet_in));
 
-    flow_extract(packet, 0, in_port, &flow);
+    flow_extract(packet, 0, 0, in_port, &flow);
     return rule->ofproto->ofproto_class->rule_execute(rule, &flow, packet);
 }
 
@@ -1723,18 +1772,12 @@ handle_set_config(struct ofconn *ofconn, const struct ofp_switch_config *osc)
 
 /* Checks whether 'ofconn' is a slave controller.  If so, returns an OpenFlow
  * error message code (composed with ofp_mkerr()) for the caller to propagate
- * upward.  Otherwise, returns 0.
- *
- * The log message mentions 'msg_type'. */
+ * upward.  Otherwise, returns 0. */
 static int
-reject_slave_controller(struct ofconn *ofconn, const char *msg_type)
+reject_slave_controller(const struct ofconn *ofconn)
 {
     if (ofconn_get_type(ofconn) == OFCONN_PRIMARY
         && ofconn_get_role(ofconn) == NX_ROLE_SLAVE) {
-        static struct vlog_rate_limit perm_rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&perm_rl, "rejecting %s message from slave controller",
-                     msg_type);
-
         return ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_EPERM);
     } else {
         return 0;
@@ -1751,11 +1794,12 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     struct ofpbuf request;
     struct flow flow;
     size_t n_ofp_actions;
+    uint16_t in_port;
     int error;
 
     COVERAGE_INC(ofproto_packet_out);
 
-    error = reject_slave_controller(ofconn, "OFPT_PACKET_OUT");
+    error = reject_slave_controller(ofconn);
     if (error) {
         return error;
     }
@@ -1784,8 +1828,18 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
         buffer = NULL;
     }
 
+    /* Get in_port and partially validate it.
+     *
+     * We don't know what range of ports the ofproto actually implements, but
+     * we do know that only certain reserved ports (numbered OFPP_MAX and
+     * above) are valid. */
+    in_port = ntohs(opo->in_port);
+    if (in_port >= OFPP_MAX && in_port != OFPP_LOCAL && in_port != OFPP_NONE) {
+        return ofp_mkerr_nicira(OFPET_BAD_REQUEST, NXBRC_BAD_IN_PORT);
+    }
+
     /* Send out packet. */
-    flow_extract(&payload, 0, ntohs(opo->in_port), &flow);
+    flow_extract(&payload, 0, 0, in_port, &flow);
     error = p->ofproto_class->packet_out(p, &payload, &flow,
                                          ofp_actions, n_ofp_actions);
     ofpbuf_delete(buffer);
@@ -1823,7 +1877,7 @@ handle_port_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     struct ofport *port;
     int error;
 
-    error = reject_slave_controller(ofconn, "OFPT_PORT_MOD");
+    error = reject_slave_controller(ofconn);
     if (error) {
         return error;
     }
@@ -1947,6 +2001,17 @@ calc_flow_duration__(long long int start, uint32_t *sec, uint32_t *nsec)
     *nsec = (msecs % 1000) * (1000 * 1000);
 }
 
+/* Checks whether 'table_id' is 0xff or a valid table ID in 'ofproto'.  Returns
+ * 0 if 'table_id' is OK, otherwise an OpenFlow error code.  */
+static int
+check_table_id(const struct ofproto *ofproto, uint8_t table_id)
+{
+    return (table_id == 0xff || table_id < ofproto->n_tables
+            ? 0
+            : ofp_mkerr_nicira(OFPET_BAD_REQUEST, NXBRC_BAD_TABLE_ID));
+
+}
+
 static struct classifier *
 first_matching_table(struct ofproto *ofproto, uint8_t table_id)
 {
@@ -1955,11 +2020,6 @@ first_matching_table(struct ofproto *ofproto, uint8_t table_id)
     } else if (table_id < ofproto->n_tables) {
         return &ofproto->tables[table_id];
     } else {
-        /* It would probably be better to reply with an error but there doesn't
-         * seem to be any appropriate value, so that might just be
-         * confusing. */
-        VLOG_WARN_RL(&rl, "controller asked for invalid table %"PRIu8,
-                     table_id);
         return NULL;
     }
 }
@@ -1982,8 +2042,9 @@ next_matching_table(struct ofproto *ofproto,
  *   - If TABLE_ID is the number of a table in OFPROTO, then the loop iterates
  *     only once, for that table.
  *
- *   - Otherwise, TABLE_ID isn't valid for OFPROTO, so ofproto logs a warning
- *     and does not enter the loop at all.
+ *   - Otherwise, TABLE_ID isn't valid for OFPROTO, so the loop won't be
+ *     entered at all.  (Perhaps you should have validated TABLE_ID with
+ *     check_table_id().)
  *
  * All parameters are evaluated multiple times.
  */
@@ -2009,6 +2070,12 @@ collect_rules_loose(struct ofproto *ofproto, uint8_t table_id,
                     struct list *rules)
 {
     struct classifier *cls;
+    int error;
+
+    error = check_table_id(ofproto, table_id);
+    if (error) {
+        return error;
+    }
 
     list_init(rules);
     FOR_EACH_MATCHING_TABLE (cls, table_id, ofproto) {
@@ -2045,6 +2112,12 @@ collect_rules_strict(struct ofproto *ofproto, uint8_t table_id,
                      struct list *rules)
 {
     struct classifier *cls;
+    int error;
+
+    error = check_table_id(ofproto, table_id);
+    if (error) {
+        return error;
+    }
 
     list_init(rules);
     FOR_EACH_MATCHING_TABLE (cls, table_id, ofproto) {
@@ -2372,6 +2445,11 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     struct rule *rule;
     int error;
 
+    error = check_table_id(ofproto, fm->table_id);
+    if (error) {
+        return error;
+    }
+
     /* Pick table. */
     if (fm->table_id == 0xff) {
         uint8_t table_id;
@@ -2637,7 +2715,7 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     struct ofputil_flow_mod fm;
     int error;
 
-    error = reject_slave_controller(ofconn, "flow_mod");
+    error = reject_slave_controller(ofconn);
     if (error) {
         return error;
     }
@@ -2703,17 +2781,13 @@ handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
     uint32_t role;
 
     if (ofconn_get_type(ofconn) != OFCONN_PRIMARY) {
-        VLOG_WARN_RL(&rl, "ignoring role request on service connection");
         return ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_EPERM);
     }
 
     role = ntohl(nrr->role);
     if (role != NX_ROLE_OTHER && role != NX_ROLE_MASTER
         && role != NX_ROLE_SLAVE) {
-        VLOG_WARN_RL(&rl, "received request for unknown role %"PRIu32, role);
-
-        /* There's no good error code for this. */
-        return ofp_mkerr(OFPET_BAD_REQUEST, -1);
+        return ofp_mkerr_nicira(OFPET_BAD_REQUEST, NXBRC_BAD_ROLE);
     }
 
     if (ofconn_get_role(ofconn) != role
@@ -2876,11 +2950,6 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPUTIL_NXST_FLOW_REPLY:
     case OFPUTIL_NXST_AGGREGATE_REPLY:
     default:
-        if (VLOG_IS_WARN_ENABLED()) {
-            char *s = ofp_to_string(oh, ntohs(oh->length), 2);
-            VLOG_DBG_RL(&rl, "OpenFlow message ignored: %s", s);
-            free(s);
-        }
         if (oh->type == OFPT_STATS_REQUEST || oh->type == OFPT_STATS_REPLY) {
             return ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_BAD_STAT);
         } else {
@@ -3064,7 +3133,8 @@ ofoperation_complete(struct ofoperation *op, int error)
 {
     struct ofopgroup *group = op->group;
     struct rule *rule = op->rule;
-    struct classifier *table = &rule->ofproto->tables[rule->table_id];
+    struct ofproto *ofproto = rule->ofproto;
+    struct classifier *table = &ofproto->tables[rule->table_id];
 
     assert(rule->pending == op);
     assert(op->status < 0);
@@ -3095,6 +3165,19 @@ ofoperation_complete(struct ofoperation *op, int error)
         if (!error) {
             if (op->victim) {
                 ofproto_rule_destroy__(op->victim);
+            }
+            if ((rule->cr.wc.vlan_tci_mask & htons(VLAN_VID_MASK))
+                == htons(VLAN_VID_MASK)) {
+                if (ofproto->vlan_bitmap) {
+                    uint16_t vid = vlan_tci_to_vid(rule->cr.flow.vlan_tci);
+
+                    if (!bitmap_is_set(ofproto->vlan_bitmap, vid)) {
+                        bitmap_set1(ofproto->vlan_bitmap, vid);
+                        ofproto->vlans_changed = true;
+                    }
+                } else {
+                    ofproto->vlans_changed = true;
+                }
             }
         } else {
             if (op->victim) {
@@ -3207,4 +3290,88 @@ ofproto_unixctl_init(void)
     registered = true;
 
     unixctl_command_register("ofproto/list", "", ofproto_unixctl_list, NULL);
+}
+
+/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+ *
+ * This is deprecated.  It is only for compatibility with broken device drivers
+ * in old versions of Linux that do not properly support VLANs when VLAN
+ * devices are not used.  When broken device drivers are no longer in
+ * widespread use, we will delete these interfaces. */
+
+/* Sets a 1-bit in the 4096-bit 'vlan_bitmap' for each VLAN ID that is matched
+ * (exactly) by an OpenFlow rule in 'ofproto'. */
+void
+ofproto_get_vlan_usage(struct ofproto *ofproto, unsigned long int *vlan_bitmap)
+{
+    const struct classifier *cls;
+
+    free(ofproto->vlan_bitmap);
+    ofproto->vlan_bitmap = bitmap_allocate(4096);
+    ofproto->vlans_changed = false;
+
+    OFPROTO_FOR_EACH_TABLE (cls, ofproto) {
+        const struct cls_table *table;
+
+        HMAP_FOR_EACH (table, hmap_node, &cls->tables) {
+            if ((table->wc.vlan_tci_mask & htons(VLAN_VID_MASK))
+                == htons(VLAN_VID_MASK)) {
+                const struct cls_rule *rule;
+
+                HMAP_FOR_EACH (rule, hmap_node, &table->rules) {
+                    uint16_t vid = vlan_tci_to_vid(rule->flow.vlan_tci);
+                    bitmap_set1(vlan_bitmap, vid);
+                    bitmap_set1(ofproto->vlan_bitmap, vid);
+                }
+            }
+        }
+    }
+}
+
+/* Returns true if new VLANs have come into use by the flow table since the
+ * last call to ofproto_get_vlan_usage().
+ *
+ * We don't track when old VLANs stop being used. */
+bool
+ofproto_has_vlan_usage_changed(const struct ofproto *ofproto)
+{
+    return ofproto->vlans_changed;
+}
+
+/* Configures a VLAN splinter binding between the ports identified by OpenFlow
+ * port numbers 'vlandev_ofp_port' and 'realdev_ofp_port'.  If
+ * 'realdev_ofp_port' is nonzero, then the VLAN device is enslaved to the real
+ * device as a VLAN splinter for VLAN ID 'vid'.  If 'realdev_ofp_port' is zero,
+ * then the VLAN device is un-enslaved. */
+int
+ofproto_port_set_realdev(struct ofproto *ofproto, uint16_t vlandev_ofp_port,
+                         uint16_t realdev_ofp_port, int vid)
+{
+    struct ofport *ofport;
+    int error;
+
+    assert(vlandev_ofp_port != realdev_ofp_port);
+
+    ofport = ofproto_get_port(ofproto, vlandev_ofp_port);
+    if (!ofport) {
+        VLOG_WARN("%s: cannot set realdev on nonexistent port %"PRIu16,
+                  ofproto->name, vlandev_ofp_port);
+        return EINVAL;
+    }
+
+    if (!ofproto->ofproto_class->set_realdev) {
+        if (!vlandev_ofp_port) {
+            return 0;
+        }
+        VLOG_WARN("%s: vlan splinters not supported", ofproto->name);
+        return EOPNOTSUPP;
+    }
+
+    error = ofproto->ofproto_class->set_realdev(ofport, realdev_ofp_port, vid);
+    if (error) {
+        VLOG_WARN("%s: setting realdev on port %"PRIu16" (%s) failed (%s)",
+                  ofproto->name, vlandev_ofp_port,
+                  netdev_get_name(ofport->netdev), strerror(error));
+    }
+    return error;
 }

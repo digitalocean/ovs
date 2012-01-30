@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #ifndef CHECKSUM_H
@@ -34,7 +44,8 @@ u8 get_ip_summed(struct sk_buff *skb);
 void set_ip_summed(struct sk_buff *skb, u8 ip_summed);
 void get_skb_csum_pointers(const struct sk_buff *skb, u16 *csum_start,
 			   u16 *csum_offset);
-void set_skb_csum_pointers(struct sk_buff *skb, u16 csum_start, u16 csum_offset);
+void set_skb_csum_pointers(struct sk_buff *skb, u16 csum_start,
+			   u16 csum_offset);
 #else
 static inline int compute_ip_summed(struct sk_buff *skb, bool xmit)
 {
@@ -114,7 +125,7 @@ static inline int rpl_pskb_expand_head(struct sk_buff *skb, int nhead,
 
 	update_csum_start(skb, skb_headroom(skb) - old_headroom);
 
-	return 0; 
+	return 0;
 }
 #define pskb_expand_head rpl_pskb_expand_head
 

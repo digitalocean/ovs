@@ -69,6 +69,15 @@ struct ofproto {
     struct list pending;        /* List of "struct ofopgroup"s. */
     unsigned int n_pending;     /* list_size(&pending). */
     struct hmap deletions;      /* All OFOPERATION_DELETE "ofoperation"s. */
+
+    /* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+     *
+     * This is deprecated.  It is only for compatibility with broken device
+     * drivers in old versions of Linux that do not properly support VLANs when
+     * VLAN devices are not used.  When broken device drivers are no longer in
+     * widespread use, we will delete these interfaces. */
+    unsigned long int *vlan_bitmap; /* 4096-bit bitmap of in-use VLANs. */
+    bool vlans_changed;             /* True if new VLANs are in use. */
 };
 
 struct ofproto *ofproto_lookup(const char *name);
@@ -788,7 +797,7 @@ struct ofproto_class {
      *
      * Returns 0 if successful, otherwise an OpenFlow error code (as returned
      * by ofp_mkerr()). */
-    int (*rule_execute)(struct rule *rule, struct flow *flow,
+    int (*rule_execute)(struct rule *rule, const struct flow *flow,
                         struct ofpbuf *packet);
 
     /* When ->rule_modify_actions() is called, the caller has already replaced
@@ -970,6 +979,17 @@ struct ofproto_class {
     int (*get_stp_port_status)(struct ofport *ofport,
                                struct ofproto_port_stp_status *s);
 
+    /* Registers meta-data associated with the 'n_qdscp' Qualities of Service
+     * 'queues' attached to 'ofport'.  This data is not intended to be
+     * sufficient to implement QoS.  Instead, providers may use this
+     * information to implement features which require knowledge of what queues
+     * exist on a port, and some basic information about them.
+     *
+     * EOPNOTSUPP as a return value indicates that this ofproto_class does not
+     * support QoS, as does a null pointer. */
+    int (*set_queues)(struct ofport *ofport,
+                      const struct ofproto_port_queue *queues, size_t n_qdscp);
+
     /* If 's' is nonnull, this function registers a "bundle" associated with
      * client data pointer 'aux' in 'ofproto'.  A bundle is the same concept as
      * a Port in OVSDB, that is, it consists of one or more "slave" devices
@@ -1005,12 +1025,22 @@ struct ofproto_class {
      * 'ofproto' associated with client data pointer 'aux'.  If no such mirror
      * has been registered, this has no effect.
      *
-     * This function affects only the behavior of the OFPP_NORMAL action.  An
-     * implementation that does not support it at all may set it to NULL or
-     * return EOPNOTSUPP.  An implementation that supports only a subset of the
-     * functionality should implement what it can and return 0. */
+     * An implementation that does not support mirroring at all may set
+     * it to NULL or return EOPNOTSUPP.  An implementation that supports
+     * only a subset of the functionality should implement what it can
+     * and return 0. */
     int (*mirror_set)(struct ofproto *ofproto, void *aux,
                       const struct ofproto_mirror_settings *s);
+
+    /* Retrieves statistics from mirror associated with client data
+     * pointer 'aux' in 'ofproto'.  Stores packet and byte counts in
+     * 'packets' and 'bytes', respectively.  If a particular counter is
+     * not supported, the appropriate argument is set to UINT64_MAX.
+     *
+     * EOPNOTSUPP as a return value indicates that this ofproto_class does not
+     * support retrieving mirror statistics. */
+    int (*mirror_get_stats)(struct ofproto *ofproto, void *aux,
+                            uint64_t *packets, uint64_t *bytes);
 
     /* Configures the VLANs whose bits are set to 1 in 'flood_vlans' as VLANs
      * on which all packets are flooded, instead of using MAC learning.  If
@@ -1029,6 +1059,25 @@ struct ofproto_class {
     /* When the configuration option of forward_bpdu changes, this function
      * will be invoked. */
     void (*forward_bpdu_changed)(struct ofproto *ofproto);
+
+/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+ *
+ * This is deprecated.  It is only for compatibility with broken device drivers
+ * in old versions of Linux that do not properly support VLANs when VLAN
+ * devices are not used.  When broken device drivers are no longer in
+ * widespread use, we will delete these interfaces. */
+
+    /* If 'realdev_ofp_port' is nonzero, then this function configures 'ofport'
+     * as a VLAN splinter port for VLAN 'vid', associated with the real device
+     * that has OpenFlow port number 'realdev_ofp_port'.
+     *
+     * If 'realdev_ofp_port' is zero, then this function deconfigures 'ofport'
+     * as a VLAN splinter port.
+     *
+     * This function should be NULL if a an implementation does not support
+     * it. */
+    int (*set_realdev)(struct ofport *ofport,
+                       uint16_t realdev_ofp_port, int vid);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;

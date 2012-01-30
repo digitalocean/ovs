@@ -695,6 +695,11 @@ struct ovsrec_mirror {
 	/* select_vlan column. */
 	int64_t *select_vlan;
 	size_t n_select_vlan;
+
+	/* statistics column. */
+	char **key_statistics;
+	int64_t *value_statistics;
+	size_t n_statistics;
 };
 
 enum {
@@ -706,11 +711,13 @@ enum {
     OVSREC_MIRROR_COL_SELECT_DST_PORT,
     OVSREC_MIRROR_COL_SELECT_SRC_PORT,
     OVSREC_MIRROR_COL_SELECT_VLAN,
+    OVSREC_MIRROR_COL_STATISTICS,
     OVSREC_MIRROR_N_COLUMNS
 };
 
 #define ovsrec_mirror_col_output_port (ovsrec_mirror_columns[OVSREC_MIRROR_COL_OUTPUT_PORT])
 #define ovsrec_mirror_col_select_src_port (ovsrec_mirror_columns[OVSREC_MIRROR_COL_SELECT_SRC_PORT])
+#define ovsrec_mirror_col_statistics (ovsrec_mirror_columns[OVSREC_MIRROR_COL_STATISTICS])
 #define ovsrec_mirror_col_name (ovsrec_mirror_columns[OVSREC_MIRROR_COL_NAME])
 #define ovsrec_mirror_col_select_all (ovsrec_mirror_columns[OVSREC_MIRROR_COL_SELECT_ALL])
 #define ovsrec_mirror_col_select_dst_port (ovsrec_mirror_columns[OVSREC_MIRROR_COL_SELECT_DST_PORT])
@@ -742,6 +749,7 @@ void ovsrec_mirror_verify_select_all(const struct ovsrec_mirror *);
 void ovsrec_mirror_verify_select_dst_port(const struct ovsrec_mirror *);
 void ovsrec_mirror_verify_select_src_port(const struct ovsrec_mirror *);
 void ovsrec_mirror_verify_select_vlan(const struct ovsrec_mirror *);
+void ovsrec_mirror_verify_statistics(const struct ovsrec_mirror *);
 
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
@@ -754,6 +762,7 @@ const struct ovsdb_datum *ovsrec_mirror_get_select_all(const struct ovsrec_mirro
 const struct ovsdb_datum *ovsrec_mirror_get_select_dst_port(const struct ovsrec_mirror *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_mirror_get_select_src_port(const struct ovsrec_mirror *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_mirror_get_select_vlan(const struct ovsrec_mirror *, enum ovsdb_atomic_type key_type);
+const struct ovsdb_datum *ovsrec_mirror_get_statistics(const struct ovsrec_mirror *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 
 void ovsrec_mirror_set_external_ids(const struct ovsrec_mirror *, char **key_external_ids, char **value_external_ids, size_t n_external_ids);
 void ovsrec_mirror_set_name(const struct ovsrec_mirror *, const char *name);
@@ -763,6 +772,7 @@ void ovsrec_mirror_set_select_all(const struct ovsrec_mirror *, bool select_all)
 void ovsrec_mirror_set_select_dst_port(const struct ovsrec_mirror *, struct ovsrec_port **select_dst_port, size_t n_select_dst_port);
 void ovsrec_mirror_set_select_src_port(const struct ovsrec_mirror *, struct ovsrec_port **select_src_port, size_t n_select_src_port);
 void ovsrec_mirror_set_select_vlan(const struct ovsrec_mirror *, const int64_t *select_vlan, size_t n_select_vlan);
+void ovsrec_mirror_set_statistics(const struct ovsrec_mirror *, char **key_statistics, const int64_t *value_statistics, size_t n_statistics);
 
 /* NetFlow table. */
 struct ovsrec_netflow {
@@ -1248,6 +1258,10 @@ void ovsrec_qos_set_type(const struct ovsrec_qos *, const char *type);
 struct ovsrec_queue {
 	struct ovsdb_idl_row header_;
 
+	/* dscp column. */
+	int64_t *dscp;
+	size_t n_dscp;
+
 	/* external_ids column. */
 	char **key_external_ids;
 	char **value_external_ids;
@@ -1260,6 +1274,7 @@ struct ovsrec_queue {
 };
 
 enum {
+    OVSREC_QUEUE_COL_DSCP,
     OVSREC_QUEUE_COL_EXTERNAL_IDS,
     OVSREC_QUEUE_COL_OTHER_CONFIG,
     OVSREC_QUEUE_N_COLUMNS
@@ -1267,6 +1282,7 @@ enum {
 
 #define ovsrec_queue_col_external_ids (ovsrec_queue_columns[OVSREC_QUEUE_COL_EXTERNAL_IDS])
 #define ovsrec_queue_col_other_config (ovsrec_queue_columns[OVSREC_QUEUE_COL_OTHER_CONFIG])
+#define ovsrec_queue_col_dscp (ovsrec_queue_columns[OVSREC_QUEUE_COL_DSCP])
 
 extern struct ovsdb_idl_column ovsrec_queue_columns[OVSREC_QUEUE_N_COLUMNS];
 
@@ -1284,15 +1300,18 @@ const struct ovsrec_queue *ovsrec_queue_next(const struct ovsrec_queue *);
 void ovsrec_queue_delete(const struct ovsrec_queue *);
 struct ovsrec_queue *ovsrec_queue_insert(struct ovsdb_idl_txn *);
 
+void ovsrec_queue_verify_dscp(const struct ovsrec_queue *);
 void ovsrec_queue_verify_external_ids(const struct ovsrec_queue *);
 void ovsrec_queue_verify_other_config(const struct ovsrec_queue *);
 
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
    the members of ovsrec_queue directly.) */
+const struct ovsdb_datum *ovsrec_queue_get_dscp(const struct ovsrec_queue *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_queue_get_external_ids(const struct ovsrec_queue *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *ovsrec_queue_get_other_config(const struct ovsrec_queue *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 
+void ovsrec_queue_set_dscp(const struct ovsrec_queue *, const int64_t *dscp, size_t n_dscp);
 void ovsrec_queue_set_external_ids(const struct ovsrec_queue *, char **key_external_ids, char **value_external_ids, size_t n_external_ids);
 void ovsrec_queue_set_other_config(const struct ovsrec_queue *, char **key_other_config, char **value_other_config, size_t n_other_config);
 

@@ -18,6 +18,7 @@
 #include "packets.h"
 #include <assert.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include "byte-order.h"
@@ -97,6 +98,27 @@ eth_push_vlan(struct ofpbuf *packet, ovs_be16 tci)
     memcpy(veh, &tmp, sizeof tmp);
 
     packet->l2 = packet->data;
+}
+
+/* Removes outermost VLAN header (if any is present) from 'packet'.
+ *
+ * 'packet->l2' must initially point to 'packet''s Ethernet header. */
+void
+eth_pop_vlan(struct ofpbuf *packet)
+{
+    struct vlan_eth_header *veh = packet->l2;
+    if (packet->size >= sizeof *veh
+        && veh->veth_type == htons(ETH_TYPE_VLAN)) {
+        struct eth_header tmp;
+
+        memcpy(tmp.eth_dst, veh->veth_dst, ETH_ADDR_LEN);
+        memcpy(tmp.eth_src, veh->veth_src, ETH_ADDR_LEN);
+        tmp.eth_type = veh->veth_next_type;
+
+        ofpbuf_pull(packet, VLAN_HEADER_LEN);
+        packet->l2 = (char*)packet->l2 + VLAN_HEADER_LEN;
+        memcpy(packet->data, &tmp, sizeof tmp);
+    }
 }
 
 /* Given the IP netmask 'netmask', returns the number of bits of the IP address
@@ -258,7 +280,8 @@ ipv6_is_cidr(const struct in6_addr *netmask)
 /* Populates 'b' with an Ethernet II packet headed with the given 'eth_dst',
  * 'eth_src' and 'eth_type' parameters.  A payload of 'size' bytes is allocated
  * in 'b' and returned.  This payload may be populated with appropriate
- * information by the caller.
+ * information by the caller.  Sets 'b''s 'l2' and 'l3' pointers to the
+ * Ethernet header and payload respectively.
  *
  * The returned packet has enough headroom to insert an 802.1Q VLAN header if
  * desired. */
@@ -280,6 +303,9 @@ eth_compose(struct ofpbuf *b, const uint8_t eth_dst[ETH_ADDR_LEN],
     memcpy(eth->eth_dst, eth_dst, ETH_ADDR_LEN);
     memcpy(eth->eth_src, eth_src, ETH_ADDR_LEN);
     eth->eth_type = htons(eth_type);
+
+    b->l2 = eth;
+    b->l3 = data;
 
     return data;
 }

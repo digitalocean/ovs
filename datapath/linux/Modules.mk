@@ -10,7 +10,6 @@ openvswitch_sources += \
 	linux/compat/skbuff-openvswitch.c \
 	linux/compat/time.c
 openvswitch_headers += \
-	linux/compat/include/asm-generic/bug.h \
 	linux/compat/include/linux/compiler.h \
 	linux/compat/include/linux/compiler-gcc.h \
 	linux/compat/include/linux/cpumask.h \
@@ -49,6 +48,7 @@ openvswitch_headers += \
 	linux/compat/include/linux/tcp.h \
 	linux/compat/include/linux/timer.h \
 	linux/compat/include/linux/types.h \
+	linux/compat/include/linux/u64_stats_sync.h \
 	linux/compat/include/linux/udp.h \
 	linux/compat/include/linux/workqueue.h \
 	linux/compat/include/net/checksum.h \

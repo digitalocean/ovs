@@ -148,7 +148,9 @@ parse_ipv6(struct ofpbuf *packet, struct flow *flow)
     flow->ipv6_dst = nh->ip6_dst;
 
     tc_flow = get_unaligned_be32(&nh->ip6_flow);
-    flow->tos_frag = (ntohl(tc_flow) >> 20) & IP_DSCP_MASK;
+    flow->nw_tos = ntohl(tc_flow) >> 20;
+    flow->ipv6_label = tc_flow & htonl(IPV6_LABEL_MASK);
+    flow->nw_ttl = nh->ip6_hlim;
     flow->nw_proto = IPPROTO_NONE;
 
     while (1) {
@@ -201,10 +203,9 @@ parse_ipv6(struct ofpbuf *packet, struct flow *flow)
             }
 
             /* We only process the first fragment. */
-            flow->tos_frag &= ~FLOW_FRAG_MASK;
-            flow->tos_frag |= FLOW_FRAG_ANY;
+            flow->nw_frag = FLOW_NW_FRAG_ANY;
             if ((frag_hdr->ip6f_offlg & IP6F_OFF_MASK) != htons(0)) {
-                flow->tos_frag |= FLOW_FRAG_LATER;
+                flow->nw_frag |= FLOW_NW_FRAG_LATER;
                 nexthdr = IPPROTO_FRAGMENT;
                 break;
             }
@@ -324,8 +325,8 @@ invalid:
  *      present and has a correct length, and otherwise NULL.
  */
 void
-flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t ofp_in_port,
-             struct flow *flow)
+flow_extract(struct ofpbuf *packet, uint32_t priority, ovs_be64 tun_id,
+             uint16_t ofp_in_port, struct flow *flow)
 {
     struct ofpbuf b = *packet;
     struct eth_header *eth;
@@ -335,6 +336,7 @@ flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t ofp_in_port,
     memset(flow, 0, sizeof *flow);
     flow->tun_id = tun_id;
     flow->in_port = ofp_in_port;
+    flow->priority = priority;
 
     packet->l2 = b.data;
     packet->l3 = NULL;
@@ -368,13 +370,14 @@ flow_extract(struct ofpbuf *packet, ovs_be64 tun_id, uint16_t ofp_in_port,
             flow->nw_dst = get_unaligned_be32(&nh->ip_dst);
             flow->nw_proto = nh->ip_proto;
 
-            flow->tos_frag = nh->ip_tos & IP_DSCP_MASK;
+            flow->nw_tos = nh->ip_tos;
             if (IP_IS_FRAGMENT(nh->ip_frag_off)) {
-                flow->tos_frag |= FLOW_FRAG_ANY;
+                flow->nw_frag = FLOW_NW_FRAG_ANY;
                 if (nh->ip_frag_off & htons(IP_FRAG_OFF_MASK)) {
-                    flow->tos_frag |= FLOW_FRAG_LATER;
+                    flow->nw_frag |= FLOW_NW_FRAG_LATER;
                 }
             }
+            flow->nw_ttl = nh->ip_ttl;
 
             if (!(nh->ip_frag_off & htons(IP_FRAG_OFF_MASK))) {
                 if (flow->nw_proto == IPPROTO_TCP) {
@@ -436,7 +439,7 @@ flow_zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         flow->regs[i] &= wildcards->reg_masks[i];
@@ -449,13 +452,13 @@ flow_zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     }
     flow->vlan_tci &= wildcards->vlan_tci_mask;
     if (wc & FWW_DL_TYPE) {
-        flow->dl_type = 0;
+        flow->dl_type = htons(0);
     }
     if (wc & FWW_TP_SRC) {
-        flow->tp_src = 0;
+        flow->tp_src = htons(0);
     }
     if (wc & FWW_TP_DST) {
-        flow->tp_dst = 0;
+        flow->tp_dst = htons(0);
     }
     if (wc & FWW_DL_SRC) {
         memset(flow->dl_src, 0, sizeof flow->dl_src);
@@ -470,7 +473,19 @@ flow_zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     if (wc & FWW_NW_PROTO) {
         flow->nw_proto = 0;
     }
-    flow->tos_frag &= wildcards->tos_frag_mask;
+    if (wc & FWW_IPV6_LABEL) {
+        flow->ipv6_label = htonl(0);
+    }
+    if (wc & FWW_NW_DSCP) {
+        flow->nw_tos &= ~IP_DSCP_MASK;
+    }
+    if (wc & FWW_NW_ECN) {
+        flow->nw_tos &= ~IP_ECN_MASK;
+    }
+    if (wc & FWW_NW_TTL) {
+        flow->nw_ttl = 0;
+    }
+    flow->nw_frag &= wildcards->nw_frag_mask;
     if (wc & FWW_ARP_SHA) {
         memset(flow->arp_sha, 0, sizeof flow->arp_sha);
     }
@@ -484,6 +499,7 @@ flow_zero_wildcards(struct flow *flow, const struct flow_wildcards *wildcards)
     if (wc & FWW_ND_TARGET) {
         memset(&flow->nd_target, 0, sizeof flow->nd_target);
     }
+    flow->priority = 0;
 }
 
 char *
@@ -497,10 +513,14 @@ flow_to_string(const struct flow *flow)
 void
 flow_format(struct ds *ds, const struct flow *flow)
 {
-    int frag;
+    ds_put_format(ds, "priority%"PRIu32
+                      ":tunnel%#"PRIx64
+                      ":in_port%04"PRIx16,
+                      flow->priority,
+                      ntohll(flow->tun_id),
+                      flow->in_port);
 
-    ds_put_format(ds, "tunnel%#"PRIx64":in_port%04"PRIx16":tci(",
-                  ntohll(flow->tun_id), flow->in_port);
+    ds_put_format(ds, ":tci(");
     if (flow->vlan_tci) {
         ds_put_format(ds, "vlan%"PRIu16",pcp%d",
                       vlan_tci_to_vid(flow->vlan_tci),
@@ -515,27 +535,25 @@ flow_format(struct ds *ds, const struct flow *flow)
                   ntohs(flow->dl_type));
 
     if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
-        ds_put_format(ds, " proto%"PRIu8" tos%"PRIu8" ipv6",
-                      flow->nw_proto, flow->tos_frag & IP_DSCP_MASK);
+        ds_put_format(ds, " label%#"PRIx32" proto%"PRIu8" tos%#"PRIx8
+                          " ttl%"PRIu8" ipv6",
+                      ntohl(flow->ipv6_label), flow->nw_proto,
+                      flow->nw_tos, flow->nw_ttl);
         print_ipv6_addr(ds, &flow->ipv6_src);
         ds_put_cstr(ds, "->");
         print_ipv6_addr(ds, &flow->ipv6_dst);
 
     } else {
-        ds_put_format(ds, " proto%"PRIu8
-                          " tos%"PRIu8
+        ds_put_format(ds, " proto%"PRIu8" tos%#"PRIx8" ttl%"PRIu8
                           " ip"IP_FMT"->"IP_FMT,
-                      flow->nw_proto,
-                      flow->tos_frag & IP_DSCP_MASK,
-                      IP_ARGS(&flow->nw_src),
-                      IP_ARGS(&flow->nw_dst));
+                      flow->nw_proto, flow->nw_tos, flow->nw_ttl,
+                      IP_ARGS(&flow->nw_src), IP_ARGS(&flow->nw_dst));
     }
-    frag = flow->tos_frag & FLOW_FRAG_MASK;
-    if (frag) {
+    if (flow->nw_frag) {
         ds_put_format(ds, " frag(%s)",
-                      frag == FLOW_FRAG_ANY ? "first"
-                      : frag == (FLOW_FRAG_ANY | FLOW_FRAG_LATER) ? "later"
-                      : "<error>");
+                      flow->nw_frag == FLOW_NW_FRAG_ANY ? "first"
+                      : flow->nw_frag == (FLOW_NW_FRAG_ANY | FLOW_NW_FRAG_LATER)
+                      ? "later" : "<error>");
     }
     if (flow->tp_src || flow->tp_dst) {
         ds_put_format(ds, " port%"PRIu16"->%"PRIu16,
@@ -562,7 +580,7 @@ flow_print(FILE *stream, const struct flow *flow)
 void
 flow_wildcards_init_catchall(struct flow_wildcards *wc)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     wc->wildcards = FWW_ALL;
     wc->tun_id_mask = htonll(0);
@@ -572,7 +590,7 @@ flow_wildcards_init_catchall(struct flow_wildcards *wc)
     wc->ipv6_dst_mask = in6addr_any;
     memset(wc->reg_masks, 0, sizeof wc->reg_masks);
     wc->vlan_tci_mask = htons(0);
-    wc->tos_frag_mask = 0;
+    wc->nw_frag_mask = 0;
     memset(wc->zeros, 0, sizeof wc->zeros);
 }
 
@@ -581,7 +599,7 @@ flow_wildcards_init_catchall(struct flow_wildcards *wc)
 void
 flow_wildcards_init_exact(struct flow_wildcards *wc)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     wc->wildcards = 0;
     wc->tun_id_mask = htonll(UINT64_MAX);
@@ -591,7 +609,7 @@ flow_wildcards_init_exact(struct flow_wildcards *wc)
     wc->ipv6_dst_mask = in6addr_exact;
     memset(wc->reg_masks, 0xff, sizeof wc->reg_masks);
     wc->vlan_tci_mask = htons(UINT16_MAX);
-    wc->tos_frag_mask = UINT8_MAX;
+    wc->nw_frag_mask = UINT8_MAX;
     memset(wc->zeros, 0, sizeof wc->zeros);
 }
 
@@ -602,7 +620,7 @@ flow_wildcards_is_exact(const struct flow_wildcards *wc)
 {
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     if (wc->wildcards
         || wc->tun_id_mask != htonll(UINT64_MAX)
@@ -611,7 +629,7 @@ flow_wildcards_is_exact(const struct flow_wildcards *wc)
         || wc->vlan_tci_mask != htons(UINT16_MAX)
         || !ipv6_mask_is_exact(&wc->ipv6_src_mask)
         || !ipv6_mask_is_exact(&wc->ipv6_dst_mask)
-        || wc->tos_frag_mask != UINT8_MAX) {
+        || wc->nw_frag_mask != UINT8_MAX) {
         return false;
     }
 
@@ -631,7 +649,7 @@ flow_wildcards_is_catchall(const struct flow_wildcards *wc)
 {
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     if (wc->wildcards != FWW_ALL
         || wc->tun_id_mask != htonll(0)
@@ -640,7 +658,7 @@ flow_wildcards_is_catchall(const struct flow_wildcards *wc)
         || wc->vlan_tci_mask != htons(0)
         || !ipv6_mask_is_any(&wc->ipv6_src_mask)
         || !ipv6_mask_is_any(&wc->ipv6_dst_mask)
-        || wc->tos_frag_mask != 0) {
+        || wc->nw_frag_mask != 0) {
         return false;
     }
 
@@ -745,66 +763,6 @@ flow_wildcards_has_extra(const struct flow_wildcards *a,
             || (a->nw_src_mask & b->nw_src_mask) != b->nw_src_mask
             || (a->nw_dst_mask & b->nw_dst_mask) != b->nw_dst_mask
             || (a->vlan_tci_mask & b->vlan_tci_mask) != b->vlan_tci_mask);
-}
-
-static bool
-set_nw_mask(ovs_be32 *maskp, ovs_be32 mask)
-{
-    if (ip_is_cidr(mask)) {
-        *maskp = mask;
-        return true;
-    } else {
-        return false;
-    }
-}
-
-/* Sets the IP (or ARP) source wildcard mask to CIDR 'mask' (consisting of N
- * high-order 1-bit and 32-N low-order 0-bits).  Returns true if successful,
- * false if 'mask' is not a CIDR mask.  */
-bool
-flow_wildcards_set_nw_src_mask(struct flow_wildcards *wc, ovs_be32 mask)
-{
-    return set_nw_mask(&wc->nw_src_mask, mask);
-}
-
-/* Sets the IP (or ARP) destination wildcard mask to CIDR 'mask' (consisting of
- * N high-order 1-bit and 32-N low-order 0-bits).  Returns true if successful,
- * false if 'mask' is not a CIDR mask.  */
-bool
-flow_wildcards_set_nw_dst_mask(struct flow_wildcards *wc, ovs_be32 mask)
-{
-    return set_nw_mask(&wc->nw_dst_mask, mask);
-}
-
-static bool
-set_ipv6_mask(struct in6_addr *maskp, const struct in6_addr *mask)
-{
-    if (ipv6_is_cidr(mask)) {
-        *maskp = *mask;
-        return true;
-    } else {
-        return false;
-    }
-}
-
-/* Sets the IPv6 source wildcard mask to CIDR 'mask' (consisting of N
- * high-order 1-bit and 128-N low-order 0-bits).  Returns true if successful,
- * false if 'mask' is not a CIDR mask.  */
-bool
-flow_wildcards_set_ipv6_src_mask(struct flow_wildcards *wc,
-                                 const struct in6_addr *mask)
-{
-    return set_ipv6_mask(&wc->ipv6_src_mask, mask);
-}
-
-/* Sets the IPv6 destination wildcard mask to CIDR 'mask' (consisting of
- * N high-order 1-bit and 128-N low-order 0-bits).  Returns true if
- * successful, false if 'mask' is not a CIDR mask.  */
-bool
-flow_wildcards_set_ipv6_dst_mask(struct flow_wildcards *wc,
-                                 const struct in6_addr *mask)
-{
-    return set_ipv6_mask(&wc->ipv6_dst_mask, mask);
 }
 
 /* Sets the wildcard mask for register 'idx' in 'wc' to 'mask'.
@@ -977,6 +935,44 @@ flow_hash_fields_valid(enum nx_hash_fields fields)
         || fields == NX_HASH_FIELDS_SYMMETRIC_L4;
 }
 
+/* Sets the VLAN VID that 'flow' matches to 'vid', which is interpreted as an
+ * OpenFlow 1.0 "dl_vlan" value:
+ *
+ *      - If it is in the range 0...4095, 'flow->vlan_tci' is set to match
+ *        that VLAN.  Any existing PCP match is unchanged (it becomes 0 if
+ *        'flow' previously matched packets without a VLAN header).
+ *
+ *      - If it is OFP_VLAN_NONE, 'flow->vlan_tci' is set to match a packet
+ *        without a VLAN tag.
+ *
+ *      - Other values of 'vid' should not be used. */
+void
+flow_set_vlan_vid(struct flow *flow, ovs_be16 vid)
+{
+    if (vid == htons(OFP_VLAN_NONE)) {
+        flow->vlan_tci = htons(0);
+    } else {
+        vid &= htons(VLAN_VID_MASK);
+        flow->vlan_tci &= ~htons(VLAN_VID_MASK);
+        flow->vlan_tci |= htons(VLAN_CFI) | vid;
+    }
+}
+
+/* Sets the VLAN PCP that 'flow' matches to 'pcp', which should be in the
+ * range 0...7.
+ *
+ * This function has no effect on the VLAN ID that 'flow' matches.
+ *
+ * After calling this function, 'flow' will not match packets without a VLAN
+ * header. */
+void
+flow_set_vlan_pcp(struct flow *flow, uint8_t pcp)
+{
+    pcp &= 0x07;
+    flow->vlan_tci &= ~htons(VLAN_PCP_MASK);
+    flow->vlan_tci |= htons((pcp << VLAN_PCP_SHIFT) | VLAN_CFI);
+}
+
 /* Puts into 'b' a packet that flow_extract() would parse as having the given
  * 'flow'.
  *
@@ -1002,19 +998,19 @@ flow_compose(struct ofpbuf *b, const struct flow *flow)
 
         b->l3 = ip = ofpbuf_put_zeros(b, sizeof *ip);
         ip->ip_ihl_ver = IP_IHL_VER(5, 4);
-        ip->ip_tos = flow->tos_frag & IP_DSCP_MASK;
+        ip->ip_tos = flow->nw_tos;
         ip->ip_proto = flow->nw_proto;
         ip->ip_src = flow->nw_src;
         ip->ip_dst = flow->nw_dst;
 
-        if (flow->tos_frag & FLOW_FRAG_ANY) {
+        if (flow->nw_frag & FLOW_NW_FRAG_ANY) {
             ip->ip_frag_off |= htons(IP_MORE_FRAGMENTS);
-            if (flow->tos_frag & FLOW_FRAG_LATER) {
+            if (flow->nw_frag & FLOW_NW_FRAG_LATER) {
                 ip->ip_frag_off |= htons(100);
             }
         }
-        if (!(flow->tos_frag & FLOW_FRAG_ANY)
-            || !(flow->tos_frag & FLOW_FRAG_LATER)) {
+        if (!(flow->nw_frag & FLOW_NW_FRAG_ANY)
+            || !(flow->nw_frag & FLOW_NW_FRAG_LATER)) {
             if (flow->nw_proto == IPPROTO_TCP) {
                 struct tcp_header *tcp;
 

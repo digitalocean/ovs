@@ -30,6 +30,7 @@ struct ds;
 struct flow;
 struct nlattr;
 struct ofpbuf;
+struct shash;
 
 #define OVSP_NONE ((uint16_t) -1)
 
@@ -58,31 +59,30 @@ odp_port_to_ofp_port(uint16_t odp_port)
         return odp_port;
     }
 }
+
 void format_odp_actions(struct ds *, const struct nlattr *odp_actions,
                         size_t actions_len);
+int odp_actions_from_string(const char *, const struct shash *port_names,
+                            struct ofpbuf *odp_actions);
 
 /* Upper bound on the length of a nlattr-formatted flow key.  The longest
  * nlattr-formatted flow key would be:
  *
  *                         struct  pad  nl hdr  total
  *                         ------  ---  ------  -----
+ *  OVS_KEY_ATTR_PRIORITY      4    --     4      8
  *  OVS_KEY_ATTR_TUN_ID        8    --     4     12
  *  OVS_KEY_ATTR_IN_PORT       4    --     4      8
  *  OVS_KEY_ATTR_ETHERNET     12    --     4     16
  *  OVS_KEY_ATTR_8021Q         4    --     4      8
  *  OVS_KEY_ATTR_ETHERTYPE     2     2     4      8
- *  OVS_KEY_ATTR_IPV6         34     2     4     40
+ *  OVS_KEY_ATTR_IPV6         40    --     4     44
  *  OVS_KEY_ATTR_ICMPV6        2     2     4      8
  *  OVS_KEY_ATTR_ND           28    --     4     32
  *  -------------------------------------------------
- *  total                                       132
+ *  total                                       144
  */
-#define ODPUTIL_FLOW_KEY_BYTES 132
-
-/* This is an imperfect sanity-check that ODPUTIL_FLOW_KEY_BYTES doesn't
- * need to be updated, but will at least raise awareness when new OVS
- * datapath key types are added. */
-BUILD_ASSERT_DECL(__OVS_KEY_ATTR_MAX == 14);
+#define ODPUTIL_FLOW_KEY_BYTES 144
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -92,10 +92,28 @@ struct odputil_keybuf {
 };
 
 void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
-int odp_flow_key_from_string(const char *s, struct ofpbuf *);
+int odp_flow_key_from_string(const char *s, const struct shash *port_names,
+                             struct ofpbuf *);
 
 void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *);
-int odp_flow_key_to_flow(const struct nlattr *, size_t, struct flow *);
+
+uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
+
+/* How well a kernel-provided flow key (a sequence of OVS_KEY_ATTR_*
+ * attributes) matches OVS userspace expectations.
+ *
+ * These values are arranged so that greater values are "more important" than
+ * lesser ones.  In particular, a single flow key can fit the descriptions for
+ * both ODP_FIT_TOO_LITTLE and ODP_FIT_TOO_MUCH.  Such a key is treated as
+ * ODP_FIT_TOO_LITTLE. */
+enum odp_key_fitness {
+    ODP_FIT_PERFECT,            /* The key had exactly the fields we expect. */
+    ODP_FIT_TOO_MUCH,           /* The key had fields we don't understand. */
+    ODP_FIT_TOO_LITTLE,         /* The key lacked fields we expected to see. */
+    ODP_FIT_ERROR,              /* The key was invalid. */
+};
+enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
+                                          struct flow *);
 
 enum user_action_cookie_type {
     USER_ACTION_COOKIE_UNSPEC,
@@ -115,4 +133,10 @@ struct user_action_cookie {
 
 BUILD_ASSERT_DECL(sizeof(struct user_action_cookie) == 8);
 
+size_t odp_put_userspace_action(uint32_t pid,
+                                const struct user_action_cookie *,
+                                struct ofpbuf *odp_actions);
+
+void commit_odp_actions(const struct flow *, struct flow *base,
+                        struct ofpbuf *odp_actions);
 #endif /* odp-util.h */

@@ -31,6 +31,7 @@
 #include "compiler.h"
 #include "daemon.h"
 #include "dirs.h"
+#include "dpif.h"
 #include "dummy.h"
 #include "leak-checker.h"
 #include "netdev.h"
@@ -123,6 +124,7 @@ parse_options(int argc, char *argv[])
         LEAK_CHECKER_OPTION_ENUMS,
         OPT_BOOTSTRAP_CA_CERT,
         OPT_ENABLE_DUMMY,
+        OPT_DISABLE_SYSTEM,
         DAEMON_OPTION_ENUMS
     };
     static struct option long_options[] = {
@@ -136,6 +138,7 @@ parse_options(int argc, char *argv[])
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
         {"enable-dummy", no_argument, NULL, OPT_ENABLE_DUMMY},
+        {"disable-system", no_argument, NULL, OPT_DISABLE_SYSTEM},
         {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
@@ -181,6 +184,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_ENABLE_DUMMY:
             dummy_enable();
+            break;
+
+        case OPT_DISABLE_SYSTEM:
+            dp_blacklist_provider("system");
             break;
 
         case '?':

@@ -32,9 +32,6 @@ static struct cls_table *find_table(const struct classifier *,
 static struct cls_table *insert_table(struct classifier *,
                                       const struct flow_wildcards *);
 
-static struct cls_table *classifier_first_table(const struct classifier *);
-static struct cls_table *classifier_next_table(const struct classifier *,
-                                               const struct cls_table *);
 static void destroy_table(struct classifier *, struct cls_table *);
 
 static struct cls_rule *find_match(const struct cls_table *,
@@ -57,12 +54,6 @@ static bool flow_equal_except(const struct flow *, const struct flow *,
 static struct cls_rule *next_rule_in_list__(struct cls_rule *);
 static struct cls_rule *next_rule_in_list(struct cls_rule *);
 
-static struct cls_table *
-cls_table_from_hmap_node(const struct hmap_node *node)
-{
-    return node ? CONTAINER_OF(node, struct cls_table, hmap_node) : NULL;
-}
-
 /* Converts the flow in 'flow' into a cls_rule in 'rule', with the given
  * 'wildcards' and 'priority'. */
 void
@@ -83,6 +74,7 @@ cls_rule_init_exact(const struct flow *flow,
                     unsigned int priority, struct cls_rule *rule)
 {
     rule->flow = *flow;
+    rule->flow.priority = 0;
     flow_wildcards_init_exact(&rule->wc);
     rule->priority = priority;
 }
@@ -226,12 +218,10 @@ cls_rule_set_any_vid(struct cls_rule *rule)
 void
 cls_rule_set_dl_vlan(struct cls_rule *rule, ovs_be16 dl_vlan)
 {
+    flow_set_vlan_vid(&rule->flow, dl_vlan);
     if (dl_vlan == htons(OFP_VLAN_NONE)) {
-        cls_rule_set_dl_tci(rule, htons(0));
+        rule->wc.vlan_tci_mask = htons(UINT16_MAX);
     } else {
-        dl_vlan &= htons(VLAN_VID_MASK);
-        rule->flow.vlan_tci &= ~htons(VLAN_VID_MASK);
-        rule->flow.vlan_tci |= htons(VLAN_CFI) | dl_vlan;
         rule->wc.vlan_tci_mask |= htons(VLAN_VID_MASK | VLAN_CFI);
     }
 }
@@ -255,9 +245,7 @@ cls_rule_set_any_pcp(struct cls_rule *rule)
 void
 cls_rule_set_dl_vlan_pcp(struct cls_rule *rule, uint8_t dl_vlan_pcp)
 {
-    dl_vlan_pcp &= 0x07;
-    rule->flow.vlan_tci &= ~htons(VLAN_PCP_MASK);
-    rule->flow.vlan_tci |= htons((dl_vlan_pcp << VLAN_PCP_SHIFT) | VLAN_CFI);
+    flow_set_vlan_pcp(&rule->flow, dl_vlan_pcp);
     rule->wc.vlan_tci_mask |= htons(VLAN_CFI | VLAN_PCP_MASK);
 }
 
@@ -285,60 +273,68 @@ cls_rule_set_nw_proto(struct cls_rule *rule, uint8_t nw_proto)
 void
 cls_rule_set_nw_src(struct cls_rule *rule, ovs_be32 nw_src)
 {
-    cls_rule_set_nw_src_masked(rule, nw_src, htonl(UINT32_MAX));
+    rule->flow.nw_src = nw_src;
+    rule->wc.nw_src_mask = htonl(UINT32_MAX);
 }
 
-bool
-cls_rule_set_nw_src_masked(struct cls_rule *rule, ovs_be32 ip, ovs_be32 mask)
+void
+cls_rule_set_nw_src_masked(struct cls_rule *rule,
+                           ovs_be32 nw_src, ovs_be32 mask)
 {
-    if (flow_wildcards_set_nw_src_mask(&rule->wc, mask)) {
-        rule->flow.nw_src = ip & mask;
-        return true;
-    } else {
-        return false;
-    }
+    rule->flow.nw_src = nw_src & mask;
+    rule->wc.nw_src_mask = mask;
 }
 
 void
 cls_rule_set_nw_dst(struct cls_rule *rule, ovs_be32 nw_dst)
 {
-    cls_rule_set_nw_dst_masked(rule, nw_dst, htonl(UINT32_MAX));
+    rule->flow.nw_dst = nw_dst;
+    rule->wc.nw_dst_mask = htonl(UINT32_MAX);
 }
 
-bool
+void
 cls_rule_set_nw_dst_masked(struct cls_rule *rule, ovs_be32 ip, ovs_be32 mask)
 {
-    if (flow_wildcards_set_nw_dst_mask(&rule->wc, mask)) {
-        rule->flow.nw_dst = ip & mask;
-        return true;
-    } else {
-        return false;
-    }
+    rule->flow.nw_dst = ip & mask;
+    rule->wc.nw_dst_mask = mask;
 }
 
 void
-cls_rule_set_nw_tos(struct cls_rule *rule, uint8_t nw_tos)
+cls_rule_set_nw_dscp(struct cls_rule *rule, uint8_t nw_dscp)
 {
-    rule->wc.tos_frag_mask |= IP_DSCP_MASK;
-    rule->flow.tos_frag &= ~IP_DSCP_MASK;
-    rule->flow.tos_frag |= nw_tos & IP_DSCP_MASK;
+    rule->wc.wildcards &= ~FWW_NW_DSCP;
+    rule->flow.nw_tos &= ~IP_DSCP_MASK;
+    rule->flow.nw_tos |= nw_dscp & IP_DSCP_MASK;
 }
 
 void
-cls_rule_set_frag(struct cls_rule *rule, uint8_t frag)
+cls_rule_set_nw_ecn(struct cls_rule *rule, uint8_t nw_ecn)
 {
-    rule->wc.tos_frag_mask |= FLOW_FRAG_MASK;
-    rule->flow.tos_frag &= ~FLOW_FRAG_MASK;
-    rule->flow.tos_frag |= frag & FLOW_FRAG_MASK;
+    rule->wc.wildcards &= ~FWW_NW_ECN;
+    rule->flow.nw_tos &= ~IP_ECN_MASK;
+    rule->flow.nw_tos |= nw_ecn & IP_ECN_MASK;
 }
 
 void
-cls_rule_set_frag_masked(struct cls_rule *rule, uint8_t frag, uint8_t mask)
+cls_rule_set_nw_ttl(struct cls_rule *rule, uint8_t nw_ttl)
 {
-    mask &= FLOW_FRAG_MASK;
-    frag &= mask;
-    rule->wc.tos_frag_mask = (rule->wc.tos_frag_mask & ~FLOW_FRAG_MASK) | mask;
-    rule->flow.tos_frag = (rule->flow.tos_frag & ~FLOW_FRAG_MASK) | frag;
+    rule->wc.wildcards &= ~FWW_NW_TTL;
+    rule->flow.nw_ttl = nw_ttl;
+}
+
+void
+cls_rule_set_nw_frag(struct cls_rule *rule, uint8_t nw_frag)
+{
+    rule->wc.nw_frag_mask |= FLOW_NW_FRAG_MASK;
+    rule->flow.nw_frag = nw_frag;
+}
+
+void
+cls_rule_set_nw_frag_masked(struct cls_rule *rule,
+                            uint8_t nw_frag, uint8_t mask)
+{
+    rule->flow.nw_frag = nw_frag & mask;
+    rule->wc.nw_frag_mask = mask;
 }
 
 void
@@ -346,7 +342,6 @@ cls_rule_set_icmp_type(struct cls_rule *rule, uint8_t icmp_type)
 {
     rule->wc.wildcards &= ~FWW_TP_SRC;
     rule->flow.tp_src = htons(icmp_type);
-
 }
 
 void
@@ -373,37 +368,38 @@ cls_rule_set_arp_tha(struct cls_rule *rule, const uint8_t tha[ETH_ADDR_LEN])
 void
 cls_rule_set_ipv6_src(struct cls_rule *rule, const struct in6_addr *src)
 {
-    cls_rule_set_ipv6_src_masked(rule, src, &in6addr_exact);
+    rule->flow.ipv6_src = *src;
+    rule->wc.ipv6_src_mask = in6addr_exact;
 }
 
-bool
+void
 cls_rule_set_ipv6_src_masked(struct cls_rule *rule, const struct in6_addr *src,
                              const struct in6_addr *mask)
 {
-    if (flow_wildcards_set_ipv6_src_mask(&rule->wc, mask)) {
-        rule->flow.ipv6_src = ipv6_addr_bitand(src, mask);
-        return true;
-    } else {
-        return false;
-    }
+    rule->flow.ipv6_src = ipv6_addr_bitand(src, mask);
+    rule->wc.ipv6_src_mask = *mask;
 }
 
 void
 cls_rule_set_ipv6_dst(struct cls_rule *rule, const struct in6_addr *dst)
 {
-    cls_rule_set_ipv6_dst_masked(rule, dst, &in6addr_exact);
+    rule->flow.ipv6_dst = *dst;
+    rule->wc.ipv6_dst_mask = in6addr_exact;
 }
 
-bool
+void
 cls_rule_set_ipv6_dst_masked(struct cls_rule *rule, const struct in6_addr *dst,
                              const struct in6_addr *mask)
 {
-    if (flow_wildcards_set_ipv6_dst_mask(&rule->wc, mask)) {
-        rule->flow.ipv6_dst = ipv6_addr_bitand(dst, mask);
-        return true;
-    } else {
-        return false;
-    }
+    rule->flow.ipv6_dst = ipv6_addr_bitand(dst, mask);
+    rule->wc.ipv6_dst_mask = *mask;
+}
+
+void
+cls_rule_set_ipv6_label(struct cls_rule *rule, ovs_be32 ipv6_label)
+{
+    rule->wc.wildcards &= ~FWW_IPV6_LABEL;
+    rule->flow.ipv6_label = ipv6_label;
 }
 
 void
@@ -468,7 +464,7 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     if (rule->priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "priority=%d,", rule->priority);
@@ -589,6 +585,9 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
     if (f->dl_type == htons(ETH_TYPE_IPV6)) {
         format_ipv6_netmask(s, "ipv6_src", &f->ipv6_src, &wc->ipv6_src_mask);
         format_ipv6_netmask(s, "ipv6_dst", &f->ipv6_dst, &wc->ipv6_dst_mask);
+        if (!(w & FWW_IPV6_LABEL)) {
+            ds_put_format(s, "ipv6_label=0x%05"PRIx32",", ntohl(f->ipv6_label));
+        }
     } else {
         format_ip_netmask(s, "nw_src", f->nw_src, wc->nw_src_mask);
         format_ip_netmask(s, "nw_dst", f->nw_dst, wc->nw_dst_mask);
@@ -610,25 +609,31 @@ cls_rule_format(const struct cls_rule *rule, struct ds *s)
                     ETH_ADDR_ARGS(f->arp_tha));
         }
     }
-    if (wc->tos_frag_mask & IP_DSCP_MASK) {
-        ds_put_format(s, "nw_tos=%"PRIu8",", f->tos_frag & IP_DSCP_MASK);
+    if (!(w & FWW_NW_DSCP)) {
+        ds_put_format(s, "nw_tos=%"PRIu8",", f->nw_tos & IP_DSCP_MASK);
     }
-    switch (wc->tos_frag_mask & FLOW_FRAG_MASK) {
-    case FLOW_FRAG_ANY | FLOW_FRAG_LATER:
-        ds_put_format(s, "frag=%s,",
-                      f->tos_frag & FLOW_FRAG_ANY
-                      ? (f->tos_frag & FLOW_FRAG_LATER ? "later" : "first")
-                      : (f->tos_frag & FLOW_FRAG_LATER ? "<error>" : "no"));
+    if (!(w & FWW_NW_ECN)) {
+        ds_put_format(s, "nw_ecn=%"PRIu8",", f->nw_tos & IP_ECN_MASK);
+    }
+    if (!(w & FWW_NW_TTL)) {
+        ds_put_format(s, "nw_ttl=%"PRIu8",", f->nw_ttl);
+    }
+    switch (wc->nw_frag_mask) {
+    case FLOW_NW_FRAG_ANY | FLOW_NW_FRAG_LATER:
+        ds_put_format(s, "nw_frag=%s,",
+                      f->nw_frag & FLOW_NW_FRAG_ANY
+                      ? (f->nw_frag & FLOW_NW_FRAG_LATER ? "later" : "first")
+                      : (f->nw_frag & FLOW_NW_FRAG_LATER ? "<error>" : "no"));
         break;
 
-    case FLOW_FRAG_ANY:
-        ds_put_format(s, "frag=%s,",
-                      f->tos_frag & FLOW_FRAG_ANY ? "yes" : "no");
+    case FLOW_NW_FRAG_ANY:
+        ds_put_format(s, "nw_frag=%s,",
+                      f->nw_frag & FLOW_NW_FRAG_ANY ? "yes" : "no");
         break;
 
-    case FLOW_FRAG_LATER:
-        ds_put_format(s, "frag=%s,",
-                      f->tos_frag & FLOW_FRAG_LATER ? "later" : "not_later");
+    case FLOW_NW_FRAG_LATER:
+        ds_put_format(s, "nw_frag=%s,",
+                      f->nw_frag & FLOW_NW_FRAG_LATER ? "later" : "not_later");
         break;
     }
     if (f->nw_proto == IPPROTO_ICMP) {
@@ -948,8 +953,7 @@ cls_cursor_first(struct cls_cursor *cursor)
 {
     struct cls_table *table;
 
-    for (table = classifier_first_table(cursor->cls); table;
-         table = classifier_next_table(cursor->cls, table)) {
+    HMAP_FOR_EACH (table, hmap_node, &cursor->cls->tables) {
         struct cls_rule *rule = search_table(table, cursor->target);
         if (rule) {
             cursor->table = table;
@@ -983,8 +987,8 @@ cls_cursor_next(struct cls_cursor *cursor, struct cls_rule *rule)
         }
     }
 
-    for (table = classifier_next_table(cursor->cls, cursor->table); table;
-         table = classifier_next_table(cursor->cls, table)) {
+    table = cursor->table;
+    HMAP_FOR_EACH_CONTINUE (table, hmap_node, &cursor->cls->tables) {
         rule = search_table(table, cursor->target);
         if (rule) {
             cursor->table = table;
@@ -1020,20 +1024,6 @@ insert_table(struct classifier *cls, const struct flow_wildcards *wc)
     hmap_insert(&cls->tables, &table->hmap_node, flow_wildcards_hash(wc, 0));
 
     return table;
-}
-
-static struct cls_table *
-classifier_first_table(const struct classifier *cls)
-{
-    return cls_table_from_hmap_node(hmap_first(&cls->tables));
-}
-
-static struct cls_table *
-classifier_next_table(const struct classifier *cls,
-                      const struct cls_table *table)
-{
-    return cls_table_from_hmap_node(hmap_next(&cls->tables,
-                                              &table->hmap_node));
 }
 
 static void
@@ -1159,7 +1149,7 @@ flow_equal_except(const struct flow *a, const struct flow *b,
     const flow_wildcards_t wc = wildcards->wildcards;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 3);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
 
     for (i = 0; i < FLOW_N_REGS; i++) {
         if ((a->regs[i] ^ b->regs[i]) & wildcards->reg_masks[i]) {
@@ -1186,9 +1176,13 @@ flow_equal_except(const struct flow *a, const struct flow *b,
             && (wc & FWW_ETH_MCAST
                 || !((a->dl_dst[0] ^ b->dl_dst[0]) & 0x01))
             && (wc & FWW_NW_PROTO || a->nw_proto == b->nw_proto)
-            && !((a->tos_frag ^ b->tos_frag) & wildcards->tos_frag_mask)
+            && (wc & FWW_NW_TTL || a->nw_ttl == b->nw_ttl)
+            && (wc & FWW_NW_DSCP || !((a->nw_tos ^ b->nw_tos) & IP_DSCP_MASK))
+            && (wc & FWW_NW_ECN || !((a->nw_tos ^ b->nw_tos) & IP_ECN_MASK))
+            && !((a->nw_frag ^ b->nw_frag) & wildcards->nw_frag_mask)
             && (wc & FWW_ARP_SHA || eth_addr_equals(a->arp_sha, b->arp_sha))
             && (wc & FWW_ARP_THA || eth_addr_equals(a->arp_tha, b->arp_tha))
+            && (wc & FWW_IPV6_LABEL || a->ipv6_label == b->ipv6_label)
             && ipv6_equal_except(&a->ipv6_src, &b->ipv6_src,
                     &wildcards->ipv6_src_mask)
             && ipv6_equal_except(&a->ipv6_dst, &b->ipv6_dst,

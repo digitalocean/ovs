@@ -458,7 +458,8 @@ answer_port_query(const struct dp_netdev_port *port,
                   struct dpif_port *dpif_port)
 {
     dpif_port->name = xstrdup(netdev_get_name(port->netdev));
-    dpif_port->type = xstrdup(port->internal ? "internal" : "system");
+    dpif_port->type = xstrdup(port->internal ? "internal"
+                              : netdev_get_type(port->netdev));
     dpif_port->port_no = port->port_no;
 }
 
@@ -550,7 +551,8 @@ dpif_netdev_port_dump_next(const struct dpif *dpif, void *state_,
             free(state->name);
             state->name = xstrdup(netdev_get_name(port->netdev));
             dpif_port->name = state->name;
-            dpif_port->type = port->internal ? "internal" : "system";
+            dpif_port->type = (char *) (port->internal ? "internal"
+                                        : netdev_get_type(port->netdev));
             dpif_port->port_no = port->port_no;
             state->port_no = port_no + 1;
             return 0;
@@ -881,7 +883,7 @@ dpif_netdev_execute(struct dpif *dpif,
     ofpbuf_reserve(&copy, DP_NETDEV_HEADROOM);
     ofpbuf_put(&copy, packet->data, packet->size);
 
-    flow_extract(&copy, 0, -1, &key);
+    flow_extract(&copy, 0, 0, -1, &key);
     error = dpif_netdev_flow_from_nlattrs(key_attrs, key_len, &key);
     if (!error) {
         dp_netdev_execute_actions(dp, &copy, &key,
@@ -905,6 +907,14 @@ dpif_netdev_recv_set_mask(struct dpif *dpif, int listen_mask)
 {
     struct dpif_netdev *dpif_netdev = dpif_netdev_cast(dpif);
     dpif_netdev->listen_mask = listen_mask;
+    return 0;
+}
+
+static int
+dpif_netdev_queue_to_priority(const struct dpif *dpif OVS_UNUSED,
+                              uint32_t queue_id, uint32_t *priority)
+{
+    *priority = queue_id;
     return 0;
 }
 
@@ -981,7 +991,7 @@ dp_netdev_port_input(struct dp_netdev *dp, struct dp_netdev_port *port,
     if (packet->size < ETH_HEADER_LEN) {
         return;
     }
-    flow_extract(packet, 0, port->port_no, &key);
+    flow_extract(packet, 0, 0, port->port_no, &key);
     flow = dp_netdev_lookup_flow(dp, &key);
     if (flow) {
         dp_netdev_flow_used(flow, &key, packet);
@@ -1034,24 +1044,6 @@ dpif_netdev_wait(struct dpif *dpif)
 }
 
 static void
-dp_netdev_pop_vlan(struct ofpbuf *packet)
-{
-    struct vlan_eth_header *veh = packet->l2;
-    if (packet->size >= sizeof *veh
-        && veh->veth_type == htons(ETH_TYPE_VLAN)) {
-        struct eth_header tmp;
-
-        memcpy(tmp.eth_dst, veh->veth_dst, ETH_ADDR_LEN);
-        memcpy(tmp.eth_src, veh->veth_src, ETH_ADDR_LEN);
-        tmp.eth_type = veh->veth_next_type;
-
-        ofpbuf_pull(packet, VLAN_HEADER_LEN);
-        packet->l2 = (char*)packet->l2 + VLAN_HEADER_LEN;
-        memcpy(packet->data, &tmp, sizeof tmp);
-    }
-}
-
-static void
 dp_netdev_set_dl(struct ofpbuf *packet, const struct ovs_key_ethernet *eth_key)
 {
     struct eth_header *eh = packet->l2;
@@ -1086,12 +1078,19 @@ dp_netdev_set_ip_tos(struct ip_header *nh, uint8_t new_tos)
 {
     uint8_t *field = &nh->ip_tos;
 
-    /* Set the DSCP bits and preserve the ECN bits. */
-    uint8_t new = new_tos | (nh->ip_tos & IP_ECN_MASK);
-
     nh->ip_csum = recalc_csum16(nh->ip_csum, htons((uint16_t)*field),
-			            htons((uint16_t) new));
-    *field = new;
+			            htons((uint16_t) new_tos));
+    *field = new_tos;
+}
+
+static void
+dp_netdev_set_ip_ttl(struct ip_header *nh, uint8_t new_ttl)
+{
+    uint8_t *field = &nh->ip_ttl;
+
+    nh->ip_csum = recalc_csum16(nh->ip_csum, htons(*field << 8),
+			            htons(new_ttl << 8));
+    *field = new_ttl;
 }
 
 static void
@@ -1107,6 +1106,9 @@ dp_netdev_set_ipv4(struct ofpbuf *packet, const struct ovs_key_ipv4 *ipv4_key)
     }
     if (nh->ip_tos != ipv4_key->ipv4_tos) {
         dp_netdev_set_ip_tos(nh, ipv4_key->ipv4_tos);
+    }
+    if (nh->ip_ttl != ipv4_key->ipv4_ttl) {
+        dp_netdev_set_ip_ttl(nh, ipv4_key->ipv4_ttl);
     }
 }
 
@@ -1239,6 +1241,8 @@ execute_set_action(struct ofpbuf *packet, const struct nlattr *a)
     enum ovs_key_attr type = nl_attr_type(a);
     switch (type) {
     case OVS_KEY_ATTR_TUN_ID:
+    case OVS_KEY_ATTR_PRIORITY:
+        /* not implemented */
         break;
 
     case OVS_KEY_ATTR_ETHERNET:
@@ -1262,10 +1266,11 @@ execute_set_action(struct ofpbuf *packet, const struct nlattr *a)
         break;
 
      case OVS_KEY_ATTR_UNSPEC:
+     case OVS_KEY_ATTR_ENCAP:
      case OVS_KEY_ATTR_ETHERTYPE:
      case OVS_KEY_ATTR_IPV6:
      case OVS_KEY_ATTR_IN_PORT:
-     case OVS_KEY_ATTR_8021Q:
+     case OVS_KEY_ATTR_VLAN:
      case OVS_KEY_ATTR_ICMP:
      case OVS_KEY_ATTR_ICMPV6:
      case OVS_KEY_ATTR_ARP:
@@ -1286,8 +1291,7 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
     unsigned int left;
 
     NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
-        const struct nlattr *nested;
-        const struct ovs_key_8021q *q_key;
+        const struct ovs_action_push_vlan *vlan;
         int type = nl_attr_type(a);
 
         switch ((enum ovs_action_attr) type) {
@@ -1299,16 +1303,13 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
             dp_netdev_action_userspace(dp, packet, key, a);
             break;
 
-        case OVS_ACTION_ATTR_PUSH:
-            nested = nl_attr_get(a);
-            assert(nl_attr_type(nested) == OVS_KEY_ATTR_8021Q);
-            q_key = nl_attr_get_unspec(nested, sizeof(*q_key));
-            eth_push_vlan(packet, q_key->q_tci);
+        case OVS_ACTION_ATTR_PUSH_VLAN:
+            vlan = nl_attr_get(a);
+            eth_push_vlan(packet, vlan->vlan_tci & ~htons(VLAN_CFI));
             break;
 
-        case OVS_ACTION_ATTR_POP:
-            assert(nl_attr_get_u16(a) == OVS_KEY_ATTR_8021Q);
-            dp_netdev_pop_vlan(packet);
+        case OVS_ACTION_ATTR_POP_VLAN:
+            eth_pop_vlan(packet);
             break;
 
         case OVS_ACTION_ATTR_SET:
@@ -1317,11 +1318,6 @@ dp_netdev_execute_actions(struct dp_netdev *dp,
 
         case OVS_ACTION_ATTR_SAMPLE:
             dp_netdev_sample(dp, packet, key, a);
-            break;
-
-        case OVS_ACTION_ATTR_SET_PRIORITY:
-        case OVS_ACTION_ATTR_POP_PRIORITY:
-            /* not implemented */
             break;
 
         case OVS_ACTION_ATTR_UNSPEC:
@@ -1362,7 +1358,7 @@ const struct dpif_class dpif_netdev_class = {
     NULL,                       /* operate */
     dpif_netdev_recv_get_mask,
     dpif_netdev_recv_set_mask,
-    NULL,                       /* queue_to_priority */
+    dpif_netdev_queue_to_priority,
     dpif_netdev_recv,
     dpif_netdev_recv_wait,
     dpif_netdev_recv_purge,

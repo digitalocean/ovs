@@ -2,6 +2,7 @@ if HAVE_PYTHON
 sbin_SCRIPTS += utilities/bugtool/ovs-bugtool
 CLEANFILES += utilities/bugtool/ovs-bugtool
 man_MANS += utilities/bugtool/ovs-bugtool.8
+MAN_ROOTS += utilities/bugtool/ovs-bugtool.8
 
 bugtool_plugins = \
 	utilities/bugtool/plugins/kernel-info/openvswitch.xml \
@@ -17,7 +18,7 @@ bugtool_scripts = \
 	utilities/bugtool/ovs-bugtool-ovsdb-dump
 scripts_SCRIPTS += $(bugtool_scripts)
 
-bugtoolpluginsdir = $(sysconfdir)/openvswitch/bugtool-plugins
+bugtoolpluginsdir = $(pkgdatadir)/bugtool-plugins
 INSTALL_DATA_LOCAL += bugtool-install-data-local
 bugtool-install-data-local:
 	for plugin in $(bugtool_plugins); do \

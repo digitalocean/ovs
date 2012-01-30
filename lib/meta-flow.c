@@ -48,14 +48,16 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_FULLY, 0,
         MFS_HEXADECIMAL,
         MFP_NONE,
-        NXM_NX_TUN_ID,
+        true,
+        NXM_NX_TUN_ID, "NXM_NX_TUN_ID",
     }, {
         MFF_IN_PORT, "in_port", NULL,
         MF_FIELD_SIZES(be16),
         MFM_NONE, FWW_IN_PORT,
         MFS_OFP_PORT,
         MFP_NONE,
-        NXM_OF_IN_PORT,
+        false,
+        NXM_OF_IN_PORT, "NXM_OF_IN_PORT",
     },
 
 #define REGISTER(IDX)                           \
@@ -65,7 +67,9 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_FULLY, 0,                           \
         MFS_HEXADECIMAL,                        \
         MFP_NONE,                               \
+        true,                                   \
         NXM_NX_REG(IDX),                        \
+        "NXM_NX_REG" #IDX                       \
     }
 #if FLOW_N_REGS > 0
     REGISTER(0),
@@ -96,21 +100,24 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_DL_SRC,
         MFS_ETHERNET,
         MFP_NONE,
-        NXM_OF_ETH_SRC,
+        true,
+        NXM_OF_ETH_SRC, "NXM_OF_ETH_SRC",
     }, {
         MFF_ETH_DST, "eth_dst", "dl_dst",
         MF_FIELD_SIZES(mac),
         MFM_MCAST, 0,
         MFS_ETHERNET,
         MFP_NONE,
-        NXM_OF_ETH_DST,
+        true,
+        NXM_OF_ETH_DST, "NXM_OF_ETH_DST",
     }, {
         MFF_ETH_TYPE, "eth_type", "dl_type",
         MF_FIELD_SIZES(be16),
         MFM_NONE, FWW_DL_TYPE,
         MFS_HEXADECIMAL,
         MFP_NONE,
-        NXM_OF_ETH_TYPE,
+        false,
+        NXM_OF_ETH_TYPE, "NXM_OF_ETH_TYPE",
     },
 
     {
@@ -119,21 +126,24 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_FULLY, 0,
         MFS_HEXADECIMAL,
         MFP_NONE,
-        NXM_OF_VLAN_TCI,
+        true,
+        NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
     }, {
         MFF_VLAN_VID, "dl_vlan", NULL,
         sizeof(ovs_be16), 12,
         MFM_NONE, 0,
         MFS_DECIMAL,
         MFP_NONE,
-        0,
+        true,
+        0, NULL
     }, {
         MFF_VLAN_PCP, "dl_vlan_pcp", NULL,
         1, 3,
         MFM_NONE, 0,
         MFS_DECIMAL,
         MFP_NONE,
-        0,
+        true,
+        0, NULL
     },
 
     /* ## -- ## */
@@ -146,14 +156,16 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_CIDR, 0,
         MFS_IPV4,
         MFP_IPV4,
-        NXM_OF_IP_SRC,
+        true,
+        NXM_OF_IP_SRC, "NXM_OF_IP_SRC",
     }, {
         MFF_IPV4_DST, "ip_dst", "nw_dst",
         MF_FIELD_SIZES(be32),
         MFM_CIDR, 0,
         MFS_IPV4,
         MFP_IPV4,
-        NXM_OF_IP_DST,
+        true,
+        NXM_OF_IP_DST, "NXM_OF_IP_DST",
     },
 
     {
@@ -162,14 +174,25 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_CIDR, 0,
         MFS_IPV6,
         MFP_IPV6,
-        NXM_NX_IPV6_SRC,
+        true,
+        NXM_NX_IPV6_SRC, "NXM_NX_IPV6_SRC",
     }, {
         MFF_IPV6_DST, "ipv6_dst", NULL,
         MF_FIELD_SIZES(ipv6),
         MFM_CIDR, 0,
         MFS_IPV6,
         MFP_IPV6,
-        NXM_NX_IPV6_DST,
+        true,
+        NXM_NX_IPV6_DST, "NXM_NX_IPV6_DST",
+    },
+    {
+        MFF_IPV6_LABEL, "ipv6_label", NULL,
+        4, 20,
+        MFM_NONE, FWW_IPV6_LABEL,
+        MFS_HEXADECIMAL,
+        MFP_IPV6,
+        false,
+        NXM_NX_IPV6_LABEL, "NXM_NX_IPV6_LABEL",
     },
 
     {
@@ -178,21 +201,40 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_NW_PROTO,
         MFS_DECIMAL,
         MFP_IP_ANY,
-        NXM_OF_IP_PROTO,
+        false,
+        NXM_OF_IP_PROTO, "NXM_OF_IP_PROTO",
     }, {
-        MFF_IP_TOS, "nw_tos", NULL,
+        MFF_IP_DSCP, "nw_tos", NULL,
         MF_FIELD_SIZES(u8),
-        MFM_NONE, 0,
+        MFM_NONE, FWW_NW_DSCP,
         MFS_DECIMAL,
         MFP_IP_ANY,
-        NXM_OF_IP_TOS,
+        true,
+        NXM_OF_IP_TOS, "NXM_OF_IP_TOS"
+    }, {
+        MFF_IP_ECN, "nw_ecn", NULL,
+        1, 2,
+        MFM_NONE, FWW_NW_ECN,
+        MFS_DECIMAL,
+        MFP_IP_ANY,
+        true,
+        NXM_NX_IP_ECN, "NXM_NX_IP_ECN",
+    }, {
+        MFF_IP_TTL, "nw_ttl", NULL,
+        MF_FIELD_SIZES(u8),
+        MFM_NONE, FWW_NW_TTL,
+        MFS_DECIMAL,
+        MFP_IP_ANY,
+        true,
+        NXM_NX_IP_TTL, "NXM_NX_IP_TTL"
     }, {
         MFF_IP_FRAG, "ip_frag", NULL,
         1, 2,
         MFM_FULLY, 0,
         MFS_FRAG,
         MFP_IP_ANY,
-        NXM_NX_IP_FRAG,
+        false,
+        NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG"
     },
 
     {
@@ -201,35 +243,40 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_NW_PROTO,
         MFS_DECIMAL,
         MFP_ARP,
-        NXM_OF_ARP_OP,
+        false,
+        NXM_OF_ARP_OP, "NXM_OF_ARP_OP",
     }, {
         MFF_ARP_SPA, "arp_spa", NULL,
         MF_FIELD_SIZES(be32),
         MFM_CIDR, 0,
         MFS_IPV4,
         MFP_ARP,
-        NXM_OF_ARP_SPA,
+        false,
+        NXM_OF_ARP_SPA, "NXM_OF_ARP_SPA",
     }, {
         MFF_ARP_TPA, "arp_tpa", NULL,
         MF_FIELD_SIZES(be32),
         MFM_CIDR, 0,
         MFS_IPV4,
         MFP_ARP,
-        NXM_OF_ARP_TPA,
+        false,
+        NXM_OF_ARP_TPA, "NXM_OF_ARP_TPA",
     }, {
         MFF_ARP_SHA, "arp_sha", NULL,
         MF_FIELD_SIZES(mac),
         MFM_NONE, FWW_ARP_SHA,
         MFS_ETHERNET,
         MFP_ARP,
-        NXM_NX_ARP_SHA,
+        false,
+        NXM_NX_ARP_SHA, "NXM_NX_ARP_SHA",
     }, {
         MFF_ARP_THA, "arp_tha", NULL,
         MF_FIELD_SIZES(mac),
         MFM_NONE, FWW_ARP_THA,
         MFS_ETHERNET,
         MFP_ARP,
-        NXM_NX_ARP_THA,
+        false,
+        NXM_NX_ARP_THA, "NXM_NX_ARP_THA",
     },
 
     /* ## -- ## */
@@ -242,14 +289,16 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_TP_SRC,
         MFS_DECIMAL,
         MFP_TCP,
-        NXM_OF_TCP_SRC,
+        true,
+        NXM_OF_TCP_SRC, "NXM_OF_TCP_SRC",
     }, {
         MFF_TCP_DST, "tcp_dst", "tp_dst",
         MF_FIELD_SIZES(be16),
         MFM_NONE, FWW_TP_DST,
         MFS_DECIMAL,
         MFP_TCP,
-        NXM_OF_TCP_DST,
+        true,
+        NXM_OF_TCP_DST, "NXM_OF_TCP_DST",
     },
 
     {
@@ -258,30 +307,52 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_TP_SRC,
         MFS_DECIMAL,
         MFP_UDP,
-        NXM_OF_UDP_SRC,
+        true,
+        NXM_OF_UDP_SRC, "NXM_OF_UDP_SRC",
     }, {
         MFF_UDP_DST, "udp_dst", NULL,
         MF_FIELD_SIZES(be16),
         MFM_NONE, FWW_TP_DST,
         MFS_DECIMAL,
         MFP_UDP,
-        NXM_OF_UDP_DST,
+        true,
+        NXM_OF_UDP_DST, "NXM_OF_UDP_DST",
     },
 
     {
-        MFF_ICMP_TYPE, "icmp_type", NULL,
+        MFF_ICMPV4_TYPE, "icmp_type", NULL,
         MF_FIELD_SIZES(u8),
         MFM_NONE, FWW_TP_SRC,
         MFS_DECIMAL,
-        MFP_ICMP_ANY,
-        NXM_OF_ICMP_TYPE,
+        MFP_ICMPV4,
+        false,
+        NXM_OF_ICMP_TYPE, "NXM_OF_ICMP_TYPE",
     }, {
-        MFF_ICMP_CODE, "icmp_code", NULL,
+        MFF_ICMPV4_CODE, "icmp_code", NULL,
         MF_FIELD_SIZES(u8),
         MFM_NONE, FWW_TP_DST,
         MFS_DECIMAL,
-        MFP_ICMP_ANY,
-        NXM_OF_ICMP_CODE,
+        MFP_ICMPV4,
+        false,
+        NXM_OF_ICMP_CODE, "NXM_OF_ICMP_CODE",
+    },
+
+    {
+        MFF_ICMPV6_TYPE, "icmpv6_type", NULL,
+        MF_FIELD_SIZES(u8),
+        MFM_NONE, FWW_TP_SRC,
+        MFS_DECIMAL,
+        MFP_ICMPV6,
+        false,
+        NXM_NX_ICMPV6_TYPE, "NXM_NX_ICMPV6_TYPE",
+    }, {
+        MFF_ICMPV6_CODE, "icmpv6_code", NULL,
+        MF_FIELD_SIZES(u8),
+        MFM_NONE, FWW_TP_DST,
+        MFS_DECIMAL,
+        MFP_ICMPV6,
+        false,
+        NXM_NX_ICMPV6_CODE, "NXM_NX_ICMPV6_CODE",
     },
 
     /* ## ---- ## */
@@ -294,23 +365,34 @@ static const struct mf_field mf_fields[MFF_N_IDS] = {
         MFM_NONE, FWW_ND_TARGET,
         MFS_IPV6,
         MFP_ND,
-        NXM_NX_ND_TARGET,
+        false,
+        NXM_NX_ND_TARGET, "NXM_NX_ND_TARGET",
     }, {
         MFF_ND_SLL, "nd_sll", NULL,
         MF_FIELD_SIZES(mac),
         MFM_NONE, FWW_ARP_SHA,
         MFS_ETHERNET,
         MFP_ND_SOLICIT,
-        NXM_NX_ND_SLL,
+        false,
+        NXM_NX_ND_SLL, "NXM_NX_ND_SLL",
     }, {
         MFF_ND_TLL, "nd_tll", NULL,
         MF_FIELD_SIZES(mac),
         MFM_NONE, FWW_ARP_THA,
         MFS_ETHERNET,
         MFP_ND_ADVERT,
-        NXM_NX_ND_TLL,
+        false,
+        NXM_NX_ND_TLL, "NXM_NX_ND_TLL",
     }
 };
+
+struct nxm_field {
+    struct hmap_node hmap_node;
+    uint32_t nxm_header;
+    const struct mf_field *mf;
+};
+
+static struct hmap all_nxm_fields = HMAP_INITIALIZER(&all_nxm_fields);
 
 /* Returns the field with the given 'id'. */
 const struct mf_field *
@@ -341,6 +423,64 @@ mf_from_name(const char *name)
     return shash_find_data(&mf_by_name, name);
 }
 
+static void
+add_nxm_field(uint32_t nxm_header, const struct mf_field *mf)
+{
+    struct nxm_field *f;
+
+    f = xmalloc(sizeof *f);
+    hmap_insert(&all_nxm_fields, &f->hmap_node, hash_int(nxm_header, 0));
+    f->nxm_header = nxm_header;
+    f->mf = mf;
+}
+
+static void
+nxm_init(void)
+{
+    const struct mf_field *mf;
+
+    for (mf = mf_fields; mf < &mf_fields[MFF_N_IDS]; mf++) {
+        if (mf->nxm_header) {
+            add_nxm_field(mf->nxm_header, mf);
+            if (mf->maskable != MFM_NONE) {
+                add_nxm_field(NXM_MAKE_WILD_HEADER(mf->nxm_header), mf);
+            }
+        }
+    }
+
+#ifndef NDEBUG
+    /* Verify that the header values are unique. */
+    for (mf = mf_fields; mf < &mf_fields[MFF_N_IDS]; mf++) {
+        if (mf->nxm_header) {
+            assert(mf_from_nxm_header(mf->nxm_header) == mf);
+            if (mf->maskable != MFM_NONE) {
+                assert(mf_from_nxm_header(NXM_MAKE_WILD_HEADER(mf->nxm_header))
+                       == mf);
+            }
+        }
+    }
+#endif
+}
+
+const struct mf_field *
+mf_from_nxm_header(uint32_t header)
+{
+    const struct nxm_field *f;
+
+    if (hmap_is_empty(&all_nxm_fields)) {
+        nxm_init();
+    }
+
+    HMAP_FOR_EACH_IN_BUCKET (f, hmap_node, hash_int(header, 0),
+                             &all_nxm_fields) {
+        if (f->nxm_header == header) {
+            return f->mf;
+        }
+    }
+
+    return NULL;
+}
+
 /* Returns true if 'wc' wildcards all the bits in field 'mf', false if 'wc'
  * specifies at least one bit in the field.
  *
@@ -354,6 +494,10 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_ETH_SRC:
     case MFF_ETH_TYPE:
     case MFF_IP_PROTO:
+    case MFF_IP_DSCP:
+    case MFF_IP_ECN:
+    case MFF_IP_TTL:
+    case MFF_IPV6_LABEL:
     case MFF_ARP_OP:
     case MFF_ARP_SHA:
     case MFF_ARP_THA:
@@ -361,8 +505,10 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_TCP_DST:
     case MFF_UDP_SRC:
     case MFF_UDP_DST:
-    case MFF_ICMP_TYPE:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
@@ -413,10 +559,8 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_IPV6_DST:
         return ipv6_mask_is_any(&wc->ipv6_dst_mask);
 
-    case MFF_IP_TOS:
-        return !(wc->tos_frag_mask & IP_DSCP_MASK);
     case MFF_IP_FRAG:
-        return !(wc->tos_frag_mask & FLOW_FRAG_MASK);
+        return !(wc->nw_frag_mask & FLOW_NW_FRAG_MASK);
 
     case MFF_ARP_SPA:
         return !wc->nw_src_mask;
@@ -444,6 +588,10 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_ETH_SRC:
     case MFF_ETH_TYPE:
     case MFF_IP_PROTO:
+    case MFF_IP_DSCP:
+    case MFF_IP_ECN:
+    case MFF_IP_TTL:
+    case MFF_IPV6_LABEL:
     case MFF_ARP_OP:
     case MFF_ARP_SHA:
     case MFF_ARP_THA:
@@ -451,8 +599,10 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
     case MFF_TCP_DST:
     case MFF_UDP_SRC:
     case MFF_UDP_DST:
-    case MFF_ICMP_TYPE:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
@@ -514,11 +664,8 @@ mf_get_mask(const struct mf_field *mf, const struct flow_wildcards *wc,
         mask->ipv6 = wc->ipv6_dst_mask;
         break;
 
-    case MFF_IP_TOS:
-        mask->u8 = wc->tos_frag_mask & IP_DSCP_MASK;
-        break;
     case MFF_IP_FRAG:
-        mask->u8 = wc->tos_frag_mask & FLOW_FRAG_MASK;
+        mask->u8 = wc->nw_frag_mask & FLOW_NW_FRAG_MASK;
         break;
 
     case MFF_ARP_SPA:
@@ -601,10 +748,10 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow)
         return is_ip_any(flow) && flow->nw_proto == IPPROTO_TCP;
     case MFP_UDP:
         return is_ip_any(flow) && flow->nw_proto == IPPROTO_UDP;
+    case MFP_ICMPV4:
+        return is_icmpv4(flow);
     case MFP_ICMPV6:
         return is_icmpv6(flow);
-    case MFP_ICMP_ANY:
-        return is_icmpv4(flow) || is_icmpv6(flow);
 
     case MFP_ND:
         return (is_icmpv6(flow)
@@ -633,7 +780,7 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow)
  * without the VLAN_CFI bit being set, but we can't reject those values because
  * it is still legitimate to test just for those bits (see the documentation
  * for NXM_OF_VLAN_TCI in nicira-ext.h).  On the other hand, there is never a
- * reason to set the low bit of MFF_IP_TOS to 1, so we reject that. */
+ * reason to set the low bit of MFF_IP_DSCP to 1, so we reject that. */
 bool
 mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
 {
@@ -667,6 +814,7 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_IPV6_SRC:
     case MFF_IPV6_DST:
     case MFF_IP_PROTO:
+    case MFF_IP_TTL:
     case MFF_ARP_SPA:
     case MFF_ARP_TPA:
     case MFF_ARP_SHA:
@@ -675,17 +823,21 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_TCP_DST:
     case MFF_UDP_SRC:
     case MFF_UDP_DST:
-    case MFF_ICMP_TYPE:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         return true;
 
-    case MFF_IP_TOS:
+    case MFF_IP_DSCP:
         return !(value->u8 & ~IP_DSCP_MASK);
+    case MFF_IP_ECN:
+        return !(value->u8 & ~IP_ECN_MASK);
     case MFF_IP_FRAG:
-        return !(value->u8 & ~FLOW_FRAG_MASK);
+        return !(value->u8 & ~FLOW_NW_FRAG_MASK);
 
     case MFF_ARP_OP:
         return !(value->be16 & htons(0xff00));
@@ -695,6 +847,9 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
 
     case MFF_VLAN_PCP:
         return !(value->u8 & ~7);
+
+    case MFF_IPV6_LABEL:
+        return !(value->be32 & ~htonl(IPV6_LABEL_MASK));
 
     case MFF_N_IDS:
     default:
@@ -778,16 +933,28 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         value->ipv6 = flow->ipv6_dst;
         break;
 
+    case MFF_IPV6_LABEL:
+        value->be32 = flow->ipv6_label;
+        break;
+
     case MFF_IP_PROTO:
         value->u8 = flow->nw_proto;
         break;
 
-    case MFF_IP_TOS:
-        value->u8 = flow->tos_frag & IP_DSCP_MASK;
+    case MFF_IP_DSCP:
+        value->u8 = flow->nw_tos & IP_DSCP_MASK;
+        break;
+
+    case MFF_IP_ECN:
+        value->u8 = flow->nw_tos & IP_ECN_MASK;
+        break;
+
+    case MFF_IP_TTL:
+        value->u8 = flow->nw_ttl;
         break;
 
     case MFF_IP_FRAG:
-        value->u8 = flow->tos_frag & FLOW_FRAG_MASK;
+        value->u8 = flow->nw_frag;
         break;
 
     case MFF_ARP_OP:
@@ -828,11 +995,13 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         value->be16 = flow->tp_dst;
         break;
 
-    case MFF_ICMP_TYPE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV6_TYPE:
         value->u8 = ntohs(flow->tp_src);
         break;
 
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_CODE:
         value->u8 = ntohs(flow->tp_dst);
         break;
 
@@ -925,16 +1094,28 @@ mf_set_value(const struct mf_field *mf,
         cls_rule_set_ipv6_dst(rule, &value->ipv6);
         break;
 
+    case MFF_IPV6_LABEL:
+        cls_rule_set_ipv6_label(rule, value->be32);
+        break;
+
     case MFF_IP_PROTO:
         cls_rule_set_nw_proto(rule, value->u8);
         break;
 
-    case MFF_IP_TOS:
-        cls_rule_set_nw_tos(rule, value->u8);
+    case MFF_IP_DSCP:
+        cls_rule_set_nw_dscp(rule, value->u8);
+        break;
+
+    case MFF_IP_ECN:
+        cls_rule_set_nw_ecn(rule, value->u8);
+        break;
+
+    case MFF_IP_TTL:
+        cls_rule_set_nw_ttl(rule, value->u8);
         break;
 
     case MFF_IP_FRAG:
-        cls_rule_set_frag(rule, value->u8);
+        cls_rule_set_nw_frag(rule, value->u8);
         break;
 
     case MFF_ARP_OP:
@@ -975,16 +1156,175 @@ mf_set_value(const struct mf_field *mf,
         cls_rule_set_tp_dst(rule, value->be16);
         break;
 
-    case MFF_ICMP_TYPE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV6_TYPE:
         cls_rule_set_icmp_type(rule, value->u8);
         break;
 
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_CODE:
         cls_rule_set_icmp_code(rule, value->u8);
         break;
 
     case MFF_ND_TARGET:
         cls_rule_set_nd_target(rule, &value->ipv6);
+        break;
+
+    case MFF_N_IDS:
+    default:
+        NOT_REACHED();
+    }
+}
+
+/* Makes 'rule' match field 'mf' exactly, with the value matched taken from
+ * 'value'.  The caller is responsible for ensuring that 'rule' meets 'mf''s
+ * prerequisites. */
+void
+mf_set_flow_value(const struct mf_field *mf,
+                  const union mf_value *value, struct flow *flow)
+{
+    switch (mf->id) {
+    case MFF_TUN_ID:
+        flow->tun_id = value->be64;
+        break;
+
+    case MFF_IN_PORT:
+        flow->in_port = ntohs(value->be16);
+        break;
+
+#if FLOW_N_REGS > 0
+    case MFF_REG0:
+#endif
+#if FLOW_N_REGS > 1
+    case MFF_REG1:
+#endif
+#if FLOW_N_REGS > 2
+    case MFF_REG2:
+#endif
+#if FLOW_N_REGS > 3
+    case MFF_REG3:
+#endif
+#if FLOW_N_REGS > 4
+    case MFF_REG4:
+#endif
+#if FLOW_N_REGS > 5
+#error
+#endif
+#if FLOW_N_REGS > 0
+        flow->regs[mf->id - MFF_REG0] = ntohl(value->be32);
+        break;
+#endif
+
+    case MFF_ETH_SRC:
+        memcpy(flow->dl_src, value->mac, ETH_ADDR_LEN);
+        break;
+
+    case MFF_ETH_DST:
+        memcpy(flow->dl_src, value->mac, ETH_ADDR_LEN);
+        break;
+
+    case MFF_ETH_TYPE:
+        flow->dl_type = value->be16;
+        break;
+
+    case MFF_VLAN_TCI:
+        flow->vlan_tci = value->be16;
+        break;
+
+    case MFF_VLAN_VID:
+        flow_set_vlan_vid(flow, value->be16);
+        break;
+
+    case MFF_VLAN_PCP:
+        flow_set_vlan_pcp(flow, value->u8);
+        break;
+
+    case MFF_IPV4_SRC:
+        flow->nw_src = value->be32;
+        break;
+
+    case MFF_IPV4_DST:
+        flow->nw_dst = value->be32;
+        break;
+
+    case MFF_IPV6_SRC:
+        flow->ipv6_src = value->ipv6;
+        break;
+
+    case MFF_IPV6_DST:
+        flow->ipv6_dst = value->ipv6;
+        break;
+
+    case MFF_IPV6_LABEL:
+        flow->ipv6_label = value->be32 & ~htonl(IPV6_LABEL_MASK);
+        break;
+
+    case MFF_IP_PROTO:
+        flow->nw_proto = value->u8;
+        break;
+
+    case MFF_IP_DSCP:
+        flow->nw_tos &= ~IP_DSCP_MASK;
+        flow->nw_tos |= value->u8 & IP_DSCP_MASK;
+        break;
+
+    case MFF_IP_ECN:
+        flow->nw_tos &= ~IP_ECN_MASK;
+        flow->nw_tos |= value->u8 & IP_ECN_MASK;
+        break;
+
+    case MFF_IP_TTL:
+        flow->nw_ttl = value->u8;
+        break;
+
+    case MFF_IP_FRAG:
+        flow->nw_frag &= value->u8;
+        break;
+
+    case MFF_ARP_OP:
+        flow->nw_proto = ntohs(value->be16);
+        break;
+
+    case MFF_ARP_SPA:
+        flow->nw_src = value->be32;
+        break;
+
+    case MFF_ARP_TPA:
+        flow->nw_dst = value->be32;
+        break;
+
+    case MFF_ARP_SHA:
+    case MFF_ND_SLL:
+        memcpy(flow->arp_sha, value->mac, ETH_ADDR_LEN);
+        break;
+
+    case MFF_ARP_THA:
+    case MFF_ND_TLL:
+        memcpy(flow->arp_tha, value->mac, ETH_ADDR_LEN);
+        break;
+
+    case MFF_TCP_SRC:
+    case MFF_UDP_SRC:
+        flow->tp_src = value->be16;
+        break;
+
+    case MFF_TCP_DST:
+    case MFF_UDP_DST:
+        flow->tp_dst = value->be16;
+        break;
+
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV6_TYPE:
+        flow->tp_src = htons(value->u8);
+        break;
+
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_CODE:
+        flow->tp_dst = htons(value->u8);
+        break;
+
+    case MFF_ND_TARGET:
+        flow->nd_target = value->ipv6;
         break;
 
     case MFF_N_IDS:
@@ -1086,19 +1426,34 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
         memset(&rule->flow.ipv6_dst, 0, sizeof rule->flow.ipv6_dst);
         break;
 
+    case MFF_IPV6_LABEL:
+        rule->wc.wildcards |= FWW_IPV6_LABEL;
+        rule->flow.ipv6_label = 0;
+        break;
+
     case MFF_IP_PROTO:
         rule->wc.wildcards |= FWW_NW_PROTO;
         rule->flow.nw_proto = 0;
         break;
 
-    case MFF_IP_TOS:
-        rule->wc.tos_frag_mask |= IP_DSCP_MASK;
-        rule->flow.tos_frag &= ~IP_DSCP_MASK;
+    case MFF_IP_DSCP:
+        rule->wc.wildcards |= FWW_NW_DSCP;
+        rule->flow.nw_tos &= ~IP_DSCP_MASK;
+        break;
+
+    case MFF_IP_ECN:
+        rule->wc.wildcards |= FWW_NW_ECN;
+        rule->flow.nw_tos &= ~IP_ECN_MASK;
+        break;
+
+    case MFF_IP_TTL:
+        rule->wc.wildcards |= FWW_NW_TTL;
+        rule->flow.nw_ttl = 0;
         break;
 
     case MFF_IP_FRAG:
-        rule->wc.tos_frag_mask |= FLOW_FRAG_MASK;
-        rule->flow.tos_frag &= ~FLOW_FRAG_MASK;
+        rule->wc.nw_frag_mask |= FLOW_NW_FRAG_MASK;
+        rule->flow.nw_frag &= ~FLOW_NW_FRAG_MASK;
         break;
 
     case MFF_ARP_OP:
@@ -1120,14 +1475,16 @@ mf_set_wild(const struct mf_field *mf, struct cls_rule *rule)
 
     case MFF_TCP_SRC:
     case MFF_UDP_SRC:
-    case MFF_ICMP_TYPE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV6_TYPE:
         rule->wc.wildcards |= FWW_TP_SRC;
         rule->flow.tp_src = htons(0);
         break;
 
     case MFF_TCP_DST:
     case MFF_UDP_DST:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_CODE:
         rule->wc.wildcards |= FWW_TP_DST;
         rule->flow.tp_dst = htons(0);
         break;
@@ -1173,8 +1530,11 @@ mf_set(const struct mf_field *mf,
     case MFF_ETH_TYPE:
     case MFF_VLAN_VID:
     case MFF_VLAN_PCP:
+    case MFF_IPV6_LABEL:
     case MFF_IP_PROTO:
-    case MFF_IP_TOS:
+    case MFF_IP_TTL:
+    case MFF_IP_DSCP:
+    case MFF_IP_ECN:
     case MFF_ARP_OP:
     case MFF_ARP_SHA:
     case MFF_ARP_THA:
@@ -1182,8 +1542,10 @@ mf_set(const struct mf_field *mf,
     case MFF_TCP_DST:
     case MFF_UDP_SRC:
     case MFF_UDP_DST:
-    case MFF_ICMP_TYPE:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
@@ -1242,7 +1604,7 @@ mf_set(const struct mf_field *mf,
         break;
 
     case MFF_IP_FRAG:
-        cls_rule_set_frag_masked(rule, value->u8, mask->u8);
+        cls_rule_set_nw_frag_masked(rule, value->u8, mask->u8);
         break;
 
     case MFF_ARP_SPA:
@@ -1378,6 +1740,7 @@ mf_random_value(const struct mf_field *mf, union mf_value *value)
     case MFF_IPV6_SRC:
     case MFF_IPV6_DST:
     case MFF_IP_PROTO:
+    case MFF_IP_TTL:
     case MFF_ARP_SPA:
     case MFF_ARP_TPA:
     case MFF_ARP_SHA:
@@ -1386,19 +1749,29 @@ mf_random_value(const struct mf_field *mf, union mf_value *value)
     case MFF_TCP_DST:
     case MFF_UDP_SRC:
     case MFF_UDP_DST:
-    case MFF_ICMP_TYPE:
-    case MFF_ICMP_CODE:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         break;
 
-    case MFF_IP_TOS:
-        value->u8 &= ~0x03;
+    case MFF_IPV6_LABEL:
+        value->be32 &= ~htonl(IPV6_LABEL_MASK);
+        break;
+
+    case MFF_IP_DSCP:
+        value->u8 &= IP_DSCP_MASK;
+        break;
+
+    case MFF_IP_ECN:
+        value->u8 &= IP_ECN_MASK;
         break;
 
     case MFF_IP_FRAG:
-        value->u8 &= FLOW_FRAG_MASK;
+        value->u8 &= FLOW_NW_FRAG_MASK;
         break;
 
     case MFF_ARP_OP:
@@ -1571,8 +1944,8 @@ struct frag_handling {
 };
 
 static const struct frag_handling all_frags[] = {
-#define A FLOW_FRAG_ANY
-#define L FLOW_FRAG_LATER
+#define A FLOW_NW_FRAG_ANY
+#define L FLOW_NW_FRAG_LATER
     /* name               mask  value */
 
     { "no",               A|L,  0     },
@@ -1597,7 +1970,7 @@ mf_from_frag_string(const char *s, uint8_t *valuep, uint8_t *maskp)
         if (!strcasecmp(s, h->name)) {
             /* We force the upper bits of the mask on to make mf_parse_value()
              * happy (otherwise it will never think it's an exact match.) */
-            *maskp = h->mask | ~FLOW_FRAG_MASK;
+            *maskp = h->mask | ~FLOW_NW_FRAG_MASK;
             *valuep = h->value;
             return NULL;
         }
@@ -1705,7 +2078,7 @@ mf_format_frag_string(const uint8_t *valuep, const uint8_t *maskp,
     uint8_t mask = *maskp;
 
     value &= mask;
-    mask &= FLOW_FRAG_MASK;
+    mask &= FLOW_NW_FRAG_MASK;
 
     for (h = all_frags; h < &all_frags[ARRAY_SIZE(all_frags)]; h++) {
         if (value == h->value && mask == h->mask) {

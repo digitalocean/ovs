@@ -5110,6 +5110,27 @@ ovsrec_mirror_parse_select_vlan(struct ovsdb_idl_row *row_, const struct ovsdb_d
 }
 
 static void
+ovsrec_mirror_parse_statistics(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_mirror *row = ovsrec_mirror_cast(row_);
+    size_t i;
+
+    assert(inited);
+    row->key_statistics = NULL;
+    row->value_statistics = NULL;
+    row->n_statistics = 0;
+    for (i = 0; i < datum->n; i++) {
+        if (!row->n_statistics) {
+            row->key_statistics = xmalloc(datum->n * sizeof *row->key_statistics);
+            row->value_statistics = xmalloc(datum->n * sizeof *row->value_statistics);
+        }
+        row->key_statistics[row->n_statistics] = datum->keys[i].string;
+        row->value_statistics[row->n_statistics] = datum->values[i].integer;
+        row->n_statistics++;
+    }
+}
+
+static void
 ovsrec_mirror_unparse_external_ids(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_mirror *row = ovsrec_mirror_cast(row_);
@@ -5171,6 +5192,16 @@ ovsrec_mirror_unparse_select_vlan(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->select_vlan);
+}
+
+static void
+ovsrec_mirror_unparse_statistics(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_mirror *row = ovsrec_mirror_cast(row_);
+
+    assert(inited);
+    free(row->key_statistics);
+    free(row->value_statistics);
 }
 
 const struct ovsrec_mirror *
@@ -5252,6 +5283,13 @@ ovsrec_mirror_verify_select_vlan(const struct ovsrec_mirror *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_mirror_columns[OVSREC_MIRROR_COL_SELECT_VLAN]);
+}
+
+void
+ovsrec_mirror_verify_statistics(const struct ovsrec_mirror *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_mirror_columns[OVSREC_MIRROR_COL_STATISTICS]);
 }
 
 /* Returns the external_ids column's value in 'row' as a struct ovsdb_datum.
@@ -5441,6 +5479,32 @@ ovsrec_mirror_get_select_vlan(const struct ovsrec_mirror *row,
     return ovsdb_idl_read(&row->header_, &ovsrec_mirror_col_select_vlan);
 }
 
+/* Returns the statistics column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes statistics's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_mirror_get_statistics(const struct ovsrec_mirror *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_STRING);
+    assert(value_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_mirror_col_statistics);
+}
+
 void
 ovsrec_mirror_set_external_ids(const struct ovsrec_mirror *row, char **key_external_ids, char **value_external_ids, size_t n_external_ids)
 {
@@ -5571,6 +5635,24 @@ ovsrec_mirror_set_select_vlan(const struct ovsrec_mirror *row, const int64_t *se
     ovsdb_idl_txn_write(&row->header_, &ovsrec_mirror_columns[OVSREC_MIRROR_COL_SELECT_VLAN], &datum);
 }
 
+void
+ovsrec_mirror_set_statistics(const struct ovsrec_mirror *row, char **key_statistics, const int64_t *value_statistics, size_t n_statistics)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_statistics;
+    datum.keys = xmalloc(n_statistics * sizeof *datum.keys);
+    datum.values = xmalloc(n_statistics * sizeof *datum.values);
+    for (i = 0; i < n_statistics; i++) {
+        datum.keys[i].string = xstrdup(key_statistics[i]);
+        datum.values[i].integer = value_statistics[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_INTEGER);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_mirror_columns[OVSREC_MIRROR_COL_STATISTICS], &datum);
+}
+
 struct ovsdb_idl_column ovsrec_mirror_columns[OVSREC_MIRROR_N_COLUMNS];
 
 static void
@@ -5670,6 +5752,17 @@ ovsrec_mirror_columns_init(void)
     c->type.n_max = 4096;
     c->parse = ovsrec_mirror_parse_select_vlan;
     c->unparse = ovsrec_mirror_unparse_select_vlan;
+
+    /* Initialize ovsrec_mirror_col_statistics. */
+    c = &ovsrec_mirror_col_statistics;
+    c->name = "statistics";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_INTEGER);
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->parse = ovsrec_mirror_parse_statistics;
+    c->unparse = ovsrec_mirror_unparse_statistics;
 }
 
 /* NetFlow table. */
@@ -9182,6 +9275,25 @@ ovsrec_qos_columns_init(void)
 /* Queue table. */
 
 static void
+ovsrec_queue_parse_dscp(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_queue *row = ovsrec_queue_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
+
+    assert(inited);
+    row->dscp = NULL;
+    row->n_dscp = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_dscp) {
+            row->dscp = xmalloc(n * sizeof *row->dscp);
+        }
+        row->dscp[row->n_dscp] = datum->keys[i].integer;
+        row->n_dscp++;
+    }
+}
+
+static void
 ovsrec_queue_parse_external_ids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_queue *row = ovsrec_queue_cast(row_);
@@ -9221,6 +9333,15 @@ ovsrec_queue_parse_other_config(struct ovsdb_idl_row *row_, const struct ovsdb_d
         row->value_other_config[row->n_other_config] = datum->values[i].string;
         row->n_other_config++;
     }
+}
+
+static void
+ovsrec_queue_unparse_dscp(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_queue *row = ovsrec_queue_cast(row_);
+
+    assert(inited);
+    free(row->dscp);
 }
 
 static void
@@ -9269,6 +9390,13 @@ ovsrec_queue_insert(struct ovsdb_idl_txn *txn)
 
 
 void
+ovsrec_queue_verify_dscp(const struct ovsrec_queue *row)
+{
+    assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_queue_columns[OVSREC_QUEUE_COL_DSCP]);
+}
+
+void
 ovsrec_queue_verify_external_ids(const struct ovsrec_queue *row)
 {
     assert(inited);
@@ -9280,6 +9408,29 @@ ovsrec_queue_verify_other_config(const struct ovsrec_queue *row)
 {
     assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_queue_columns[OVSREC_QUEUE_COL_OTHER_CONFIG]);
+}
+
+/* Returns the dscp column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_INTEGER.
+ * (This helps to avoid silent bugs if someone changes dscp's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_queue_get_dscp(const struct ovsrec_queue *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    assert(key_type == OVSDB_TYPE_INTEGER);
+    return ovsdb_idl_read(&row->header_, &ovsrec_queue_col_dscp);
 }
 
 /* Returns the external_ids column's value in 'row' as a struct ovsdb_datum.
@@ -9335,6 +9486,23 @@ ovsrec_queue_get_other_config(const struct ovsrec_queue *row,
 }
 
 void
+ovsrec_queue_set_dscp(const struct ovsrec_queue *row, const int64_t *dscp, size_t n_dscp)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    assert(inited);
+    datum.n = n_dscp;
+    datum.keys = xmalloc(n_dscp * sizeof *datum.keys);
+    datum.values = NULL;
+    for (i = 0; i < n_dscp; i++) {
+        datum.keys[i].integer = dscp[i];
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_INTEGER, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &ovsrec_queue_columns[OVSREC_QUEUE_COL_DSCP], &datum);
+}
+
+void
 ovsrec_queue_set_external_ids(const struct ovsrec_queue *row, char **key_external_ids, char **value_external_ids, size_t n_external_ids)
 {
     struct ovsdb_datum datum;
@@ -9376,6 +9544,18 @@ static void
 ovsrec_queue_columns_init(void)
 {
     struct ovsdb_idl_column *c;
+
+    /* Initialize ovsrec_queue_col_dscp. */
+    c = &ovsrec_queue_col_dscp;
+    c->name = "dscp";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_INTEGER);
+    c->type.key.u.integer.min = INT64_C(0);
+    c->type.key.u.integer.max = INT64_C(63);
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->parse = ovsrec_queue_parse_dscp;
+    c->unparse = ovsrec_queue_unparse_dscp;
 
     /* Initialize ovsrec_queue_col_external_ids. */
     c = &ovsrec_queue_col_external_ids;

@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -45,7 +55,7 @@
 
 static struct datapath *sysfs_get_dp(struct net_device *netdev)
 {
-	struct vport *vport = internal_dev_get_vport(netdev);
+	struct vport *vport = ovs_internal_dev_get_vport(netdev);
 	return vport ? vport->dp : NULL;
 }
 /*
@@ -77,8 +87,8 @@ static ssize_t store_bridge_parm(DEVICE_PARAMS,
 
 		dp = sysfs_get_dp(to_net_dev(d));
 		if (dp)
-			printk("%s: xxx writing dp parms not supported yet!\n",
-			       dp_name(dp));
+			pr_warning("%s: xxx writing dp parms not supported yet!\n",
+			       ovs_dp_name(dp));
 		else
 			result = -ENODEV;
 
@@ -96,7 +106,7 @@ static ssize_t show_forward_delay(DEVICE_PARAMS, char *buf)
 
 static void set_forward_delay(struct datapath *dp, unsigned long val)
 {
-	printk("%s: xxx attempt to set_forward_delay()\n", dp_name(dp));
+	pr_info("%s: xxx attempt to set_forward_delay()\n", ovs_dp_name(dp));
 }
 
 static ssize_t store_forward_delay(DEVICE_PARAMS,
@@ -114,7 +124,7 @@ static ssize_t show_hello_time(DEVICE_PARAMS, char *buf)
 
 static void set_hello_time(struct datapath *dp, unsigned long val)
 {
-	printk("%s: xxx attempt to set_hello_time()\n", dp_name(dp));
+	pr_info("%s: xxx attempt to set_hello_time()\n", ovs_dp_name(dp));
 }
 
 static ssize_t store_hello_time(DEVICE_PARAMS,
@@ -133,7 +143,7 @@ static ssize_t show_max_age(DEVICE_PARAMS, char *buf)
 
 static void set_max_age(struct datapath *dp, unsigned long val)
 {
-	printk("%s: xxx attempt to set_max_age()\n", dp_name(dp));
+	pr_info("%s: xxx attempt to set_max_age()\n", ovs_dp_name(dp));
 }
 
 static ssize_t store_max_age(DEVICE_PARAMS,
@@ -150,7 +160,7 @@ static ssize_t show_ageing_time(DEVICE_PARAMS, char *buf)
 
 static void set_ageing_time(struct datapath *dp, unsigned long val)
 {
-	printk("%s: xxx attempt to set_ageing_time()\n", dp_name(dp));
+	pr_info("%s: xxx attempt to set_ageing_time()\n", ovs_dp_name(dp));
 }
 
 static ssize_t store_ageing_time(DEVICE_PARAMS,
@@ -178,7 +188,7 @@ static ssize_t store_stp_state(DEVICE_PARAMS,
 
 	dp = sysfs_get_dp(to_net_dev(d));
 	if (dp)
-		printk("%s: xxx attempt to set_stp_state()\n", dp_name(dp));
+		pr_info("%s: xxx attempt to set_stp_state()\n", ovs_dp_name(dp));
 	else
 		result = -ENODEV;
 
@@ -196,7 +206,7 @@ static ssize_t show_priority(DEVICE_PARAMS, char *buf)
 
 static void set_priority(struct datapath *dp, unsigned long val)
 {
-	printk("%s: xxx attempt to set_priority()\n", dp_name(dp));
+	pr_info("%s: xxx attempt to set_priority()\n", ovs_dp_name(dp));
 }
 
 static ssize_t store_priority(DEVICE_PARAMS,
@@ -219,13 +229,14 @@ static ssize_t show_bridge_id(DEVICE_PARAMS, char *buf)
 
 	rcu_read_lock();
 
-	vport = internal_dev_get_vport(to_net_dev(d));
+	vport = ovs_internal_dev_get_vport(to_net_dev(d));
 	if (vport) {
 		const unsigned char *addr;
 
-		addr = vport_get_addr(vport);
+		addr = vport->ops->get_addr(vport);
 		result = sprintf(buf, "%.2x%.2x.%.2x%.2x%.2x%.2x%.2x%.2x\n",
-				 0, 0, addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+				 0, 0, addr[0], addr[1], addr[2], addr[3],
+				 addr[4], addr[5]);
 	} else
 		result = -ENODEV;
 
@@ -300,7 +311,8 @@ static ssize_t store_group_addr(DEVICE_PARAMS,
 
 	dp = sysfs_get_dp(to_net_dev(d));
 	if (dp)
-		printk("%s: xxx attempt to store_group_addr()\n", dp_name(dp));
+		pr_info("%s: xxx attempt to store_group_addr()\n",
+		       ovs_dp_name(dp));
 	else
 		result = -ENODEV;
 
@@ -348,17 +360,17 @@ static struct attribute_group bridge_group = {
  *   to hold links.  The ifobj exists in the same data structure
  *   as its parent the bridge so reference counting works.
  */
-int dp_sysfs_add_dp(struct datapath *dp)
+int ovs_dp_sysfs_add_dp(struct datapath *dp)
 {
-	struct kobject *kobj =
-		vport_get_kobj(rtnl_dereference(dp->ports[OVSP_LOCAL]));
+	struct vport *vport = rtnl_dereference(dp->ports[OVSP_LOCAL]);
+	struct kobject *kobj = vport->ops->get_kobj(vport);
 	int err;
 
 	/* Create /sys/class/net/<devname>/bridge directory. */
 	err = sysfs_create_group(kobj, &bridge_group);
 	if (err) {
 		pr_info("%s: can't create group %s/%s\n",
-			__func__, dp_name(dp), bridge_group.name);
+			__func__, ovs_dp_name(dp), bridge_group.name);
 		goto out1;
 	}
 
@@ -366,7 +378,7 @@ int dp_sysfs_add_dp(struct datapath *dp)
 	err = kobject_add(&dp->ifobj, kobj, SYSFS_BRIDGE_PORT_SUBDIR);
 	if (err) {
 		pr_info("%s: can't add kobject (directory) %s/%s\n",
-			__FUNCTION__, dp_name(dp), kobject_name(&dp->ifobj));
+			__func__, ovs_dp_name(dp), kobject_name(&dp->ifobj));
 		goto out2;
 	}
 	kobject_uevent(&dp->ifobj, KOBJ_ADD);
@@ -378,10 +390,10 @@ int dp_sysfs_add_dp(struct datapath *dp)
 	return err;
 }
 
-int dp_sysfs_del_dp(struct datapath *dp)
+int ovs_dp_sysfs_del_dp(struct datapath *dp)
 {
-	struct kobject *kobj =
-		vport_get_kobj(rtnl_dereference(dp->ports[OVSP_LOCAL]));
+	struct vport *vport = rtnl_dereference(dp->ports[OVSP_LOCAL]);
+	struct kobject *kobj = vport->ops->get_kobj(vport);
 
 	kobject_del(&dp->ifobj);
 	sysfs_remove_group(kobj, &bridge_group);
@@ -389,8 +401,8 @@ int dp_sysfs_del_dp(struct datapath *dp)
 	return 0;
 }
 #else /* !CONFIG_SYSFS */
-int dp_sysfs_add_dp(struct datapath *dp) { return 0; }
-int dp_sysfs_del_dp(struct datapath *dp) { return 0; }
+int ovs_dp_sysfs_add_dp(struct datapath *dp) { return 0; }
+int ovs_dp_sysfs_del_dp(struct datapath *dp) { return 0; }
 int dp_sysfs_add_if(struct vport *p) { return 0; }
 int dp_sysfs_del_if(struct vport *p) { return 0; }
 #endif /* !CONFIG_SYSFS */

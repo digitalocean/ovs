@@ -1,12 +1,20 @@
 /*
- * Distributed under the terms of the GNU GPL version 2.
- * Copyright (c) 2007, 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
-
-/* Functions for executing flow actions. */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -19,11 +27,10 @@
 #include <linux/in6.h>
 #include <linux/if_arp.h>
 #include <linux/if_vlan.h>
-#include <net/inet_ecn.h>
 #include <net/ip.h>
 #include <net/checksum.h>
+#include <net/dsfield.h>
 
-#include "actions.h"
 #include "checksum.h"
 #include "datapath.h"
 #include "vlan.h"
@@ -43,8 +50,7 @@ static int make_writable(struct sk_buff *skb, int write_len)
 /* remove VLAN header from packet and update csum accrodingly. */
 static int __pop_vlan_tci(struct sk_buff *skb, __be16 *current_tci)
 {
-	struct ethhdr *eh;
-	struct vlan_ethhdr *veth;
+	struct vlan_hdr *vhdr;
 	int err;
 
 	err = make_writable(skb, VLAN_ETH_HLEN);
@@ -55,15 +61,15 @@ static int __pop_vlan_tci(struct sk_buff *skb, __be16 *current_tci)
 		skb->csum = csum_sub(skb->csum, csum_partial(skb->data
 					+ ETH_HLEN, VLAN_HLEN, 0));
 
-	veth = (struct vlan_ethhdr *) skb->data;
-	*current_tci = veth->h_vlan_TCI;
+	vhdr = (struct vlan_hdr *)(skb->data + ETH_HLEN);
+	*current_tci = vhdr->h_vlan_TCI;
 
 	memmove(skb->data + VLAN_HLEN, skb->data, 2 * ETH_ALEN);
+	__skb_pull(skb, VLAN_HLEN);
 
-	eh = (struct ethhdr *)__skb_pull(skb, VLAN_HLEN);
-
-	skb->protocol = eh->h_proto;
+	vlan_set_encap_proto(skb, vhdr);
 	skb->mac_header += VLAN_HLEN;
+	skb_reset_mac_len(skb);
 
 	return 0;
 }
@@ -77,7 +83,7 @@ static int pop_vlan(struct sk_buff *skb)
 		vlan_set_tci(skb, 0);
 	} else {
 		if (unlikely(skb->protocol != htons(ETH_P_8021Q) ||
-		    skb->len < VLAN_ETH_HLEN))
+			     skb->len < VLAN_ETH_HLEN))
 			return 0;
 
 		err = __pop_vlan_tci(skb, &tci);
@@ -86,7 +92,7 @@ static int pop_vlan(struct sk_buff *skb)
 	}
 	/* move next vlan tag to hw accel tag */
 	if (likely(skb->protocol != htons(ETH_P_8021Q) ||
-	    skb->len < VLAN_ETH_HLEN))
+		   skb->len < VLAN_ETH_HLEN))
 		return 0;
 
 	err = __pop_vlan_tci(skb, &tci);
@@ -97,7 +103,7 @@ static int pop_vlan(struct sk_buff *skb)
 	return 0;
 }
 
-static int push_vlan(struct sk_buff *skb, const struct ovs_key_8021q *q_key)
+static int push_vlan(struct sk_buff *skb, const struct ovs_action_push_vlan *vlan)
 {
 	if (unlikely(vlan_tx_tag_present(skb))) {
 		u16 current_tag;
@@ -113,7 +119,7 @@ static int push_vlan(struct sk_buff *skb, const struct ovs_key_8021q *q_key)
 					+ ETH_HLEN, VLAN_HLEN, 0));
 
 	}
-	__vlan_hwaccel_put_tag(skb, ntohs(q_key->q_tci));
+	__vlan_hwaccel_put_tag(skb, ntohs(vlan->vlan_tci) & ~VLAN_TAG_PRESENT);
 	return 0;
 }
 
@@ -125,8 +131,8 @@ static int set_eth_addr(struct sk_buff *skb,
 	if (unlikely(err))
 		return err;
 
-	memcpy(eth_hdr(skb)->h_source, eth_key->eth_src, ETH_HLEN);
-	memcpy(eth_hdr(skb)->h_dest, eth_key->eth_dst, ETH_HLEN);
+	memcpy(eth_hdr(skb)->h_source, eth_key->eth_src, ETH_ALEN);
+	memcpy(eth_hdr(skb)->h_dest, eth_key->eth_dst, ETH_ALEN);
 
 	return 0;
 }
@@ -151,16 +157,10 @@ static void set_ip_addr(struct sk_buff *skb, struct iphdr *nh,
 	*addr = new_addr;
 }
 
-static void set_ip_tos(struct sk_buff *skb, struct iphdr *nh, u8 new_tos)
+static void set_ip_ttl(struct sk_buff *skb, struct iphdr *nh, u8 new_ttl)
 {
-	u8 old, new;
-
-	/* Set the DSCP bits and preserve the ECN bits. */
-	old = nh->tos;
-	new = new_tos | (nh->tos & INET_ECN_MASK);
-	csum_replace4(&nh->check, (__force __be32)old,
-				  (__force __be32)new);
-	nh->tos = new;
+	csum_replace2(&nh->check, htons(nh->ttl << 8), htons(new_ttl << 8));
+	nh->ttl = new_ttl;
 }
 
 static int set_ipv4(struct sk_buff *skb, const struct ovs_key_ipv4 *ipv4_key)
@@ -182,7 +182,10 @@ static int set_ipv4(struct sk_buff *skb, const struct ovs_key_ipv4 *ipv4_key)
 		set_ip_addr(skb, nh, &nh->daddr, ipv4_key->ipv4_dst);
 
 	if (ipv4_key->ipv4_tos != nh->tos)
-		set_ip_tos(skb, nh, ipv4_key->ipv4_tos);
+		ipv4_change_dsfield(nh, 0, ipv4_key->ipv4_tos);
+
+	if (ipv4_key->ipv4_ttl != nh->ttl)
+		set_ip_ttl(skb, nh, ipv4_key->ipv4_ttl);
 
 	return 0;
 }
@@ -251,7 +254,7 @@ static int do_output(struct datapath *dp, struct sk_buff *skb, int out_port)
 		return -ENODEV;
 	}
 
-	vport_send(vport, skb);
+	ovs_vport_send(vport, skb);
 	return 0;
 }
 
@@ -280,7 +283,7 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 		}
 	}
 
-	return dp_upcall(dp, skb, &upcall);
+	return ovs_dp_upcall(dp, skb, &upcall);
 }
 
 static int sample(struct datapath *dp, struct sk_buff *skb,
@@ -314,6 +317,10 @@ static int execute_set_action(struct sk_buff *skb,
 	int err = 0;
 
 	switch (nla_type(nested_attr)) {
+	case OVS_KEY_ATTR_PRIORITY:
+		skb->priority = nla_get_u32(nested_attr);
+		break;
+
 	case OVS_KEY_ATTR_TUN_ID:
 		OVS_CB(skb)->tun_id = nla_get_be64(nested_attr);
 		break;
@@ -347,7 +354,6 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 	 * then freeing the original skbuff is wasteful.  So the following code
 	 * is slightly obscure just to avoid that. */
 	int prev_port = -1;
-	u32 priority = skb->priority;
 	const struct nlattr *a;
 	int rem;
 
@@ -369,28 +375,18 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			output_userspace(dp, skb, a);
 			break;
 
-		case OVS_ACTION_ATTR_PUSH:
-			/* Only supported push action is on vlan tag. */
-			err = push_vlan(skb, nla_data(nla_data(a)));
+		case OVS_ACTION_ATTR_PUSH_VLAN:
+			err = push_vlan(skb, nla_data(a));
 			if (unlikely(err)) /* skb already freed. */
 				return err;
 			break;
 
-		case OVS_ACTION_ATTR_POP:
-			/* Only supported pop action is on vlan tag. */
+		case OVS_ACTION_ATTR_POP_VLAN:
 			err = pop_vlan(skb);
 			break;
 
 		case OVS_ACTION_ATTR_SET:
 			err = execute_set_action(skb, nla_data(a));
-			break;
-
-		case OVS_ACTION_ATTR_SET_PRIORITY:
-			skb->priority = nla_get_u32(a);
-			break;
-
-		case OVS_ACTION_ATTR_POP_PRIORITY:
-			skb->priority = priority;
 			break;
 
 		case OVS_ACTION_ATTR_SAMPLE:
@@ -430,13 +426,13 @@ static int loop_suppress(struct datapath *dp, struct sw_flow_actions *actions)
 {
 	if (net_ratelimit())
 		pr_warn("%s: flow looped %d times, dropping\n",
-				dp_name(dp), MAX_LOOPS);
+				ovs_dp_name(dp), MAX_LOOPS);
 	actions->actions_len = 0;
 	return -ELOOP;
 }
 
 /* Execute a list of actions against 'skb'. */
-int execute_actions(struct datapath *dp, struct sk_buff *skb)
+int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 {
 	struct sw_flow_actions *acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
 	struct loop_counter *loop;

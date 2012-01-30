@@ -26,6 +26,7 @@ actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_NX_REG0[0..30],slaves:)
 actions=output:1,bundle_load(eth_src,0,hrw,ofport,NXM_NX_REG0[16..31],slaves:1),output:2
 actions=resubmit:1,resubmit(2),resubmit(,3),resubmit(2,3)
 actions=output:1,output:NXM_NX_REG0[],output:2,output:NXM_NX_REG1[16..31],output:3
+actions=output:1,exit,output:2
 ]])
 
 AT_CHECK([ovs-ofctl parse-flows flows.txt
@@ -56,6 +57,7 @@ NXT_FLOW_MOD: ADD table:255 actions=bundle_load(symmetric_l4,60,hrw,ofport,NXM_N
 NXT_FLOW_MOD: ADD table:255 actions=output:1,bundle_load(eth_src,0,hrw,ofport,NXM_NX_REG0[16..31],slaves:1),output:2
 NXT_FLOW_MOD: ADD table:255 actions=resubmit:1,resubmit:2,resubmit(,3),resubmit(2,3)
 NXT_FLOW_MOD: ADD table:255 actions=output:1,output:NXM_NX_REG0[],output:2,output:NXM_NX_REG1[16..31],output:3
+NXT_FLOW_MOD: ADD table:255 actions=output:1,exit,output:2
 ]])
 AT_CLEANUP
 
@@ -65,6 +67,7 @@ AT_DATA([flows.txt], [
 tcp,tp_src=123,actions=flood
 in_port=LOCAL dl_vlan=9 dl_src=00:0A:E4:25:6B:B0 actions=drop
 arp,dl_src=00:0A:E4:25:6B:B0,arp_sha=00:0A:E4:25:6B:B0 actions=drop
+ipv6,ipv6_label=0x12345 actions=2
 ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5 actions=3
 ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5/64 actions=4
 ipv6,ipv6_dst=2001:db8:3c4d:1:2:3:4:5/127 actions=5
@@ -92,6 +95,7 @@ AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0], [dnl
 NXT_FLOW_MOD: ADD tcp,tp_src=123 actions=FLOOD
 NXT_FLOW_MOD: ADD in_port=65534,dl_vlan=9,dl_src=00:0a:e4:25:6b:b0 actions=drop
 NXT_FLOW_MOD: ADD arp,dl_src=00:0a:e4:25:6b:b0,arp_sha=00:0a:e4:25:6b:b0 actions=drop
+NXT_FLOW_MOD: ADD ipv6,ipv6_label=0x12345 actions=output:2
 NXT_FLOW_MOD: ADD ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5 actions=output:3
 NXT_FLOW_MOD: ADD ipv6,ipv6_src=2001:db8:3c4d:1::/64 actions=output:4
 NXT_FLOW_MOD: ADD ipv6,ipv6_dst=2001:db8:3c4d:1:2:3:4:4/127 actions=output:5
@@ -122,6 +126,7 @@ AT_DATA([flows.txt], [[
 tcp,tp_src=123,actions=flood
 in_port=LOCAL dl_vlan=9 dl_src=00:0A:E4:25:6B:B0 actions=drop
 arp,dl_src=00:0A:E4:25:6B:B0,arp_sha=00:0A:E4:25:6B:B0 actions=drop
+ipv6,ipv6_label=0x12345 actions=2
 ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5 actions=3
 ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5/64 actions=4
 ipv6,ipv6_dst=2001:db8:3c4d:1:2:3:4:5/127 actions=5
@@ -147,6 +152,7 @@ AT_CHECK([[sed 's/ (xid=0x[0-9a-fA-F]*)//' stdout]], [0],
 [[NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(06), NXM_OF_TCP_SRC(007b) actions=FLOOD
 NXT_FLOW_MOD: ADD NXM_OF_IN_PORT(fffe), NXM_OF_ETH_SRC(000ae4256bb0), NXM_OF_VLAN_TCI_W(1009/1fff) actions=drop
 NXT_FLOW_MOD: ADD NXM_OF_ETH_SRC(000ae4256bb0), NXM_OF_ETH_TYPE(0806), NXM_NX_ARP_SHA(000ae4256bb0) actions=drop
+NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_LABEL(00012345) actions=output:2
 NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_SRC(20010db83c4d00010002000300040005) actions=output:3
 NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_SRC_W(20010db83c4d00010000000000000000/ffffffffffffffff0000000000000000) actions=output:4
 NXT_FLOW_MOD: ADD NXM_OF_ETH_TYPE(86dd), NXM_NX_IPV6_DST_W(20010db83c4d00010002000300040004/fffffffffffffffffffffffffffffffe) actions=output:5
@@ -205,12 +211,23 @@ NXM_OF_VLAN_TCI_W(0000/e000)    # No 802.1Q or with VID=0
 
 # IP TOS
 NXM_OF_ETH_TYPE(0800) NXM_OF_IP_TOS(f0)
+NXM_OF_ETH_TYPE(0800) NXM_OF_IP_TOS(41)
 NXM_OF_IP_TOS(f0)
+
+# IP ECN
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_ECN(03)
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_ECN(06)
+NXM_NX_IP_ECN(03)
 
 # IP protocol
 NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(01)
 NXM_OF_ETH_TYPE(0800) NXM_OF_IP_PROTO(05)
 NXM_OF_IP_PROTO(05)
+
+# IP TTL
+NXM_OF_ETH_TYPE(0800) NXM_NX_IP_TTL(80)
+NXM_OF_ETH_TYPE(86dd) NXM_NX_IP_TTL(ff)
+NXM_NX_IP_TTL(80)
 
 # IP source
 NXM_OF_ETH_TYPE(0800) NXM_OF_IP_SRC(ac100014)
@@ -383,11 +400,22 @@ NXM_OF_VLAN_TCI_W(0000/e000)
 
 # IP TOS
 NXM_OF_ETH_TYPE(0800), NXM_OF_IP_TOS(f0)
+nx_pull_match() returned error 44010102 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_VALUE)
+nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
+
+# IP ECN
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_ECN(03)
+nx_pull_match() returned error 44010102 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_VALUE)
 nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
 
 # IP protocol
 NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(01)
 NXM_OF_ETH_TYPE(0800), NXM_OF_IP_PROTO(05)
+nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
+
+# IP TTL
+NXM_OF_ETH_TYPE(0800), NXM_NX_IP_TTL(80)
+NXM_OF_ETH_TYPE(86dd), NXM_NX_IP_TTL(ff)
 nx_pull_match() returned error 44010104 (type OFPET_BAD_REQUEST, code NXBRC_NXM_BAD_PREREQ)
 
 # IP source

@@ -1,16 +1,22 @@
 /*
- * Copyright (c) 2009, 2010 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
-/*
- *	Sysfs attributes of bridge ports for Open vSwitch
- *
- *  This has been shamelessly copied from the kernel sources.
- */
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/capability.h>
 #include <linux/kernel.h>
@@ -31,7 +37,7 @@ struct brport_attribute {
 };
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
-#define BRPORT_ATTR(_name,_mode,_show,_store)		        \
+#define BRPORT_ATTR(_name, _mode, _show, _store)		\
 struct brport_attribute brport_attr_##_name = {		        \
 	.attr = {.name = __stringify(_name),			\
 		 .mode = _mode },				\
@@ -39,10 +45,10 @@ struct brport_attribute brport_attr_##_name = {		        \
 	.store	= _store,					\
 };
 #else
-#define BRPORT_ATTR(_name,_mode,_show,_store)		        \
-struct brport_attribute brport_attr_##_name = { 	        \
-	.attr = {.name = __stringify(_name), 			\
-		 .mode = _mode, 				\
+#define BRPORT_ATTR(_name, _mode, _show, _store)		\
+struct brport_attribute brport_attr_##_name = {			\
+	.attr = {.name = __stringify(_name),			\
+		 .mode = _mode,					\
 		 .owner = THIS_MODULE, },			\
 	.show	= _show,					\
 	.store	= _store,					\
@@ -126,22 +132,19 @@ static ssize_t show_port_state(struct vport *p, char *buf)
 }
 static BRPORT_ATTR(state, S_IRUGO, show_port_state, NULL);
 
-static ssize_t show_message_age_timer(struct vport *p,
-					    char *buf)
+static ssize_t show_message_age_timer(struct vport *p, char *buf)
 {
 	return sprintf(buf, "%d\n", 0);
 }
 static BRPORT_ATTR(message_age_timer, S_IRUGO, show_message_age_timer, NULL);
 
-static ssize_t show_forward_delay_timer(struct vport *p,
-					    char *buf)
+static ssize_t show_forward_delay_timer(struct vport *p, char *buf)
 {
 	return sprintf(buf, "%d\n", 0);
 }
 static BRPORT_ATTR(forward_delay_timer, S_IRUGO, show_forward_delay_timer, NULL);
 
-static ssize_t show_hold_timer(struct vport *p,
-					    char *buf)
+static ssize_t show_hold_timer(struct vport *p, char *buf)
 {
 	return sprintf(buf, "%d\n", 0);
 }
@@ -168,32 +171,32 @@ static struct brport_attribute *brport_attrs[] = {
 #define to_vport_attr(_at) container_of(_at, struct brport_attribute, attr)
 #define to_vport(obj)	container_of(obj, struct vport, kobj)
 
-static ssize_t brport_show(struct kobject * kobj,
-			   struct attribute * attr, char * buf)
+static ssize_t brport_show(struct kobject *kobj,
+			   struct attribute *attr, char *buf)
 {
-	struct brport_attribute * brport_attr = to_vport_attr(attr);
-	struct vport * p = to_vport(kobj);
+	struct brport_attribute *brport_attr = to_vport_attr(attr);
+	struct vport *p = to_vport(kobj);
 
 	return brport_attr->show(p, buf);
 }
 
-static ssize_t brport_store(struct kobject * kobj,
-			    struct attribute * attr,
-			    const char * buf, size_t count)
+static ssize_t brport_store(struct kobject *kobj,
+			    struct attribute *attr,
+			    const char *buf, size_t count)
 {
-	struct vport * p = to_vport(kobj);
+	struct vport *p = to_vport(kobj);
 	ssize_t ret = -EINVAL;
 
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	printk("%s: xxx writing port parms not supported yet!\n",
-	       dp_name(p->dp));
+	pr_warning("%s: xxx writing port parms not supported yet!\n",
+		   ovs_dp_name(p->dp));
 
 	return ret;
 }
 
-struct sysfs_ops brport_sysfs_ops = {
+struct sysfs_ops ovs_brport_sysfs_ops = {
 	.show = brport_show,
 	.store = brport_store,
 };
@@ -203,25 +206,25 @@ struct sysfs_ops brport_sysfs_ops = {
  * Creates a brport subdirectory with bridge attributes.
  * Puts symlink in bridge's brport subdirectory
  */
-int dp_sysfs_add_if(struct vport *p)
+int ovs_dp_sysfs_add_if(struct vport *p)
 {
-	struct kobject *kobj = vport_get_kobj(p);
 	struct datapath *dp = p->dp;
+	struct vport *local_port = rtnl_dereference(dp->ports[OVSP_LOCAL]);
 	struct brport_attribute **a;
 	int err;
 
 	/* Create /sys/class/net/<devname>/brport directory. */
-	if (!kobj)
+	if (!p->ops->get_kobj)
 		return -ENOENT;
 
-	err = kobject_add(&p->kobj, kobj, SYSFS_BRIDGE_PORT_ATTR);
+	err = kobject_add(&p->kobj, p->ops->get_kobj(p),
+			  SYSFS_BRIDGE_PORT_ATTR);
 	if (err)
 		goto err;
 
 	/* Create symlink from /sys/class/net/<devname>/brport/bridge to
 	 * /sys/class/net/<bridgename>. */
-	err = sysfs_create_link(&p->kobj,
-		vport_get_kobj(rtnl_dereference(dp->ports[OVSP_LOCAL])),
+	err = sysfs_create_link(&p->kobj, local_port->ops->get_kobj(local_port),
 		SYSFS_BRIDGE_PORT_LINK); /* "bridge" */
 	if (err)
 		goto err_del;
@@ -235,10 +238,10 @@ int dp_sysfs_add_if(struct vport *p)
 
 	/* Create symlink from /sys/class/net/<bridgename>/brif/<devname> to
 	 * /sys/class/net/<devname>/brport.  */
-	err = sysfs_create_link(&dp->ifobj, &p->kobj, vport_get_name(p));
+	err = sysfs_create_link(&dp->ifobj, &p->kobj, p->ops->get_name(p));
 	if (err)
 		goto err_del;
-	strcpy(p->linkname, vport_get_name(p));
+	strcpy(p->linkname, p->ops->get_name(p));
 
 	kobject_uevent(&p->kobj, KOBJ_ADD);
 
@@ -251,7 +254,7 @@ err:
 	return err;
 }
 
-int dp_sysfs_del_if(struct vport *p)
+int ovs_dp_sysfs_del_if(struct vport *p)
 {
 	if (p->linkname[0]) {
 		sysfs_remove_link(&p->dp->ifobj, p->linkname);

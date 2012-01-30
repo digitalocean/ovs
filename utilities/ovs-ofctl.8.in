@@ -81,6 +81,13 @@ system.
 Disables the interface.  This is equivalent to ``ifconfig down'' on a Unix
 system.
 .
+.IP \fBforward\fR
+Allows forwarding of traffic on this interface.  This is the default posture
+for all ports.
+.
+.IP \fBnoforward\fR
+Disallows forwarding of traffic on this interface.
+.
 .IP \fBflood\fR
 When a \fIflood\fR action is specified, traffic will be sent out this
 interface.  This is the default posture for monitored ports.
@@ -404,9 +411,26 @@ Matches IP ToS/DSCP or IPv6 traffic class field \fItos\fR, which is
 specified as a decimal number between 0 and 255, inclusive.  Note that
 the two lower reserved bits are ignored for matching purposes.
 .IP
-When \fBdl_type\fR is wildcarded or set to a value other than 0x0800,
-0x0806, or 0x86dd, the value of \fBnw_tos\fR is ignored (see \fBFlow
-Syntax\fR above).
+When \fBdl_type\fR is wildcarded or set to a value other than 0x0800 or
+0x86dd, the value of \fBnw_tos\fR is ignored (see \fBFlow Syntax\fR
+above).
+.
+.IP \fBnw_ecn=\fIecn\fR
+Matches \fIecn\fR bits in IP ToS or IPv6 traffic class fields, which is
+specified as a decimal number between 0 and 3, inclusive.
+.IP
+When \fBdl_type\fR is wildcarded or set to a value other than 0x0800 or
+0x86dd, the value of \fBnw_ecn\fR is ignored (see \fBFlow Syntax\fR
+above).
+.
+.IP \fBnw_ttl=\fIttl\fR
+Matches IP TTL or IPv6 hop limit value \fIttl\fR, which is
+specified as a decimal number between 0 and 255, inclusive.
+.IP
+When \fBdl_type\fR is wildcarded or set to a value other than 0x0800 or
+0x86dd, the value of \fBnw_ttl\fR is ignored (see \fBFlow Syntax\fR
+above).
+.IP
 .
 .IP \fBtp_src=\fIport\fR
 .IQ \fBtp_dst=\fIport\fR
@@ -430,10 +454,10 @@ these settings are ignored (see \fBFlow Syntax\fR above).
 .
 .IP \fBtable=\fInumber\fR
 If specified, limits the flow manipulation and flow dump commands to
-only apply to the table with the given \fInumber\fR.
-\fInumber\fR is a number between 0 and 254, inclusive.
+only apply to the table with the given \fInumber\fR between 0 and 254.
 .
-Behavior varies if \fBtable\fR is not specified.  For flow table
+Behavior varies if \fBtable\fR is not specified (equivalent to
+specifying 255 as \fInumber\fR).  For flow table
 modification commands without \fB\-\-strict\fR, the switch will choose
 the table for these commands to operate on.  For flow table
 modification commands with \fB\-\-strict\fR, the command will operate
@@ -475,7 +499,7 @@ will report a fatal error.
 .IP \fBvlan_tci=\fItci\fR[\fB/\fImask\fR]
 Matches modified VLAN TCI \fItci\fR.  If \fImask\fR is omitted,
 \fItci\fR is the exact VLAN TCI to match; if \fImask\fR is specified,
-then a 1-bit in \fItci\fR indicates that the corresponding bit in
+then a 1-bit in \fImask\fR indicates that the corresponding bit in
 \fItci\fR must match exactly, and a 0-bit wildcards that bit.  Both
 \fItci\fR and \fImask\fR are 16-bit values that are decimal by
 default; use a \fB0x\fR prefix to specify them in hexadecimal.
@@ -547,6 +571,10 @@ address.  A single instance of \fB::\fR may be used to indicate multiple
 groups of 16-bits of zeros.  The optional \fInetmask\fR allows
 restricting a match to an IPv6 address prefix.  A netmask is specified
 as a CIDR block (e.g. \fB2001:db8:3c4d:1::/64\fR).
+.
+.IP \fBipv6_label=\fIlabel\fR
+When \fBdl_type\fR is 0x86dd (possibly via shorthand, e.g., \fBipv6\fR
+or \fBtcp6\fR), matches IPv6 flow label \fIlabel\fR.
 .
 .IP \fBnd_target=\fIipv6\fR
 When \fBdl_type\fR, \fBnw_proto\fR, and \fBicmp_type\fR specify
@@ -897,6 +925,12 @@ possibly for a lowest-priority ``catch-all'' flow, that is, a flow
 with no match criteria.  (This is why the default \fBtable\fR is 1, to
 keep the learned flows separate from the primary flow table 0.)
 .RE
+.
+.IP "\fBexit\fR"
+This action causes Open vSwitch to immediately halt execution of further
+actions.  Those actions which have already been executed are unaffected.  Any
+further actions, including those which may be in other tables, or different
+levels of the \fBresubmit\fR call stack, are ignored.
 .
 .PP
 The \fBadd\-flow\fR, \fBadd\-flows\fR, and \fBmod\-flows\fR commands

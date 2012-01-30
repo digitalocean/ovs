@@ -140,7 +140,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_packet_in *op,
         struct ofpbuf packet;
 
         ofpbuf_use_const(&packet, op->data, data_len);
-        flow_extract(&packet, 0, ntohs(op->in_port), &flow);
+        flow_extract(&packet, 0, 0, ntohs(op->in_port), &flow);
         flow_format(string, &flow);
         ds_put_char(string, '\n');
     }
@@ -336,6 +336,10 @@ ofp_print_action(struct ds *s, const union ofp_action *a,
 
     case OFPUTIL_NXAST_LEARN:
         learn_format((const struct nx_action_learn *) a, s);
+        break;
+
+    case OFPUTIL_NXAST_EXIT:
+        ds_put_cstr(s, "exit");
         break;
 
     default:
@@ -935,14 +939,10 @@ ofp_print_error_msg(struct ds *string, const struct ofp_error_msg *oem)
         ds_put_printable(string, payload, payload_len);
         break;
 
-    case OFPET_BAD_REQUEST:
+    default:
         s = ofp_to_string(payload, payload_len, 1);
         ds_put_cstr(string, s);
         free(s);
-        break;
-
-    default:
-        ds_put_hex_dump(string, payload, payload_len, 0, true);
         break;
     }
 }

@@ -13,7 +13,7 @@ Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: Nicira Networks, Inc.
-Version: 1.3.0
+Version: 1.4.0
 
 License: ASL 2.0
 Release: 1
@@ -36,17 +36,22 @@ make %{_smp_mflags}
 %install
 rm -rf $RPM_BUILD_ROOT
 make install DESTDIR=$RPM_BUILD_ROOT
-install -d -m 755 $RPM_BUILD_ROOT/etc
-install -d -m 755 $RPM_BUILD_ROOT/etc/init.d
-install -m 755 rhel/etc_init.d_openvswitch \
-    $RPM_BUILD_ROOT/etc/init.d/openvswitch
-install -d -m 755 $RPM_BUILD_ROOT/etc/sysconfig
-install -d -m 755 $RPM_BUILD_ROOT/etc/logrotate.d
-install -m 755 rhel/etc_logrotate.d_openvswitch \
-    $RPM_BUILD_ROOT/etc/logrotate.d/openvswitch
-install -d -m 755 $RPM_BUILD_ROOT/usr/share/openvswitch/scripts
-install -m 755 rhel/usr_share_openvswitch_scripts_sysconfig.template \
-    $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/sysconfig.template
+
+rhel_cp() {
+ base=$1
+ mode=$2
+ dst=$RPM_BUILD_ROOT/$(echo $base | sed 's,_,/,g')
+ install -D -m $mode rhel/$base $dst
+}
+rhel_cp etc_init.d_openvswitch 0755
+rhel_cp etc_logrotate.d_openvswitch 0644
+rhel_cp etc_sysconfig_network-scripts_ifup-ovs 0755
+rhel_cp etc_sysconfig_network-scripts_ifdown-ovs 0755
+rhel_cp usr_share_openvswitch_scripts_sysconfig.template 0644
+
+docdir=$RPM_BUILD_ROOT/usr/share/doc/openvswitch-%{version}
+install -d -m755 "$docdir"
+install -m 0644 rhel/README.RHEL "$docdir"
 install python/compat/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
@@ -54,6 +59,8 @@ install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-controller \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
+    $RPM_BUILD_ROOT/usr/bin/ovs-test \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8 \
     $RPM_BUILD_ROOT/usr/sbin/ovs-vlan-bug-workaround \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-vlan-bug-workaround.8
 
@@ -100,8 +107,9 @@ exit 0
 %files
 %defattr(-,root,root)
 /etc/init.d/openvswitch
-/etc/logrotate.d/openvswitch
-/etc/openvswitch/bugtool-plugins/*
+%config(noreplace) /etc/logrotate.d/openvswitch
+/etc/sysconfig/network-scripts/ifup-ovs
+/etc/sysconfig/network-scripts/ifdown-ovs
 /usr/bin/ovs-appctl
 /usr/bin/ovs-benchmark
 /usr/bin/ovs-dpctl
@@ -136,11 +144,13 @@ exit 0
 /usr/share/man/man8/ovs-vlan-test.8.gz
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
+/usr/share/openvswitch/bugtool-plugins/
 /usr/share/openvswitch/python/
 /usr/share/openvswitch/scripts/ovs-bugtool-*
 /usr/share/openvswitch/scripts/ovs-ctl
-/usr/share/openvswitch/scripts/ovs-lib.sh
+/usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-save
 /usr/share/openvswitch/scripts/sysconfig.template
 /usr/share/openvswitch/vswitch.ovsschema
+/usr/share/doc/openvswitch-%{version}/README.RHEL
 /var/lib/openvswitch

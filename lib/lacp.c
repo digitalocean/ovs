@@ -25,6 +25,7 @@
 #include "ofpbuf.h"
 #include "packets.h"
 #include "poll-loop.h"
+#include "shash.h"
 #include "timer.h"
 #include "timeval.h"
 #include "unixctl.h"
@@ -224,6 +225,8 @@ lacp_destroy(struct lacp *lacp)
 void
 lacp_configure(struct lacp *lacp, const struct lacp_settings *s)
 {
+    assert(!eth_addr_is_zero(s->id));
+
     if (!lacp->name || strcmp(s->name, lacp->name)) {
         free(lacp->name);
         lacp->name = xstrdup(s->name);
@@ -724,42 +727,46 @@ static void
 ds_put_lacp_state(struct ds *ds, uint8_t state)
 {
     if (state & LACP_STATE_ACT) {
-        ds_put_cstr(ds, "activity ");
+        ds_put_cstr(ds, " activity");
     }
 
     if (state & LACP_STATE_TIME) {
-        ds_put_cstr(ds, "timeout ");
+        ds_put_cstr(ds, " timeout");
     }
 
     if (state & LACP_STATE_AGG) {
-        ds_put_cstr(ds, "aggregation ");
+        ds_put_cstr(ds, " aggregation");
     }
 
     if (state & LACP_STATE_SYNC) {
-        ds_put_cstr(ds, "synchronized ");
+        ds_put_cstr(ds, " synchronized");
     }
 
     if (state & LACP_STATE_COL) {
-        ds_put_cstr(ds, "collecting ");
+        ds_put_cstr(ds, " collecting");
     }
 
     if (state & LACP_STATE_DIST) {
-        ds_put_cstr(ds, "distributing ");
+        ds_put_cstr(ds, " distributing");
     }
 
     if (state & LACP_STATE_DEF) {
-        ds_put_cstr(ds, "defaulted ");
+        ds_put_cstr(ds, " defaulted");
     }
 
     if (state & LACP_STATE_EXP) {
-        ds_put_cstr(ds, "expired ");
+        ds_put_cstr(ds, " expired");
     }
 }
 
 static void
 lacp_print_details(struct ds *ds, struct lacp *lacp)
 {
+    struct shash slave_shash = SHASH_INITIALIZER(&slave_shash);
+    const struct shash_node **sorted_slaves = NULL;
+
     struct slave *slave;
+    int i;
 
     ds_put_format(ds, "---- %s ----\n", lacp->name);
     ds_put_format(ds, "\tstatus: %s", lacp->active ? "active" : "passive");
@@ -797,9 +804,15 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
     }
 
     HMAP_FOR_EACH (slave, node, &lacp->slaves) {
+        shash_add(&slave_shash, slave->name, slave);
+    }
+    sorted_slaves = shash_sort(&slave_shash);
+
+    for (i = 0; i < shash_count(&slave_shash); i++) {
         char *status;
         struct lacp_info actor;
 
+        slave = sorted_slaves[i]->data;
         slave_get_actor(slave, &actor);
         switch (slave->status) {
         case LACP_CURRENT:
@@ -830,7 +843,7 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
                       ntohs(actor.port_priority));
         ds_put_format(ds, "\tactor key: %u\n",
                       ntohs(actor.key));
-        ds_put_cstr(ds, "\tactor state: ");
+        ds_put_cstr(ds, "\tactor state:");
         ds_put_lacp_state(ds, actor.state);
         ds_put_cstr(ds, "\n\n");
 
@@ -844,10 +857,13 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
                       ntohs(slave->partner.port_priority));
         ds_put_format(ds, "\tpartner key: %u\n",
                       ntohs(slave->partner.key));
-        ds_put_cstr(ds, "\tpartner state: ");
+        ds_put_cstr(ds, "\tpartner state:");
         ds_put_lacp_state(ds, slave->partner.state);
         ds_put_cstr(ds, "\n");
     }
+
+    shash_destroy(&slave_shash);
+    free(sorted_slaves);
 }
 
 static void

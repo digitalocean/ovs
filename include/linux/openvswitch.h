@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
  * This file is offered under your choice of two licenses: Apache 2.0 or GNU
  * GPL 2.0 or later.  The permission statements for each of these licenses is
@@ -21,19 +21,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  * ----------------------------------------------------------------------
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  * ----------------------------------------------------------------------
  */
 
@@ -182,7 +182,7 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_UNSPEC,
 	OVS_VPORT_TYPE_NETDEV,   /* network device */
 	OVS_VPORT_TYPE_INTERNAL, /* network device implemented by datapath */
-	OVS_VPORT_TYPE_PATCH,    /* virtual tunnel connecting two vports */
+	OVS_VPORT_TYPE_PATCH = 100, /* virtual tunnel connecting two vports */
 	OVS_VPORT_TYPE_GRE,      /* GRE tunnel */
 	OVS_VPORT_TYPE_CAPWAP,   /* CAPWAP tunnel */
 	__OVS_VPORT_TYPE_MAX
@@ -198,6 +198,7 @@ enum ovs_vport_type {
  * @OVS_VPORT_ATTR_NAME: Name of vport.  For a vport based on a network device
  * this is the name of the network device.  Maximum length %IFNAMSIZ-1 bytes
  * plus a null terminator.
+ * @OVS_VPORT_ATTR_OPTIONS: Vport-specific configuration information.
  * @OVS_VPORT_ATTR_UPCALL_PID: The Netlink socket in userspace that
  * OVS_PACKET_CMD_MISS upcalls will be directed to for packets received on
  * this port.  A value of zero indicates that upcalls should not be sent.
@@ -221,13 +222,13 @@ enum ovs_vport_type {
  */
 enum ovs_vport_attr {
 	OVS_VPORT_ATTR_UNSPEC,
-	OVS_VPORT_ATTR_PORT_NO,	/* port number within datapath */
-	OVS_VPORT_ATTR_TYPE,	/* 32-bit OVS_VPORT_TYPE_* constant. */
+	OVS_VPORT_ATTR_PORT_NO,	/* u32 port number within datapath */
+	OVS_VPORT_ATTR_TYPE,	/* u32 OVS_VPORT_TYPE_* constant. */
 	OVS_VPORT_ATTR_NAME,	/* string name, up to IFNAMSIZ bytes long */
-	OVS_VPORT_ATTR_UPCALL_PID, /* Netlink PID to receive upcalls */
-	OVS_VPORT_ATTR_STATS,	/* struct ovs_vport_stats */
-	OVS_VPORT_ATTR_ADDRESS, /* hardware address */
 	OVS_VPORT_ATTR_OPTIONS, /* nested attributes, varies by vport type */
+	OVS_VPORT_ATTR_UPCALL_PID, /* u32 Netlink PID to receive upcalls */
+	OVS_VPORT_ATTR_STATS,	/* struct ovs_vport_stats */
+	OVS_VPORT_ATTR_ADDRESS = 100, /* hardware address */
 	__OVS_VPORT_ATTR_MAX
 };
 
@@ -263,11 +264,12 @@ struct ovs_flow_stats {
 
 enum ovs_key_attr {
 	OVS_KEY_ATTR_UNSPEC,
-	OVS_KEY_ATTR_TUN_ID,    /* 64-bit tunnel ID */
-	OVS_KEY_ATTR_IN_PORT,   /* 32-bit OVS dp port number */
+	OVS_KEY_ATTR_ENCAP,	/* Nested set of encapsulated attributes. */
+	OVS_KEY_ATTR_PRIORITY,  /* u32 skb->priority */
+	OVS_KEY_ATTR_IN_PORT,   /* u32 OVS dp port number */
 	OVS_KEY_ATTR_ETHERNET,  /* struct ovs_key_ethernet */
-	OVS_KEY_ATTR_8021Q,     /* struct ovs_key_8021q */
-	OVS_KEY_ATTR_ETHERTYPE,	/* 16-bit Ethernet type */
+	OVS_KEY_ATTR_VLAN,	/* be16 VLAN TCI */
+	OVS_KEY_ATTR_ETHERTYPE,	/* be16 Ethernet type */
 	OVS_KEY_ATTR_IPV4,      /* struct ovs_key_ipv4 */
 	OVS_KEY_ATTR_IPV6,      /* struct ovs_key_ipv6 */
 	OVS_KEY_ATTR_TCP,       /* struct ovs_key_tcp */
@@ -276,6 +278,7 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_ICMPV6,    /* struct ovs_key_icmpv6 */
 	OVS_KEY_ATTR_ARP,       /* struct ovs_key_arp */
 	OVS_KEY_ATTR_ND,        /* struct ovs_key_nd */
+	OVS_KEY_ATTR_TUN_ID = 63, /* be64 tunnel ID */
 	__OVS_KEY_ATTR_MAX
 };
 
@@ -304,24 +307,22 @@ struct ovs_key_ethernet {
 	__u8	 eth_dst[6];
 };
 
-struct ovs_key_8021q {
-	__be16 q_tpid;
-	__be16 q_tci;
-};
-
 struct ovs_key_ipv4 {
 	__be32 ipv4_src;
 	__be32 ipv4_dst;
 	__u8   ipv4_proto;
 	__u8   ipv4_tos;
+	__u8   ipv4_ttl;
 	__u8   ipv4_frag;	/* One of OVS_FRAG_TYPE_*. */
 };
 
 struct ovs_key_ipv6 {
 	__be32 ipv6_src[4];
 	__be32 ipv6_dst[4];
+	__be32 ipv6_label;	/* 20-bits in least-significant bits. */
 	__u8   ipv6_proto;
-	__u8   ipv6_tos;
+	__u8   ipv6_tclass;
+	__u8   ipv6_hlimit;
 	__u8   ipv6_frag;	/* One of OVS_FRAG_TYPE_*. */
 };
 
@@ -366,7 +367,8 @@ struct ovs_key_nd {
  * dumps).
  * @OVS_FLOW_ATTR_ACTIONS: Nested %OVS_ACTION_ATTR_* attributes specifying
  * the actions to take for packets that match the key.  Always present in
- * notifications.  Required for %OVS_FLOW_CMD_NEW requests, optional
+ * notifications.  Required for %OVS_FLOW_CMD_NEW requests, optional for
+ * %OVS_FLOW_CMD_SET requests.
  * @OVS_FLOW_ATTR_STATS: &struct ovs_flow_stats giving statistics for this
  * flow.  Present in notifications if the stats would be nonzero.  Ignored in
  * requests.
@@ -435,38 +437,48 @@ enum ovs_userspace_attr {
 #define OVS_USERSPACE_ATTR_MAX (__OVS_USERSPACE_ATTR_MAX - 1)
 
 /**
- * enum ovs_action_attr -  Action types.
+ * struct ovs_action_push_vlan - %OVS_ACTION_ATTR_PUSH_VLAN action argument.
+ * @vlan_tpid: Tag protocol identifier (TPID) to push.
+ * @vlan_tci: Tag control identifier (TCI) to push.  The CFI bit must be set
+ * (but it will not be set in the 802.1Q header that is pushed).
  *
- * @OVS_ACTION_ATTR_OUTPUT: Output packet to port passed as NLA data.
- * @OVS_ACTION_ATTR_USERSPACE: Nested %OVS_USERSPACE_ATTR_ attributes specifying
- * PID.
- * @OVS_ACTION_ATTR_PUSH: Nested %OVS_KEY_ATTR_* attribute specifying header to
- * push to given packet.
- * E.g. Push vlan tag action would be NLA of %OVS_ACTION_ATTR_PUSH type with
- * nested attribute of type %OVS_KEY_ATTR_8021Q with struct ovs_key_8021q
- * as NLA data.
- * @OVS_ACTION_ATTR_POP: Pop header according to %OVS_KEY_ATTR_ sent as
- * attribute data.
- * @OVS_ACTION_ATTR_SET: Nested %OVS_KEY_ATTR_* attribute specifying the
- * field to set to given packet.
- * @OVS_ACTION_ATTR_SET_PRIORITY: A set skb->priority to 32-bit number passed
- * as NLA data.
- * @OVS_ACTION_ATTR_POP_PRIORITY: Restore skb->priority to original value.
- * @OVS_ACTION_ATTR_SAMPLE: Execute set of actions according to probability
- * %OVS_SAMPLE_ATTR_PROBABILITY.
+ * The @vlan_tpid value is typically %ETH_P_8021Q.  The only acceptable TPID
+ * values are those that the kernel module also parses as 802.1Q headers, to
+ * prevent %OVS_ACTION_ATTR_PUSH_VLAN followed by %OVS_ACTION_ATTR_POP_VLAN
+ * from having surprising results.
+ */
+struct ovs_action_push_vlan {
+	__be16 vlan_tpid;	/* 802.1Q TPID. */
+	__be16 vlan_tci;	/* 802.1Q TCI (VLAN ID and priority). */
+};
+
+/**
+ * enum ovs_action_attr - Action types.
  *
- * Only a single field can be set with a single %OVS_ACTION_ATTR_{SET,PUSH}.
+ * @OVS_ACTION_ATTR_OUTPUT: Output packet to port.
+ * @OVS_ACTION_ATTR_USERSPACE: Send packet to userspace according to nested
+ * %OVS_USERSPACE_ATTR_* attributes.
+ * @OVS_ACTION_ATTR_SET: Replaces the contents of an existing header.  The
+ * single nested %OVS_KEY_ATTR_* attribute specifies a header to modify and its
+ * value.
+ * @OVS_ACTION_ATTR_PUSH_VLAN: Push a new outermost 802.1Q header onto the
+ * packet.
+ * @OVS_ACTION_ATTR_POP_VLAN: Pop the outermost 802.1Q header off the packet.
+ * @OVS_ACTION_ATTR_SAMPLE: Probabilitically executes actions, as specified in
+ * the nested %OVS_SAMPLE_ATTR_* attributes.
+ *
+ * Only a single header can be set with a single %OVS_ACTION_ATTR_SET.  Not all
+ * fields within a header are modifiable, e.g. the IPv4 protocol and fragment
+ * type may not be changed.
  */
 
 enum ovs_action_attr {
 	OVS_ACTION_ATTR_UNSPEC,
-	OVS_ACTION_ATTR_OUTPUT,	      /* Output to switch port. */
+	OVS_ACTION_ATTR_OUTPUT,	      /* u32 port number. */
 	OVS_ACTION_ATTR_USERSPACE,    /* Nested OVS_USERSPACE_ATTR_*. */
-	OVS_ACTION_ATTR_PUSH,         /* Push packet header. */
-	OVS_ACTION_ATTR_POP,          /* Pop packet header. */
-	OVS_ACTION_ATTR_SET,          /* Set packet field(s). */
-	OVS_ACTION_ATTR_SET_PRIORITY, /* Set skb->priority. */
-	OVS_ACTION_ATTR_POP_PRIORITY, /* Restore original skb->priority. */
+	OVS_ACTION_ATTR_SET,          /* One nested OVS_KEY_ATTR_*. */
+	OVS_ACTION_ATTR_PUSH_VLAN,    /* struct ovs_action_push_vlan. */
+	OVS_ACTION_ATTR_POP_VLAN,     /* No argument. */
 	OVS_ACTION_ATTR_SAMPLE,       /* Nested OVS_SAMPLE_ATTR_*. */
 	__OVS_ACTION_ATTR_MAX
 };

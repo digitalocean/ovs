@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -91,10 +101,11 @@ static struct sk_buff *gre_update_header(const struct vport *vport,
 					       - GRE_HEADER_SECTION);
 
 	/* Work backwards over the options so the checksum is last. */
-	if (mutable->flags & TNL_F_OUT_KEY_ACTION) {
+	if (mutable->flags & TNL_F_OUT_KEY_ACTION)
 		*options = be64_get_low32(OVS_CB(skb)->tun_id);
+
+	if (mutable->out_key || mutable->flags & TNL_F_OUT_KEY_ACTION)
 		options--;
-	}
 
 	if (mutable->flags & TNL_F_CSUM)
 		*(__sum16 *)options = csum_fold(skb_checksum(skb,
@@ -188,13 +199,15 @@ static void gre_err(struct sk_buff *skb, u32 info)
 		return;
 
 	iph = (struct iphdr *)skb->data;
+	if (ipv4_is_multicast(iph->daddr))
+		return;
 
 	tunnel_hdr_len = parse_header(iph, &flags, &key);
 	if (tunnel_hdr_len < 0)
 		return;
 
-	vport = tnl_find_port(iph->saddr, iph->daddr, key, TNL_T_PROTO_GRE,
-			      &mutable);
+	vport = ovs_tnl_find_port(iph->saddr, iph->daddr, key, TNL_T_PROTO_GRE,
+				  &mutable);
 	if (!vport)
 		return;
 
@@ -271,7 +284,7 @@ static void gre_err(struct sk_buff *skb, u32 info)
 #endif
 
 	__skb_pull(skb, tunnel_hdr_len);
-	tnl_frag_needed(vport, mutable, skb, mtu, key);
+	ovs_tnl_frag_needed(vport, mutable, skb, mtu, key);
 	__skb_push(skb, tunnel_hdr_len);
 
 out:
@@ -330,8 +343,8 @@ static int gre_rcv(struct sk_buff *skb)
 		goto error;
 
 	iph = ip_hdr(skb);
-	vport = tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_GRE,
-			      &mutable);
+	vport = ovs_tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_GRE,
+				  &mutable);
 	if (unlikely(!vport)) {
 		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
 		goto error;
@@ -345,7 +358,7 @@ static int gre_rcv(struct sk_buff *skb)
 	__skb_pull(skb, hdr_len);
 	skb_postpull_rcsum(skb, skb_transport_header(skb), hdr_len + ETH_HLEN);
 
-	tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb, iph->tos);
 	return 0;
 
 error:
@@ -363,7 +376,7 @@ static const struct tnl_ops gre_tnl_ops = {
 
 static struct vport *gre_create(const struct vport_parms *parms)
 {
-	return tnl_create(parms, &gre_vport_ops, &gre_tnl_ops);
+	return ovs_tnl_create(parms, &ovs_gre_vport_ops, &gre_tnl_ops);
 }
 
 static const struct net_protocol gre_protocol_handlers = {
@@ -387,20 +400,20 @@ static void gre_exit(void)
 	inet_del_protocol(&gre_protocol_handlers, IPPROTO_GRE);
 }
 
-const struct vport_ops gre_vport_ops = {
+const struct vport_ops ovs_gre_vport_ops = {
 	.type		= OVS_VPORT_TYPE_GRE,
 	.flags		= VPORT_F_TUN_ID,
 	.init		= gre_init,
 	.exit		= gre_exit,
 	.create		= gre_create,
-	.destroy	= tnl_destroy,
-	.set_addr	= tnl_set_addr,
-	.get_name	= tnl_get_name,
-	.get_addr	= tnl_get_addr,
-	.get_options	= tnl_get_options,
-	.set_options	= tnl_set_options,
-	.get_dev_flags	= vport_gen_get_dev_flags,
-	.is_running	= vport_gen_is_running,
-	.get_operstate	= vport_gen_get_operstate,
-	.send		= tnl_send,
+	.destroy	= ovs_tnl_destroy,
+	.set_addr	= ovs_tnl_set_addr,
+	.get_name	= ovs_tnl_get_name,
+	.get_addr	= ovs_tnl_get_addr,
+	.get_options	= ovs_tnl_get_options,
+	.set_options	= ovs_tnl_set_options,
+	.get_dev_flags	= ovs_vport_gen_get_dev_flags,
+	.is_running	= ovs_vport_gen_is_running,
+	.get_operstate	= ovs_vport_gen_get_operstate,
+	.send		= ovs_tnl_send,
 };

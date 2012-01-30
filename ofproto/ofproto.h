@@ -99,6 +99,11 @@ struct ofproto_port_stp_status {
     int error_count;            /* Number of bad BPDUs received. */
 };
 
+struct ofproto_port_queue {
+    uint32_t queue;             /* Queue ID. */
+    uint8_t dscp;               /* DSCP bits (e.g. [0, 63]). */
+};
+
 /* How the switch should act if the controller cannot be contacted. */
 enum ofproto_fail_mode {
     OFPROTO_FAIL_SECURE,        /* Preserve flow table. */
@@ -220,6 +225,9 @@ int ofproto_port_set_stp(struct ofproto *, uint16_t ofp_port,
                          const struct ofproto_port_stp_settings *);
 int ofproto_port_get_stp_status(struct ofproto *, uint16_t ofp_port,
                                 struct ofproto_port_stp_status *);
+int ofproto_port_set_queues(struct ofproto *, uint16_t ofp_port,
+                            const struct ofproto_port_queue *,
+                            size_t n_queues);
 
 /* The behaviour of the port regarding VLAN handling */
 enum port_vlan_mode {
@@ -252,12 +260,21 @@ struct ofproto_bundle_settings {
     enum port_vlan_mode vlan_mode; /* Selects mode for vlan and trunks */
     int vlan;                   /* VLAN VID, except for PORT_VLAN_TRUNK. */
     unsigned long *trunks;      /* vlan_bitmap, except for PORT_VLAN_ACCESS. */
+    bool use_priority_tags;     /* Use 802.1p tag for frames in VLAN 0? */
 
     struct bond_settings *bond; /* Must be nonnull iff if n_slaves > 1. */
     uint32_t *bond_stable_ids;  /* Array of n_slaves elements. */
 
     struct lacp_settings *lacp;              /* Nonnull to enable LACP. */
     struct lacp_slave_settings *lacp_slaves; /* Array of n_slaves elements. */
+
+    /* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+     *
+     * This is deprecated.  It is only for compatibility with broken device
+     * drivers in old versions of Linux that do not properly support VLANs when
+     * VLAN devices are not used.  When broken device drivers are no longer in
+     * widespread use, we will delete these interfaces. */
+    uint16_t realdev_ofp_port;  /* OpenFlow port number of real device. */
 };
 
 int ofproto_bundle_register(struct ofproto *, void *aux,
@@ -288,6 +305,8 @@ struct ofproto_mirror_settings {
 int ofproto_mirror_register(struct ofproto *, void *aux,
                             const struct ofproto_mirror_settings *);
 int ofproto_mirror_unregister(struct ofproto *, void *aux);
+int ofproto_mirror_get_stats(struct ofproto *, void *aux,
+                             uint64_t *packets, uint64_t *bytes);
 
 int ofproto_set_flood_vlans(struct ofproto *, unsigned long *flood_vlans);
 bool ofproto_is_mirror_output_bundle(const struct ofproto *, void *aux);
@@ -305,6 +324,18 @@ int ofproto_port_get_cfm_remote_mpids(const struct ofproto *,
 
 void ofproto_get_ofproto_controller_info(const struct ofproto *, struct shash *);
 void ofproto_free_ofproto_controller_info(struct shash *);
+
+/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+ *
+ * This is deprecated.  It is only for compatibility with broken device drivers
+ * in old versions of Linux that do not properly support VLANs when VLAN
+ * devices are not used.  When broken device drivers are no longer in
+ * widespread use, we will delete these interfaces. */
+
+void ofproto_get_vlan_usage(struct ofproto *, unsigned long int *vlan_bitmap);
+bool ofproto_has_vlan_usage_changed(const struct ofproto *);
+int ofproto_port_set_realdev(struct ofproto *, uint16_t vlandev_ofp_port,
+                             uint16_t realdev_ofp_port, int vid);
 
 #ifdef  __cplusplus
 }

@@ -17,6 +17,8 @@
 #ifndef META_FLOW_H
 #define META_FLOW_H 1
 
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <netinet/ip6.h>
 #include "flow.h"
 #include "packets.h"
@@ -65,9 +67,12 @@ enum mf_field_id {
 
     MFF_IPV6_SRC,               /* ipv6 */
     MFF_IPV6_DST,               /* ipv6 */
+    MFF_IPV6_LABEL,             /* be32 */
 
     MFF_IP_PROTO,               /* u8 (used for IPv4 or IPv6) */
-    MFF_IP_TOS,                 /* u8 (used for IPv4 or IPv6) */
+    MFF_IP_DSCP,                /* u8 (used for IPv4 or IPv6) */
+    MFF_IP_ECN,                 /* u8 (used for IPv4 or IPv6) */
+    MFF_IP_TTL,                 /* u8 (used for IPv4 or IPv6) */
     MFF_IP_FRAG,                /* u8 (used for IPv4 or IPv6) */
 
     MFF_ARP_OP,                 /* be16 */
@@ -83,8 +88,11 @@ enum mf_field_id {
     MFF_UDP_SRC,                /* be16 (used for IPv4 or IPv6) */
     MFF_UDP_DST,                /* be16 (used for IPv4 or IPv6) */
 
-    MFF_ICMP_TYPE,              /* u8 (used for IPv4 or IPv6) */
-    MFF_ICMP_CODE,              /* u8 (used for IPv4 or IPv6) */
+    MFF_ICMPV4_TYPE,            /* u8 */
+    MFF_ICMPV4_CODE,            /* u8 */
+
+    MFF_ICMPV6_TYPE,            /* u8 */
+    MFF_ICMPV6_CODE,            /* u8 */
 
     /* ICMPv6 Neighbor Discovery. */
     MFF_ND_TARGET,              /* ipv6 */
@@ -111,8 +119,8 @@ enum mf_prereqs {
     /* L2+L3 requirements. */
     MFP_TCP,                    /* On IPv4 or IPv6. */
     MFP_UDP,                    /* On IPv4 or IPv6. */
+    MFP_ICMPV4,
     MFP_ICMPV6,
-    MFP_ICMP_ANY,
 
     /* L2+L3+L4 requirements. */
     MFP_ND,
@@ -155,9 +163,13 @@ struct mf_field {
 
     /* Size.
      *
-     * Most fields have n_bytes * 8 == n_bits.  There are only two exceptions
-     * currently: "dl_vlan" is 2 bytes but only 12 bits, and "dl_vlan_pcp" is
-     * 1 byte but only 3 bits. */
+     * Most fields have n_bytes * 8 == n_bits.  There are a few exceptions:
+     *
+     *     - "dl_vlan" is 2 bytes but only 12 bits.
+     *     - "dl_vlan_pcp" is 1 byte but only 3 bits.
+     *     - "is_frag" is 1 byte but only 2 bits.
+     *     - "ipv6_label" is 4 bytes but only 20 bits.
+     */
     unsigned int n_bytes;       /* Width of the field in bytes. */
     unsigned int n_bits;        /* Number of significant bits in field. */
 
@@ -166,7 +178,14 @@ struct mf_field {
     flow_wildcards_t fww_bit;   /* Either 0 or exactly one FWW_* bit. */
     enum mf_string string;
     enum mf_prereqs prereqs;
+    bool writable;              /* May be written by actions? */
+
+    /* NXM properties.
+     *
+     * A few "mf_field"s don't correspond to NXM fields.  Those have 0 and
+     * NULL for the following members, respectively. */
     uint32_t nxm_header;        /* An NXM_* constant (a few fields have 0). */
+    const char *nxm_name;       /* The "NXM_*" constant's name. */
 };
 
 /* The representation of a field's value. */
@@ -182,6 +201,8 @@ union mf_value {
 /* Finding mf_fields. */
 const struct mf_field *mf_from_id(enum mf_field_id);
 const struct mf_field *mf_from_name(const char *name);
+const struct mf_field *mf_from_nxm_header(uint32_t nxm_header);
+const struct mf_field *mf_from_nxm_name(const char *nxm_name);
 
 /* Inspecting wildcarded bits. */
 bool mf_is_all_wild(const struct mf_field *, const struct flow_wildcards *);
@@ -201,6 +222,8 @@ void mf_get_value(const struct mf_field *, const struct flow *,
                   union mf_value *value);
 void mf_set_value(const struct mf_field *, const union mf_value *value,
                   struct cls_rule *);
+void mf_set_flow_value(const struct mf_field *, const union mf_value *value,
+                       struct flow *);
 
 void mf_get(const struct mf_field *, const struct cls_rule *,
             union mf_value *value, union mf_value *mask);

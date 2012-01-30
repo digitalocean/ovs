@@ -1,9 +1,19 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
- * Distributed under the terms of the GNU GPL version 2.
+ * Copyright (c) 2007-2011 Nicira Networks.
  *
- * Significant portions of this file may be copied from parts of the Linux
- * kernel, by Linus Torvalds and others.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
  */
 
 #include <linux/dcache.h>
@@ -41,7 +51,7 @@ static struct hlist_head *peer_table;
 
 static void update_peers(const char *name, struct vport *);
 
-static inline struct patch_vport *patch_vport_priv(const struct vport *vport)
+static struct patch_vport *patch_vport_priv(const struct vport *vport)
 {
 	return vport_priv(vport);
 }
@@ -127,7 +137,8 @@ static struct vport *patch_create(const struct vport_parms *parms)
 	struct patch_config *patchconf;
 	int err;
 
-	vport = vport_alloc(sizeof(struct patch_vport), &patch_vport_ops, parms);
+	vport = ovs_vport_alloc(sizeof(struct patch_vport),
+				&ovs_patch_vport_ops, parms);
 	if (IS_ERR(vport)) {
 		err = PTR_ERR(vport);
 		goto error;
@@ -147,13 +158,13 @@ static struct vport *patch_create(const struct vport_parms *parms)
 	if (err)
 		goto error_free_patchconf;
 
-	vport_gen_rand_ether_addr(patchconf->eth_addr);
+	random_ether_addr(patchconf->eth_addr);
 
 	rcu_assign_pointer(patch_vport->patchconf, patchconf);
 
 	peer_name = patchconf->peer_name;
 	hlist_add_head(&patch_vport->hash_node, hash_bucket(peer_name));
-	rcu_assign_pointer(patch_vport->peer, vport_locate(peer_name));
+	rcu_assign_pointer(patch_vport->peer, ovs_vport_locate(peer_name));
 	update_peers(patch_vport->name, vport);
 
 	return vport;
@@ -161,7 +172,7 @@ static struct vport *patch_create(const struct vport_parms *parms)
 error_free_patchconf:
 	kfree(patchconf);
 error_free_vport:
-	vport_free(vport);
+	ovs_vport_free(vport);
 error:
 	return ERR_PTR(err);
 }
@@ -172,7 +183,7 @@ static void free_port_rcu(struct rcu_head *rcu)
 					  struct patch_vport, rcu);
 
 	kfree((struct patch_config __force *)patch_vport->patchconf);
-	vport_free(vport_from_priv(patch_vport));
+	ovs_vport_free(vport_from_priv(patch_vport));
 }
 
 static void patch_destroy(struct vport *vport)
@@ -205,7 +216,7 @@ static int patch_set_options(struct vport *vport, struct nlattr *options)
 
 	hlist_del(&patch_vport->hash_node);
 
-	rcu_assign_pointer(patch_vport->peer, vport_locate(patchconf->peer_name));
+	rcu_assign_pointer(patch_vport->peer, ovs_vport_locate(patchconf->peer_name));
 	hlist_add_head(&patch_vport->hash_node, hash_bucket(patchconf->peer_name));
 
 	return 0;
@@ -276,16 +287,16 @@ static int patch_send(struct vport *vport, struct sk_buff *skb)
 
 	if (!peer) {
 		kfree_skb(skb);
-		vport_record_error(vport, VPORT_E_TX_DROPPED);
+		ovs_vport_record_error(vport, VPORT_E_TX_DROPPED);
 
 		return 0;
 	}
 
-	vport_receive(peer, skb);
+	ovs_vport_receive(peer, skb);
 	return skb_len;
 }
 
-const struct vport_ops patch_vport_ops = {
+const struct vport_ops ovs_patch_vport_ops = {
 	.type		= OVS_VPORT_TYPE_PATCH,
 	.init		= patch_init,
 	.exit		= patch_exit,
@@ -296,8 +307,8 @@ const struct vport_ops patch_vport_ops = {
 	.get_addr	= patch_get_addr,
 	.get_options	= patch_get_options,
 	.set_options	= patch_set_options,
-	.get_dev_flags	= vport_gen_get_dev_flags,
-	.is_running	= vport_gen_is_running,
-	.get_operstate	= vport_gen_get_operstate,
+	.get_dev_flags	= ovs_vport_gen_get_dev_flags,
+	.is_running	= ovs_vport_gen_is_running,
+	.get_operstate	= ovs_vport_gen_get_operstate,
 	.send		= patch_send,
 };

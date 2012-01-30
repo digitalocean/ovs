@@ -99,7 +99,20 @@ enum nx_bad_request_code {
     NXBRC_NXM_BAD_PREREQ = 0x104,
 
     /* A given nxm_type was specified more than once. */
-    NXBRC_NXM_DUP_TYPE = 0x105
+    NXBRC_NXM_DUP_TYPE = 0x105,
+
+/* Other errors. */
+
+    /* A request specified a nonexistent table ID.  (But NXFMFC_BAD_TABLE_ID is
+     * used instead, when it is appropriate, because that is such a special
+     * case.) */
+    NXBRC_BAD_TABLE_ID = 0x200,
+
+    /* NXT_ROLE_REQUEST specified an invalid role. */
+    NXBRC_BAD_ROLE = 0x201,
+
+    /* The in_port in an ofp_packet_out request is invalid. */
+    NXBRC_BAD_IN_PORT = 0x202
 };
 
 /* Additional "code" values for OFPET_FLOW_MOD_FAILED. */
@@ -282,7 +295,8 @@ enum nx_action_subtype {
     NXAST_BUNDLE_LOAD,          /* struct nx_action_bundle */
     NXAST_RESUBMIT_TABLE,       /* struct nx_action_resubmit */
     NXAST_OUTPUT_REG,           /* struct nx_action_output_reg */
-    NXAST_LEARN                 /* struct nx_action_learn */
+    NXAST_LEARN,                /* struct nx_action_learn */
+    NXAST_EXIT                  /* struct nx_action_header */
 };
 
 /* Header for Nicira-defined actions. */
@@ -936,6 +950,13 @@ OFP_ASSERT(sizeof(struct nx_action_autopath) == 24);
  * slave.  If the switch does not support the specified 'algorithm' parameter,
  * it should reject the action.
  *
+ * Several algorithms take into account liveness when selecting slaves.  The
+ * liveness of a slave is implementation defined (with one exception), but will
+ * generally take into account things like its carrier status and the results
+ * of any link monitoring protocols which happen to be running on it.  In order
+ * to give controllers a place-holder value, the OFPP_NONE port is always
+ * considered live.
+ *
  * Some slave selection strategies require the use of a hash function, in which
  * case the 'fields' and 'basis' parameters should be populated.  The 'fields'
  * parameter (one of NX_HASH_FIELDS_*) designates which parts of the flow to
@@ -963,7 +984,7 @@ struct nx_action_bundle {
     ovs_be16 algorithm;         /* One of NX_BD_ALG_*. */
 
     /* What fields to hash and how. */
-    ovs_be16 fields;            /* One of NX_BD_FIELDS_*. */
+    ovs_be16 fields;            /* One of NX_HASH_FIELDS_*. */
     ovs_be16 basis;             /* Universal hash parameter. */
 
     ovs_be32 slave_type;        /* NXM_OF_IN_PORT. */
@@ -1026,6 +1047,18 @@ struct nx_action_output_reg {
     uint8_t zero[6];            /* Reserved, must be zero. */
 };
 OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
+
+/* NXAST_EXIT
+ *
+ * Discontinues action processing.
+ *
+ * The NXAST_EXIT action causes the switch to immediately halt processing
+ * actions for the flow.  Any actions which have already been processed are
+ * executed by the switch.  However, any further actions, including those which
+ * may be in different tables, or different levels of the NXAST_RESUBMIT
+ * hierarchy, will be ignored.
+ *
+ * Uses the nx_action_header structure. */
 
 /* Flexible flow specifications (aka NXM = Nicira Extended Match).
  *
@@ -1580,6 +1613,33 @@ OFP_ASSERT(sizeof(struct nx_action_output_reg) == 24);
 /* Bits in the value of NXM_NX_IP_FRAG. */
 #define NX_IP_FRAG_ANY   (1 << 0) /* Is this a fragment? */
 #define NX_IP_FRAG_LATER (1 << 1) /* Is this a fragment with nonzero offset? */
+
+/* The flow label in the IPv6 header.
+ *
+ * Prereqs: NXM_OF_ETH_TYPE must match 0x86dd exactly.
+ *
+ * Format: 20-bit IPv6 flow label in least-significant bits.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_IPV6_LABEL  NXM_HEADER  (0x0001, 27, 4)
+
+/* The ECN of the IP header.
+ *
+ * Prereqs: NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
+ *
+ * Format: ECN in the low-order 2 bits.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_IP_ECN      NXM_HEADER  (0x0001, 28, 1)
+
+/* The time-to-live/hop limit of the IP header.
+ *
+ * Prereqs: NXM_OF_ETH_TYPE must be either 0x0800 or 0x86dd.
+ *
+ * Format: 8-bit integer.
+ *
+ * Masking: Not maskable. */
+#define NXM_NX_IP_TTL      NXM_HEADER  (0x0001, 29, 1)
 
 /* ## --------------------- ## */
 /* ## Requests and replies. ## */

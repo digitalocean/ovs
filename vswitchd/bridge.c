@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
+/* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,7 @@
 #include "timeval.h"
 #include "util.h"
 #include "unixctl.h"
+#include "vlandev.h"
 #include "vswitchd/vswitch-idl.h"
 #include "xenserver.h"
 #include "vlog.h"
@@ -78,6 +79,7 @@ struct mirror {
     struct hmap_node hmap_node; /* In struct bridge's "mirrors" hmap. */
     struct bridge *bridge;
     char *name;
+    const struct ovsrec_mirror *cfg;
 };
 
 struct port {
@@ -144,7 +146,8 @@ static unixctl_cb_func bridge_unixctl_dump_flows;
 static unixctl_cb_func bridge_unixctl_reconnect;
 static size_t bridge_get_controllers(const struct bridge *br,
                                      struct ovsrec_controller ***controllersp);
-static void bridge_add_del_ports(struct bridge *);
+static void bridge_add_del_ports(struct bridge *,
+                                 const unsigned long int *splinter_vlans);
 static void bridge_add_ofproto_ports(struct bridge *);
 static void bridge_del_ofproto_ports(struct bridge *);
 static void bridge_refresh_ofp_port(struct bridge *);
@@ -191,7 +194,8 @@ static void bridge_configure_mirrors(struct bridge *);
 static struct mirror *mirror_create(struct bridge *,
                                     const struct ovsrec_mirror *);
 static void mirror_destroy(struct mirror *);
-static bool mirror_configure(struct mirror *, const struct ovsrec_mirror *);
+static bool mirror_configure(struct mirror *);
+static void mirror_refresh_stats(struct mirror *);
 
 static void iface_configure_lacp(struct iface *, struct lacp_slave_settings *);
 static struct iface *iface_create(struct port *port,
@@ -210,11 +214,32 @@ static void iface_refresh_cfm_stats(struct iface *);
 static void iface_refresh_stats(struct iface *);
 static void iface_refresh_status(struct iface *);
 static bool iface_is_synthetic(const struct iface *);
+static const char *get_interface_other_config(const struct ovsrec_interface *,
+                                              const char *key,
+                                              const char *default_value);
 
 static void shash_from_ovs_idl_map(char **keys, char **values, size_t n,
                                    struct shash *);
 static void shash_to_ovs_idl_map(struct shash *,
                                  char ***keys, char ***values, size_t *n);
+
+/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+ *
+ * This is deprecated.  It is only for compatibility with broken device drivers
+ * in old versions of Linux that do not properly support VLANs when VLAN
+ * devices are not used.  When broken device drivers are no longer in
+ * widespread use, we will delete these interfaces. */
+
+/* True if VLAN splinters are enabled on any interface, false otherwise.*/
+static bool vlan_splinters_enabled_anywhere;
+
+static bool vlan_splinters_is_enabled(const struct ovsrec_interface *);
+static unsigned long int *collect_splinter_vlans(
+    const struct ovsrec_open_vswitch *);
+static void configure_splinter_port(struct port *);
+static void add_vlan_splinter_ports(struct bridge *,
+                                    const unsigned long int *splinter_vlans,
+                                    struct shash *ports);
 
 /* Public functions. */
 
@@ -269,6 +294,7 @@ bridge_init(const char *remote)
     ovsdb_idl_omit(idl, &ovsrec_queue_col_external_ids);
 
     ovsdb_idl_omit(idl, &ovsrec_mirror_col_external_ids);
+    ovsdb_idl_omit_alert(idl, &ovsrec_mirror_col_statistics);
 
     ovsdb_idl_omit(idl, &ovsrec_netflow_col_external_ids);
 
@@ -363,6 +389,7 @@ collect_in_band_managers(const struct ovsrec_open_vswitch *ovs_cfg,
 static void
 bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 {
+    unsigned long int *splinter_vlans;
     struct sockaddr_in *managers;
     struct bridge *br, *next;
     int sflow_bridge_number;
@@ -374,12 +401,14 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * iface"s according to 'ovs_cfg', with only very minimal configuration
      * otherwise.
      *
-     * This is purely an update to bridge data structures.  Nothing is pushed
-     * down to ofproto or lower layers. */
+     * This is mostly an update to bridge data structures.  Very little is
+     * pushed down to ofproto or lower layers. */
     add_del_bridges(ovs_cfg);
+    splinter_vlans = collect_splinter_vlans(ovs_cfg);
     HMAP_FOR_EACH (br, node, &all_bridges) {
-        bridge_add_del_ports(br);
+        bridge_add_del_ports(br, splinter_vlans);
     }
+    free(splinter_vlans);
 
     /* Delete all datapaths and datapath ports that are no longer configured.
      *
@@ -493,6 +522,11 @@ port_configure(struct port *port)
     struct ofproto_bundle_settings s;
     struct iface *iface;
 
+    if (cfg->vlan_mode && !strcmp(cfg->vlan_mode, "splinter")) {
+        configure_splinter_port(port);
+        return;
+    }
+
     /* Get name. */
     s.name = port->name;
 
@@ -505,17 +539,8 @@ port_configure(struct port *port)
 
     /* Get VLAN tag. */
     s.vlan = -1;
-    if (cfg->tag) {
-        if (list_is_short(&port->ifaces)) {
-            if (*cfg->tag >= 0 && *cfg->tag <= 4095) {
-                s.vlan = *cfg->tag;
-            }
-        } else {
-            /* It's possible that bonded, VLAN-tagged ports make sense.  Maybe
-             * they even work as-is.  But they have not been tested. */
-            VLOG_WARN("port %s: VLAN tags not supported on bonded ports",
-                      port->name);
-        }
+    if (cfg->tag && *cfg->tag >= 0 && *cfg->tag <= 4095) {
+        s.vlan = *cfg->tag;
     }
 
     /* Get VLAN trunks. */
@@ -550,6 +575,8 @@ port_configure(struct port *port)
             s.vlan_mode = PORT_VLAN_TRUNK;
         }
     }
+    s.use_priority_tags = !strcmp("true", get_port_other_config(
+                                      cfg, "priority-tags", ""));
 
     /* Get LACP settings. */
     s.lacp = port_configure_lacp(port, &lacp_settings);
@@ -1096,6 +1123,12 @@ bridge_add_ofproto_ports(struct bridge *br)
                     VLOG_WARN("could not open network device %s (%s)",
                               iface->name, strerror(error));
                 }
+
+                if (iface->netdev
+                    && port->cfg->vlan_mode
+                    && !strcmp(port->cfg->vlan_mode, "splinter")) {
+                    netdev_turn_flags_on(iface->netdev, NETDEV_UP, true);
+                }
             } else {
                 error = 0;
             }
@@ -1186,25 +1219,24 @@ bridge_add_ofproto_ports(struct bridge *br)
 }
 
 static const char *
-get_ovsrec_key_value(const struct ovsdb_idl_row *row,
-                     const struct ovsdb_idl_column *column,
-                     const char *key)
+get_ovsrec_key_value(char **keys, char **values, size_t n, const char *key)
 {
-    const struct ovsdb_datum *datum;
-    union ovsdb_atom atom;
-    unsigned int idx;
+    size_t i;
 
-    datum = ovsdb_idl_get(row, column, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
-    atom.string = (char *) key;
-    idx = ovsdb_datum_find_key(datum, &atom, OVSDB_TYPE_STRING);
-    return idx == UINT_MAX ? NULL : datum->values[idx].string;
+    for (i = 0; i < n; i++) {
+        if (!strcmp(keys[i], key)) {
+            return values[i];
+        }
+    }
+    return NULL;
 }
 
 static const char *
 bridge_get_other_config(const struct ovsrec_bridge *br_cfg, const char *key)
 {
-    return get_ovsrec_key_value(&br_cfg->header_,
-                                &ovsrec_bridge_col_other_config, key);
+    return get_ovsrec_key_value(br_cfg->key_other_config,
+                                br_cfg->value_other_config,
+                                br_cfg->n_other_config, key);
 }
 
 /* Set Flow eviction threshold */
@@ -1380,33 +1412,10 @@ bridge_pick_datapath_id(struct bridge *br,
         return dpid;
     }
 
-    if (hw_addr_iface) {
-        int vlan;
-        if (!netdev_get_vlan_vid(hw_addr_iface->netdev, &vlan)) {
-            /*
-             * A bridge whose MAC address is taken from a VLAN network device
-             * (that is, a network device created with vconfig(8) or similar
-             * tool) will have the same MAC address as a bridge on the VLAN
-             * device's physical network device.
-             *
-             * Handle this case by hashing the physical network device MAC
-             * along with the VLAN identifier.
-             */
-            uint8_t buf[ETH_ADDR_LEN + 2];
-            memcpy(buf, bridge_ea, ETH_ADDR_LEN);
-            buf[ETH_ADDR_LEN] = vlan >> 8;
-            buf[ETH_ADDR_LEN + 1] = vlan;
-            return dpid_from_hash(buf, sizeof buf);
-        } else {
-            /*
-             * Assume that this bridge's MAC address is unique, since it
-             * doesn't fit any of the cases we handle specially.
-             */
-        }
-    } else {
+    if (!hw_addr_iface) {
         /*
          * A purely internal bridge, that is, one that has no non-virtual
-         * network devices on it at all, is more difficult because it has no
+         * network devices on it at all, is difficult because it has no
          * natural unique identifier at all.
          *
          * When the host is a XenServer, we handle this case by hashing the
@@ -1681,8 +1690,9 @@ enable_system_stats(const struct ovsrec_open_vswitch *cfg)
     const char *enable;
 
     /* Use other-config:enable-system-stats by preference. */
-    enable = get_ovsrec_key_value(&cfg->header_,
-                                  &ovsrec_open_vswitch_col_other_config,
+    enable = get_ovsrec_key_value(cfg->key_other_config,
+                                  cfg->value_other_config,
+                                  cfg->n_other_config,
                                   "enable-statistics");
     if (enable) {
         return !strcmp(enable, "true");
@@ -1804,6 +1814,7 @@ bridge_run(void)
 {
     const struct ovsrec_open_vswitch *cfg;
 
+    bool vlan_splinters_changed;
     bool database_changed;
     struct bridge *br;
 
@@ -1843,7 +1854,19 @@ bridge_run(void)
         stream_ssl_set_ca_cert_file(ssl->ca_cert, ssl->bootstrap_ca_cert);
     }
 
-    if (database_changed) {
+    /* If VLAN splinters are in use, then we need to reconfigure if VLAN usage
+     * has changed. */
+    vlan_splinters_changed = false;
+    if (vlan_splinters_enabled_anywhere) {
+        HMAP_FOR_EACH (br, node, &all_bridges) {
+            if (ofproto_has_vlan_usage_changed(br->ofproto)) {
+                vlan_splinters_changed = true;
+                break;
+            }
+        }
+    }
+
+    if (database_changed || vlan_splinters_changed) {
         if (cfg) {
             struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(idl);
 
@@ -1869,6 +1892,7 @@ bridge_run(void)
             txn = ovsdb_idl_txn_create(idl);
             HMAP_FOR_EACH (br, node, &all_bridges) {
                 struct port *port;
+                struct mirror *m;
 
                 HMAP_FOR_EACH (port, hmap_node, &br->ports) {
                     struct iface *iface;
@@ -1878,6 +1902,11 @@ bridge_run(void)
                         iface_refresh_status(iface);
                     }
                 }
+
+                HMAP_FOR_EACH (m, hmap_node, &br->mirrors) {
+                    mirror_refresh_stats(m);
+                }
+
             }
             refresh_system_stats(cfg);
             refresh_controller_status();
@@ -2181,7 +2210,8 @@ bridge_get_controllers(const struct bridge *br,
 /* Adds and deletes "struct port"s and "struct iface"s under 'br' to match
  * those configured in 'br->cfg'. */
 static void
-bridge_add_del_ports(struct bridge *br)
+bridge_add_del_ports(struct bridge *br,
+                     const unsigned long int *splinter_vlans)
 {
     struct port *port, *next;
     struct shash_node *node;
@@ -2214,9 +2244,12 @@ bridge_add_del_ports(struct bridge *br)
         shash_add(&new_ports, br->name, &br->synth_local_port);
     }
 
+    if (splinter_vlans) {
+        add_vlan_splinter_ports(br, splinter_vlans, &new_ports);
+    }
+
     /* Get rid of deleted ports.
-     * Get rid of deleted interfaces on ports that still exist.
-     * Update 'cfg' of ports that still exist. */
+     * Get rid of deleted interfaces on ports that still exist. */
     HMAP_FOR_EACH_SAFE (port, next, hmap_node, &br->ports) {
         port->cfg = shash_find_data(&new_ports, port->name);
         if (!port->cfg) {
@@ -2464,8 +2497,9 @@ get_port_other_config(const struct ovsrec_port *port, const char *key,
 {
     const char *value;
 
-    value = get_ovsrec_key_value(&port->header_, &ovsrec_port_col_other_config,
-                                 key);
+    value = get_ovsrec_key_value(port->key_other_config,
+                                 port->value_other_config,
+                                 port->n_other_config, key);
     return value ? value : default_value;
 }
 
@@ -2475,8 +2509,9 @@ get_interface_other_config(const struct ovsrec_interface *iface,
 {
     const char *value;
 
-    value = get_ovsrec_key_value(&iface->header_,
-                                 &ovsrec_interface_col_other_config, key);
+    value = get_ovsrec_key_value(iface->key_other_config,
+                                 iface->value_other_config,
+                                 iface->n_other_config, key);
     return value ? value : default_value;
 }
 
@@ -2633,6 +2668,11 @@ port_configure_lacp(struct port *port, struct lacp_settings *s)
         memcpy(s->id, port->bridge->ea, ETH_ADDR_LEN);
     }
 
+    if (eth_addr_is_zero(s->id)) {
+        VLOG_WARN("port %s: Invalid zero LACP system ID.", port->name);
+        return NULL;
+    }
+
     /* Prefer bondable links if unspecified. */
     priority = atoi(get_port_other_config(port->cfg, "lacp-system-priority",
                                           "0"));
@@ -2643,7 +2683,6 @@ port_configure_lacp(struct port *port, struct lacp_settings *s)
     s->heartbeat = !strcmp(get_port_other_config(port->cfg,
                                                  "lacp-heartbeat",
                                                  "false"), "true");
-
 
     lacp_time = get_port_other_config(port->cfg, "lacp-time", "slow");
     custom_time = atoi(lacp_time);
@@ -2701,11 +2740,21 @@ port_configure_bond(struct port *port, struct bond_settings *s,
 
     s->name = port->name;
     s->balance = BM_SLB;
-    if (port->cfg->bond_mode
-        && !bond_mode_from_string(&s->balance, port->cfg->bond_mode)) {
-        VLOG_WARN("port %s: unknown bond_mode %s, defaulting to %s",
-                  port->name, port->cfg->bond_mode,
-                  bond_mode_to_string(s->balance));
+    if (port->cfg->bond_mode) {
+        if (!bond_mode_from_string(&s->balance, port->cfg->bond_mode)) {
+            VLOG_WARN("port %s: unknown bond_mode %s, defaulting to %s",
+                      port->name, port->cfg->bond_mode,
+                      bond_mode_to_string(s->balance));
+        }
+    } else {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+
+        /* XXX: Post version 1.4.*, change the default bond_mode to
+         * active-backup.  Until then, warn that the change is imminent. */
+        VLOG_WARN_RL(&rl, "port %s: Using the default bond_mode %s. Note that"
+                     " in future versions, the default bond_mode is expected"
+                     " to change to active-backup", port->name,
+                     bond_mode_to_string(s->balance));
     }
     if (s->balance == BM_SLB && port->bridge->cfg->n_flood_vlans) {
         VLOG_WARN("port %s: SLB bonds are incompatible with flood_vlans, "
@@ -2991,6 +3040,10 @@ iface_delete_queues(unsigned int queue_id,
 static void
 iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
 {
+    struct ofpbuf queues_buf;
+
+    ofpbuf_init(&queues_buf, 0);
+
     if (!qos || qos->type[0] == '\0' || qos->n_queues < 1) {
         netdev_set_qos(iface->netdev, NULL, NULL);
     } else {
@@ -3021,6 +3074,15 @@ iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
                 queue_zero = true;
             }
 
+            if (queue->n_dscp == 1) {
+                struct ofproto_port_queue *port_queue;
+
+                port_queue = ofpbuf_put_uninit(&queues_buf,
+                                               sizeof *port_queue);
+                port_queue->queue = queue_id;
+                port_queue->dscp = queue->dscp[0];
+            }
+
             shash_from_ovs_idl_map(queue->key_other_config,
                                    queue->value_other_config,
                                    queue->n_other_config, &details);
@@ -3036,9 +3098,19 @@ iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
         }
     }
 
+    if (iface->ofp_port >= 0) {
+        const struct ofproto_port_queue *port_queues = queues_buf.data;
+        size_t n_queues = queues_buf.size / sizeof *port_queues;
+
+        ofproto_port_set_queues(iface->port->bridge->ofproto, iface->ofp_port,
+                                port_queues, n_queues);
+    }
+
     netdev_set_policing(iface->netdev,
                         iface->cfg->ingress_policing_rate,
                         iface->cfg->ingress_policing_burst);
+
+    ofpbuf_uninit(&queues_buf);
 }
 
 static void
@@ -3055,6 +3127,8 @@ iface_configure_cfm(struct iface *iface)
 
     s.mpid = *cfg->cfm_mpid;
     s.interval = atoi(get_interface_other_config(iface->cfg, "cfm_interval",
+                                                 "0"));
+    s.ccm_vlan = atoi(get_interface_other_config(iface->cfg, "cfm_ccm_vlan",
                                                  "0"));
     if (s.interval <= 0) {
         s.interval = 1000;
@@ -3119,7 +3193,8 @@ bridge_configure_mirrors(struct bridge *br)
         if (!m) {
             m = mirror_create(br, cfg);
         }
-        if (!mirror_configure(m, cfg)) {
+        m->cfg = cfg;
+        if (!mirror_configure(m)) {
             mirror_destroy(m);
         }
     }
@@ -3185,8 +3260,9 @@ mirror_collect_ports(struct mirror *m,
 }
 
 static bool
-mirror_configure(struct mirror *m, const struct ovsrec_mirror *cfg)
+mirror_configure(struct mirror *m)
 {
+    const struct ovsrec_mirror *cfg = m->cfg;
     struct ofproto_mirror_settings s;
 
     /* Set name. */
@@ -3261,4 +3337,303 @@ mirror_configure(struct mirror *m, const struct ovsrec_mirror *cfg)
     free(s.src_vlans);
 
     return true;
+}
+
+/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
+ *
+ * This is deprecated.  It is only for compatibility with broken device drivers
+ * in old versions of Linux that do not properly support VLANs when VLAN
+ * devices are not used.  When broken device drivers are no longer in
+ * widespread use, we will delete these interfaces. */
+
+static void **blocks;
+static size_t n_blocks, allocated_blocks;
+
+/* Adds 'block' to a list of blocks that have to be freed with free() when the
+ * VLAN splinters are reconfigured. */
+static void
+register_block(void *block)
+{
+    if (n_blocks >= allocated_blocks) {
+        blocks = x2nrealloc(blocks, &allocated_blocks, sizeof *blocks);
+    }
+    blocks[n_blocks++] = block;
+}
+
+/* Frees all of the blocks registered with register_block(). */
+static void
+free_registered_blocks(void)
+{
+    size_t i;
+
+    for (i = 0; i < n_blocks; i++) {
+        free(blocks[i]);
+    }
+    n_blocks = 0;
+}
+
+/* Returns true if VLAN splinters are enabled on 'iface_cfg', false
+ * otherwise. */
+static bool
+vlan_splinters_is_enabled(const struct ovsrec_interface *iface_cfg)
+{
+    const char *value;
+
+    value = get_interface_other_config(iface_cfg, "enable-vlan-splinters", "");
+    return !strcmp(value, "true");
+}
+
+/* Figures out the set of VLANs that are in use for the purpose of VLAN
+ * splinters.
+ *
+ * If VLAN splinters are enabled on at least one interface and any VLANs are in
+ * use, returns a 4096-bit bitmap with a 1-bit for each in-use VLAN (bits 0 and
+ * 4095 will not be set).  The caller is responsible for freeing the bitmap,
+ * with free().
+ *
+ * If VLANs splinters are not enabled on any interface or if no VLANs are in
+ * use, returns NULL.
+ *
+ * Updates 'vlan_splinters_enabled_anywhere'. */
+static unsigned long int *
+collect_splinter_vlans(const struct ovsrec_open_vswitch *ovs_cfg)
+{
+    unsigned long int *splinter_vlans;
+    struct sset splinter_ifaces;
+    const char *real_dev_name;
+    struct shash *real_devs;
+    struct shash_node *node;
+    struct bridge *br;
+    size_t i;
+
+    /* Free space allocated for synthesized ports and interfaces, since we're
+     * in the process of reconstructing all of them. */
+    free_registered_blocks();
+
+    splinter_vlans = bitmap_allocate(4096);
+    sset_init(&splinter_ifaces);
+    vlan_splinters_enabled_anywhere = false;
+    for (i = 0; i < ovs_cfg->n_bridges; i++) {
+        struct ovsrec_bridge *br_cfg = ovs_cfg->bridges[i];
+        size_t j;
+
+        for (j = 0; j < br_cfg->n_ports; j++) {
+            struct ovsrec_port *port_cfg = br_cfg->ports[j];
+            int k;
+
+            for (k = 0; k < port_cfg->n_interfaces; k++) {
+                struct ovsrec_interface *iface_cfg = port_cfg->interfaces[k];
+
+                if (vlan_splinters_is_enabled(iface_cfg)) {
+                    vlan_splinters_enabled_anywhere = true;
+                    sset_add(&splinter_ifaces, iface_cfg->name);
+                    vlan_bitmap_from_array__(port_cfg->trunks,
+                                             port_cfg->n_trunks,
+                                             splinter_vlans);
+                }
+            }
+
+            if (port_cfg->tag && *port_cfg->tag > 0 && *port_cfg->tag < 4095) {
+                bitmap_set1(splinter_vlans, *port_cfg->tag);
+            }
+        }
+    }
+
+    if (!vlan_splinters_enabled_anywhere) {
+        free(splinter_vlans);
+        sset_destroy(&splinter_ifaces);
+        return NULL;
+    }
+
+    HMAP_FOR_EACH (br, node, &all_bridges) {
+        if (br->ofproto) {
+            ofproto_get_vlan_usage(br->ofproto, splinter_vlans);
+        }
+    }
+
+    /* Don't allow VLANs 0 or 4095 to be splintered.  VLAN 0 should appear on
+     * the real device.  VLAN 4095 is reserved and Linux doesn't allow a VLAN
+     * device to be created for it. */
+    bitmap_set0(splinter_vlans, 0);
+    bitmap_set0(splinter_vlans, 4095);
+
+    /* Delete all VLAN devices that we don't need. */
+    vlandev_refresh();
+    real_devs = vlandev_get_real_devs();
+    SHASH_FOR_EACH (node, real_devs) {
+        const struct vlan_real_dev *real_dev = node->data;
+        const struct vlan_dev *vlan_dev;
+        bool real_dev_has_splinters;
+
+        real_dev_has_splinters = sset_contains(&splinter_ifaces,
+                                               real_dev->name);
+        HMAP_FOR_EACH (vlan_dev, hmap_node, &real_dev->vlan_devs) {
+            if (!real_dev_has_splinters
+                || !bitmap_is_set(splinter_vlans, vlan_dev->vid)) {
+                struct netdev *netdev;
+
+                if (!netdev_open(vlan_dev->name, "system", &netdev)) {
+                    if (!netdev_get_in4(netdev, NULL, NULL) ||
+                        !netdev_get_in6(netdev, NULL)) {
+                        vlandev_del(vlan_dev->name);
+                    } else {
+                        /* It has an IP address configured, so we don't own
+                         * it.  Don't delete it. */
+                    }
+                    netdev_close(netdev);
+                }
+            }
+
+        }
+    }
+
+    /* Add all VLAN devices that we need. */
+    SSET_FOR_EACH (real_dev_name, &splinter_ifaces) {
+        int vid;
+
+        BITMAP_FOR_EACH_1 (vid, 4096, splinter_vlans) {
+            if (!vlandev_get_name(real_dev_name, vid)) {
+                vlandev_add(real_dev_name, vid);
+            }
+        }
+    }
+
+    vlandev_refresh();
+
+    sset_destroy(&splinter_ifaces);
+
+    if (bitmap_scan(splinter_vlans, 0, 4096) >= 4096) {
+        free(splinter_vlans);
+        return NULL;
+    }
+    return splinter_vlans;
+}
+
+/* Pushes the configure of VLAN splinter port 'port' (e.g. eth0.9) down to
+ * ofproto.  */
+static void
+configure_splinter_port(struct port *port)
+{
+    struct ofproto *ofproto = port->bridge->ofproto;
+    uint16_t realdev_ofp_port;
+    const char *realdev_name;
+    struct iface *vlandev, *realdev;
+
+    ofproto_bundle_unregister(port->bridge->ofproto, port);
+
+    vlandev = CONTAINER_OF(list_front(&port->ifaces), struct iface,
+                           port_elem);
+
+    realdev_name = get_port_other_config(port->cfg, "realdev", NULL);
+    realdev = iface_lookup(port->bridge, realdev_name);
+    realdev_ofp_port = realdev ? realdev->ofp_port : 0;
+
+    ofproto_port_set_realdev(ofproto, vlandev->ofp_port, realdev_ofp_port,
+                             *port->cfg->tag);
+}
+
+static struct ovsrec_port *
+synthesize_splinter_port(const char *real_dev_name,
+                         const char *vlan_dev_name, int vid)
+{
+    struct ovsrec_interface *iface;
+    struct ovsrec_port *port;
+
+    iface = xzalloc(sizeof *iface);
+    iface->name = xstrdup(vlan_dev_name);
+    iface->type = "system";
+
+    port = xzalloc(sizeof *port);
+    port->interfaces = xmemdup(&iface, sizeof iface);
+    port->n_interfaces = 1;
+    port->name = xstrdup(vlan_dev_name);
+    port->vlan_mode = "splinter";
+    port->tag = xmalloc(sizeof *port->tag);
+    *port->tag = vid;
+    port->key_other_config = xmalloc(sizeof *port->key_other_config);
+    port->key_other_config[0] = "realdev";
+    port->value_other_config = xmalloc(sizeof *port->value_other_config);
+    port->value_other_config[0] = xstrdup(real_dev_name);
+    port->n_other_config = 1;
+
+    register_block(iface);
+    register_block(iface->name);
+    register_block(port);
+    register_block(port->interfaces);
+    register_block(port->name);
+    register_block(port->tag);
+    register_block(port->key_other_config);
+    register_block(port->value_other_config);
+    register_block(port->value_other_config[0]);
+
+    return port;
+}
+
+/* For each interface with 'br' that has VLAN splinters enabled, adds a
+ * corresponding ovsrec_port to 'ports' for each splinter VLAN marked with a
+ * 1-bit in the 'splinter_vlans' bitmap. */
+static void
+add_vlan_splinter_ports(struct bridge *br,
+                        const unsigned long int *splinter_vlans,
+                        struct shash *ports)
+{
+    size_t i;
+
+    /* We iterate through 'br->cfg->ports' instead of 'ports' here because
+     * we're modifying 'ports'. */
+    for (i = 0; i < br->cfg->n_ports; i++) {
+        const char *name = br->cfg->ports[i]->name;
+        struct ovsrec_port *port_cfg = shash_find_data(ports, name);
+        size_t j;
+
+        for (j = 0; j < port_cfg->n_interfaces; j++) {
+            struct ovsrec_interface *iface_cfg = port_cfg->interfaces[j];
+
+            if (vlan_splinters_is_enabled(iface_cfg)) {
+                const char *real_dev_name;
+                uint16_t vid;
+
+                real_dev_name = iface_cfg->name;
+                BITMAP_FOR_EACH_1 (vid, 4096, splinter_vlans) {
+                    const char *vlan_dev_name;
+
+                    vlan_dev_name = vlandev_get_name(real_dev_name, vid);
+                    if (vlan_dev_name
+                        && !shash_find(ports, vlan_dev_name)) {
+                        shash_add(ports, vlan_dev_name,
+                                  synthesize_splinter_port(
+                                      real_dev_name, vlan_dev_name, vid));
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void
+mirror_refresh_stats(struct mirror *m)
+{
+    struct ofproto *ofproto = m->bridge->ofproto;
+    uint64_t tx_packets, tx_bytes;
+    char *keys[2];
+    int64_t values[2];
+    size_t stat_cnt = 0;
+
+    if (ofproto_mirror_get_stats(ofproto, m, &tx_packets, &tx_bytes)) {
+        ovsrec_mirror_set_statistics(m->cfg, NULL, NULL, 0);
+        return;
+    }
+
+    if (tx_packets != UINT64_MAX) {
+        keys[stat_cnt] = "tx_packets";
+        values[stat_cnt] = tx_packets;
+        stat_cnt++;
+    }
+    if (tx_bytes != UINT64_MAX) {
+        keys[stat_cnt] = "tx_bytes";
+        values[stat_cnt] = tx_bytes;
+        stat_cnt++;
+    }
+
+    ovsrec_mirror_set_statistics(m->cfg, keys, values, stat_cnt);
 }
