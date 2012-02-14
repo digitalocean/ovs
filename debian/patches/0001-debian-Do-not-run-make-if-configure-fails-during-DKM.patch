@@ -1,0 +1,31 @@
+From 3d93284f97b96861dbfeec440eda6bb8c7b735c6 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Mon, 13 Feb 2012 10:09:09 -0800
+Subject: [PATCH] debian: Do not run "make" if "configure" fails during DKMS
+ build.
+
+There is no point in trying to run "make" if "configure" failed.  The
+"make" will fail too and the log will be harder to read.
+
+CC: Thomas Goirand <zigo@debian.org>
+CC: Simon Horman <horms@verge.net.au>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ debian/dkms.conf.in |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/debian/dkms.conf.in b/debian/dkms.conf.in
+index a6dc316..ae1fc7a 100644
+--- a/debian/dkms.conf.in
++++ b/debian/dkms.conf.in
+@@ -1,6 +1,6 @@
+ PACKAGE_NAME="openvswitch"
+ PACKAGE_VERSION="__VERSION__"
+-MAKE="./configure --with-linux=/lib/modules/`uname -r`/build ; make -C datapath/linux"
++MAKE="./configure --with-linux=/lib/modules/`uname -r`/build && make -C datapath/linux"
+ BUILT_MODULE_NAME[0]=openvswitch_mod
+ BUILT_MODULE_NAME[1]=brcompat_mod
+ BUILT_MODULE_LOCATION[0]=datapath/linux/
+-- 
+1.7.6.3
+

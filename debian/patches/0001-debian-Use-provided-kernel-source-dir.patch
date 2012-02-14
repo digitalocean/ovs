@@ -1,0 +1,91 @@
+Return-Path: <dev-bounces@openvswitch.org>
+X-Spam-Checker-Version: SpamAssassin 3.2.5-kirsty.vergenet.net_2010071208
+	(2008-06-10) on kirsty.vergenet.net
+X-Spam-Level: 
+X-Spam-Status: No, score=-2.6 required=5.0 tests=AWL,BAYES_00 autolearn=ham
+	version=3.2.5-kirsty.vergenet.net_2010071208
+X-Original-To: horms@verge.net.au
+Delivered-To: horms@vergenet.net
+Received: from mail.au.vergenet.net [2406:a000:f000:9500::3]
+	by joe.kanocho.kobe.vergenet.net with IMAP (fetchmail-6.3.18)
+	for <horms@localhost> (single-drop); Tue, 14 Feb 2012 09:32:07 +0900 (JST)
+Received: from archives.nicira.com (li205-44.members.linode.com [173.255.195.44])
+	by kirsty.vergenet.net (Postfix) with ESMTP id 7E24025BE8B
+	for <horms@verge.net.au>; Tue, 14 Feb 2012 11:15:26 +1100 (EST)
+Received: from li205-44.members.linode.com (localhost [127.0.0.1])
+	by archives.nicira.com (Postfix) with ESMTP id 49D2216575;
+	Mon, 13 Feb 2012 16:15:26 -0800 (PST)
+X-Original-To: dev@openvswitch.org
+Delivered-To: dev@openvswitch.org
+Received: from mail-pz0-f49.google.com (mail-pz0-f49.google.com
+	[209.85.210.49])
+	by archives.nicira.com (Postfix) with ESMTPS id 29199164F4
+	for <dev@openvswitch.org>; Mon, 13 Feb 2012 16:15:24 -0800 (PST)
+Received: by dakp5 with SMTP id p5so6268325dak.22
+	for <dev@openvswitch.org>; Mon, 13 Feb 2012 16:15:23 -0800 (PST)
+MIME-Version: 1.0
+Received: by 10.68.228.137 with SMTP id si9mr52557629pbc.24.1329178523353;
+	Mon, 13 Feb 2012 16:15:23 -0800 (PST)
+Received: from localhost.localdomain
+	(107-0-204-137-ip-static.hfc.comcastbusiness.net. [107.0.204.137])
+	by mx.google.com with ESMTPS id t10sm43084965pbb.18.2012.02.13.16.15.21
+	(version=TLSv1/SSLv3 cipher=OTHER);
+	Mon, 13 Feb 2012 16:15:22 -0800 (PST)
+From: Ben Pfaff <blp@nicira.com>
+To: dev@openvswitch.org
+Date: Mon, 13 Feb 2012 16:15:17 -0800
+Message-Id: <1329178517-6137-1-git-send-email-blp@nicira.com>
+X-Mailer: git-send-email 1.7.2.5
+X-Gm-Message-State: ALoCoQlVfmkHrc2GppOHIkw9xtdYwlLlkxf5qOjjh9NTmHWR1EH1L9AkoVf2n8fR6xZK6+5CIQfS
+Cc: Ben Pfaff <blp@nicira.com>, Thomas Goirand <thomas@goirand.fr>,
+	659685@bugs.debian.org
+Subject: [ovs-dev] [PATCH] debian: Use provided kernel source dir instead of
+	host kernel version.
+X-BeenThere: dev@openvswitch.org
+X-Mailman-Version: 2.1.11
+Precedence: list
+List-Id: <dev.openvswitch.org>
+List-Unsubscribe: <http://openvswitch.org/mailman/options/dev>,
+	<mailto:dev-request@openvswitch.org?subject=unsubscribe>
+List-Archive: <http://openvswitch.org/pipermail/dev>
+List-Post: <mailto:dev@openvswitch.org>
+List-Help: <mailto:dev-request@openvswitch.org?subject=help>
+List-Subscribe: <http://openvswitch.org/mailman/listinfo/dev>,
+	<mailto:dev-request@openvswitch.org?subject=subscribe>
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Sender: dev-bounces@openvswitch.org
+Errors-To: dev-bounces@openvswitch.org
+X-Loop: oathstix_finish by kirsty.vergenet.net
+X-Loop: oathstix_finish by joe
+
+DKMS passes in an explicit variable for the kernel source directory, so we
+should use that instead of `uname -r`.
+
+CC: 659685@bugs.debian.org
+Reported-by: Thomas Goirand <thomas@goirand.fr>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ debian/dkms.conf.in |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/debian/dkms.conf.in b/debian/dkms.conf.in
+index ae1fc7a..d5bc37e 100644
+--- a/debian/dkms.conf.in
++++ b/debian/dkms.conf.in
+@@ -1,6 +1,6 @@
+ PACKAGE_NAME="openvswitch"
+ PACKAGE_VERSION="__VERSION__"
+-MAKE="./configure --with-linux=/lib/modules/`uname -r`/build && make -C datapath/linux"
++MAKE="./configure --with-linux='${kernel_source_dir}' && make -C datapath/linux"
+ BUILT_MODULE_NAME[0]=openvswitch_mod
+ BUILT_MODULE_NAME[1]=brcompat_mod
+ BUILT_MODULE_LOCATION[0]=datapath/linux/
+-- 
+1.7.2.5
+
+_______________________________________________
+dev mailing list
+dev@openvswitch.org
+http://openvswitch.org/mailman/listinfo/dev
+

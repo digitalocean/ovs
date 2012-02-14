@@ -1,0 +1,51 @@
+From a67fe5159bec790933e61d341cfb7fa27ac786dc Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Fri, 3 Feb 2012 13:30:50 -0800
+Subject: [PATCH] debian: Don't install Python modules for obsolete Python
+ versions.
+
+Python 2.4 is obsolete, not present in Debian squeeze or sid, so don't
+install Python modules for it.
+
+It would be better to just put the files directly into
+/usr/share/pyshared/ovs/, instead of in site-packages for some specific
+Python version, but this causes problems for builds on squeeze, as
+documented in commit bc3aa0bf5 (debian: Make python-openvswitch packaging
+work with squeeze dh_python2.):
+
+    The dh_python2 helper in Debian squeeze has a limitation that is not
+    mentioned anywhere, as far as I can tell: Python files must be in
+    /usr/lib/python#.#/site-packages to be installed.  The version in Debian
+    wheezy does not have the same limitation.
+
+    This meant that building the Debian packages on squeeze silently produced
+    a broken python-openvswitch package, whereas building the same thing on
+    wheezy built a working package.
+
+    This fixes the problem by putting the .py files where squeeze expects them.
+    It works on wheezy too.
+
+A before-and-after "debdiff" shows that the only significant effect of this
+commit is to drop python2.4 symlinks.
+
+CC: horms@debian.org
+Reported-by: Luca Falavigna <ftpmaster@debian.org>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+
+index a152aff..a36c828 100644
+--- a/debian/openvswitch-test.install
++++ b/debian/openvswitch-test.install
+@@ -1,2 +1,2 @@
+-usr/share/openvswitch/python/ovstest usr/lib/python2.4/site-packages/
++usr/share/openvswitch/python/ovstest usr/lib/python2.6/dist-packages/
+ usr/bin/ovs-test
+diff --git a/debian/python-openvswitch.install b/debian/python-openvswitch.install
+index 6779298..9387e68 100644
+--- a/debian/python-openvswitch.install
++++ b/debian/python-openvswitch.install
+@@ -1 +1 @@
+-usr/share/openvswitch/python/ovs usr/lib/python2.4/site-packages/
++usr/share/openvswitch/python/ovs usr/lib/python2.6/dist-packages/
+-- 
+1.7.6.3
+

@@ -1,0 +1,38 @@
+From 30ee46f95c0b16e0e58d059d9c6d71f2e51ac303 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Fri, 10 Feb 2012 11:00:54 -0800
+Subject: [PATCH 1/2] debian: Fix dependencies for openvswitch-datapath-dkms
+ package.
+
+The OVS kernel module, like other kernel modules, does not need a working
+userspace build environment, but the OVS "configure" script and makefiles
+don't support a kernel-only build, so "configure" fails if libc6-dev is
+not installed.
+
+It would be better to change the "configure" script and makefiles to handle
+this special case, but that was more work than I initially expected it to
+be.
+
+Bug #8606.
+Reported-by: Edwin Chiu <echiu@nicira.com>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ debian/control |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/debian/control b/debian/control
+index 4f71465..09a26b1 100644
+--- a/debian/control
++++ b/debian/control
+@@ -25,7 +25,7 @@ Description: Open vSwitch datapath module source - module-assistant version
+ 
+ Package: openvswitch-datapath-dkms
+ Architecture: all
+-Depends: dkms (>= 1.95), make, ${misc:Depends}
++Depends: dkms (>= 1.95), make, libc6-dev, ${misc:Depends}
+ Description: Open vSwitch datapath module source - DKMS version
+  This package provides the Open vSwitch datapath module source code
+  that is needed by openvswitch-switch.  DKMS can built the kernel
+-- 
+1.7.6.3
+
