@@ -1,3 +1,13 @@
+openvswitch (1.4.0-2+nmu1) unstable; urgency=low
+
+  * Non maintainer upload.
+  * Removes all patches in debian/patches, because they are patching stuff
+  inconditionally in debian/*, and this should be applied by default.
+  * Uses the correct ${kernel_source_dir} in debian/dkms.conf.in, so that
+  the kernel module builds as expected (Closes: #659685).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 08 Mar 2012 08:46:24 +0000
+
 openvswitch (1.4.0-2) unstable; urgency=low
 
   * Use explicit DKMS variable for kernel source directory
