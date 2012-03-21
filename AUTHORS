@@ -1,6 +1,7 @@
 The following people, in alphabetical order, have either authored or
 signed off on commits in the Open vSwitch version control repository.
 
+Aaron Rosen             arosen@clemson.edu
 Alexey I. Froloff       raorn@altlinux.org
 Andrew Evans            aevans@nicira.com
 Andrew Lambeth          wal@nicira.com
@@ -13,6 +14,7 @@ Chuck Short             zulcss@ubuntu.com
 Dan Wendlandt           dan@nicira.com
 Daniel Roman            droman@nicira.com
 David Erickson          derickso@stanford.edu
+Dominic Curran          dominic.curran@citrix.com
 Edward Tomasz Napierała trasz@freebsd.org
 Ethan Jackson           ethan@nicira.com
 Gaetano Catalli         gaetano.catalli@gmail.com
@@ -53,10 +55,11 @@ The following additional people are mentioned in commit logs as having
 provided helpful bug reports or suggestions.
 
 Aaron M. Ucko           ucko@debian.org
-Aaron Rosen             arosen@clemson.edu
 Ahmed Bilal             numan252@gmail.com
+Alban Browaeys          prahal@yahoo.com
 Alex Yip                alex@nicira.com
 Alexey I. Froloff       raorn@altlinux.org
+Andreas Beckmann        debian@abeckmann.de
 Bob Ball                bob.ball@citrix.com
 Brad Hall               brad@nicira.com
 Brandon Heller          brandonh@stanford.edu
@@ -79,6 +82,7 @@ Gregor Schaffrath       grsch@net.t-labs.tu-berlin.de
 Hassan Khan             hassan.khan@seecs.edu.pk
 Hector Oron             hector.oron@gmail.com
 Henrik Amren            henrik@nicira.com
+Hiroshi Tanaka          htanaka@nicira.com
 Jad Naous               jnaous@gmail.com
 Jan Medved              jmedved@juniper.net
 Janis Hamme             janis.hamme@student.kit.edu
@@ -89,10 +93,12 @@ Joan Cirer              joan@ev0.net
 John Galgay             john@galgay.net
 Koichi Yagishita        yagishita.koichi@jrc.co.jp
 Krishna Miriyala        krishna@nicira.com
+Luca Falavigna          dktrkranz@debian.org
 Luiz Henrique Ozaki     luiz.ozaki@gmail.com
 Michael A. Collins      mike.a.collins@ark-net.org
 Michael Hu              mhu@nicira.com
 Michael Mao             mmao@nicira.com
+Michael Shigorin        mike@osdn.org.ua
 Mike Kruze              mkruze@nicira.com
 Murphy McCauley         murphy.mccauley@gmail.com
 Mikael Doverhag         mdoverhag@nicira.com
@@ -117,6 +123,7 @@ Voravit T.              voravit@kth.se
 YAMAMOTO Takashi        yamamoto@valinux.co.jp
 Yongqiang Liu           liuyq7809@gmail.com
 kk yap                  yapkke@stanford.edu
+likunyun                kunyunli@hotmail.com
 冯全树(Crab)          fqs888@126.com
 
 Thanks to all Open vSwitch contributors.  If you are not listed above

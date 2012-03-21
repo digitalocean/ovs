@@ -695,7 +695,7 @@ am__noinst_HEADERS_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux \
 	debian/openvswitch-datapath-source.dirs \
 	debian/openvswitch-datapath-source.install \
 	debian/openvswitch-ipsec.dirs debian/openvswitch-ipsec.init \
-	debian/openvswitch-ipsec.install \
+	debian/openvswitch-ipsec.install debian/openvswitch-pki.dirs \
 	debian/openvswitch-pki.postinst debian/openvswitch-pki.postrm \
 	debian/openvswitch-switch.README.Debian \
 	debian/openvswitch-switch.dirs debian/openvswitch-switch.init \
@@ -1038,7 +1038,7 @@ EXTRA_DIST = CodingStyle DESIGN INSTALL.KVM INSTALL.Linux INSTALL.RHEL \
 	debian/openvswitch-datapath-source.dirs \
 	debian/openvswitch-datapath-source.install \
 	debian/openvswitch-ipsec.dirs debian/openvswitch-ipsec.init \
-	debian/openvswitch-ipsec.install \
+	debian/openvswitch-ipsec.install debian/openvswitch-pki.dirs \
 	debian/openvswitch-pki.postinst debian/openvswitch-pki.postrm \
 	debian/openvswitch-switch.README.Debian \
 	debian/openvswitch-switch.dirs debian/openvswitch-switch.init \

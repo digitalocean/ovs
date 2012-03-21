@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -537,7 +537,7 @@ netdev_set_mtu(const struct netdev *netdev, int mtu)
 
     error = class->set_mtu ? class->set_mtu(netdev, mtu) : EOPNOTSUPP;
     if (error && error != EOPNOTSUPP) {
-        VLOG_WARN_RL(&rl, "failed to retrieve MTU for network device %s: %s",
+        VLOG_WARN_RL(&rl, "failed to set MTU for network device %s: %s",
                      netdev_get_name(netdev), strerror(error));
     }
 
@@ -1202,7 +1202,11 @@ netdev_get_queue_stats(const struct netdev *netdev, unsigned int queue_id,
  * Calling this function may be more efficient than calling netdev_get_queue()
  * for every queue.
  *
- * 'cb' must not modify or free the 'details' argument passed in.
+ * 'cb' must not modify or free the 'details' argument passed in.  It may
+ * delete or modify the queue passed in as its 'queue_id' argument.  It may
+ * modify but must not delete any other queue within 'netdev'.  'cb' should not
+ * add new queues because this may cause some queues to be visited twice or not
+ * at all.
  *
  * Returns 0 if successful, otherwise a positive errno value.  On error, some
  * configured queues may not have been included in the iteration. */

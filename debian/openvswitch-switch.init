@@ -1,6 +1,6 @@
 #! /bin/sh
 #
-# Copyright (C) 2011 Nicira Networks, Inc.
+# Copyright (C) 2011, 2012 Nicira Networks, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,6 +56,13 @@ start () {
             echo "For instructions, read"
 	fi
 	echo "/usr/share/doc/openvswitch-datapath-source/README.Debian"
+
+	if test X"$OVS_MISSING_KMOD_OK" = Xyes; then
+	    # We're being invoked by the package postinst.  Do not
+	    # fail package installation just because the kernel module
+	    # is not available.
+	    exit 0
+	fi
     fi
     set ovs_ctl ${1-start} --system-id=random
     if test X"$FORCE_COREFILES" != X; then
@@ -86,6 +93,7 @@ case $1 in
         ;;
     status)
         ovs_ctl status
+        exit $?
         ;;
     force-reload-kmod)
         start force-reload-kmod

@@ -1,5 +1,5 @@
 '\" p
-.TH Open_vSwitch 5 "January 2012" "Open vSwitch" "Open vSwitch Manual"
+.TH Open_vSwitch 5 "March 2012" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
@@ -12,7 +12,8 @@
 .  I "\\$1"
 .  RE
 ..
-.SH "Open_vSwitch DATABASE"
+.SH NAME
+Open_vSwitch \- Open_vSwitch database schema
 A database with this schema holds the configuration for one Open
 vSwitch daemon.  The top-level configuration for the daemon is the
 \fBOpen_vSwitch\fR table, which must have exactly one
@@ -561,6 +562,9 @@ optional string, containing an integer, at least 0
 .TQ 2.75in
 \fBother_config : forward-bpdu\fR
 optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBother_config : mac-aging-time\fR
+optional string, containing an integer, at least 1
 .RE
 .TQ .25in
 \fIBridge Status:\fR
@@ -733,6 +737,19 @@ vSwitch bridge is used to connect different Ethernet networks,
 and if Open vSwitch node does not run STP, then this option
 should be enabled.  Default is disabled, set to
 \fBtrue\fR to enable.
+.IP "\fBother_config : mac-aging-time\fR: optional string, containing an integer, at least 1"
+The maximum number of seconds to retain a MAC learning entry for
+which no packets have been seen.  The default is currently 300
+seconds (5 minutes).  The value, if specified, is forced into a
+reasonable range, currently 15 to 3600 seconds.
+.IP
+A short MAC aging time allows a network to more quickly detect that a
+host is no longer connected to a switch port.  However, it also makes
+it more likely that packets will be flooded unnecessarily, when they
+are addressed to a connected host that rarely transmits packets.  To
+reduce the incidence of unnecessary flooding, use a MAC aging time
+longer than the maximum interval at which a host will ordinarily
+transmit packets.
 .ST "Bridge Status:"
 Status information about bridges.
 .IP "\fBstatus\fR: map of string-string pairs"
@@ -1526,7 +1543,7 @@ known.  If the interface is successfully added,
 (generally either in the range 1 to 65279, inclusive, or 65534, the
 port number for the OpenFlow ``local port\(cq\(cq).  If the interface
 cannot be added then Open vSwitch sets this column
-to -1.
+to \-1.
 .ST "System-Specific Details:"
 .IP "\fBtype\fR: string"
 The interface type, one of:
@@ -2013,6 +2030,10 @@ Defaults to \fBfalse\fR\.
 .IP
 VLAN splinters increase kernel and userspace memory overhead, so do
 not use them unless they are needed.
+.IP
+VLAN splinters do not support 802.1p priority tags.  Received
+priorities will appear to be 0, regardless of their actual values,
+and priorities on transmitted packets will also be cleared to 0.
 .ST "Common Columns:"
 The overall purpose of these columns is described under \fBCommon
 Columns\fR at the beginning of this document.
@@ -2071,8 +2092,14 @@ A map from queue numbers to \fBQueue\fR records.  The
 supported range of queue numbers depend on \fBtype\fR\.  The
 queue numbers are the same as the \fBqueue_id\fR used in
 OpenFlow in \fBstruct ofp_action_enqueue\fR and other
-structures.  Queue 0 is used by OpenFlow output actions that do not
-specify a specific queue.
+structures.
+.IP
+Queue 0 is the ``default queue.\(cq\(cq  It is used by OpenFlow output
+actions when no specific queue has been set.  Ordinarily \fBqueues\fR should include a configuration for queue 0.  When no
+configuration for queue 0 is present, a default configuration is used.
+(Before version 1.6, Open vSwitch would leave queue 0 unconfigured in
+this case.  With some queuing disciplines, this dropped all packets
+destined for the default queue.)
 .ST "Configuration for linux-htb and linux-hfsc:"
 The \fBlinux\-htb\fR and \fBlinux\-hfsc\fR classes support
 the following key-value pair:
@@ -2897,7 +2924,7 @@ optional integer, in range 0 to 255
 optional integer, in range 0 to 255
 .TQ 3.00in
 \fBactive_timeout\fR
-integer, at least -1
+integer, at least \-1
 .TQ 3.00in
 \fBadd_id_to_interface\fR
 boolean
@@ -2919,7 +2946,7 @@ if not specified.
 .IP "\fBengine_type\fR: optional integer, in range 0 to 255"
 Engine type to use in NetFlow messages.  Defaults to datapath
 index if not specified.
-.IP "\fBactive_timeout\fR: integer, at least -1"
+.IP "\fBactive_timeout\fR: integer, at least \-1"
 The interval at which NetFlow records are sent for flows that are
 still active, in seconds.  A value of \fB0\fR requests the
 default timeout (currently 600 seconds); a value of \fB\-1\fR

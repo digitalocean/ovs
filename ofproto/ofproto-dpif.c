@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -110,7 +110,7 @@ static void flow_push_stats(const struct rule_dpif *, const struct flow *,
                             uint64_t packets, uint64_t bytes,
                             long long int used);
 
-static uint32_t rule_calculate_tag(const struct flow *,
+static tag_type rule_calculate_tag(const struct flow *,
                                    const struct flow_wildcards *,
                                    uint32_t basis);
 static void rule_invalidate(const struct rule_dpif *);
@@ -191,6 +191,8 @@ static struct ofbundle ofpp_none_bundle = {
 
 static void stp_run(struct ofproto_dpif *ofproto);
 static void stp_wait(struct ofproto_dpif *ofproto);
+static int set_stp_port(struct ofport *,
+                        const struct ofproto_port_stp_settings *);
 
 static bool ofbundle_includes_vlan(const struct ofbundle *, uint16_t vlan);
 
@@ -208,11 +210,17 @@ struct action_xlate_ctx {
      * revalidating without a packet to refer to. */
     const struct ofpbuf *packet;
 
-    /* Should OFPP_NORMAL MAC learning and NXAST_LEARN actions execute?  We
-     * want to execute them if we are actually processing a packet, or if we
-     * are accounting for packets that the datapath has processed, but not if
-     * we are just revalidating. */
-    bool may_learn;
+    /* Should OFPP_NORMAL update the MAC learning table?  We want to update it
+     * if we are actually processing a packet, or if we are accounting for
+     * packets that the datapath has processed, but not if we are just
+     * revalidating. */
+    bool may_learn_macs;
+
+    /* Should "learn" actions update the flow table?  We want to update it if
+     * we are actually processing a packet, or in most cases if we are
+     * accounting for packets that the datapath has processed, but not if we
+     * are just revalidating.  */
+    bool may_flow_mod;
 
     /* If nonnull, called just before executing a resubmit action.
      *
@@ -336,7 +344,8 @@ static void facet_update_time(struct ofproto_dpif *, struct facet *,
                               long long int used);
 static void facet_reset_counters(struct facet *);
 static void facet_push_stats(struct facet *);
-static void facet_account(struct ofproto_dpif *, struct facet *);
+static void facet_account(struct ofproto_dpif *, struct facet *,
+                          bool may_flow_mod);
 
 static bool facet_is_controller_flow(struct facet *);
 
@@ -651,7 +660,7 @@ construct(struct ofproto *ofproto_, int *n_tablesp)
     ofproto->sflow = NULL;
     ofproto->stp = NULL;
     hmap_init(&ofproto->bundles);
-    ofproto->ml = mac_learning_create();
+    ofproto->ml = mac_learning_create(MAC_ENTRY_DEFAULT_IDLE_TIME);
     for (i = 0; i < MAX_MIRRORS; i++) {
         ofproto->mirrors[i] = NULL;
     }
@@ -1137,6 +1146,12 @@ set_stp(struct ofproto *ofproto_, const struct ofproto_stp_settings *s)
         stp_set_max_age(ofproto->stp, s->max_age);
         stp_set_forward_delay(ofproto->stp, s->fwd_delay);
     }  else {
+        struct ofport *ofport;
+
+        HMAP_FOR_EACH (ofport, hmap_node, &ofproto->up.ports) {
+            set_stp_port(ofport, NULL);
+        }
+
         stp_destroy(ofproto->stp);
         ofproto->stp = NULL;
     }
@@ -2133,6 +2148,13 @@ forward_bpdu_changed(struct ofproto *ofproto_)
     /* Revalidate cached flows whenever forward_bpdu option changes. */
     ofproto->need_revalidate = true;
 }
+
+static void
+set_mac_idle_time(struct ofproto *ofproto_, unsigned int idle_time)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    mac_learning_set_idle_time(ofproto->ml, idle_time);
+}
 
 /* Ports. */
 
@@ -2901,7 +2923,7 @@ update_stats(struct ofproto_dpif *p)
             subfacet->dp_byte_count = stats->n_bytes;
 
             subfacet_update_time(p, subfacet, stats->used);
-            facet_account(p, facet);
+            facet_account(p, facet, true);
             facet_push_stats(facet);
         } else {
             if (!VLOG_DROP_WARN(&rl)) {
@@ -3191,7 +3213,8 @@ facet_remove(struct ofproto_dpif *ofproto, struct facet *facet)
 }
 
 static void
-facet_account(struct ofproto_dpif *ofproto, struct facet *facet)
+facet_account(struct ofproto_dpif *ofproto, struct facet *facet,
+              bool may_flow_mod)
 {
     uint64_t n_bytes;
     struct subfacet *subfacet;
@@ -3213,7 +3236,8 @@ facet_account(struct ofproto_dpif *ofproto, struct facet *facet)
 
         action_xlate_ctx_init(&ctx, ofproto, &facet->flow,
                               facet->flow.vlan_tci, NULL);
-        ctx.may_learn = true;
+        ctx.may_learn_macs = true;
+        ctx.may_flow_mod = may_flow_mod;
         ofpbuf_delete(xlate_actions(&ctx, facet->rule->up.actions,
                                     facet->rule->up.n_actions));
     }
@@ -3286,7 +3310,7 @@ facet_flush_stats(struct ofproto_dpif *ofproto, struct facet *facet)
     }
 
     facet_push_stats(facet);
-    facet_account(ofproto, facet);
+    facet_account(ofproto, facet, false);
 
     if (ofproto->netflow && !facet_is_controller_flow(facet)) {
         struct ofexpired expired;
@@ -4223,7 +4247,7 @@ xlate_table_action(struct action_xlate_ctx *ctx,
         if (table_id > 0 && table_id < N_TABLES) {
             struct table_dpif *table = &ofproto->tables[table_id];
             if (table->other_table) {
-                ctx->tags |= (rule
+                ctx->tags |= (rule && rule->tag
                               ? rule->tag
                               : rule_calculate_tag(&ctx->flow,
                                                    &table->other_table->wc,
@@ -4331,11 +4355,9 @@ xlate_output_action__(struct action_xlate_ctx *ctx,
     case OFPP_CONTROLLER:
         compose_controller_action(ctx, max_len);
         break;
-    case OFPP_LOCAL:
-        compose_output_action(ctx, OFPP_LOCAL);
-        break;
     case OFPP_NONE:
         break;
+    case OFPP_LOCAL:
     default:
         if (port != ctx->flow.in_port) {
             compose_output_action(ctx, port);
@@ -4678,7 +4700,7 @@ do_xlate_actions(const union ofp_action *in, size_t n_in,
 
         case OFPUTIL_NXAST_LEARN:
             ctx->has_learn = true;
-            if (ctx->may_learn) {
+            if (ctx->may_flow_mod) {
                 xlate_learn_action(ctx, (const struct nx_action_learn *) ia);
             }
             break;
@@ -4708,7 +4730,8 @@ action_xlate_ctx_init(struct action_xlate_ctx *ctx,
     ctx->base_flow.tun_id = 0;
     ctx->base_flow.vlan_tci = initial_tci;
     ctx->packet = packet;
-    ctx->may_learn = packet != NULL;
+    ctx->may_learn_macs = packet != NULL;
+    ctx->may_flow_mod = packet != NULL;
     ctx->resubmit_hook = NULL;
 }
 
@@ -5315,7 +5338,7 @@ xlate_normal(struct action_xlate_ctx *ctx)
     }
 
     /* Learn source MAC. */
-    if (ctx->may_learn) {
+    if (ctx->may_learn_macs) {
         update_learning_table(ctx->ofproto, &ctx->flow, vlan, in_bundle);
     }
 
@@ -5372,7 +5395,7 @@ xlate_normal(struct action_xlate_ctx *ctx)
 
 /* Calculates the tag to use for 'flow' and wildcards 'wc' when it is inserted
  * into an OpenFlow table with the given 'basis'. */
-static uint32_t
+static tag_type
 rule_calculate_tag(const struct flow *flow, const struct flow_wildcards *wc,
                    uint32_t secret)
 {
@@ -5631,7 +5654,8 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn,
         struct ofbundle *bundle = e->port.p;
         ds_put_format(&ds, "%5d  %4d  "ETH_ADDR_FMT"  %3d\n",
                       ofbundle_get_a_port(bundle)->odp_port,
-                      e->vlan, ETH_ADDR_ARGS(e->mac), mac_entry_age(e));
+                      e->vlan, ETH_ADDR_ARGS(e->mac),
+                      mac_entry_age(ofproto->ml, e));
     }
     unixctl_command_reply(conn, 200, ds_cstr(&ds));
     ds_destroy(&ds);
@@ -6079,5 +6103,6 @@ const struct ofproto_class ofproto_dpif_class = {
     set_flood_vlans,
     is_mirror_output_bundle,
     forward_bpdu_changed,
+    set_mac_idle_time,
     set_realdev,
 };
