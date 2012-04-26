@@ -1,3 +1,13 @@
+openvswitch (1.4.0+git20120426-1) unstable; urgency=low
+
+  * New upstream release fixing the following bugs:
+    o Broken log rotation.
+    o Use-after-free error when ports disappear.
+    o Minor memory leaks.
+    o Testsuite failures on big-endian architectures.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Thu, 26 Apr 2012 13:46:55 -0700
+
 openvswitch (1.4.0+git20120321-1) unstable; urgency=low
 
   * New upstream version including:
