@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -447,7 +447,7 @@ parse_odp_action(const char *s, const struct shash *port_names,
             for (;;) {
                 int retval;
 
-                s += strspn(s, delimiters);
+                n += strspn(s + n, delimiters);
                 if (s[n] == ')') {
                     break;
                 }
@@ -457,7 +457,6 @@ parse_odp_action(const char *s, const struct shash *port_names,
                     return retval;
                 }
                 n += retval;
-
             }
             nl_msg_end_nested(actions, actions_ofs);
             nl_msg_end_nested(actions, sample_ofs);
@@ -1156,7 +1155,10 @@ ovs_to_odp_frag(uint8_t ovs_frag)
             : OVS_FRAG_TYPE_NONE);
 }
 
-/* Appends a representation of 'flow' as OVS_KEY_ATTR_* attributes to 'buf'. */
+/* Appends a representation of 'flow' as OVS_KEY_ATTR_* attributes to 'buf'.
+ *
+ * 'buf' must have at least ODPUTIL_FLOW_KEY_BYTES bytes of space, or be
+ * capable of being expanded to allow for that much space. */
 void
 odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
 {
@@ -1171,7 +1173,7 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
         nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tun_id);
     }
 
-    if (flow->in_port != OFPP_NONE) {
+    if (flow->in_port != OFPP_NONE && flow->in_port != OFPP_CONTROLLER) {
         nl_msg_put_u32(buf, OVS_KEY_ATTR_IN_PORT,
                        ofp_port_to_odp_port(flow->in_port));
     }

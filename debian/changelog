@@ -1,3 +1,22 @@
+openvswitch (1.4.2+git20120612-1) unstable; urgency=low
+
+  * New upstream version fixing the following bugs:
+    o Crash fixes:
+      - ofproto: Fix use after free in ofoperation_complete().
+      - odp-util: Update ODPUTIL_FLOW_KEY_BYTES for current kernel flow format.
+      - datapath: Check correct return value from skb_gso_segment().
+    o Possible serious malfunctions:
+      - dpif-netdev: allow for proper destruction of netdev datapaths.
+      - datapath: Validation of IPv6 set port action uses IPv4 header.
+    o Rare annoying corner case:
+      - odp-util: Fix parsing of actions encapsulated within "sample" actions.
+    o Bugs with unknown impact:
+      - Correctly set destination MAC in mf_set_flow_value().
+    o OpenFlow controller compatibility:
+      - Allow OFPP_CONTROLLER as the in_port for packet-out messages.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Tue, 12 Jun 2012 10:25:08 -0700
+
 openvswitch (1.4.0+git20120426-1) unstable; urgency=low
 
   * New upstream release fixing the following bugs:
@@ -15,7 +34,7 @@ openvswitch (1.4.0+git20120321-1) unstable; urgency=low
       - ovs-vsctl: Allow "fake bridges" to be created for VLAN 0.
       - vswitchd: Make the MAC entry aging time configurable.
       - mac-learning: Increase MAC learning timeout to 300 seconds.
-    o Bug fixes:  
+    o Bug fixes:
       - netdev-linux: Fix use-after-free when netdev_dump_queues() deletes
         queues.
       - netlink-socket: Increase Netlink socket receive buffer size.
@@ -237,7 +256,7 @@ openvswitch (1.1.1-1) unstable; urgency=low
     - For local non-debian/ patches (above)
 
  -- Simon Horman <horms@debian.org>  Wed, 15 Jun 2011 10:46:15 +0900
-    
+
 openvswitch (1.1.0-1) unstable; urgency=low
 
   [ Open vSwitch team ]
@@ -282,7 +301,7 @@ openvswitch (1.1.0-1) unstable; urgency=low
       bugs.  New ovs-vlan-bug-workaround command for enabling and
       disabling a workaround for these driver bugs.
     - OpenFlow support:
-      - "Resubmit" actions now update flow statistics. 
+      - "Resubmit" actions now update flow statistics.
       - New "register" extension for use in matching and actions, via NXM.
       - New "multipath" experimental action extension.
       - New support for matching multicast Ethernet frames, via NXM.
