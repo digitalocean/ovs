@@ -1,3 +1,11 @@
+openvswitch (1.4.2+git20120612-2) unstable; urgency=low
+
+  * Apply upstream commit that enables DKMS to automatically build for the
+    running kernel, which seems to be common practice in DMS packaging
+    (launchpad bug #962189)
+
+ -- Ben Pfaff <pfaffben@debian.org>  Tue, 19 Jun 2012 09:40:53 -0700
+
 openvswitch (1.4.2+git20120612-1) unstable; urgency=low
 
   * New upstream version fixing the following bugs:
