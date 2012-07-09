@@ -1,3 +1,11 @@
+openvswitch (1.4.2+git20120612-3) unstable; urgency=low
+
+  * debian/control: Add "netbase" dependency to ensure that /etc/protocols
+    is available.  Closes: #680537.  Thanks to Bastian Blank <waldi@debian.org>
+    for reporting this bug.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 09 Jul 2012 09:50:03 -0700
+
 openvswitch (1.4.2+git20120612-2) unstable; urgency=low
 
   * Apply upstream commit that enables DKMS to automatically build for the
