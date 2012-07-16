@@ -1,3 +1,11 @@
+openvswitch (1.4.2+git20120612-4) unstable; urgency=low
+
+  * debian/openvswitch-switch.init: Do not modify iptables rules.  Closes:
+    #680537.  Thanks to Bastian Blank <waldi@debian.org> for reporting
+    this bug.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 16 Jul 2012 12:56:37 -0700
+
 openvswitch (1.4.2+git20120612-3) unstable; urgency=low
 
   * debian/control: Add "netbase" dependency to ensure that /etc/protocols
