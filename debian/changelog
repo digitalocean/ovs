@@ -1,3 +1,11 @@
+openvswitch (1.4.2+git20120612-5) unstable; urgency=low
+
+  * debian/openvswitch-controller.postrm: Remove configuration files in
+    /etc/openvswitch-controller on purge.  Closes: #682187.  Thanks to
+    Andreas Beckmann <debian@abeckmann.de> for reporting this bug.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Fri, 20 Jul 2012 22:33:19 -0700
+
 openvswitch (1.4.2+git20120612-4) unstable; urgency=low
 
   * debian/openvswitch-switch.init: Do not modify iptables rules.  Closes:
