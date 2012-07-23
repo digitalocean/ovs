@@ -1,3 +1,12 @@
+openvswitch (1.4.2+git20120612-6) unstable; urgency=low
+
+  * utilities/automake.mk: Fix duplicate mention of ovs-vsctl in
+    bin_PROGRAMS and bin_SCRIPTS; it should only have been in the former.
+    Closes: #682384.  Thanks to Bastian Blank <waldi@debian.org> for
+    reporting this bug.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 23 Jul 2012 09:46:41 -0700
+
 openvswitch (1.4.2+git20120612-5) unstable; urgency=low
 
   * debian/openvswitch-controller.postrm: Remove configuration files in
