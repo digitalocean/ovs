@@ -1,0 +1,45 @@
+From 11d1cec1eeece689122022758b67396f875f901b Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Thu, 26 Jul 2012 14:42:58 -0700
+Subject: [PATCH 2/3] ovsdb: Make "ovsdb-tool create" work through a dangling symlink.
+
+open() with O_CREAT|O_EXCL yields EEXIST if the name passed in is a
+symlink, but we would like "ovsdb-tool create /etc/openvswitch/conf.db" to
+work if /etc/openvswitch/conf.db is a symlink to elsewhere in the file
+system.  This commit fixes the problem.  It introduces a theoretical race,
+but no one should be doing "ovsdb-tool create" in parallel anyhow; O_EXCL
+is just an idiot check here, not required to be fail-safe.
+
+Debian bug #681880.
+CC: 681880@bugs.debian.org
+Reported-by: Bastian Blank <waldi@debian.org>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ ovsdb/log.c |   13 +++++++++++--
+ 1 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/ovsdb/log.c b/ovsdb/log.c
+index ab4a150..9b882dc 100644
+--- a/ovsdb/log.c
++++ b/ovsdb/log.c
+@@ -95,7 +95,16 @@ ovsdb_log_open(const char *name, enum ovsdb_log_open_mode open_mode,
+     } else if (open_mode == OVSDB_LOG_READ_WRITE) {
+         flags = O_RDWR;
+     } else if (open_mode == OVSDB_LOG_CREATE) {
+-        flags = O_RDWR | O_CREAT | O_EXCL;
++        if (stat(name, &s) == -1 && errno == ENOENT
++            && lstat(name, &s) == 0 && S_ISLNK(s.st_mode)) {
++            /* 'name' is a dangling symlink.  We want to create the file that
++             * the symlink points to, but POSIX says that open() with O_EXCL
++             * must fail with EEXIST if the named file is a symlink.  So, we
++             * have to leave off O_EXCL and accept the race. */
++            flags = O_RDWR | O_CREAT;
++        } else {
++            flags = O_RDWR | O_CREAT | O_EXCL;
++        }
+     } else {
+         NOT_REACHED();
+     }
+-- 
+1.7.2.5
+

@@ -1,3 +1,24 @@
+openvswitch (1.4.2+git20120612-7) unstable; urgency=low
+
+  * Move /etc/openvswitch/conf.db to /var/lib/openvswitch, using symlinks.
+    Closes: #681880.  Thanks to Bastian Blank <waldi@debian.org> for
+    reporting this bug.
+    
+    This required applying the following bug fix patches:
+
+    bug-681880-1-lockfile-Fix-hang-locking-through-a-dangling-symlink.patch
+    bug-681880-2-ovsdb-Make-ovsdb-tool-create-work-through-a-dangling.patch
+
+  * Start the rest of OVS if bridge compatibility is enabled but the
+    kernel bridge module cannot be loaded.  Closes: #681955.  Thanks to
+    Bastian Blank <waldi@debian.org> for reporting this bug.
+    
+    This was fixed by applying the following bug fix patch:
+
+    bug-681955-ovs-ctl-Start-the-rest-of-Open-vSwitch.patch    
+
+ -- Ben Pfaff <pfaffben@debian.org>  Fri, 27 Jul 2012 12:36:03 -0700
+
 openvswitch (1.4.2+git20120612-6) unstable; urgency=low
 
   * utilities/automake.mk: Fix duplicate mention of ovs-vsctl in

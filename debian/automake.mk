@@ -43,6 +43,7 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
+	debian/openvswitch-switch.prerm \
 	debian/openvswitch-switch.template \
 	debian/openvswitch-test.dirs \
 	debian/openvswitch-test.install \

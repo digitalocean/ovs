@@ -1,0 +1,37 @@
+From 1d960e27d88625baae03a4bd3b60c7647f6aea6a Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Thu, 26 Jul 2012 15:41:34 -0700
+Subject: [PATCH] ovs-ctl: Start the rest of Open vSwitch if loading brcompat module fails.
+
+This may be more useful in practice than failing the entire OVS startup
+sequence.
+
+Debian bug #681955.
+CC: 681955@bugs.debian.org
+Reported-by: Bastian Blank <waldi@debian.org>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ utilities/ovs-ctl.in |    7 ++++++-
+ 1 files changed, 6 insertions(+), 1 deletions(-)
+
+diff --git a/utilities/ovs-ctl.in b/utilities/ovs-ctl.in
+index 552cef3..59c2a31 100755
+--- a/utilities/ovs-ctl.in
++++ b/utilities/ovs-ctl.in
+@@ -64,7 +64,12 @@ insert_brcompat_mod_if_required () {
+ insert_mod_if_required () {
+     insert_openvswitch_mod_if_required || return 1
+     if test X"$BRCOMPAT" = Xyes; then
+-        insert_brcompat_mod_if_required || return 1
++        if insert_brcompat_mod_if_required; then
++            :
++        else
++            log_warning_msg "could not load brcompat module, disabling bridge compatibility"
++            BRCOMPAT=no
++        fi
+     fi
+ }
+ 
+-- 
+1.7.2.5
+

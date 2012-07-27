@@ -1,3 +1,4 @@
 /etc/openvswitch
 /etc/openvswitch-switch
 /usr/share/openvswitch/switch
+/var/lib/openvswitch

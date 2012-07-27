@@ -33,6 +33,21 @@ case "$1" in
                 fi
             done
 	fi
+
+	# Ensure that /etc/openvswitch/conf.db links to /var/lib/openvswitch,
+	# moving an existing file if there is one.
+	#
+	# Ditto for .conf.db.~lock~.
+	for base in conf.db .conf.db.~lock~; do
+	    new=/var/lib/openvswitch/$base
+	    old=/etc/openvswitch/$base
+	    if test -f $old && test ! -e $new; then
+		mv $old $new
+	    fi
+	    if test ! -e $old && test ! -h $old; then
+		ln -s $new $old
+	    fi
+	done
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
