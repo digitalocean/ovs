@@ -1,0 +1,123 @@
+From 8c2296a6d97ffc29c0b253eab084e92a82c198b4 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Mon, 30 Jul 2012 09:35:32 -0700
+Subject: [PATCH 2/7] tests: Slightly generalize utility function tests.
+
+This will allow passing arguments in for an upcoming test.
+
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ tests/library.at  |   10 +++++++---
+ tests/test-util.c |   44 ++++++++++++++++++++++++++++++++++++--------
+ 2 files changed, 43 insertions(+), 11 deletions(-)
+
+Index: b/tests/library.at
+===================================================================
+--- a/tests/library.at
++++ b/tests/library.at
+@@ -100,9 +100,13 @@ nibble   0   1   2   3   4   5   6   7
+ ])
+ AT_CLEANUP
+ 
+-AT_SETUP([test log_2_floor])
+-AT_CHECK([test-util])
+-AT_CLEANUP
++m4_foreach(
++  [testname],
++  [[ctz],
++   [log_2_floor]],
++  [AT_SETUP([testname[()] function])
++   AT_CHECK([test-util testname], [0], [], [])
++   AT_CLEANUP])
+ 
+ AT_SETUP([test unix socket -- short pathname])
+ AT_CHECK([test-unix-socket x])
+Index: b/tests/test-util.c
+===================================================================
+--- a/tests/test-util.c
++++ b/tests/test-util.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2011 Nicira Networks.
++ * Copyright (c) 2011, 2012 Nicira Networks.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++#include "command-line.h"
+ #include "random.h"
+ #include "util.h"
+ 
+@@ -35,6 +36,25 @@ check_log_2_floor(uint32_t x, int n)
+ }
+ 
+ static void
++test_log_2_floor(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
++{
++    int n;
++
++    for (n = 0; n < 32; n++) {
++        /* Check minimum x such that f(x) == n. */
++        check_log_2_floor(1 << n, n);
++
++        /* Check maximum x such that f(x) == n. */
++        check_log_2_floor((1 << n) | ((1 << n) - 1), n);
++
++        /* Check a random value in the middle. */
++        check_log_2_floor((random_uint32() & ((1 << n) - 1)) | (1 << n), n);
++    }
++
++    /* log_2_floor(0) is undefined, so don't check it. */
++}
++
++static void
+ check_ctz(uint32_t x, int n)
+ {
+     if (ctz(x) != n) {
+@@ -44,28 +64,36 @@ check_ctz(uint32_t x, int n)
+     }
+ }
+ 
+-int
+-main(void)
++static void
++test_ctz(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+ {
+     int n;
+ 
+     for (n = 0; n < 32; n++) {
+         /* Check minimum x such that f(x) == n. */
+-        check_log_2_floor(1 << n, n);
+         check_ctz(1 << n, n);
+ 
+         /* Check maximum x such that f(x) == n. */
+-        check_log_2_floor((1 << n) | ((1 << n) - 1), n);
+         check_ctz(UINT32_MAX << n, n);
+ 
+         /* Check a random value in the middle. */
+-        check_log_2_floor((random_uint32() & ((1 << n) - 1)) | (1 << n), n);
+         check_ctz((random_uint32() | 1) << n, n);
+     }
+ 
+-    /* Check ctz(0).
+-     * (log_2_floor(0) is undefined.) */
++    /* Check ctz(0). */
+     check_ctz(0, 32);
++}
++
++static const struct command commands[] = {
++    {"ctz", 0, 0, test_ctz},
++    {"log_2_floor", 0, 0, test_log_2_floor},
++    {NULL, 0, 0, NULL},
++};
+ 
++int
++main(int argc, char *argv[])
++{
++    set_program_name(argv[0]);
++    run_command(argc - 1, argv + 1, commands);
+     return 0;
+ }

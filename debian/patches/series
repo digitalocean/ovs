@@ -1,4 +1,16 @@
 debian-changes-1.4.2+git20120612-6
+
 bug-681955-ovs-ctl-Start-the-rest-of-Open-vSwitch.patch
+
 bug-681880-1-lockfile-Fix-hang-locking-through-a-dangling-symlink.patch
 bug-681880-2-ovsdb-Make-ovsdb-tool-create-work-through-a-dangling.patch
+bug-681880-3-Make-the-location-of-the-database-separately-configu.patch
+bug-681880-4-tests-Slightly-generalize-utility-function-tests.patch
+bug-681880-5-util-New-function-follow_symlinks.patch
+bug-681880-6-lockfile-Be-more-forgiving-about-lockfiles-for-symli.patch
+bug-681880-7-ovsdb-Do-not-replace-symlinks-by-regular-files-durin.patch
+bug-681880-8-Fix-a-typo-in-commit-f973f2af2.patch
+bug-681880-9-dirs-dbdir-default-must-be-based-on-sysconfdir.patch
+
+bug-683665-use-mode-700-for-pki-incoming-dir.patch
+debian-changes-1.4.2+git20120612-8

@@ -1,0 +1,38 @@
+Subject: Use mode 0700 for ovs-pki incoming directory, instead of 0733.
+
+Andreas Beckmann <debian@abeckmann.de> reported in bug #683665 that
+the openvswitch-pki package creates a world-writable directory during
+installation.  I believe that the intended use of this directory is
+safe, because the file names are supposed to be the SHA-1 hash of a
+freshly generated SSL client certificate, but the feature in question
+is one that has not been widely used in Open vSwitch.  I'm not aware of
+even a single user, the intended client software is not packaged
+for Debian, and I intend to remove the feature from a later version
+of Open vSwitch entirely.  Therefore, this patch simply changes the
+directory's permissions to be only writable by root.
+
+---
+ utilities/ovs-pki.in |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+Index: b/utilities/ovs-pki.in
+===================================================================
+--- a/utilities/ovs-pki.in
++++ b/utilities/ovs-pki.in
+@@ -1,6 +1,6 @@
+ #! /bin/sh
+ 
+-# Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks, Inc.
++# Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks, Inc.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -214,7 +214,7 @@ if test "$command" = "init"; then
+ 
+         mkdir -p certs crl newcerts
+         mkdir -p -m 0700 private
+-        mkdir -p -m 0733 incoming
++        mkdir -p -m 0700 incoming
+         touch index.txt
+         test -e crlnumber || echo 01 > crlnumber
+         test -e serial || echo 01 > serial

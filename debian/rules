@@ -48,6 +48,7 @@ configure-stamp:
 		test -e Makefile || \
 		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
 			--sysconfdir=/etc $(BUILD_NUMBER_OPTION) \
+			--with-dbdir=/var/lib/openvswitch \
 			CFLAGS="$(CFLAGS)" $(DATAPATH_CONFIGURE_OPTS))
 	touch configure-stamp
 

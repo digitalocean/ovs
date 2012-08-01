@@ -21,8 +21,10 @@ set -e
 
 case "$1" in
     purge)
-        rm -f /etc/openvswitch/conf.db /etc/openvswitch/.conf.db.~lock~
-        rm -f /var/lib/openvswitch/conf.db /var/lib/openvswitch/.conf.db.~lock~
+	for dir in /etc/openvswitch /var/lib/openvswitch; do
+	    rm -f $dir/conf.db $dir/conf.db.backup* $dir/.conf.db.~lock~
+	done
+	rm -f /etc/openvswitch/system-id.conf
         rm -f /etc/default/openvswitch-switch
         rm -f /var/log/openvswitch/ovs-vswitchd.log* || true
         rm -f /var/log/openvswitch/ovsdb-server.log* || true

@@ -1,0 +1,24 @@
+From be867c2fedbdd8ff9bd8f4129e3c6e64a7eb3e3d Mon Sep 17 00:00:00 2001
+From: Mehak Mahajan <mmahajan@nicira.com>
+Date: Wed, 1 Aug 2012 19:57:03 -0700
+Subject: [PATCH] Fix a typo in commit f973f2af2.
+
+Signed-off-by: Mehak Mahajan <mmahajan@nicira.com>
+---
+ python/ovs/dirs.py |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/python/ovs/dirs.py b/python/ovs/dirs.py
+index a5717fc..e4b37f9 100644
+--- a/python/ovs/dirs.py
++++ b/python/ovs/dirs.py
+@@ -5,5 +5,5 @@ import os
+ PKGDATADIR = os.environ.get("OVS_PKGDATADIR", "/usr/local/share/openvswitch")
+ RUNDIR = os.environ.get("OVS_RUNDIR", "/var/run")
+ LOGDIR = os.environ.get("OVS_LOGDIR", "/usr/local/var/log")
+-LOGDIR = os.environ.get("OVS_DBDIR", "/usr/local/etc/openvswitch")
++DBDIR = os.environ.get("OVS_DBDIR", "/usr/local/etc/openvswitch")
+ BINDIR = os.environ.get("OVS_BINDIR", "/usr/local/bin")
+-- 
+1.7.2.5
+

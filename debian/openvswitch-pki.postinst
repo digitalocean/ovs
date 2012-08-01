@@ -30,6 +30,13 @@ case "$1" in
         # Create certificate authorities.
         if test ! -e /var/lib/openvswitch/pki; then
             ovs-pki init
+        else
+	    for ca in switchca controllerca; do
+		dir=/var/lib/openvswitch/pki/$ca/incoming
+		if test -d $dir; then
+		    chmod 0700 $dir
+		fi
+	    done
         fi
         ;;
 
