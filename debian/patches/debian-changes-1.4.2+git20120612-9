@@ -1,44 +1,17 @@
-Description: Upstream changes introduced in version 1.4.2+git20120612-8
+Description: Upstream changes introduced in version 1.4.2+git20120612-9
  This patch has been created by dpkg-source during the package build.
  Here's the last changelog entry, hopefully it gives details on why
  those changes were made:
  .
- openvswitch (1.4.2+git20120612-8) unstable; urgency=low
+ openvswitch (1.4.2+git20120612-9) unstable; urgency=low
  .
-   * Apply further patches to fix bugs resulting from moving
-     /etc/openvswitch/conf.db to /var/lib/openvswitch in -7.
- .
-     This required applying the following bug fix patches:
- .
-     bug-681880-3-Make-the-location-of-the-database-separately-configu.patch
-     bug-681880-4-tests-Slightly-generalize-utility-function-tests.patch
-     bug-681880-5-util-New-function-follow_symlinks.patch
-     bug-681880-6-lockfile-Be-more-forgiving-about-lockfiles-for-symli.patch
-     bug-681880-7-ovsdb-Do-not-replace-symlinks-by-regular-files-durin.patch
-     bug-681880-8-Fix-a-typo-in-commit-f973f2af2.patch
-     bug-681880-9-dirs-dbdir-default-must-be-based-on-sysconfdir.patch
- .
-   * debian/rules: Configure /var/lib/openvswitch as the database directory
-     instead of working through symlinks.  (The symlinks are still created
-     for compatibility with people and existing software that are
-     accustomed to seeing the database in its original location, but the
-     Debian packages themselves never use the symlinks.)
- .
-   * debian/openvswitch-switch.postrm: Also remove
-     /ec/openvswitch/system-id.conf and conf.db backups on purge.
- .
-   * utilities/ovs-pki.in: Use mode 0700 instead of 0733 for
-     openvswitch-pki "incoming" directory, by applying
-     bug-683665-use-mode-700-for-pki-incoming-dir.patch.  See the patch for
-     complete rationale.  Closes: #683665.  Thanks to Andreas Beckmann
-     <debian@abeckmann.de> for reporting this bug.
- .
-   * debian/openvswitch-pki.postinst: Change mode of existing "incoming"
-     directories to 0700 at configure time (see above).
+   * Apply bug-684057-ovs-ctl-Add-support-for-newer-module-name.patch to
+     allow use of the openvswitch kernel module integrated into 3.3 and
+     later.  Closes: #684057.
  .
  The person named in the Author field signed this changelog entry.
 Author: Ben Pfaff <pfaffben@debian.org>
-Bug-Debian: http://bugs.debian.org/683665
+Bug-Debian: http://bugs.debian.org/684057
 
 ---
 The information above should follow the Patch Tagging Guidelines, please

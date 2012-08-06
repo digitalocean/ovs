@@ -1,3 +1,11 @@
+openvswitch (1.4.2+git20120612-9) unstable; urgency=low
+
+  * Apply bug-684057-ovs-ctl-Add-support-for-newer-module-name.patch to
+    allow use of the openvswitch kernel module integrated into 3.3 and
+    later.  Closes: #684057.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 06 Aug 2012 16:59:01 -0700
+
 openvswitch (1.4.2+git20120612-8) unstable; urgency=low
 
   * Apply further patches to fix bugs resulting from moving

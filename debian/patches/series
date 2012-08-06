@@ -13,4 +13,6 @@ bug-681880-8-Fix-a-typo-in-commit-f973f2af2.patch
 bug-681880-9-dirs-dbdir-default-must-be-based-on-sysconfdir.patch
 
 bug-683665-use-mode-700-for-pki-incoming-dir.patch
-debian-changes-1.4.2+git20120612-8
+
+bug-684057-ovs-ctl-Add-support-for-newer-module-name.patch
+debian-changes-1.4.2+git20120612-9
