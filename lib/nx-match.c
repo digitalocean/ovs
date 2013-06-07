@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
+ * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,11 +23,14 @@
 #include "classifier.h"
 #include "dynamic-string.h"
 #include "meta-flow.h"
+#include "ofp-actions.h"
+#include "ofp-errors.h"
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "openflow/nicira-ext.h"
 #include "packets.h"
 #include "unaligned.h"
+#include "util.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(nx_match);
@@ -35,16 +38,6 @@ VLOG_DEFINE_THIS_MODULE(nx_match);
 /* Rate limit for nx_match parse errors.  These always indicate a bug in the
  * peer and so there's not much point in showing a lot of them. */
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-
-enum {
-    NXM_INVALID = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_INVALID),
-    NXM_BAD_TYPE = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_BAD_TYPE),
-    NXM_BAD_VALUE = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_BAD_VALUE),
-    NXM_BAD_MASK = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_BAD_MASK),
-    NXM_BAD_PREREQ = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_BAD_PREREQ),
-    NXM_DUP_TYPE = OFP_MKERR_NICIRA(OFPET_BAD_REQUEST, NXBRC_NXM_DUP_TYPE),
-    BAD_ARGUMENT = OFP_MKERR(OFPET_BAD_ACTION, OFPBAC_BAD_ARGUMENT)
-};
 
 /* Returns the width of the data for a field with the given 'header', in
  * bytes. */
@@ -74,7 +67,8 @@ nx_entry_ok(const void *p, unsigned int match_len)
 
     if (match_len < 4) {
         if (match_len) {
-            VLOG_DBG_RL(&rl, "nx_match ends with partial nxm_header");
+            VLOG_DBG_RL(&rl, "nx_match ends with partial (%u-byte) nxm_header",
+                        match_len);
         }
         return 0;
     }
@@ -96,75 +90,199 @@ nx_entry_ok(const void *p, unsigned int match_len)
     return header;
 }
 
-int
-nx_pull_match(struct ofpbuf *b, unsigned int match_len, uint16_t priority,
-              struct cls_rule *rule)
+static enum ofperr
+nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
+            struct match *match, ovs_be64 *cookie, ovs_be64 *cookie_mask)
 {
     uint32_t header;
-    uint8_t *p;
 
-    p = ofpbuf_try_pull(b, ROUND_UP(match_len, 8));
-    if (!p) {
-        VLOG_DBG_RL(&rl, "nx_match length %u, rounded up to a "
-                    "multiple of 8, is longer than space in message (max "
-                    "length %zu)", match_len, b->size);
-        return ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_BAD_LEN);
+    assert((cookie != NULL) == (cookie_mask != NULL));
+
+    match_init_catchall(match);
+    if (cookie) {
+        *cookie = *cookie_mask = htonll(0);
+    }
+    if (!match_len) {
+        return 0;
     }
 
-    cls_rule_init_catchall(rule, priority);
-    while ((header = nx_entry_ok(p, match_len)) != 0) {
-        unsigned length = NXM_LENGTH(header);
+    for (;
+         (header = nx_entry_ok(p, match_len)) != 0;
+         p += 4 + NXM_LENGTH(header), match_len -= 4 + NXM_LENGTH(header)) {
         const struct mf_field *mf;
-        int error;
+        enum ofperr error;
 
         mf = mf_from_nxm_header(header);
         if (!mf) {
-            error = NXM_BAD_TYPE;
-        } else if (!mf_are_prereqs_ok(mf, &rule->flow)) {
-            error = NXM_BAD_PREREQ;
-        } else if (!mf_is_all_wild(mf, &rule->wc)) {
-            error = NXM_DUP_TYPE;
-        } else {
+            if (strict) {
+                error = OFPERR_OFPBMC_BAD_FIELD;
+            } else {
+                continue;
+            }
+        } else if (!mf_are_prereqs_ok(mf, &match->flow)) {
+            error = OFPERR_OFPBMC_BAD_PREREQ;
+        } else if (!mf_is_all_wild(mf, &match->wc)) {
+            error = OFPERR_OFPBMC_DUP_FIELD;
+        } else if (header != OXM_OF_IN_PORT) {
             unsigned int width = mf->n_bytes;
             union mf_value value;
 
             memcpy(&value, p + 4, width);
             if (!mf_is_value_valid(mf, &value)) {
-                error = NXM_BAD_VALUE;
+                error = OFPERR_OFPBMC_BAD_VALUE;
             } else if (!NXM_HASMASK(header)) {
                 error = 0;
-                mf_set_value(mf, &value, rule);
+                mf_set_value(mf, &value, match);
             } else {
                 union mf_value mask;
 
                 memcpy(&mask, p + 4 + width, width);
                 if (!mf_is_mask_valid(mf, &mask)) {
-                    error = NXM_BAD_MASK;
+                    error = OFPERR_OFPBMC_BAD_MASK;
                 } else {
                     error = 0;
-                    mf_set(mf, &value, &mask, rule);
+                    mf_set(mf, &value, &mask, match);
                 }
+            }
+        } else {
+            /* Special case for 32bit ports when using OXM,
+             * ports are 16 bits wide otherwise. */
+            ovs_be32 port_of11;
+            uint16_t port;
+
+            memcpy(&port_of11, p + 4, sizeof port_of11);
+            error = ofputil_port_from_ofp11(port_of11, &port);
+            if (!error) {
+                match_set_in_port(match, port);
+            }
+        }
+
+        /* Check if the match is for a cookie rather than a classifier rule. */
+        if ((header == NXM_NX_COOKIE || header == NXM_NX_COOKIE_W) && cookie) {
+            if (*cookie_mask) {
+                error = OFPERR_OFPBMC_DUP_FIELD;
+            } else {
+                unsigned int width = sizeof *cookie;
+
+                memcpy(cookie, p + 4, width);
+                if (NXM_HASMASK(header)) {
+                    memcpy(cookie_mask, p + 4 + width, width);
+                } else {
+                    *cookie_mask = htonll(UINT64_MAX);
+                }
+                error = 0;
             }
         }
 
         if (error) {
-            char *msg = ofputil_error_to_string(error);
             VLOG_DBG_RL(&rl, "bad nxm_entry %#08"PRIx32" (vendor=%"PRIu32", "
                         "field=%"PRIu32", hasmask=%"PRIu32", len=%"PRIu32"), "
                         "(%s)", header,
                         NXM_VENDOR(header), NXM_FIELD(header),
                         NXM_HASMASK(header), NXM_LENGTH(header),
-                        msg);
-            free(msg);
-
+                        ofperr_to_string(error));
             return error;
         }
-
-        p += 4 + length;
-        match_len -= 4 + length;
     }
 
-    return match_len ? NXM_INVALID : 0;
+    return match_len ? OFPERR_OFPBMC_BAD_LEN : 0;
+}
+
+static enum ofperr
+nx_pull_match__(struct ofpbuf *b, unsigned int match_len, bool strict,
+                struct match *match,
+                ovs_be64 *cookie, ovs_be64 *cookie_mask)
+{
+    uint8_t *p = NULL;
+
+    if (match_len) {
+        p = ofpbuf_try_pull(b, ROUND_UP(match_len, 8));
+        if (!p) {
+            VLOG_DBG_RL(&rl, "nx_match length %u, rounded up to a "
+                        "multiple of 8, is longer than space in message (max "
+                        "length %zu)", match_len, b->size);
+            return OFPERR_OFPBMC_BAD_LEN;
+        }
+    }
+
+    return nx_pull_raw(p, match_len, strict, match, cookie, cookie_mask);
+}
+
+/* Parses the nx_match formatted match description in 'b' with length
+ * 'match_len'.  Stores the results in 'match'.  If 'cookie' and 'cookie_mask'
+ * are valid pointers, then stores the cookie and mask in them if 'b' contains
+ * a "NXM_NX_COOKIE*" match.  Otherwise, stores 0 in both.
+ *
+ * Fails with an error upon encountering an unknown NXM header.
+ *
+ * Returns 0 if successful, otherwise an OpenFlow error code. */
+enum ofperr
+nx_pull_match(struct ofpbuf *b, unsigned int match_len, struct match *match,
+              ovs_be64 *cookie, ovs_be64 *cookie_mask)
+{
+    return nx_pull_match__(b, match_len, true, match, cookie, cookie_mask);
+}
+
+/* Behaves the same as nx_pull_match(), but skips over unknown NXM headers,
+ * instead of failing with an error. */
+enum ofperr
+nx_pull_match_loose(struct ofpbuf *b, unsigned int match_len,
+                    struct match *match,
+                    ovs_be64 *cookie, ovs_be64 *cookie_mask)
+{
+    return nx_pull_match__(b, match_len, false, match, cookie, cookie_mask);
+}
+
+static enum ofperr
+oxm_pull_match__(struct ofpbuf *b, bool strict, struct match *match)
+{
+    struct ofp11_match_header *omh = b->data;
+    uint8_t *p;
+    uint16_t match_len;
+
+    if (b->size < sizeof *omh) {
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    match_len = ntohs(omh->length);
+    if (match_len < sizeof *omh) {
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    if (omh->type != htons(OFPMT_OXM)) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    p = ofpbuf_try_pull(b, ROUND_UP(match_len, 8));
+    if (!p) {
+        VLOG_DBG_RL(&rl, "oxm length %u, rounded up to a "
+                    "multiple of 8, is longer than space in message (max "
+                    "length %zu)", match_len, b->size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return nx_pull_raw(p + sizeof *omh, match_len - sizeof *omh,
+                       strict, match, NULL, NULL);
+}
+
+/* Parses the oxm formatted match description preceeded by a struct ofp11_match
+ * in 'b' with length 'match_len'.  Stores the result in 'match'.
+ *
+ * Fails with an error when encountering unknown OXM headers.
+ *
+ * Returns 0 if successful, otherwise an OpenFlow error code. */
+enum ofperr
+oxm_pull_match(struct ofpbuf *b, struct match *match)
+{
+    return oxm_pull_match__(b, true, match);
+}
+
+/* Behaves the same as oxm_pull_match() with one exception.  Skips over unknown
+ * PXM headers instead of failing with an error when they are encountered. */
+enum ofperr
+oxm_pull_match_loose(struct ofpbuf *b, struct match *match)
+{
+    return oxm_pull_match__(b, false, match);
 }
 
 /* nx_put_match() and helpers.
@@ -311,20 +429,18 @@ nxm_put_eth(struct ofpbuf *b, uint32_t header,
 }
 
 static void
-nxm_put_eth_dst(struct ofpbuf *b,
-                flow_wildcards_t wc, const uint8_t value[ETH_ADDR_LEN])
+nxm_put_eth_masked(struct ofpbuf *b, uint32_t header,
+                   const uint8_t value[ETH_ADDR_LEN],
+                   const uint8_t mask[ETH_ADDR_LEN])
 {
-    switch (wc & (FWW_DL_DST | FWW_ETH_MCAST)) {
-    case FWW_DL_DST | FWW_ETH_MCAST:
-        break;
-    default:
-        nxm_put_header(b, NXM_OF_ETH_DST_W);
-        ofpbuf_put(b, value, ETH_ADDR_LEN);
-        ofpbuf_put(b, flow_wildcards_to_dl_dst_mask(wc), ETH_ADDR_LEN);
-        break;
-    case 0:
-        nxm_put_eth(b, NXM_OF_ETH_DST, value);
-        break;
+    if (!eth_addr_is_zero(mask)) {
+        if (eth_mask_is_exact(mask)) {
+            nxm_put_eth(b, header, value);
+        } else {
+            nxm_put_header(b, NXM_MAKE_WILD_HEADER(header));
+            ofpbuf_put(b, value, ETH_ADDR_LEN);
+            ofpbuf_put(b, mask, ETH_ADDR_LEN);
+        }
     }
 }
 
@@ -345,10 +461,10 @@ nxm_put_ipv6(struct ofpbuf *b, uint32_t header,
 }
 
 static void
-nxm_put_frag(struct ofpbuf *b, const struct cls_rule *cr)
+nxm_put_frag(struct ofpbuf *b, const struct match *match)
 {
-    uint8_t nw_frag = cr->flow.nw_frag;
-    uint8_t nw_frag_mask = cr->wc.nw_frag_mask;
+    uint8_t nw_frag = match->flow.nw_frag;
+    uint8_t nw_frag_mask = match->wc.masks.nw_frag;
 
     switch (nw_frag_mask) {
     case 0:
@@ -365,199 +481,233 @@ nxm_put_frag(struct ofpbuf *b, const struct cls_rule *cr)
     }
 }
 
-/* Appends to 'b' the nx_match format that expresses 'cr' (except for
- * 'cr->priority', because priority is not part of nx_match), plus enough
- * zero bytes to pad the nx_match out to a multiple of 8.
+static void
+nxm_put_ip(struct ofpbuf *b, const struct match *match,
+           uint8_t icmp_proto, uint32_t icmp_type, uint32_t icmp_code,
+           bool oxm)
+{
+    const struct flow *flow = &match->flow;
+
+    nxm_put_frag(b, match);
+
+    if (match->wc.masks.nw_tos & IP_DSCP_MASK) {
+        nxm_put_8(b, oxm ? OXM_OF_IP_DSCP : NXM_OF_IP_TOS,
+                  flow->nw_tos & IP_DSCP_MASK);
+    }
+
+    if (match->wc.masks.nw_tos & IP_ECN_MASK) {
+        nxm_put_8(b, oxm ? OXM_OF_IP_ECN : NXM_NX_IP_ECN,
+                  flow->nw_tos & IP_ECN_MASK);
+    }
+
+    if (!oxm && match->wc.masks.nw_ttl) {
+        nxm_put_8(b, NXM_NX_IP_TTL, flow->nw_ttl);
+    }
+
+    if (match->wc.masks.nw_proto) {
+        nxm_put_8(b, oxm ? OXM_OF_IP_PROTO : NXM_OF_IP_PROTO, flow->nw_proto);
+
+        if (flow->nw_proto == IPPROTO_TCP) {
+            nxm_put_16m(b, oxm ? OXM_OF_TCP_SRC : NXM_OF_TCP_SRC,
+                        flow->tp_src, match->wc.masks.tp_src);
+            nxm_put_16m(b, oxm ? OXM_OF_TCP_DST : NXM_OF_TCP_DST,
+                        flow->tp_dst, match->wc.masks.tp_dst);
+        } else if (flow->nw_proto == IPPROTO_UDP) {
+            nxm_put_16m(b, oxm ? OXM_OF_UDP_SRC : NXM_OF_UDP_SRC,
+                        flow->tp_src, match->wc.masks.tp_src);
+            nxm_put_16m(b, oxm ? OXM_OF_UDP_DST : NXM_OF_UDP_DST,
+                        flow->tp_dst, match->wc.masks.tp_dst);
+        } else if (flow->nw_proto == icmp_proto) {
+            if (match->wc.masks.tp_src) {
+                nxm_put_8(b, icmp_type, ntohs(flow->tp_src));
+            }
+            if (match->wc.masks.tp_dst) {
+                nxm_put_8(b, icmp_code, ntohs(flow->tp_dst));
+            }
+        }
+    }
+}
+
+/* Appends to 'b' the nx_match format that expresses 'match'.  For Flow Mod and
+ * Flow Stats Requests messages, a 'cookie' and 'cookie_mask' may be supplied.
+ * Otherwise, 'cookie_mask' should be zero.
  *
  * This function can cause 'b''s data to be reallocated.
  *
  * Returns the number of bytes appended to 'b', excluding padding.
  *
- * If 'cr' is a catch-all rule that matches every packet, then this function
+ * If 'match' is a catch-all rule that matches every packet, then this function
  * appends nothing to 'b' and returns 0. */
-int
-nx_put_match(struct ofpbuf *b, const struct cls_rule *cr)
+static int
+nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
+           ovs_be64 cookie, ovs_be64 cookie_mask)
 {
-    const flow_wildcards_t wc = cr->wc.wildcards;
-    const struct flow *flow = &cr->flow;
+    const struct flow *flow = &match->flow;
     const size_t start_len = b->size;
     int match_len;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 7);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 18);
 
     /* Metadata. */
-    if (!(wc & FWW_IN_PORT)) {
+    if (match->wc.masks.in_port) {
         uint16_t in_port = flow->in_port;
-        nxm_put_16(b, NXM_OF_IN_PORT, htons(in_port));
+        if (oxm) {
+            nxm_put_32(b, OXM_OF_IN_PORT, ofputil_port_to_ofp11(in_port));
+        } else {
+            nxm_put_16(b, NXM_OF_IN_PORT, htons(in_port));
+        }
     }
 
     /* Ethernet. */
-    nxm_put_eth_dst(b, wc, flow->dl_dst);
-    if (!(wc & FWW_DL_SRC)) {
-        nxm_put_eth(b, NXM_OF_ETH_SRC, flow->dl_src);
-    }
-    if (!(wc & FWW_DL_TYPE)) {
-        nxm_put_16(b, NXM_OF_ETH_TYPE,
-                   ofputil_dl_type_to_openflow(flow->dl_type));
-    }
+    nxm_put_eth_masked(b, oxm ? OXM_OF_ETH_SRC : NXM_OF_ETH_SRC,
+                       flow->dl_src, match->wc.masks.dl_src);
+    nxm_put_eth_masked(b, oxm ? OXM_OF_ETH_DST : NXM_OF_ETH_DST,
+                       flow->dl_dst, match->wc.masks.dl_dst);
+    nxm_put_16m(b, oxm ? OXM_OF_ETH_TYPE : NXM_OF_ETH_TYPE,
+                ofputil_dl_type_to_openflow(flow->dl_type),
+                match->wc.masks.dl_type);
 
     /* 802.1Q. */
-    nxm_put_16m(b, NXM_OF_VLAN_TCI, flow->vlan_tci, cr->wc.vlan_tci_mask);
+    if (oxm) {
+        ovs_be16 VID_CFI_MASK = htons(VLAN_VID_MASK | VLAN_CFI);
+        ovs_be16 vid = flow->vlan_tci & VID_CFI_MASK;
+        ovs_be16 mask = match->wc.masks.vlan_tci & VID_CFI_MASK;
+
+        if (mask == htons(VLAN_VID_MASK | VLAN_CFI)) {
+            nxm_put_16(b, OXM_OF_VLAN_VID, vid);
+        } else if (mask) {
+            nxm_put_16m(b, OXM_OF_VLAN_VID, vid, mask);
+        }
+
+        if (vid && vlan_tci_to_pcp(match->wc.masks.vlan_tci)) {
+            nxm_put_8(b, OXM_OF_VLAN_PCP, vlan_tci_to_pcp(flow->vlan_tci));
+        }
+
+    } else {
+        nxm_put_16m(b, NXM_OF_VLAN_TCI, flow->vlan_tci,
+                    match->wc.masks.vlan_tci);
+    }
 
     /* L3. */
-    if (!(wc & FWW_DL_TYPE) && flow->dl_type == htons(ETH_TYPE_IP)) {
+    if (flow->dl_type == htons(ETH_TYPE_IP)) {
         /* IP. */
-        nxm_put_32m(b, NXM_OF_IP_SRC, flow->nw_src, cr->wc.nw_src_mask);
-        nxm_put_32m(b, NXM_OF_IP_DST, flow->nw_dst, cr->wc.nw_dst_mask);
-        nxm_put_frag(b, cr);
-
-        if (!(wc & FWW_NW_DSCP)) {
-            nxm_put_8(b, NXM_OF_IP_TOS, flow->nw_tos & IP_DSCP_MASK);
-        }
-
-        if (!(wc & FWW_NW_ECN)) {
-            nxm_put_8(b, NXM_NX_IP_ECN, flow->nw_tos & IP_ECN_MASK);
-        }
-
-        if (!(wc & FWW_NW_TTL)) {
-            nxm_put_8(b, NXM_NX_IP_TTL, flow->nw_ttl);
-        }
-
-        if (!(wc & FWW_NW_PROTO)) {
-            nxm_put_8(b, NXM_OF_IP_PROTO, flow->nw_proto);
-            switch (flow->nw_proto) {
-                /* TCP. */
-            case IPPROTO_TCP:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_16(b, NXM_OF_TCP_SRC, flow->tp_src);
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_16(b, NXM_OF_TCP_DST, flow->tp_dst);
-                }
-                break;
-
-                /* UDP. */
-            case IPPROTO_UDP:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_16(b, NXM_OF_UDP_SRC, flow->tp_src);
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_16(b, NXM_OF_UDP_DST, flow->tp_dst);
-                }
-                break;
-
-                /* ICMP. */
-            case IPPROTO_ICMP:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_8(b, NXM_OF_ICMP_TYPE, ntohs(flow->tp_src));
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_8(b, NXM_OF_ICMP_CODE, ntohs(flow->tp_dst));
-                }
-                break;
-            }
-        }
-    } else if (!(wc & FWW_DL_TYPE) && flow->dl_type == htons(ETH_TYPE_IPV6)) {
+        nxm_put_32m(b, oxm ? OXM_OF_IPV4_SRC : NXM_OF_IP_SRC,
+                    flow->nw_src, match->wc.masks.nw_src);
+        nxm_put_32m(b, oxm ? OXM_OF_IPV4_DST : NXM_OF_IP_DST,
+                    flow->nw_dst, match->wc.masks.nw_dst);
+        nxm_put_ip(b, match, IPPROTO_ICMP,
+                   oxm ? OXM_OF_ICMPV4_TYPE : NXM_OF_ICMP_TYPE,
+                   oxm ? OXM_OF_ICMPV4_CODE : NXM_OF_ICMP_CODE, oxm);
+    } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
         /* IPv6. */
-        nxm_put_ipv6(b, NXM_NX_IPV6_SRC, &flow->ipv6_src,
-                &cr->wc.ipv6_src_mask);
-        nxm_put_ipv6(b, NXM_NX_IPV6_DST, &flow->ipv6_dst,
-                &cr->wc.ipv6_dst_mask);
-        nxm_put_frag(b, cr);
+        nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_SRC : NXM_NX_IPV6_SRC,
+                     &flow->ipv6_src, &match->wc.masks.ipv6_src);
+        nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_DST : NXM_NX_IPV6_DST,
+                     &flow->ipv6_dst, &match->wc.masks.ipv6_dst);
+        nxm_put_ip(b, match, IPPROTO_ICMPV6,
+                   oxm ? OXM_OF_ICMPV6_TYPE : NXM_NX_ICMPV6_TYPE,
+                   oxm ? OXM_OF_ICMPV6_CODE : NXM_NX_ICMPV6_CODE, oxm);
 
-        if (!(wc & FWW_IPV6_LABEL)) {
-            nxm_put_32(b, NXM_NX_IPV6_LABEL, flow->ipv6_label);
-        }
+        nxm_put_32m(b, oxm ? OXM_OF_IPV6_FLABEL : NXM_NX_IPV6_LABEL,
+                    flow->ipv6_label, match->wc.masks.ipv6_label);
 
-        if (!(wc & FWW_NW_DSCP)) {
-            nxm_put_8(b, NXM_OF_IP_TOS, flow->nw_tos & IP_DSCP_MASK);
-        }
-
-        if (!(wc & FWW_NW_ECN)) {
-            nxm_put_8(b, NXM_NX_IP_ECN, flow->nw_tos & IP_ECN_MASK);
-        }
-
-        if (!(wc & FWW_NW_TTL)) {
-            nxm_put_8(b, NXM_NX_IP_TTL, flow->nw_ttl);
-        }
-
-        if (!(wc & FWW_NW_PROTO)) {
-            nxm_put_8(b, NXM_OF_IP_PROTO, flow->nw_proto);
-            switch (flow->nw_proto) {
-                /* TCP. */
-            case IPPROTO_TCP:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_16(b, NXM_OF_TCP_SRC, flow->tp_src);
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_16(b, NXM_OF_TCP_DST, flow->tp_dst);
-                }
-                break;
-
-                /* UDP. */
-            case IPPROTO_UDP:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_16(b, NXM_OF_UDP_SRC, flow->tp_src);
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_16(b, NXM_OF_UDP_DST, flow->tp_dst);
-                }
-                break;
-
-                /* ICMPv6. */
-            case IPPROTO_ICMPV6:
-                if (!(wc & FWW_TP_SRC)) {
-                    nxm_put_8(b, NXM_NX_ICMPV6_TYPE, ntohs(flow->tp_src));
-
-                    if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
-                        flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
-                        if (!(wc & FWW_ND_TARGET)) {
-                            nxm_put_ipv6(b, NXM_NX_ND_TARGET, &flow->nd_target,
-                                         &in6addr_exact);
-                        }
-                        if (!(wc & FWW_ARP_SHA)
-                            && flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)) {
-                            nxm_put_eth(b, NXM_NX_ND_SLL, flow->arp_sha);
-                        }
-                        if (!(wc & FWW_ARP_THA)
-                            && flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
-                            nxm_put_eth(b, NXM_NX_ND_TLL, flow->arp_tha);
-                        }
-                    }
-                }
-                if (!(wc & FWW_TP_DST)) {
-                    nxm_put_8(b, NXM_NX_ICMPV6_CODE, ntohs(flow->tp_dst));
-                }
-                break;
+        if (flow->nw_proto == IPPROTO_ICMPV6
+            && (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
+                flow->tp_src == htons(ND_NEIGHBOR_ADVERT))) {
+            nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_ND_TARGET : NXM_NX_ND_TARGET,
+                         &flow->nd_target, &match->wc.masks.nd_target);
+            if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)) {
+                nxm_put_eth_masked(b, oxm ? OXM_OF_IPV6_ND_SLL : NXM_NX_ND_SLL,
+                                   flow->arp_sha, match->wc.masks.arp_sha);
+            }
+            if (flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
+                nxm_put_eth_masked(b, oxm ? OXM_OF_IPV6_ND_TLL : NXM_NX_ND_TLL,
+                                   flow->arp_tha, match->wc.masks.arp_tha);
             }
         }
-    } else if (!(wc & FWW_DL_TYPE) && flow->dl_type == htons(ETH_TYPE_ARP)) {
+    } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
+               flow->dl_type == htons(ETH_TYPE_RARP)) {
         /* ARP. */
-        if (!(wc & FWW_NW_PROTO)) {
-            nxm_put_16(b, NXM_OF_ARP_OP, htons(flow->nw_proto));
+        if (match->wc.masks.nw_proto) {
+            nxm_put_16(b, oxm ? OXM_OF_ARP_OP : NXM_OF_ARP_OP,
+                       htons(flow->nw_proto));
         }
-        nxm_put_32m(b, NXM_OF_ARP_SPA, flow->nw_src, cr->wc.nw_src_mask);
-        nxm_put_32m(b, NXM_OF_ARP_TPA, flow->nw_dst, cr->wc.nw_dst_mask);
-        if (!(wc & FWW_ARP_SHA)) {
-            nxm_put_eth(b, NXM_NX_ARP_SHA, flow->arp_sha);
-        }
-        if (!(wc & FWW_ARP_THA)) {
-            nxm_put_eth(b, NXM_NX_ARP_THA, flow->arp_tha);
-        }
+        nxm_put_32m(b, oxm ? OXM_OF_ARP_SPA : NXM_OF_ARP_SPA,
+                    flow->nw_src, match->wc.masks.nw_src);
+        nxm_put_32m(b, oxm ? OXM_OF_ARP_TPA : NXM_OF_ARP_TPA,
+                    flow->nw_dst, match->wc.masks.nw_dst);
+        nxm_put_eth_masked(b, oxm ? OXM_OF_ARP_SHA : NXM_NX_ARP_SHA,
+                           flow->arp_sha, match->wc.masks.arp_sha);
+        nxm_put_eth_masked(b, oxm ? OXM_OF_ARP_THA : NXM_NX_ARP_THA,
+                           flow->arp_tha, match->wc.masks.arp_tha);
     }
 
     /* Tunnel ID. */
-    nxm_put_64m(b, NXM_NX_TUN_ID, flow->tun_id, cr->wc.tun_id_mask);
+    nxm_put_64m(b, NXM_NX_TUN_ID, flow->tunnel.tun_id,
+                match->wc.masks.tunnel.tun_id);
 
     /* Registers. */
     for (i = 0; i < FLOW_N_REGS; i++) {
         nxm_put_32m(b, NXM_NX_REG(i),
-                    htonl(flow->regs[i]), htonl(cr->wc.reg_masks[i]));
+                    htonl(flow->regs[i]), htonl(match->wc.masks.regs[i]));
     }
 
+    /* OpenFlow 1.1+ Metadata. */
+    nxm_put_64m(b, OXM_OF_METADATA, flow->metadata, match->wc.masks.metadata);
+
+    /* Cookie. */
+    nxm_put_64m(b, NXM_NX_COOKIE, cookie, cookie_mask);
+
     match_len = b->size - start_len;
+    return match_len;
+}
+
+/* Appends to 'b' the nx_match format that expresses 'match', plus enough zero
+ * bytes to pad the nx_match out to a multiple of 8.  For Flow Mod and Flow
+ * Stats Requests messages, a 'cookie' and 'cookie_mask' may be supplied.
+ * Otherwise, 'cookie_mask' should be zero.
+ *
+ * This function can cause 'b''s data to be reallocated.
+ *
+ * Returns the number of bytes appended to 'b', excluding padding.  The return
+ * value can be zero if it appended nothing at all to 'b' (which happens if
+ * 'cr' is a catch-all rule that matches every packet). */
+int
+nx_put_match(struct ofpbuf *b, const struct match *match,
+             ovs_be64 cookie, ovs_be64 cookie_mask)
+{
+    int match_len = nx_put_raw(b, false, match, cookie, cookie_mask);
+
     ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+    return match_len;
+}
+
+
+/* Appends to 'b' an struct ofp11_match_header followed by the oxm format that
+ * expresses 'cr', plus enough zero bytes to pad the data appended out to a
+ * multiple of 8.
+ *
+ * This function can cause 'b''s data to be reallocated.
+ *
+ * Returns the number of bytes appended to 'b', excluding the padding.  Never
+ * returns zero. */
+int
+oxm_put_match(struct ofpbuf *b, const struct match *match)
+{
+    int match_len;
+    struct ofp11_match_header *omh;
+    size_t start_len = b->size;
+    ovs_be64 cookie = htonll(0), cookie_mask = htonll(0);
+
+    ofpbuf_put_uninit(b, sizeof *omh);
+    match_len = nx_put_raw(b, true, match, cookie, cookie_mask) + sizeof *omh;
+    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+
+    omh = (struct ofp11_match_header *)((char *)b->data + start_len);
+    omh->type = htons(OFPMT_OXM);
+    omh->length = htons(match_len);
+
     return match_len;
 }
 
@@ -616,15 +766,56 @@ nx_match_to_string(const uint8_t *p, unsigned int match_len)
     return ds_steal_cstr(&s);
 }
 
+char *
+oxm_match_to_string(const uint8_t *p, unsigned int match_len)
+{
+    const struct ofp11_match_header *omh = (struct ofp11_match_header *)p;
+    uint16_t match_len_;
+    struct ds s;
+
+    ds_init(&s);
+
+    if (match_len < sizeof *omh) {
+        ds_put_format(&s, "<match too short: %u>", match_len);
+        goto err;
+    }
+
+    if (omh->type != htons(OFPMT_OXM)) {
+        ds_put_format(&s, "<bad match type field: %u>", ntohs(omh->type));
+        goto err;
+    }
+
+    match_len_ = ntohs(omh->length);
+    if (match_len_ < sizeof *omh) {
+        ds_put_format(&s, "<match length field too short: %u>", match_len_);
+        goto err;
+    }
+
+    if (match_len_ != match_len) {
+        ds_put_format(&s, "<match length field incorrect: %u != %u>",
+                      match_len_, match_len);
+        goto err;
+    }
+
+    return nx_match_to_string(p + sizeof *omh, match_len - sizeof *omh);
+
+err:
+    return ds_steal_cstr(&s);
+}
+
 static void
 format_nxm_field_name(struct ds *s, uint32_t header)
 {
     const struct mf_field *mf = mf_from_nxm_header(header);
     if (mf) {
-        ds_put_cstr(s, mf->nxm_name);
+        ds_put_cstr(s, IS_OXM_HEADER(header) ? mf->oxm_name : mf->nxm_name);
         if (NXM_HASMASK(header)) {
             ds_put_cstr(s, "_W");
         }
+    } else if (header == NXM_NX_COOKIE) {
+        ds_put_cstr(s, "NXM_NX_COOKIE");
+    } else if (header == NXM_NX_COOKIE_W) {
+        ds_put_cstr(s, "NXM_NX_COOKIE_W");
     } else {
         ds_put_format(s, "%d:%d", NXM_VENDOR(header), NXM_FIELD(header));
     }
@@ -641,17 +832,36 @@ parse_nxm_field_name(const char *name, int name_len)
     if (wild) {
         name_len -= 2;
     }
+
     for (i = 0; i < MFF_N_IDS; i++) {
         const struct mf_field *mf = mf_from_id(i);
+        uint32_t header;
 
-        if (mf->nxm_name
-            && !strncmp(mf->nxm_name, name, name_len)
-            && mf->nxm_name[name_len] == '\0') {
-            if (!wild) {
-                return mf->nxm_header;
-            } else if (mf->maskable != MFM_NONE) {
-                return NXM_MAKE_WILD_HEADER(mf->nxm_header);
-            }
+        if (mf->nxm_name &&
+            !strncmp(mf->nxm_name, name, name_len) &&
+            mf->nxm_name[name_len] == '\0') {
+            header = mf->nxm_header;
+        } else if (mf->oxm_name &&
+                   !strncmp(mf->oxm_name, name, name_len) &&
+                   mf->oxm_name[name_len] == '\0') {
+            header = mf->oxm_header;
+        } else {
+            continue;
+        }
+
+        if (!wild) {
+            return header;
+        } else if (mf->maskable != MFM_NONE) {
+            return NXM_MAKE_WILD_HEADER(header);
+        }
+    }
+
+    if (!strncmp("NXM_NX_COOKIE", name, name_len) &&
+        (name_len == strlen("NXM_NX_COOKIE"))) {
+        if (!wild) {
+            return NXM_NX_COOKIE;
+        } else {
+            return NXM_NX_COOKIE_W;
         }
     }
 
@@ -669,12 +879,11 @@ parse_nxm_field_name(const char *name, int name_len)
 
 /* nx_match_from_string(). */
 
-int
-nx_match_from_string(const char *s, struct ofpbuf *b)
+static int
+nx_match_from_string_raw(const char *s, struct ofpbuf *b)
 {
     const char *full_s = s;
     const size_t start_len = b->size;
-    int match_len;
 
     if (!strcmp(s, "<any>")) {
         /* Ensure that 'b->data' isn't actually null. */
@@ -726,373 +935,337 @@ nx_match_from_string(const char *s, struct ofpbuf *b)
         s++;
     }
 
-    match_len = b->size - start_len;
+    return b->size - start_len;
+}
+
+int
+nx_match_from_string(const char *s, struct ofpbuf *b)
+{
+    int match_len = nx_match_from_string_raw(s, b);
     ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
     return match_len;
 }
-
-const char *
-nxm_parse_field_bits(const char *s, uint32_t *headerp, int *ofsp, int *n_bitsp)
+
+int
+oxm_match_from_string(const char *s, struct ofpbuf *b)
 {
-    const char *full_s = s;
-    const char *name;
-    uint32_t header;
-    int start, end;
-    int name_len;
-    int width;
+    int match_len;
+    struct ofp11_match_header *omh;
+    size_t start_len = b->size;
 
-    name = s;
-    name_len = strcspn(s, "[");
-    if (s[name_len] != '[') {
-        ovs_fatal(0, "%s: missing [ looking for field name", full_s);
-    }
+    ofpbuf_put_uninit(b, sizeof *omh);
+    match_len = nx_match_from_string_raw(s, b) + sizeof *omh;
+    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
 
-    header = parse_nxm_field_name(name, name_len);
-    if (!header) {
-        ovs_fatal(0, "%s: unknown field `%.*s'", full_s, name_len, s);
-    }
-    width = nxm_field_bits(header);
+    omh = (struct ofp11_match_header *)((char *)b->data + start_len);
+    omh->type = htons(OFPMT_OXM);
+    omh->length = htons(match_len);
 
-    s += name_len;
-    if (sscanf(s, "[%d..%d]", &start, &end) == 2) {
-        /* Nothing to do. */
-    } else if (sscanf(s, "[%d]", &start) == 1) {
-        end = start;
-    } else if (!strncmp(s, "[]", 2)) {
-        start = 0;
-        end = width - 1;
-    } else {
-        ovs_fatal(0, "%s: syntax error expecting [] or [<bit>] or "
-                  "[<start>..<end>]", full_s);
-    }
-    s = strchr(s, ']') + 1;
-
-    if (start > end) {
-        ovs_fatal(0, "%s: starting bit %d is after ending bit %d",
-                  full_s, start, end);
-    } else if (start >= width) {
-        ovs_fatal(0, "%s: starting bit %d is not valid because field is only "
-                  "%d bits wide", full_s, start, width);
-    } else if (end >= width){
-        ovs_fatal(0, "%s: ending bit %d is not valid because field is only "
-                  "%d bits wide", full_s, end, width);
-    }
-
-    *headerp = header;
-    *ofsp = start;
-    *n_bitsp = end - start + 1;
-
-    return s;
+    return match_len;
 }
-
+
 void
-nxm_parse_reg_move(struct nx_action_reg_move *move, const char *s)
+nxm_parse_reg_move(struct ofpact_reg_move *move, const char *s)
 {
     const char *full_s = s;
-    uint32_t src, dst;
-    int src_ofs, dst_ofs;
-    int src_n_bits, dst_n_bits;
 
-    s = nxm_parse_field_bits(s, &src, &src_ofs, &src_n_bits);
+    s = mf_parse_subfield(&move->src, s);
     if (strncmp(s, "->", 2)) {
         ovs_fatal(0, "%s: missing `->' following source", full_s);
     }
     s += 2;
-    s = nxm_parse_field_bits(s, &dst, &dst_ofs, &dst_n_bits);
+    s = mf_parse_subfield(&move->dst, s);
     if (*s != '\0') {
         ovs_fatal(0, "%s: trailing garbage following destination", full_s);
     }
 
-    if (src_n_bits != dst_n_bits) {
+    if (move->src.n_bits != move->dst.n_bits) {
         ovs_fatal(0, "%s: source field is %d bits wide but destination is "
-                  "%d bits wide", full_s, src_n_bits, dst_n_bits);
+                  "%d bits wide", full_s,
+                  move->src.n_bits, move->dst.n_bits);
     }
-
-    ofputil_init_NXAST_REG_MOVE(move);
-    move->n_bits = htons(src_n_bits);
-    move->src_ofs = htons(src_ofs);
-    move->dst_ofs = htons(dst_ofs);
-    move->src = htonl(src);
-    move->dst = htonl(dst);
 }
 
 void
-nxm_parse_reg_load(struct nx_action_reg_load *load, const char *s)
+nxm_parse_reg_load(struct ofpact_reg_load *load, const char *s)
 {
     const char *full_s = s;
-    uint32_t dst;
-    int ofs, n_bits;
-    uint64_t value;
+    uint64_t value = strtoull(s, (char **) &s, 0);
 
-    value = strtoull(s, (char **) &s, 0);
     if (strncmp(s, "->", 2)) {
         ovs_fatal(0, "%s: missing `->' following value", full_s);
     }
     s += 2;
-    s = nxm_parse_field_bits(s, &dst, &ofs, &n_bits);
+    s = mf_parse_subfield(&load->dst, s);
     if (*s != '\0') {
         ovs_fatal(0, "%s: trailing garbage following destination", full_s);
     }
 
-    if (n_bits < 64 && (value >> n_bits) != 0) {
+    if (load->dst.n_bits < 64 && (value >> load->dst.n_bits) != 0) {
         ovs_fatal(0, "%s: value %"PRIu64" does not fit into %d bits",
-                  full_s, value, n_bits);
+                  full_s, value, load->dst.n_bits);
     }
 
-    ofputil_init_NXAST_REG_LOAD(load);
-    load->ofs_nbits = nxm_encode_ofs_nbits(ofs, n_bits);
-    load->dst = htonl(dst);
-    load->value = htonll(value);
+    load->subvalue.be64[0] = htonll(0);
+    load->subvalue.be64[1] = htonll(value);
 }
 
 /* nxm_format_reg_move(), nxm_format_reg_load(). */
 
 void
-nxm_format_field_bits(struct ds *s, uint32_t header, int ofs, int n_bits)
+nxm_format_reg_move(const struct ofpact_reg_move *move, struct ds *s)
 {
-    format_nxm_field_name(s, header);
-    if (ofs == 0 && n_bits == nxm_field_bits(header)) {
-        ds_put_cstr(s, "[]");
-    } else if (n_bits == 1) {
-        ds_put_format(s, "[%d]", ofs);
-    } else {
-        ds_put_format(s, "[%d..%d]", ofs, ofs + n_bits - 1);
-    }
-}
-
-void
-nxm_format_reg_move(const struct nx_action_reg_move *move, struct ds *s)
-{
-    int n_bits = ntohs(move->n_bits);
-    int src_ofs = ntohs(move->src_ofs);
-    int dst_ofs = ntohs(move->dst_ofs);
-    uint32_t src = ntohl(move->src);
-    uint32_t dst = ntohl(move->dst);
-
     ds_put_format(s, "move:");
-    nxm_format_field_bits(s, src, src_ofs, n_bits);
+    mf_format_subfield(&move->src, s);
     ds_put_cstr(s, "->");
-    nxm_format_field_bits(s, dst, dst_ofs, n_bits);
+    mf_format_subfield(&move->dst, s);
+}
+
+static void
+set_field_format(const struct ofpact_reg_load *load, struct ds *s)
+{
+    const struct mf_field *mf = load->dst.field;
+    union mf_value value;
+
+    assert(load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD);
+    ds_put_format(s, "set_field:");
+    memset(&value, 0, sizeof value);
+    bitwise_copy(&load->subvalue, sizeof load->subvalue, 0,
+                 &value, mf->n_bytes, 0, load->dst.n_bits);
+    mf_format(mf, &value, NULL, s);
+    ds_put_format(s, "->%s", mf->name);
+}
+
+static void
+load_format(const struct ofpact_reg_load *load, struct ds *s)
+{
+    ds_put_cstr(s, "load:");
+    mf_format_subvalue(&load->subvalue, s);
+    ds_put_cstr(s, "->");
+    mf_format_subfield(&load->dst, s);
 }
 
 void
-nxm_format_reg_load(const struct nx_action_reg_load *load, struct ds *s)
+nxm_format_reg_load(const struct ofpact_reg_load *load, struct ds *s)
 {
-    int ofs = nxm_decode_ofs(load->ofs_nbits);
-    int n_bits = nxm_decode_n_bits(load->ofs_nbits);
-    uint32_t dst = ntohl(load->dst);
-    uint64_t value = ntohll(load->value);
-
-    ds_put_format(s, "load:%#"PRIx64"->", value);
-    nxm_format_field_bits(s, dst, ofs, n_bits);
+    if (load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD) {
+        set_field_format(load, s);
+    } else {
+        load_format(load, s);
+    }
 }
 
-/* nxm_check_reg_move(), nxm_check_reg_load(). */
-
-static bool
-field_ok(const struct mf_field *mf, const struct flow *flow, int size)
+enum ofperr
+nxm_reg_move_from_openflow(const struct nx_action_reg_move *narm,
+                           struct ofpbuf *ofpacts)
 {
-    return (mf
-            && mf_are_prereqs_ok(mf, flow)
-            && size <= nxm_field_bits(mf->nxm_header));
+    struct ofpact_reg_move *move;
+
+    move = ofpact_put_REG_MOVE(ofpacts);
+    move->src.field = mf_from_nxm_header(ntohl(narm->src));
+    move->src.ofs = ntohs(narm->src_ofs);
+    move->src.n_bits = ntohs(narm->n_bits);
+    move->dst.field = mf_from_nxm_header(ntohl(narm->dst));
+    move->dst.ofs = ntohs(narm->dst_ofs);
+    move->dst.n_bits = ntohs(narm->n_bits);
+
+    return nxm_reg_move_check(move, NULL);
 }
 
-int
-nxm_check_reg_move(const struct nx_action_reg_move *action,
-                   const struct flow *flow)
+enum ofperr
+nxm_reg_load_from_openflow(const struct nx_action_reg_load *narl,
+                           struct ofpbuf *ofpacts)
 {
-    int src_ofs, dst_ofs, n_bits;
-    int error;
+    struct ofpact_reg_load *load;
 
-    n_bits = ntohs(action->n_bits);
-    src_ofs = ntohs(action->src_ofs);
-    dst_ofs = ntohs(action->dst_ofs);
+    load = ofpact_put_REG_LOAD(ofpacts);
+    load->dst.field = mf_from_nxm_header(ntohl(narl->dst));
+    load->dst.ofs = nxm_decode_ofs(narl->ofs_nbits);
+    load->dst.n_bits = nxm_decode_n_bits(narl->ofs_nbits);
+    load->subvalue.be64[1] = narl->value;
 
-    error = nxm_src_check(action->src, src_ofs, n_bits, flow);
+    /* Reject 'narl' if a bit numbered 'n_bits' or higher is set to 1 in
+     * narl->value. */
+    if (load->dst.n_bits < 64 &&
+        ntohll(narl->value) >> load->dst.n_bits) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+
+    return nxm_reg_load_check(load, NULL);
+}
+
+enum ofperr
+nxm_reg_load_from_openflow12_set_field(
+    const struct ofp12_action_set_field * oasf, struct ofpbuf *ofpacts)
+{
+    uint16_t oasf_len = ntohs(oasf->len);
+    uint32_t oxm_header = ntohl(oasf->dst);
+    uint8_t oxm_length = NXM_LENGTH(oxm_header);
+    struct ofpact_reg_load *load;
+    const struct mf_field *mf;
+
+    /* ofp12_action_set_field is padded to 64 bits by zero */
+    if (oasf_len != ROUND_UP(sizeof(*oasf) + oxm_length, 8)) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+    if (!is_all_zeros((const uint8_t *)(oasf) + sizeof *oasf + oxm_length,
+                      oasf_len - oxm_length - sizeof *oasf)) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+
+    if (NXM_HASMASK(oxm_header)) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+    mf = mf_from_nxm_header(oxm_header);
+    if (!mf) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+    load = ofpact_put_REG_LOAD(ofpacts);
+    ofpact_set_field_init(load, mf, oasf + 1);
+
+    return nxm_reg_load_check(load, NULL);
+}
+
+enum ofperr
+nxm_reg_move_check(const struct ofpact_reg_move *move, const struct flow *flow)
+{
+    enum ofperr error;
+
+    error = mf_check_src(&move->src, flow);
     if (error) {
         return error;
     }
 
-    return nxm_dst_check(action->dst, dst_ofs, n_bits, flow);
+    return mf_check_dst(&move->dst, NULL);
 }
 
-/* Given a flow, checks that the source field represented by 'src_header'
- * in the range ['ofs', 'ofs' + 'n_bits') is valid. */
-int
-nxm_src_check(ovs_be32 src_header_, unsigned int ofs, unsigned int n_bits,
-              const struct flow *flow)
+enum ofperr
+nxm_reg_load_check(const struct ofpact_reg_load *load, const struct flow *flow)
 {
-    uint32_t src_header = ntohl(src_header_);
-    const struct mf_field *src = mf_from_nxm_header(src_header);
+    return mf_check_dst(&load->dst, flow);
+}
+
+void
+nxm_reg_move_to_nxast(const struct ofpact_reg_move *move,
+                      struct ofpbuf *openflow)
+{
+    struct nx_action_reg_move *narm;
 
-    if (!n_bits) {
-        VLOG_WARN_RL(&rl, "zero bit source field");
-    } else if (NXM_HASMASK(src_header) || !field_ok(src, flow, ofs + n_bits)) {
-        VLOG_WARN_RL(&rl, "invalid source field");
+    narm = ofputil_put_NXAST_REG_MOVE(openflow);
+    narm->n_bits = htons(move->dst.n_bits);
+    narm->src_ofs = htons(move->src.ofs);
+    narm->dst_ofs = htons(move->dst.ofs);
+    narm->src = htonl(move->src.field->nxm_header);
+    narm->dst = htonl(move->dst.field->nxm_header);
+}
+
+static void
+reg_load_to_nxast(const struct ofpact_reg_load *load, struct ofpbuf *openflow)
+{
+    struct nx_action_reg_load *narl;
+
+    narl = ofputil_put_NXAST_REG_LOAD(openflow);
+    narl->ofs_nbits = nxm_encode_ofs_nbits(load->dst.ofs, load->dst.n_bits);
+    narl->dst = htonl(load->dst.field->nxm_header);
+    narl->value = load->subvalue.be64[1];
+}
+
+static void
+set_field_to_ofast(const struct ofpact_reg_load *load,
+                      struct ofpbuf *openflow)
+{
+    const struct mf_field *mf = load->dst.field;
+    uint16_t padded_value_len = ROUND_UP(mf->n_bytes, 8);
+    struct ofp12_action_set_field *oasf;
+    char *value;
+
+    /* Set field is the only action of variable length (so far),
+     * so handling the variable length portion is open-coded here */
+    oasf = ofputil_put_OFPAT12_SET_FIELD(openflow);
+    oasf->dst = htonl(mf->oxm_header);
+    oasf->len = htons(ntohs(oasf->len) + padded_value_len);
+
+    value = ofpbuf_put_zeros(openflow, padded_value_len);
+    bitwise_copy(&load->subvalue, sizeof load->subvalue, load->dst.ofs,
+                 value, mf->n_bytes, load->dst.ofs, load->dst.n_bits);
+}
+
+void
+nxm_reg_load_to_nxast(const struct ofpact_reg_load *load,
+                      struct ofpbuf *openflow)
+{
+
+    if (load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD) {
+        struct ofp_header *oh = (struct ofp_header *)openflow->l2;
+
+        switch(oh->version) {
+        case OFP12_VERSION:
+            set_field_to_ofast(load, openflow);
+            break;
+
+        case OFP11_VERSION:
+        case OFP10_VERSION:
+            if (load->dst.n_bits < 64) {
+                reg_load_to_nxast(load, openflow);
+            } else {
+                /* Split into 64bit chunks */
+                int chunk, ofs;
+                for (ofs = 0; ofs < load->dst.n_bits; ofs += chunk) {
+                    struct ofpact_reg_load subload = *load;
+
+                    chunk = MIN(load->dst.n_bits - ofs, 64);
+
+                    subload.dst.field =  load->dst.field;
+                    subload.dst.ofs = load->dst.ofs + ofs;
+                    subload.dst.n_bits = chunk;
+                    bitwise_copy(&load->subvalue, sizeof load->subvalue, ofs,
+                                 &subload.subvalue, sizeof subload.subvalue, 0,
+                                 chunk);
+                    reg_load_to_nxast(&subload, openflow);
+                }
+            }
+            break;
+
+        default:
+            NOT_REACHED();
+        }
     } else {
-        return 0;
+        reg_load_to_nxast(load, openflow);
     }
-
-    return BAD_ARGUMENT;
-}
-
-/* Given a flow, checks that the destination field represented by 'dst_header'
- * in the range ['ofs', 'ofs' + 'n_bits') is valid. */
-int
-nxm_dst_check(ovs_be32 dst_header_, unsigned int ofs, unsigned int n_bits,
-              const struct flow *flow)
-{
-    uint32_t dst_header = ntohl(dst_header_);
-    const struct mf_field *dst = mf_from_nxm_header(dst_header);
-
-    if (!n_bits) {
-        VLOG_WARN_RL(&rl, "zero bit destination field");
-    } else if (NXM_HASMASK(dst_header) || !field_ok(dst, flow, ofs + n_bits)) {
-        VLOG_WARN_RL(&rl, "invalid destination field");
-    } else if (!dst->writable) {
-        VLOG_WARN_RL(&rl, "destination field is not writable");
-    } else {
-        return 0;
-    }
-
-    return BAD_ARGUMENT;
-}
-
-int
-nxm_check_reg_load(const struct nx_action_reg_load *action,
-                   const struct flow *flow)
-{
-    unsigned int ofs = nxm_decode_ofs(action->ofs_nbits);
-    unsigned int n_bits = nxm_decode_n_bits(action->ofs_nbits);
-    int error;
-
-    error = nxm_dst_check(action->dst, ofs, n_bits, flow);
-    if (error) {
-        return error;
-    }
-
-    /* Reject 'action' if a bit numbered 'n_bits' or higher is set to 1 in
-     * action->value. */
-    if (n_bits < 64 && ntohll(action->value) >> n_bits) {
-        return BAD_ARGUMENT;
-    }
-
-    return 0;
 }
 
 /* nxm_execute_reg_move(), nxm_execute_reg_load(). */
 
-static void
-bitwise_copy(const void *src_, unsigned int src_len, unsigned int src_ofs,
-             void *dst_, unsigned int dst_len, unsigned int dst_ofs,
-             unsigned int n_bits)
-{
-    const uint8_t *src = src_;
-    uint8_t *dst = dst_;
-
-    src += src_len - (src_ofs / 8 + 1);
-    src_ofs %= 8;
-
-    dst += dst_len - (dst_ofs / 8 + 1);
-    dst_ofs %= 8;
-
-    if (src_ofs == 0 && dst_ofs == 0) {
-        unsigned int n_bytes = n_bits / 8;
-        if (n_bytes) {
-            dst -= n_bytes - 1;
-            src -= n_bytes - 1;
-            memcpy(dst, src, n_bytes);
-
-            n_bits %= 8;
-            src--;
-            dst--;
-        }
-        if (n_bits) {
-            uint8_t mask = (1 << n_bits) - 1;
-            *dst = (*dst & ~mask) | (*src & mask);
-        }
-    } else {
-        while (n_bits > 0) {
-            unsigned int max_copy = 8 - MAX(src_ofs, dst_ofs);
-            unsigned int chunk = MIN(n_bits, max_copy);
-            uint8_t mask = ((1 << chunk) - 1) << dst_ofs;
-
-            *dst &= ~mask;
-            *dst |= ((*src >> src_ofs) << dst_ofs) & mask;
-
-            src_ofs += chunk;
-            if (src_ofs == 8) {
-                src--;
-                src_ofs = 0;
-            }
-            dst_ofs += chunk;
-            if (dst_ofs == 8) {
-                dst--;
-                dst_ofs = 0;
-            }
-            n_bits -= chunk;
-        }
-    }
-}
-
-/* Returns the value of the NXM field corresponding to 'header' at 'ofs_nbits'
- * in 'flow'. */
-uint64_t
-nxm_read_field_bits(ovs_be32 header, ovs_be16 ofs_nbits,
-                    const struct flow *flow)
-{
-    const struct mf_field *field = mf_from_nxm_header(ntohl(header));
-    union mf_value value;
-    union mf_value bits;
-
-    mf_get_value(field, flow, &value);
-    bits.be64 = htonll(0);
-    bitwise_copy(&value, field->n_bytes, nxm_decode_ofs(ofs_nbits),
-                 &bits, sizeof bits.be64, 0,
-                 nxm_decode_n_bits(ofs_nbits));
-    return ntohll(bits.be64);
-}
-
 void
-nxm_execute_reg_move(const struct nx_action_reg_move *action,
+nxm_execute_reg_move(const struct ofpact_reg_move *move,
                      struct flow *flow)
 {
-    const struct mf_field *src = mf_from_nxm_header(ntohl(action->src));
-    const struct mf_field *dst = mf_from_nxm_header(ntohl(action->dst));
     union mf_value src_value;
     union mf_value dst_value;
 
-    mf_get_value(dst, flow, &dst_value);
-    mf_get_value(src, flow, &src_value);
-    bitwise_copy(&src_value, src->n_bytes, ntohs(action->src_ofs),
-                 &dst_value, dst->n_bytes, ntohs(action->dst_ofs),
-                 ntohs(action->n_bits));
-    mf_set_flow_value(dst, &dst_value, flow);
+    mf_get_value(move->dst.field, flow, &dst_value);
+    mf_get_value(move->src.field, flow, &src_value);
+    bitwise_copy(&src_value, move->src.field->n_bytes, move->src.ofs,
+                 &dst_value, move->dst.field->n_bytes, move->dst.ofs,
+                 move->src.n_bits);
+    mf_set_flow_value(move->dst.field, &dst_value, flow);
 }
 
 void
-nxm_execute_reg_load(const struct nx_action_reg_load *action,
-                     struct flow *flow)
+nxm_execute_reg_load(const struct ofpact_reg_load *load, struct flow *flow)
 {
-    nxm_reg_load(action->dst, action->ofs_nbits, ntohll(action->value), flow);
+    mf_write_subfield_flow(&load->dst, &load->subvalue, flow);
 }
 
-/* Calculates ofs and n_bits from the given 'ofs_nbits' parameter, and copies
- * 'src_data'[0:n_bits] to 'dst_header'[ofs:ofs+n_bits] in the given 'flow'. */
 void
-nxm_reg_load(ovs_be32 dst_header, ovs_be16 ofs_nbits, uint64_t src_data,
+nxm_reg_load(const struct mf_subfield *dst, uint64_t src_data,
              struct flow *flow)
 {
-    const struct mf_field *dst = mf_from_nxm_header(ntohl(dst_header));
-    int n_bits = nxm_decode_n_bits(ofs_nbits);
-    int dst_ofs = nxm_decode_ofs(ofs_nbits);
-    union mf_value dst_value;
-    union mf_value src_value;
+    union mf_subvalue src_subvalue;
+    ovs_be64 src_data_be = htonll(src_data);
 
-    mf_get_value(dst, flow, &dst_value);
-    src_value.be64 = htonll(src_data);
-    bitwise_copy(&src_value, sizeof src_value.be64, 0,
-                 &dst_value, dst->n_bytes, dst_ofs,
-                 n_bits);
-    mf_set_flow_value(dst, &dst_value, flow);
+    bitwise_copy(&src_data_be, sizeof src_data_be, 0,
+                 &src_subvalue, sizeof src_subvalue, 0,
+                 sizeof src_data_be * 8);
+    mf_write_subfield_flow(dst, &src_subvalue, flow);
 }

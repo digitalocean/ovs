@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,8 +34,12 @@ char *long_options_to_short_options(const struct option *options);
 void run_command(int argc, char *argv[], const struct command[]);
 
 void proctitle_init(int argc, char **argv);
+#ifdef __FreeBSD__
+#define proctitle_set setproctitle
+#else
 void proctitle_set(const char *, ...)
     PRINTF_FORMAT(1, 2);
+#endif
 void proctitle_restore(void);
 
 #endif /* command-line.h */

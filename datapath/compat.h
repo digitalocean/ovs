@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -58,12 +58,12 @@ static inline void skb_clear_rxhash(struct sk_buff *skb)
  * exporting br_should_route_hook.  Because the bridge module also exports the
  * same symbol, the module loader will refuse to load both modules at the same
  * time (e.g. "bridge: exports duplicate symbol br_should_route_hook (owned by
- * openvswitch_mod)").
+ * openvswitch)").
  *
  * Before Linux 2.6.36, Open vSwitch cannot safely coexist with the Linux
- * bridge module, so openvswitch_mod uses this macro in those versions.  In
- * Linux 2.6.36 and later, Open vSwitch can coexist with the bridge module, but
- * it makes no sense to load both bridge and brcompat_mod, so brcompat_mod uses
+ * bridge module, so openvswitch uses this macro in those versions.  In
+ * Linux 2.6.36 and later, Open vSwitch can coexist with the bridge module,
+ * but it makes no sense to load both bridge and brcompat, so brcompat uses
  * this macro in those versions.
  *
  * The use of "typeof" here avoids the need to track changes in the type of
@@ -72,5 +72,46 @@ static inline void skb_clear_rxhash(struct sk_buff *skb)
 #define BRIDGE_MUTUAL_EXCLUSION					\
 	typeof(br_should_route_hook) br_should_route_hook;	\
 	EXPORT_SYMBOL(br_should_route_hook)
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+#define GENL_SOCK(net) (genl_sock)
+#define SET_NETNSOK
+#else
+#define GENL_SOCK(net) ((net)->genl_sock)
+#define SET_NETNSOK    .netnsok = true,
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
+#ifdef CONFIG_NETFILTER
+static inline u32 skb_get_mark(struct sk_buff *skb)
+{
+	return skb->nfmark;
+}
+
+static inline void skb_set_mark(struct sk_buff *skb, u32 mark)
+{
+	skb->nfmark = mark;
+}
+#else /* CONFIG_NETFILTER */
+static inline u32 skb_get_mark(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static inline void skb_set_mark(struct sk_buff *skb, u32 mark)
+{
+}
+#endif
+#else /* before 2.6.20 */
+static inline u32 skb_get_mark(struct sk_buff *skb)
+{
+	return skb->mark;
+}
+
+static inline void skb_set_mark(struct sk_buff *skb, u32 mark)
+{
+	skb->mark = mark;
+}
+#endif /* after 2.6.20 */
 
 #endif /* compat.h */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include "openvswitch/types.h"
 #include "vlog.h"
+#include "socket-util.h"
 
 struct pstream;
 struct stream;
@@ -31,7 +32,7 @@ void stream_usage(const char *name, bool active, bool passive, bool bootstrap);
 
 /* Bidirectional byte streams. */
 int stream_verify_name(const char *name);
-int stream_open(const char *name, struct stream **);
+int stream_open(const char *name, struct stream **, uint8_t dscp);
 int stream_open_block(int error, struct stream **);
 void stream_close(struct stream *);
 const char *stream_get_name(const struct stream *);
@@ -58,24 +59,32 @@ void stream_send_wait(struct stream *);
 
 /* Passive streams: listeners for incoming stream connections. */
 int pstream_verify_name(const char *name);
-int pstream_open(const char *name, struct pstream **);
+int pstream_open(const char *name, struct pstream **, uint8_t dscp);
 const char *pstream_get_name(const struct pstream *);
 void pstream_close(struct pstream *);
 int pstream_accept(struct pstream *, struct stream **);
 int pstream_accept_block(struct pstream *, struct stream **);
 void pstream_wait(struct pstream *);
+int pstream_set_dscp(struct pstream *, uint8_t dscp);
 
 /* Convenience functions. */
 
 int stream_open_with_default_ports(const char *name,
                                    uint16_t default_tcp_port,
                                    uint16_t default_ssl_port,
-                                   struct stream **);
+                                   struct stream **,
+                                   uint8_t dscp);
 int pstream_open_with_default_ports(const char *name,
                                     uint16_t default_ptcp_port,
                                     uint16_t default_pssl_port,
-                                    struct pstream **);
-
+                                    struct pstream **,
+                                    uint8_t dscp);
+bool stream_parse_target_with_default_ports(const char *target,
+                                           uint16_t default_tcp_port,
+                                           uint16_t default_ssl_port,
+                                           struct sockaddr_in *sin);
+int stream_or_pstream_needs_probes(const char *name);
+
 /* Error reporting. */
 
 enum stream_content_type {

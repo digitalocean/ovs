@@ -19,28 +19,27 @@ AT_BANNER([OVSDB -- ovsdb-server monitors])
 m4_define([OVSDB_CHECK_MONITOR], 
   [AT_SETUP([$1])
    AT_KEYWORDS([ovsdb server monitor positive $9])
-   AT_DATA([schema], [$2
-])
+   $2 > schema
    AT_CHECK([ovsdb-tool create db schema], [0], [stdout], [ignore])
    m4_foreach([txn], [$3],
      [AT_CHECK([ovsdb-tool transact db 'txn'], [0], [ignore], [ignore])])
    AT_CAPTURE_FILE([ovsdb-server-log])
-   AT_CHECK([ovsdb-server --detach --pidfile=$PWD/server-pid --remote=punix:socket --unixctl=$PWD/unixctl --log-file=$PWD/ovsdb-server-log db >/dev/null 2>&1],
+   AT_CHECK([ovsdb-server --detach --no-chdir --pidfile="`pwd`"/server-pid --remote=punix:socket --unixctl="`pwd`"/unixctl --log-file="`pwd`"/ovsdb-server-log db >/dev/null 2>&1],
             [0], [], [])
-   AT_CHECK([ovsdb-client -vjsonrpc --detach --pidfile=$PWD/client-pid -d json monitor --format=csv unix:socket $4 $5 $8 > output], 
+   AT_CHECK([ovsdb-client -vjsonrpc --detach --no-chdir --pidfile="`pwd`"/client-pid -d json monitor --format=csv unix:socket $4 $5 $8 > output], 
             [0], [ignore], [ignore], [kill `cat server-pid`])
    m4_foreach([txn], [$6],
      [AT_CHECK([ovsdb-client transact unix:socket 'txn'], [0],
                      [ignore], [ignore], [kill `cat server-pid client-pid`])])
    AT_CHECK([ovsdb-client transact unix:socket '[["$4"]]'], [0],
             [ignore], [ignore], [kill `cat server-pid client-pid`])
-   AT_CHECK([ovs-appctl -t $PWD/unixctl -e exit], [0], [ignore], [ignore])
+   AT_CHECK([ovs-appctl -t "`pwd`"/unixctl -e exit], [0], [ignore], [ignore])
    OVS_WAIT_UNTIL([test ! -e server-pid && test ! -e client-pid])
    AT_CHECK([perl $srcdir/ovsdb-monitor-sort.pl < output | perl $srcdir/uuidfilt.pl], [0], [$7], [ignore])
    AT_CLEANUP])
 
 OVSDB_CHECK_MONITOR([monitor insert into empty table],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [],
   [ordinals], [ordinals],
   [[[["ordinals",
@@ -52,7 +51,7 @@ OVSDB_CHECK_MONITOR([monitor insert into empty table],
 ]])
 
 OVSDB_CHECK_MONITOR([monitor insert into populated table],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -70,7 +69,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor delete],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -88,7 +87,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor row update],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -108,7 +107,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor no-op row updates],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -131,7 +130,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor insert-and-update transaction],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -154,7 +153,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor insert-update-and-delete transaction],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -183,7 +182,7 @@ row,action,name,number,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor weak reference change],
-  [WEAK_SCHEMA],
+  [weak_schema],
   [[[["weak",
       {"op": "insert",
        "table": "a",
@@ -218,7 +217,7 @@ row,action,a,a2a,a2a1,a2b,_version
 ]])
 
 OVSDB_CHECK_MONITOR([monitor insert-update-and-delete transaction],
-  [ORDINAL_SCHEMA],
+  [ordinal_schema],
   [[[["ordinals",
       {"op": "insert",
        "table": "ordinals",
@@ -269,7 +268,7 @@ m4_define([OVSDB_MONITOR_TXNS],
        "where": []}]]]])
 
 OVSDB_CHECK_MONITOR([monitor all operations],
-  [ORDINAL_SCHEMA], [OVSDB_MONITOR_INITIAL],
+  [ordinal_schema], [OVSDB_MONITOR_INITIAL],
   [ordinals], [ordinals], [OVSDB_MONITOR_TXNS],
   [[row,action,name,number,_version
 <0>,initial,"""ten""",10,"[""uuid"",""<1>""]"
@@ -289,21 +288,21 @@ row,action,name,number,_version
 dnl A monitor with "initial" only doesn't really make sense,
 dnl but it's still allowed and should work.
 OVSDB_CHECK_MONITOR([monitor initial only],
-  [ORDINAL_SCHEMA], [OVSDB_MONITOR_INITIAL],
+  [ordinal_schema], [OVSDB_MONITOR_INITIAL],
   [ordinals], [ordinals], [OVSDB_MONITOR_TXNS],
   [[row,action,name,number,_version
 <0>,initial,"""ten""",10,"[""uuid"",""<1>""]"
 ]], [!insert,!delete,!modify])
 
 OVSDB_CHECK_MONITOR([monitor insert only],
-  [ORDINAL_SCHEMA], [OVSDB_MONITOR_INITIAL],
+  [ordinal_schema], [OVSDB_MONITOR_INITIAL],
   [ordinals], [ordinals], [OVSDB_MONITOR_TXNS],
   [[row,action,name,number,_version
 <0>,insert,"""five""",5,"[""uuid"",""<1>""]"
 ]], [!initial,!delete,!modify])
 
 OVSDB_CHECK_MONITOR([monitor delete only],
-  [ORDINAL_SCHEMA], [OVSDB_MONITOR_INITIAL],
+  [ordinal_schema], [OVSDB_MONITOR_INITIAL],
   [ordinals], [ordinals], [OVSDB_MONITOR_TXNS],
   [[row,action,name,number,_version
 <0>,delete,"""FIVE""",5,"[""uuid"",""<1>""]"
@@ -311,7 +310,7 @@ OVSDB_CHECK_MONITOR([monitor delete only],
 ]], [!initial,!insert,!modify])
 
 OVSDB_CHECK_MONITOR([monitor modify only],
-  [ORDINAL_SCHEMA], [OVSDB_MONITOR_INITIAL],
+  [ordinal_schema], [OVSDB_MONITOR_INITIAL],
   [ordinals], [ordinals], [OVSDB_MONITOR_TXNS],
   [[row,action,name,number,_version
 <0>,old,"""five""",,"[""uuid"",""<1>""]"

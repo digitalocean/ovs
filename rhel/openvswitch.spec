@@ -1,7 +1,7 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 # Spec file for Open vSwitch on Red Hat Enterprise Linux.
 
-# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -12,8 +12,8 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Vendor: Nicira Networks, Inc.
-Version: 1.4.2
+Vendor: Nicira, Inc.
+Version: 1.9.2
 
 License: ASL 2.0
 Release: 1
@@ -30,7 +30,7 @@ traffic.
 %setup -q
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --enable-ssl %{?build_number}
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --enable-ssl
 make %{_smp_mflags}
 
 %install
@@ -51,7 +51,7 @@ rhel_cp usr_share_openvswitch_scripts_sysconfig.template 0644
 
 docdir=$RPM_BUILD_ROOT/usr/share/doc/openvswitch-%{version}
 install -d -m755 "$docdir"
-install -m 0644 rhel/README.RHEL "$docdir"
+install -m 0644 FAQ rhel/README.RHEL "$docdir"
 install python/compat/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
@@ -60,7 +60,9 @@ rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-controller \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
+    $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8 \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
     $RPM_BUILD_ROOT/usr/sbin/ovs-vlan-bug-workaround \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-vlan-bug-workaround.8
 
@@ -114,6 +116,7 @@ exit 0
 /usr/bin/ovs-benchmark
 /usr/bin/ovs-dpctl
 /usr/bin/ovs-ofctl
+/usr/bin/ovs-parse-backtrace
 /usr/bin/ovs-parse-leaks
 /usr/bin/ovs-pcap
 /usr/bin/ovs-pki
@@ -139,6 +142,7 @@ exit 0
 /usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
+/usr/share/man/man8/ovs-parse-backtrace.8.gz
 /usr/share/man/man8/ovs-parse-leaks.8.gz
 /usr/share/man/man8/ovs-pki.8.gz
 /usr/share/man/man8/ovs-vlan-test.8.gz
@@ -147,10 +151,12 @@ exit 0
 /usr/share/openvswitch/bugtool-plugins/
 /usr/share/openvswitch/python/
 /usr/share/openvswitch/scripts/ovs-bugtool-*
+/usr/share/openvswitch/scripts/ovs-check-dead-ifs
 /usr/share/openvswitch/scripts/ovs-ctl
 /usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-save
 /usr/share/openvswitch/scripts/sysconfig.template
 /usr/share/openvswitch/vswitch.ovsschema
+/usr/share/doc/openvswitch-%{version}/FAQ
 /usr/share/doc/openvswitch-%{version}/README.RHEL
 /var/lib/openvswitch

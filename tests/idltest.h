@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "ovsdb-data.h"
 #include "ovsdb-idl-provider.h"
+#include "smap.h"
 #include "uuid.h"
 
 /* link1 table. */
@@ -54,6 +55,7 @@ const struct idltest_link1 *idltest_link1_next(const struct idltest_link1 *);
              (ROW) ? ((NEXT) = idltest_link1_next(ROW), 1) : 0; \
              (ROW) = (NEXT))
 
+void idltest_link1_init(struct idltest_link1 *);
 void idltest_link1_delete(const struct idltest_link1 *);
 struct idltest_link1 *idltest_link1_insert(struct ovsdb_idl_txn *);
 
@@ -74,6 +76,7 @@ void idltest_link1_set_i(const struct idltest_link1 *, int64_t i);
 void idltest_link1_set_k(const struct idltest_link1 *, const struct idltest_link1 *k);
 void idltest_link1_set_ka(const struct idltest_link1 *, struct idltest_link1 **ka, size_t n_ka);
 void idltest_link1_set_l2(const struct idltest_link1 *, const struct idltest_link2 *l2);
+
 
 /* link2 table. */
 struct idltest_link2 {
@@ -108,6 +111,7 @@ const struct idltest_link2 *idltest_link2_next(const struct idltest_link2 *);
              (ROW) ? ((NEXT) = idltest_link2_next(ROW), 1) : 0; \
              (ROW) = (NEXT))
 
+void idltest_link2_init(struct idltest_link2 *);
 void idltest_link2_delete(const struct idltest_link2 *);
 struct idltest_link2 *idltest_link2_insert(struct ovsdb_idl_txn *);
 
@@ -122,6 +126,7 @@ const struct ovsdb_datum *idltest_link2_get_l1(const struct idltest_link2 *, enu
 
 void idltest_link2_set_i(const struct idltest_link2 *, int64_t i);
 void idltest_link2_set_l1(const struct idltest_link2 *, const struct idltest_link1 *l1);
+
 
 /* simple table. */
 struct idltest_simple {
@@ -131,7 +136,7 @@ struct idltest_simple {
 	bool b;
 
 	/* ba column. */
-	const bool *ba;
+	bool *ba;
 	size_t n_ba;
 
 	/* i column. */
@@ -201,6 +206,7 @@ const struct idltest_simple *idltest_simple_next(const struct idltest_simple *);
              (ROW) ? ((NEXT) = idltest_simple_next(ROW), 1) : 0; \
              (ROW) = (NEXT))
 
+void idltest_simple_init(struct idltest_simple *);
 void idltest_simple_delete(const struct idltest_simple *);
 struct idltest_simple *idltest_simple_insert(struct ovsdb_idl_txn *);
 
@@ -239,6 +245,7 @@ void idltest_simple_set_s(const struct idltest_simple *, const char *s);
 void idltest_simple_set_sa(const struct idltest_simple *, char **sa, size_t n_sa);
 void idltest_simple_set_u(const struct idltest_simple *, struct uuid u);
 void idltest_simple_set_ua(const struct idltest_simple *, const struct uuid *ua, size_t n_ua);
+
 
 enum {
     IDLTEST_TABLE_LINK1,

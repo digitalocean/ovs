@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * This file is offered under your choice of two licenses: Apache 2.0 or GNU
  * GPL 2.0 or later.  The permission statements for each of these licenses is
@@ -45,14 +45,15 @@
 
 /* OVS_VPORT_ATTR_OPTIONS attributes for tunnels.
  *
- * OVS_TUNNEL_ATTR_FLAGS and OVS_TUNNEL_ATTR_DST_IPV4 are required.  All other
+ * OVS_TUNNEL_ATTR_DST_IPV4 is required for kernel tunnel ports, all other
  * attributes are optional.
+ * For flow-based tunnels, none of the options apply.
  */
 enum {
 	OVS_TUNNEL_ATTR_UNSPEC,
 	OVS_TUNNEL_ATTR_FLAGS,    /* 32-bit TNL_F_*. */
-	OVS_TUNNEL_ATTR_DST_IPV4, /* IPv4 destination address. */
-	OVS_TUNNEL_ATTR_SRC_IPV4, /* IPv4 source address. */
+	OVS_TUNNEL_ATTR_DST_IPV4, /* Remote IPv4 address. */
+	OVS_TUNNEL_ATTR_SRC_IPV4, /* Local IPv4 address. */
 	OVS_TUNNEL_ATTR_OUT_KEY,  /* __be64 key to use on output. */
 	OVS_TUNNEL_ATTR_IN_KEY,   /* __be64 key to match on input. */
 	OVS_TUNNEL_ATTR_TOS,      /* 8-bit TOS value. */
@@ -68,8 +69,8 @@ enum {
 #define TNL_F_DF_INHERIT	(1 << 3) /* Inherit DF bit from inner packet. */
 #define TNL_F_DF_DEFAULT	(1 << 4) /* Set DF bit if inherit off or
 					  * not IP. */
+/* Bit 6 is reserved since it was previously used for Tunnel header caching. */
 #define TNL_F_PMTUD		(1 << 5) /* Enable path MTU discovery. */
-#define TNL_F_HDR_CACHE		(1 << 6) /* Enable tunnel header caching. */
 #define TNL_F_IPSEC		(1 << 7) /* Traffic is IPsec encrypted. */
 
 #endif /* openvswitch/tunnel.h */

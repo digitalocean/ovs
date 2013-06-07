@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
+ * Copyright (c) 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,16 +48,16 @@ typedef __be64 ovs_be64;
  * boundary.  */
 typedef struct {
 #ifdef WORDS_BIGENDIAN
-	uint32_t hi, lo;
+        uint32_t hi, lo;
 #else
-	uint32_t lo, hi;
+        uint32_t lo, hi;
 #endif
 } ovs_32aligned_u64;
 
 /* A 64-bit value, in network byte order, that is only aligned on a 32-bit
  * boundary. */
 typedef struct {
-	ovs_be32 hi, lo;
+        ovs_be32 hi, lo;
 } ovs_32aligned_be64;
 
 #endif /* openvswitch/types.h */

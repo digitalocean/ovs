@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -45,6 +45,12 @@ MODULE_PARM_DESC(vlan_tso, "Enable TSO for VLAN packets");
 #define vlan_tso true
 #endif
 
+#ifdef HAVE_RHEL_OVS_HOOK
+static atomic_t nr_bridges = ATOMIC_INIT(0);
+
+extern struct sk_buff *(*openvswitch_handle_frame_hook)(struct sk_buff *skb);
+#endif
+
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,39)
@@ -63,7 +69,8 @@ static rx_handler_result_t netdev_frame_hook(struct sk_buff **pskb)
 
 	return RX_HANDLER_CONSUMED;
 }
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36) || \
+      defined HAVE_RHEL_OVS_HOOK
 /* Called with rcu_read_lock and bottom-halves disabled. */
 static struct sk_buff *netdev_frame_hook(struct sk_buff *skb)
 {
@@ -105,7 +112,8 @@ static int netdev_frame_hook(struct net_bridge_port *p, struct sk_buff **pskb)
 #error
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36) || \
+    defined HAVE_RHEL_OVS_HOOK
 static int netdev_init(void) { return 0; }
 static void netdev_exit(void) { }
 #else
@@ -139,7 +147,7 @@ static struct vport *netdev_create(const struct vport_parms *parms)
 
 	netdev_vport = netdev_vport_priv(vport);
 
-	netdev_vport->dev = dev_get_by_name(&init_net, parms->name);
+	netdev_vport->dev = dev_get_by_name(ovs_dp_get_net(vport->dp), parms->name);
 	if (!netdev_vport->dev) {
 		err = -ENODEV;
 		goto error_free_vport;
@@ -152,10 +160,16 @@ static struct vport *netdev_create(const struct vport_parms *parms)
 		goto error_put;
 	}
 
+#ifdef HAVE_RHEL_OVS_HOOK
+	rcu_assign_pointer(netdev_vport->dev->ax25_ptr, vport);
+	atomic_inc(&nr_bridges);
+	rcu_assign_pointer(openvswitch_handle_frame_hook, netdev_frame_hook);
+#else
 	err = netdev_rx_handler_register(netdev_vport->dev, netdev_frame_hook,
 					 vport);
 	if (err)
 		goto error_put;
+#endif
 
 	dev_set_promiscuity(netdev_vport->dev, 1);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
@@ -173,6 +187,21 @@ error:
 	return ERR_PTR(err);
 }
 
+static void free_port_rcu(struct rcu_head *rcu)
+{
+	struct netdev_vport *netdev_vport = container_of(rcu,
+					struct netdev_vport, rcu);
+
+#ifdef HAVE_RHEL_OVS_HOOK
+	rcu_assign_pointer(netdev_vport->dev->ax25_ptr, NULL);
+
+	if (atomic_dec_and_test(&nr_bridges))
+		rcu_assign_pointer(openvswitch_handle_frame_hook, NULL);
+#endif
+	dev_put(netdev_vport->dev);
+	ovs_vport_free(vport_from_priv(netdev_vport));
+}
+
 static void netdev_destroy(struct vport *vport)
 {
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
@@ -181,10 +210,7 @@ static void netdev_destroy(struct vport *vport)
 	netdev_rx_handler_unregister(netdev_vport->dev);
 	dev_set_promiscuity(netdev_vport->dev, -1);
 
-	synchronize_rcu();
-
-	dev_put(netdev_vport->dev);
-	ovs_vport_free(vport);
+	call_rcu(&netdev_vport->rcu, free_port_rcu);
 }
 
 int ovs_netdev_set_addr(struct vport *vport, const unsigned char *addr)
@@ -249,10 +275,11 @@ int ovs_netdev_get_mtu(const struct vport *vport)
 /* Must be called with rcu_read_lock. */
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 {
-	if (unlikely(!vport)) {
-		kfree_skb(skb);
-		return;
-	}
+	if (unlikely(!vport))
+		goto error;
+
+	if (unlikely(skb_warn_if_lro(skb)))
+		goto error;
 
 	/* Make our own copy of the packet.  Otherwise we will mangle the
 	 * packet for anyone who came before us (e.g. tcpdump via AF_PACKET).
@@ -264,18 +291,21 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 
 	skb_push(skb, ETH_HLEN);
 
-	if (unlikely(compute_ip_summed(skb, false))) {
-		kfree_skb(skb);
-		return;
-	}
+	if (unlikely(compute_ip_summed(skb, false)))
+		goto error;
+
 	vlan_copy_skb_tci(skb);
 
 	ovs_vport_receive(vport, skb);
+	return;
+
+error:
+	kfree_skb(skb);
 }
 
-static unsigned packet_length(const struct sk_buff *skb)
+static unsigned int packet_length(const struct sk_buff *skb)
 {
-	unsigned length = skb->len - ETH_HLEN;
+	unsigned int length = skb->len - ETH_HLEN;
 
 	if (skb->protocol == htons(ETH_P_8021Q))
 		length -= VLAN_HLEN;
@@ -303,14 +333,11 @@ static int netdev_send(struct vport *vport, struct sk_buff *skb)
 	int len;
 
 	if (unlikely(packet_length(skb) > mtu && !skb_is_gso(skb))) {
-		if (net_ratelimit())
-			pr_warn("%s: dropped over-mtu packet: %d > %d\n",
-				ovs_dp_name(vport->dp), packet_length(skb), mtu);
+		net_warn_ratelimited("%s: dropped over-mtu packet: %d > %d\n",
+				     netdev_vport->dev->name,
+				     packet_length(skb), mtu);
 		goto error;
 	}
-
-	if (unlikely(skb_warn_if_lro(skb)))
-		goto error;
 
 	skb->dev = netdev_vport->dev;
 	forward_ip_summed(skb, true);
@@ -385,13 +412,18 @@ error:
 /* Returns null if this device is not attached to a datapath. */
 struct vport *ovs_netdev_get_vport(struct net_device *dev)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
-#if IFF_BRIDGE_PORT != IFF_OVS_DATAPATH
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36) || \
+    defined HAVE_RHEL_OVS_HOOK
+#if IFF_OVS_DATAPATH != 0
 	if (likely(dev->priv_flags & IFF_OVS_DATAPATH))
 #else
 	if (likely(rcu_access_pointer(dev->rx_handler) == netdev_frame_hook))
 #endif
+#ifdef HAVE_RHEL_OVS_HOOK
+		return (struct vport *)rcu_dereference_rtnl(dev->ax25_ptr);
+#else
 		return (struct vport *)rcu_dereference_rtnl(dev->rx_handler_data);
+#endif
 	else
 		return NULL;
 #else
@@ -418,12 +450,13 @@ const struct vport_ops ovs_netdev_vport_ops = {
 	.send		= netdev_send,
 };
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36) && \
+    !defined HAVE_RHEL_OVS_HOOK
 /*
  * In kernels earlier than 2.6.36, Open vSwitch cannot safely coexist with the
  * Linux bridge module, because there is only a single bridge hook function and
  * only a single br_port member in struct net_device, so this prevents loading
- * both bridge and openvswitch_mod at the same time.
+ * both bridge and openvswitch at the same time.
  */
 BRIDGE_MUTUAL_EXCLUSION;
 #endif

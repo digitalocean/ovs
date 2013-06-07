@@ -35,7 +35,12 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client help\fR
 .IP "Output formatting options:"
 [\fB\-\-format=\fIformat\fR]
+[\fB\-\-data=\fIformat\fR]
+[\fB\-\-no-heading\fR]
+[\fB\-\-pretty\fR]
+[\fB\-\-bare\fR]
 [\fB\-\-no\-heading\fR]
+[\fB\-\-timestamp\fR]
 .so lib/daemon-syn.man
 .so lib/vlog-syn.man
 .so lib/ssl-syn.man
@@ -79,7 +84,7 @@ If \fIdatabase\fR was created before schema versioning was introduced,
 then it will not have a version number and this command will print a
 blank line.
 .
-.IP "\fBlist\-columns\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
+.IP "\fBlist\-tables\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
 prints a table listing the name of each table
 within the database.
@@ -99,7 +104,7 @@ operations, and prints the received reply on stdout.
 Connects to \fIserver\fR, retrieves all of the data in \fIdatabase\fR,
 and prints it on stdout as a series of tables.
 .
-.IP "\fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR"
+.IP "\fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]..."
 Connects to \fIserver\fR and monitors the contents of \fItable\fR in
 \fIdatabase\fR.  By default, the initial contents of \fItable\fR are
 printed, followed by each change as it occurs.  If at least one
@@ -132,6 +137,12 @@ The following options controlling output formatting:
 .
 .ds TD (default)
 .so lib/table.man
+.
+.IP "\fB\-\-timestamp\fR"
+For the \fBmonitor\fR command, adds a timestamp to each table
+update.  Most output formats add the timestamp on a line of its own
+just above the table.  The JSON output format puts the timestamp in a
+member of the top-level JSON object named \fBtime\fR.
 .
 .SS "Daemon Options"
 The daemon options apply only to the \fBmonitor\fR command.  With any

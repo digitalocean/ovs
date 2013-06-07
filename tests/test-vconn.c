@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "command-line.h"
+#include "ofp-msgs.h"
+#include "ofp-util.h"
+#include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "poll-loop.h"
 #include "socket-util.h"
@@ -56,8 +59,9 @@ static void
 check_errno(int a, int b, const char *as, const char *file, int line)
 {
     if (a != b) {
+        char *str_b = strdup(strerror(abs(b)));
         ovs_fatal(0, "%s:%d: %s is %d (%s) but should be %d (%s)",
-                  file, line, as, a, strerror(abs(a)), b, strerror(abs(b)));
+                  file, line, as, a, strerror(abs(a)), b, str_b);
     }
 }
 
@@ -82,14 +86,15 @@ fpv_create(const char *type, struct fake_pvconn *fpv)
         bind_path = xasprintf("fake-pvconn.%d", unix_count++);
         fpv->pvconn_name = xasprintf("punix:%s", bind_path);
         fpv->vconn_name = xasprintf("unix:%s", bind_path);
-        CHECK_ERRNO(pstream_open(fpv->pvconn_name, &fpv->pstream), 0);
+        CHECK_ERRNO(pstream_open(fpv->pvconn_name, &fpv->pstream,
+                                 DSCP_DEFAULT), 0);
         free(bind_path);
     } else if (!strcmp(type, "tcp") || !strcmp(type, "ssl")) {
         char *s, *port, *save_ptr = NULL;
         char *open_name;
 
         open_name = xasprintf("p%s:0:127.0.0.1", type);
-        CHECK_ERRNO(pstream_open(open_name, &fpv->pstream), 0);
+        CHECK_ERRNO(pstream_open(open_name, &fpv->pstream, DSCP_DEFAULT), 0);
 
         /* Extract bound port number from pstream name. */
         s = xstrdup(pstream_get_name(fpv->pstream));
@@ -138,19 +143,33 @@ static void
 test_refuse_connection(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    int expected_error;
     struct fake_pvconn fpv;
     struct vconn *vconn;
-
-    expected_error = (!strcmp(type, "unix") ? EPIPE
-                      : !strcmp(type, "tcp") ? ECONNRESET
-                      : EPROTO);
+    int error;
 
     fpv_create(type, &fpv);
-    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP_VERSION, &vconn), 0);
+    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
+                           DSCP_DEFAULT), 0);
     fpv_close(&fpv);
     vconn_run(vconn);
-    CHECK_ERRNO(vconn_connect(vconn), expected_error);
+
+    error = vconn_connect_block(vconn);
+    if (!strcmp(type, "tcp")) {
+        if (error != ECONNRESET && error != EPIPE) {
+            ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                      error, strerror(error));
+        }
+    } else if (!strcmp(type, "unix")) {
+        CHECK_ERRNO(error, EPIPE);
+    } else if (!strcmp(type, "ssl")) {
+        if (error != EPROTO && error != ECONNRESET) {
+            ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                      error, strerror(error));
+        }
+    } else {
+        ovs_fatal(0, "invalid connection type %s", type);
+    }
+
     vconn_close(vconn);
     fpv_destroy(&fpv);
 }
@@ -162,20 +181,27 @@ static void
 test_accept_then_close(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    int expected_error;
     struct fake_pvconn fpv;
     struct vconn *vconn;
-
-    expected_error = (!strcmp(type, "unix") ? EPIPE
-                      : !strcmp(type, "tcp") ? ECONNRESET
-                      : EPROTO);
+    int error;
 
     fpv_create(type, &fpv);
-    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP_VERSION, &vconn), 0);
+    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
+                           DSCP_DEFAULT), 0);
     vconn_run(vconn);
     stream_close(fpv_accept(&fpv));
     fpv_close(&fpv);
-    CHECK_ERRNO(vconn_connect(vconn), expected_error);
+
+    error = vconn_connect_block(vconn);
+    if (!strcmp(type, "tcp") || !strcmp(type, "unix")) {
+        if (error != ECONNRESET && error != EPIPE) {
+            ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                      error, strerror(error));
+        }
+    } else {
+        CHECK_ERRNO(error, EPROTO);
+    }
+
     vconn_close(vconn);
     fpv_destroy(&fpv);
 }
@@ -190,9 +216,11 @@ test_read_hello(int argc OVS_UNUSED, char *argv[])
     struct fake_pvconn fpv;
     struct vconn *vconn;
     struct stream *stream;
+    int error;
 
     fpv_create(type, &fpv);
-    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP_VERSION, &vconn), 0);
+    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
+                           DSCP_DEFAULT), 0);
     vconn_run(vconn);
     stream = fpv_accept(&fpv);
     fpv_destroy(&fpv);
@@ -202,8 +230,11 @@ test_read_hello(int argc OVS_UNUSED, char *argv[])
 
        retval = stream_recv(stream, &hello, sizeof hello);
        if (retval == sizeof hello) {
-           CHECK(hello.version, OFP_VERSION);
-           CHECK(hello.type, OFPT_HELLO);
+           enum ofpraw raw;
+
+           CHECK(hello.version, OFP10_VERSION);
+           CHECK(ofpraw_decode_partial(&raw, &hello, sizeof hello), 0);
+           CHECK(raw, OFPRAW_OFPT_HELLO);
            CHECK(ntohs(hello.length), sizeof hello);
            break;
        } else {
@@ -218,7 +249,11 @@ test_read_hello(int argc OVS_UNUSED, char *argv[])
        poll_block();
     }
     stream_close(stream);
-    CHECK_ERRNO(vconn_connect(vconn), ECONNRESET);
+    error = vconn_connect_block(vconn);
+    if (error != ECONNRESET && error != EPIPE) {
+        ovs_fatal(0, "unexpected vconn_connect() return value %d (%s)",
+                  error, strerror(error));
+    }
     vconn_close(vconn);
 }
 
@@ -238,7 +273,8 @@ test_send_hello(const char *type, const void *out, size_t out_size,
     size_t n_sent;
 
     fpv_create(type, &fpv);
-    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP_VERSION, &vconn), 0);
+    CHECK_ERRNO(vconn_open(fpv.vconn_name, OFP10_VERSION, &vconn,
+                           DSCP_DEFAULT), 0);
     vconn_run(vconn);
     stream = fpv_accept(&fpv);
     fpv_destroy(&fpv);
@@ -268,8 +304,11 @@ test_send_hello(const char *type, const void *out, size_t out_size,
            struct ofp_header hello;
            int retval = stream_recv(stream, &hello, sizeof hello);
            if (retval == sizeof hello) {
-               CHECK(hello.version, OFP_VERSION);
-               CHECK(hello.type, OFPT_HELLO);
+               enum ofpraw raw;
+
+               CHECK(hello.version, OFP10_VERSION);
+               CHECK(ofpraw_decode_partial(&raw, &hello, sizeof hello), 0);
+               CHECK(raw, OFPRAW_OFPT_HELLO);
                CHECK(ntohs(hello.length), sizeof hello);
                read_hello = true;
            } else {
@@ -307,7 +346,7 @@ test_send_hello(const char *type, const void *out, size_t out_size,
        poll_block();
     }
     stream_close(stream);
-    CHECK_ERRNO(vconn_recv(vconn, &msg), EOF);
+    CHECK_ERRNO(vconn_recv_block(vconn, &msg), EOF);
     vconn_close(vconn);
 }
 
@@ -316,13 +355,12 @@ static void
 test_send_plain_hello(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    struct ofp_header hello;
+    struct ofpbuf *hello;
 
-    hello.version = OFP_VERSION;
-    hello.type = OFPT_HELLO;
-    hello.length = htons(sizeof hello);
-    hello.xid = htonl(0x12345678);
-    test_send_hello(type, &hello, sizeof hello, 0);
+    hello = ofpraw_alloc_xid(OFPRAW_OFPT_HELLO, OFP10_VERSION,
+                             htonl(0x12345678), 0);
+    test_send_hello(type, hello->data, hello->size, 0);
+    ofpbuf_delete(hello);
 }
 
 /* Try connecting and sending an extra-long hello, which should succeed (since
@@ -332,16 +370,15 @@ static void
 test_send_long_hello(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    struct ofp_header hello;
-    char buffer[sizeof hello * 2];
+    struct ofpbuf *hello;
+    enum { EXTRA_BYTES = 8 };
 
-    hello.version = OFP_VERSION;
-    hello.type = OFPT_HELLO;
-    hello.length = htons(sizeof buffer);
-    hello.xid = htonl(0x12345678);
-    memset(buffer, 0, sizeof buffer);
-    memcpy(buffer, &hello, sizeof hello);
-    test_send_hello(type, buffer, sizeof buffer, 0);
+    hello = ofpraw_alloc_xid(OFPRAW_OFPT_HELLO, OFP10_VERSION,
+                             htonl(0x12345678), EXTRA_BYTES);
+    ofpbuf_put_zeros(hello, EXTRA_BYTES);
+    ofpmsg_update_length(hello);
+    test_send_hello(type, hello->data, hello->size, 0);
+    ofpbuf_delete(hello);
 }
 
 /* Try connecting and sending an echo request instead of a hello, which should
@@ -350,13 +387,12 @@ static void
 test_send_echo_hello(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    struct ofp_header echo;
+    struct ofpbuf *echo;
 
-    echo.version = OFP_VERSION;
-    echo.type = OFPT_ECHO_REQUEST;
-    echo.length = htons(sizeof echo);
-    echo.xid = htonl(0x89abcdef);
-    test_send_hello(type, &echo, sizeof echo, EPROTO);
+    echo = ofpraw_alloc_xid(OFPRAW_OFPT_ECHO_REQUEST, OFP10_VERSION,
+                             htonl(0x12345678), 0);
+    test_send_hello(type, echo->data, echo->size, EPROTO);
+    ofpbuf_delete(echo);
 }
 
 /* Try connecting and sending a hello packet that has its length field as 0,
@@ -377,13 +413,13 @@ static void
 test_send_invalid_version_hello(int argc OVS_UNUSED, char *argv[])
 {
     const char *type = argv[1];
-    struct ofp_header hello;
+    struct ofpbuf *hello;
 
-    hello.version = OFP_VERSION - 1;
-    hello.type = OFPT_HELLO;
-    hello.length = htons(sizeof hello);
-    hello.xid = htonl(0x12345678);
-    test_send_hello(type, &hello, sizeof hello, EPROTO);
+    hello = ofpraw_alloc_xid(OFPRAW_OFPT_HELLO, OFP10_VERSION,
+                             htonl(0x12345678), 0);
+    ((struct ofp_header *) hello->data)->version = 0;
+    test_send_hello(type, hello->data, hello->size, EPROTO);
+    ofpbuf_delete(hello);
 }
 
 static const struct command commands[] = {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "ovsdb-parser.h"
 #include "json.h"
 #include "shash.h"
+#include "smap.h"
 #include "sort.h"
 #include "unicode.h"
 
@@ -590,6 +591,7 @@ ovsdb_atom_from_string(union ovsdb_atom *atom,
 
     error = ovsdb_atom_check_constraints(atom, base);
     if (error) {
+        ovsdb_atom_destroy(atom, base->type);
         msg = ovsdb_error_to_string(error);
         ovsdb_error_destroy(error);
     }
@@ -882,9 +884,10 @@ ovsdb_datum_default(const struct ovsdb_type *type)
         d = &default_data[kt][vt];
         if (!d->n) {
             d->n = 1;
-            d->keys = (union ovsdb_atom *) ovsdb_atom_default(kt);
+            d->keys = CONST_CAST(union ovsdb_atom *, ovsdb_atom_default(kt));
             if (vt != OVSDB_TYPE_VOID) {
-                d->values = (union ovsdb_atom *) ovsdb_atom_default(vt);
+                d->values = CONST_CAST(union ovsdb_atom *,
+                                       ovsdb_atom_default(vt));
             }
         }
         return d;
@@ -1523,27 +1526,26 @@ ovsdb_datum_to_bare(const struct ovsdb_datum *datum,
 }
 
 /* Initializes 'datum' as a string-to-string map whose contents are taken from
- * 'sh'.  Destroys 'sh'. */
+ * 'smap'.  Destroys 'smap'. */
 void
-ovsdb_datum_from_shash(struct ovsdb_datum *datum, struct shash *sh)
+ovsdb_datum_from_smap(struct ovsdb_datum *datum, struct smap *smap)
 {
-    struct shash_node *node, *next;
+    struct smap_node *node, *next;
     size_t i;
 
-    datum->n = shash_count(sh);
+    datum->n = smap_count(smap);
     datum->keys = xmalloc(datum->n * sizeof *datum->keys);
     datum->values = xmalloc(datum->n * sizeof *datum->values);
 
     i = 0;
-    SHASH_FOR_EACH_SAFE (node, next, sh) {
-        datum->keys[i].string = node->name;
-        datum->values[i].string = node->data;
-        shash_steal(sh, node);
+    SMAP_FOR_EACH_SAFE (node, next, smap) {
+        smap_steal(smap, node,
+                   &datum->keys[i].string, &datum->values[i].string);
         i++;
     }
     assert(i == datum->n);
 
-    shash_destroy(sh);
+    smap_destroy(smap);
     ovsdb_datum_sort_unique(datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
 }
 
@@ -1687,6 +1689,9 @@ ovsdb_datum_includes_all(const struct ovsdb_datum *a,
 {
     size_t i;
 
+    if (a->n > b->n) {
+        return false;
+    }
     for (i = 0; i < a->n; i++) {
         if (ovsdb_datum_find(a, i, b, type) == UINT_MAX) {
             return false;

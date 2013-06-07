@@ -100,9 +100,19 @@ nibble   0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
 ])
 AT_CLEANUP
 
-AT_SETUP([test log_2_floor])
-AT_CHECK([test-util])
-AT_CLEANUP
+m4_foreach(
+  [testname],
+  [[ctz],
+   [popcount],
+   [log_2_floor],
+   [bitwise_copy],
+   [bitwise_zero],
+   [bitwise_one],
+   [bitwise_is_all_zeros]],
+  [AT_SETUP([testname[()] function])
+   AT_KEYWORDS([testname])
+   AT_CHECK([test-util testname], [0], [], [])
+   AT_CLEANUP])
 
 AT_SETUP([test unix socket -- short pathname])
 AT_CHECK([test-unix-socket x])

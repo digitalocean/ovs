@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,5 +28,7 @@ uint32_t csum_continue(uint32_t partial, const void *, size_t);
 ovs_be16 csum_finish(uint32_t partial);
 ovs_be16 recalc_csum16(ovs_be16 old_csum, ovs_be16 old_u16, ovs_be16 new_u16);
 ovs_be16 recalc_csum32(ovs_be16 old_csum, ovs_be32 old_u32, ovs_be32 new_u32);
+ovs_be16 recalc_csum128(ovs_be16 old_csum, ovs_be32 old_u32[4],
+                        const ovs_be32 new_u32[4]);
 
 #endif /* csum.h */

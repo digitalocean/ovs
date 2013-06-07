@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -65,10 +65,10 @@ struct vport_class {
     enum ovs_vport_type type;
     struct netdev_class netdev_class;
     int (*parse_config)(const char *name, const char *type,
-                        const struct shash *args, struct ofpbuf *options);
+                        const struct smap *args, struct ofpbuf *options);
     int (*unparse_config)(const char *name, const char *type,
                           const struct nlattr *options, size_t options_len,
-                          struct shash *args);
+                          struct smap *args);
 };
 
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
@@ -136,6 +136,12 @@ netdev_vport_get_vport_type(const struct netdev *netdev)
             : OVS_VPORT_TYPE_UNSPEC);
 }
 
+static uint32_t
+get_u32_or_zero(const struct nlattr *a)
+{
+    return a ? nl_attr_get_u32(a) : 0;
+}
+
 const char *
 netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
 {
@@ -159,12 +165,21 @@ netdev_vport_get_netdev_type(const struct dpif_linux_vport *vport)
                                         a)) {
             break;
         }
-        return (nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
+        return (get_u32_or_zero(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
                 ? "ipsec_gre" : "gre");
+
+    case OVS_VPORT_TYPE_GRE64:
+        if (tnl_port_config_from_nlattr(vport->options, vport->options_len,
+                                        a)) {
+            break;
+        }
+        return (get_u32_or_zero(a[OVS_TUNNEL_ATTR_FLAGS]) & TNL_F_IPSEC
+                ? "ipsec_gre64" : "gre64");
 
     case OVS_VPORT_TYPE_CAPWAP:
         return "capwap";
 
+    case OVS_VPORT_TYPE_FT_GRE:
     case __OVS_VPORT_TYPE_MAX:
         break;
     }
@@ -223,7 +238,7 @@ netdev_vport_close(struct netdev *netdev_)
 }
 
 static int
-netdev_vport_get_config(struct netdev_dev *dev_, struct shash *args)
+netdev_vport_get_config(struct netdev_dev *dev_, struct smap *args)
 {
     const struct netdev_class *netdev_class = netdev_dev_get_class(dev_);
     const struct vport_class *vport_class = vport_class_cast(netdev_class);
@@ -260,7 +275,7 @@ netdev_vport_get_config(struct netdev_dev *dev_, struct shash *args)
 }
 
 static int
-netdev_vport_set_config(struct netdev_dev *dev_, const struct shash *args)
+netdev_vport_set_config(struct netdev_dev *dev_, const struct smap *args)
 {
     const struct netdev_class *netdev_class = netdev_dev_get_class(dev_);
     const struct vport_class *vport_class = vport_class_cast(netdev_class);
@@ -459,19 +474,18 @@ netdev_vport_set_stats(struct netdev *netdev, const struct netdev_stats *stats)
 }
 
 static int
-netdev_vport_get_status(const struct netdev *netdev, struct shash *sh)
+netdev_vport_get_drv_info(const struct netdev *netdev, struct smap *smap)
 {
     const char *iface = netdev_vport_get_tnl_iface(netdev);
 
     if (iface) {
         struct netdev *egress_netdev;
 
-        shash_add(sh, "tunnel_egress_iface", xstrdup(iface));
+        smap_add(smap, "tunnel_egress_iface", iface);
 
         if (!netdev_open(iface, "system", &egress_netdev)) {
-            shash_add(sh, "tunnel_egress_iface_carrier",
-                      xstrdup(netdev_get_carrier(egress_netdev)
-                              ? "up" : "down"));
+            smap_add(smap, "tunnel_egress_iface_carrier",
+                     netdev_get_carrier(egress_netdev) ? "up" : "down");
             netdev_close(egress_netdev);
         }
     }
@@ -515,7 +529,6 @@ static const char *
 netdev_vport_get_tnl_iface(const struct netdev *netdev)
 {
     struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
-    ovs_be32 route;
     struct netdev_dev_vport *ndv;
     static char name[IFNAMSIZ];
 
@@ -524,12 +537,13 @@ netdev_vport_get_tnl_iface(const struct netdev *netdev)
                                     a)) {
         return NULL;
     }
-    route = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
+    if (a[OVS_TUNNEL_ATTR_DST_IPV4]) {
+        ovs_be32 route = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
 
-    if (route_table_get_name(route, name)) {
-        return name;
+        if (route_table_get_name(route, name)) {
+            return name;
+        }
     }
-
     return NULL;
 }
 
@@ -551,14 +565,14 @@ netdev_vport_poll_notify(const struct netdev *netdev)
 /* Code specific to individual vport types. */
 
 static void
-set_key(const struct shash *args, const char *name, uint16_t type,
+set_key(const struct smap *args, const char *name, uint16_t type,
         struct ofpbuf *options)
 {
     const char *s;
 
-    s = shash_find_data(args, name);
+    s = smap_get(args, name);
     if (!s) {
-        s = shash_find_data(args, "key");
+        s = smap_get(args, "key");
         if (!s) {
             s = "0";
         }
@@ -573,75 +587,85 @@ set_key(const struct shash *args, const char *name, uint16_t type,
 
 static int
 parse_tunnel_config(const char *name, const char *type,
-                    const struct shash *args, struct ofpbuf *options)
+                    const struct smap *args, struct ofpbuf *options)
 {
     bool is_gre = false;
     bool is_ipsec = false;
-    struct shash_node *node;
+    struct smap_node *node;
     bool ipsec_mech_set = false;
     ovs_be32 daddr = htonl(0);
     ovs_be32 saddr = htonl(0);
     uint32_t flags;
 
-    flags = TNL_F_DF_DEFAULT | TNL_F_PMTUD | TNL_F_HDR_CACHE;
-    if (!strcmp(type, "gre")) {
+    if (!strcmp(type, "capwap")) {
+        VLOG_WARN_ONCE("CAPWAP tunnel support is deprecated.");
+    }
+
+    flags = TNL_F_DF_DEFAULT;
+    if (!strcmp(type, "gre") || !strcmp(type, "gre64")) {
         is_gre = true;
-    } else if (!strcmp(type, "ipsec_gre")) {
+    } else if (!strcmp(type, "ipsec_gre") || !strcmp(type, "ipsec_gre64")) {
         is_gre = true;
         is_ipsec = true;
         flags |= TNL_F_IPSEC;
-        flags &= ~TNL_F_HDR_CACHE;
     }
 
-    SHASH_FOR_EACH (node, args) {
-        if (!strcmp(node->name, "remote_ip")) {
+    SMAP_FOR_EACH (node, args) {
+        if (!strcmp(node->key, "remote_ip")) {
             struct in_addr in_addr;
-            if (lookup_ip(node->data, &in_addr)) {
+            if (lookup_ip(node->value, &in_addr)) {
                 VLOG_WARN("%s: bad %s 'remote_ip'", name, type);
             } else {
                 daddr = in_addr.s_addr;
             }
-        } else if (!strcmp(node->name, "local_ip")) {
+        } else if (!strcmp(node->key, "local_ip")) {
             struct in_addr in_addr;
-            if (lookup_ip(node->data, &in_addr)) {
+            if (lookup_ip(node->value, &in_addr)) {
                 VLOG_WARN("%s: bad %s 'local_ip'", name, type);
             } else {
                 saddr = in_addr.s_addr;
             }
-        } else if (!strcmp(node->name, "tos")) {
-            if (!strcmp(node->data, "inherit")) {
+        } else if (!strcmp(node->key, "tos")) {
+            if (!strcmp(node->value, "inherit")) {
                 flags |= TNL_F_TOS_INHERIT;
             } else {
-                nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TOS, atoi(node->data));
+                char *endptr;
+                int tos;
+                tos = strtol(node->value, &endptr, 0);
+                if (*endptr == '\0' && tos == (tos & IP_DSCP_MASK)) {
+                    nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TOS, tos);
+                } else {
+                    VLOG_WARN("%s: invalid TOS %s", name, node->value);
+                }
             }
-        } else if (!strcmp(node->name, "ttl")) {
-            if (!strcmp(node->data, "inherit")) {
+        } else if (!strcmp(node->key, "ttl")) {
+            if (!strcmp(node->value, "inherit")) {
                 flags |= TNL_F_TTL_INHERIT;
             } else {
-                nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->data));
+                nl_msg_put_u8(options, OVS_TUNNEL_ATTR_TTL, atoi(node->value));
             }
-        } else if (!strcmp(node->name, "csum") && is_gre) {
-            if (!strcmp(node->data, "true")) {
+        } else if (!strcmp(node->key, "csum") && is_gre) {
+            if (!strcmp(node->value, "true")) {
                 flags |= TNL_F_CSUM;
             }
-        } else if (!strcmp(node->name, "df_inherit")) {
-            if (!strcmp(node->data, "true")) {
+        } else if (!strcmp(node->key, "df_inherit")) {
+            if (!strcmp(node->value, "true")) {
                 flags |= TNL_F_DF_INHERIT;
             }
-        } else if (!strcmp(node->name, "df_default")) {
-            if (!strcmp(node->data, "false")) {
+        } else if (!strcmp(node->key, "df_default")) {
+            if (!strcmp(node->value, "false")) {
                 flags &= ~TNL_F_DF_DEFAULT;
             }
-        } else if (!strcmp(node->name, "pmtud")) {
-            if (!strcmp(node->data, "false")) {
-                flags &= ~TNL_F_PMTUD;
+        } else if (!strcmp(node->key, "pmtud")) {
+            if (!strcmp(node->value, "true")) {
+                VLOG_WARN_ONCE("%s: The tunnel Path MTU discovery is "
+                               "deprecated and may be removed in February "
+                               "2013. Please email dev@openvswitch.org with "
+                               "concerns.", name);
+                flags |= TNL_F_PMTUD;
             }
-        } else if (!strcmp(node->name, "header_cache")) {
-            if (!strcmp(node->data, "false")) {
-                flags &= ~TNL_F_HDR_CACHE;
-            }
-        } else if (!strcmp(node->name, "peer_cert") && is_ipsec) {
-            if (shash_find(args, "certificate")) {
+        } else if (!strcmp(node->key, "peer_cert") && is_ipsec) {
+            if (smap_get(args, "certificate")) {
                 ipsec_mech_set = true;
             } else {
                 const char *use_ssl_cert;
@@ -652,7 +676,7 @@ parse_tunnel_config(const char *name, const char *type,
                  * will like be removed when multiple SSL configurations
                  * are supported by OVS.
                  */
-                use_ssl_cert = shash_find_data(args, "use_ssl_cert");
+                use_ssl_cert = smap_get(args, "use_ssl_cert");
                 if (!use_ssl_cert || strcmp(use_ssl_cert, "true")) {
                     VLOG_ERR("%s: 'peer_cert' requires 'certificate' argument",
                              name);
@@ -660,34 +684,38 @@ parse_tunnel_config(const char *name, const char *type,
                 }
                 ipsec_mech_set = true;
             }
-        } else if (!strcmp(node->name, "psk") && is_ipsec) {
+        } else if (!strcmp(node->key, "psk") && is_ipsec) {
             ipsec_mech_set = true;
         } else if (is_ipsec
-                && (!strcmp(node->name, "certificate")
-                    || !strcmp(node->name, "private_key")
-                    || !strcmp(node->name, "use_ssl_cert"))) {
+                && (!strcmp(node->key, "certificate")
+                    || !strcmp(node->key, "private_key")
+                    || !strcmp(node->key, "use_ssl_cert"))) {
             /* Ignore options not used by the netdev. */
-        } else if (!strcmp(node->name, "key") ||
-                   !strcmp(node->name, "in_key") ||
-                   !strcmp(node->name, "out_key")) {
+        } else if (!strcmp(node->key, "key") ||
+                   !strcmp(node->key, "in_key") ||
+                   !strcmp(node->key, "out_key")) {
             /* Handled separately below. */
         } else {
-            VLOG_WARN("%s: unknown %s argument '%s'", name, type, node->name);
+            VLOG_WARN("%s: unknown %s argument '%s'", name, type, node->key);
         }
     }
 
     if (is_ipsec) {
-        char *file_name = xasprintf("%s/%s", ovs_rundir(),
-                "ovs-monitor-ipsec.pid");
-        pid_t pid = read_pidfile(file_name);
-        free(file_name);
+        static pid_t pid = 0;
+        if (pid <= 0) {
+            char *file_name = xasprintf("%s/%s", ovs_rundir(),
+                                        "ovs-monitor-ipsec.pid");
+            pid = read_pidfile(file_name);
+            free(file_name);
+        }
+
         if (pid < 0) {
             VLOG_ERR("%s: IPsec requires the ovs-monitor-ipsec daemon",
                      name);
             return EINVAL;
         }
 
-        if (shash_find(args, "peer_cert") && shash_find(args, "psk")) {
+        if (smap_get(args, "peer_cert") && smap_get(args, "psk")) {
             VLOG_ERR("%s: cannot define both 'peer_cert' and 'psk'", name);
             return EINVAL;
         }
@@ -727,8 +755,8 @@ tnl_port_config_from_nlattr(const struct nlattr *options, size_t options_len,
                             struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1])
 {
     static const struct nl_policy ovs_tunnel_policy[] = {
-        [OVS_TUNNEL_ATTR_FLAGS] = { .type = NL_A_U32 },
-        [OVS_TUNNEL_ATTR_DST_IPV4] = { .type = NL_A_BE32 },
+        [OVS_TUNNEL_ATTR_FLAGS] = { .type = NL_A_U32, .optional = true },
+        [OVS_TUNNEL_ATTR_DST_IPV4] = { .type = NL_A_BE32, .optional = true },
         [OVS_TUNNEL_ATTR_SRC_IPV4] = { .type = NL_A_BE32, .optional = true },
         [OVS_TUNNEL_ATTR_IN_KEY] = { .type = NL_A_BE64, .optional = true },
         [OVS_TUNNEL_ATTR_OUT_KEY] = { .type = NL_A_BE64, .optional = true },
@@ -754,10 +782,9 @@ get_be64_or_zero(const struct nlattr *a)
 static int
 unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
                       const struct nlattr *options, size_t options_len,
-                      struct shash *args)
+                      struct smap *args)
 {
     struct nlattr *a[OVS_TUNNEL_ATTR_MAX + 1];
-    ovs_be32 daddr;
     uint32_t flags;
     int error;
 
@@ -766,18 +793,14 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
         return error;
     }
 
-    flags = nl_attr_get_u32(a[OVS_TUNNEL_ATTR_FLAGS]);
-    if (!(flags & TNL_F_HDR_CACHE) == !(flags & TNL_F_IPSEC)) {
-        smap_add(args, "header_cache",
-                 flags & TNL_F_HDR_CACHE ? "true" : "false");
+    if (a[OVS_TUNNEL_ATTR_DST_IPV4]) {
+        ovs_be32 daddr = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
+        smap_add_format(args, "remote_ip", IP_FMT, IP_ARGS(&daddr));
     }
-
-    daddr = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_DST_IPV4]);
-    shash_add(args, "remote_ip", xasprintf(IP_FMT, IP_ARGS(&daddr)));
 
     if (a[OVS_TUNNEL_ATTR_SRC_IPV4]) {
         ovs_be32 saddr = nl_attr_get_be32(a[OVS_TUNNEL_ATTR_SRC_IPV4]);
-        shash_add(args, "local_ip", xasprintf(IP_FMT, IP_ARGS(&saddr)));
+        smap_add_format(args, "local_ip", IP_FMT, IP_ARGS(&saddr));
     }
 
     if (!a[OVS_TUNNEL_ATTR_IN_KEY] && !a[OVS_TUNNEL_ATTR_OUT_KEY]) {
@@ -787,34 +810,36 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
         uint64_t out_key = get_be64_or_zero(a[OVS_TUNNEL_ATTR_OUT_KEY]);
 
         if (in_key && in_key == out_key) {
-            shash_add(args, "key", xasprintf("%"PRIu64, in_key));
+            smap_add_format(args, "key", "%"PRIu64, in_key);
         } else {
             if (!a[OVS_TUNNEL_ATTR_IN_KEY]) {
                 smap_add(args, "in_key", "flow");
             } else if (in_key) {
-                shash_add(args, "in_key", xasprintf("%"PRIu64, in_key));
+                smap_add_format(args, "in_key", "%"PRIu64, in_key);
             }
 
             if (!a[OVS_TUNNEL_ATTR_OUT_KEY]) {
                 smap_add(args, "out_key", "flow");
             } else if (out_key) {
-                shash_add(args, "out_key", xasprintf("%"PRIu64, out_key));
+                smap_add_format(args, "out_key", "%"PRIu64, out_key);
             }
         }
     }
 
+    flags = get_u32_or_zero(a[OVS_TUNNEL_ATTR_FLAGS]);
+
     if (flags & TNL_F_TTL_INHERIT) {
-        smap_add(args, "tos", "inherit");
+        smap_add(args, "ttl", "inherit");
     } else if (a[OVS_TUNNEL_ATTR_TTL]) {
         int ttl = nl_attr_get_u8(a[OVS_TUNNEL_ATTR_TTL]);
-        shash_add(args, "tos", xasprintf("%d", ttl));
+        smap_add_format(args, "ttl", "%d", ttl);
     }
 
     if (flags & TNL_F_TOS_INHERIT) {
         smap_add(args, "tos", "inherit");
     } else if (a[OVS_TUNNEL_ATTR_TOS]) {
         int tos = nl_attr_get_u8(a[OVS_TUNNEL_ATTR_TOS]);
-        shash_add(args, "tos", xasprintf("%d", tos));
+        smap_add_format(args, "tos", "0x%x", tos);
     }
 
     if (flags & TNL_F_CSUM) {
@@ -826,8 +851,8 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
     if (!(flags & TNL_F_DF_DEFAULT)) {
         smap_add(args, "df_default", "false");
     }
-    if (!(flags & TNL_F_PMTUD)) {
-        smap_add(args, "pmtud", "false");
+    if (flags & TNL_F_PMTUD) {
+        smap_add(args, "pmtud", "true");
     }
 
     return 0;
@@ -835,17 +860,17 @@ unparse_tunnel_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
 
 static int
 parse_patch_config(const char *name, const char *type OVS_UNUSED,
-                   const struct shash *args, struct ofpbuf *options)
+                   const struct smap *args, struct ofpbuf *options)
 {
     const char *peer;
 
-    peer = shash_find_data(args, "peer");
+    peer = smap_get(args, "peer");
     if (!peer) {
         VLOG_ERR("%s: patch type requires valid 'peer' argument", name);
         return EINVAL;
     }
 
-    if (shash_count(args) > 1) {
+    if (smap_count(args) > 1) {
         VLOG_ERR("%s: patch type takes only a 'peer' argument", name);
         return EINVAL;
     }
@@ -868,7 +893,7 @@ parse_patch_config(const char *name, const char *type OVS_UNUSED,
 static int
 unparse_patch_config(const char *name OVS_UNUSED, const char *type OVS_UNUSED,
                      const struct nlattr *options, size_t options_len,
-                     struct shash *args)
+                     struct smap *args)
 {
     static const struct nl_policy ovs_patch_policy[] = {
         [OVS_PATCH_ATTR_PEER] = { .type = NL_A_STRING,
@@ -953,15 +978,23 @@ netdev_vport_register(void)
 {
     static const struct vport_class vport_classes[] = {
         { OVS_VPORT_TYPE_GRE,
-          { "gre", VPORT_FUNCTIONS(netdev_vport_get_status) },
+          { "gre", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
           parse_tunnel_config, unparse_tunnel_config },
 
         { OVS_VPORT_TYPE_GRE,
-          { "ipsec_gre", VPORT_FUNCTIONS(netdev_vport_get_status) },
+          { "ipsec_gre", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
+          parse_tunnel_config, unparse_tunnel_config },
+
+        { OVS_VPORT_TYPE_GRE64,
+          { "gre64", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
+          parse_tunnel_config, unparse_tunnel_config },
+
+        { OVS_VPORT_TYPE_GRE64,
+          { "ipsec_gre64", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
           parse_tunnel_config, unparse_tunnel_config },
 
         { OVS_VPORT_TYPE_CAPWAP,
-          { "capwap", VPORT_FUNCTIONS(netdev_vport_get_status) },
+          { "capwap", VPORT_FUNCTIONS(netdev_vport_get_drv_info) },
           parse_tunnel_config, unparse_tunnel_config },
 
         { OVS_VPORT_TYPE_PATCH,

@@ -5,6 +5,17 @@
 #include <linux/netlink.h>
 #include <net/net_namespace.h>
 
+/*
+ * 15e473046cb6e5d18a4d0057e61d76315230382b renames pid to portid
+ * the affected structures are
+ * netlink_skb_parms::pid -> portid
+ * genl_info::snd_pid -> snd_portid
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0)
+#define snd_portid snd_pid
+#define portid pid
+#endif
+
 /* Very special super-nasty workaround here:
  *
  * Before 2.6.19, nlmsg_multicast() lacked a 'flags' parameter.  We work
@@ -26,7 +37,7 @@
 #define nlmsg_multicast busted_nlmsg_multicast
 #define genlmsg_multicast busted_genlmsg_multicast
 extern int busted_nlmsg_multicast(struct sock *sk, struct sk_buff *skb,
-				  u32 pid, unsigned int group);
+				  u32 portid, unsigned int group);
 #endif	/* linux kernel < v2.6.19 */
 
 #include_next <net/genetlink.h>
@@ -86,14 +97,14 @@ static inline int genlmsg_total_size(int payload)
 #define genlmsg_multicast(s, p, g, f) \
 		genlmsg_multicast_flags((s), (p), (g), (f))
 
-static inline int genlmsg_multicast_flags(struct sk_buff *skb, u32 pid,
+static inline int genlmsg_multicast_flags(struct sk_buff *skb, u32 portid,
 		unsigned int group, gfp_t flags)
 {
 	int err;
 
 	NETLINK_CB(skb).dst_group = group;
 
-	err = netlink_broadcast(genl_sock, skb, pid, group, flags);
+	err = netlink_broadcast(genl_sock, skb, portid, group, flags);
 	if (err > 0)
 		err = 0;
 
@@ -101,6 +112,10 @@ static inline int genlmsg_multicast_flags(struct sk_buff *skb, u32 pid,
 }
 #endif /* linux kernel < 2.6.19 */
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
+#define genlmsg_multicast_netns(net, skb, portid, grp, flags) \
+		genlmsg_multicast(skb, portid, grp, flags)
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
 
@@ -122,7 +137,7 @@ static inline void *genlmsg_put_reply(struct sk_buff *skb,
 			struct genl_info *info, struct genl_family *family,
 			int flags, u8 cmd)
 {
-	return genlmsg_put(skb, info->snd_pid, info->snd_seq, family,
+	return genlmsg_put(skb, info->snd_portid, info->snd_seq, family,
 				flags, cmd);
 }
 
@@ -133,7 +148,7 @@ static inline void *genlmsg_put_reply(struct sk_buff *skb,
  */
 static inline int genlmsg_reply(struct sk_buff *skb, struct genl_info *info)
 {
-	return genlmsg_unicast(skb, info->snd_pid);
+	return genlmsg_unicast(skb, info->snd_portid);
 }
 
 /**
@@ -153,10 +168,10 @@ int genl_register_family_with_ops(struct genl_family *family,
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-#define genl_notify(skb, net, pid, group, nlh, flags) \
-	genl_notify(skb, pid, group, nlh, flags)
+#define genl_notify(skb, net, portid, group, nlh, flags) \
+	genl_notify(skb, portid, group, nlh, flags)
 #endif
-extern void genl_notify(struct sk_buff *skb, struct net *net, u32 pid,
+extern void genl_notify(struct sk_buff *skb, struct net *net, u32 portid,
 			u32 group, struct nlmsghdr *nlh, gfp_t flags);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24) && \
@@ -168,6 +183,6 @@ static inline struct net *genl_info_net(struct genl_info *info)
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,32)
-#define genlmsg_unicast(ignore_net, skb, pid)   genlmsg_unicast(skb, pid)
+#define genlmsg_unicast(ignore_net, skb, portid)   genlmsg_unicast(skb, portid)
 #endif
 #endif /* genetlink.h */

@@ -25,19 +25,17 @@ ovs\-vsctl \- utility for querying and configuring \fBovs\-vswitchd\fR
 .
 .SH DESCRIPTION
 The \fBovs\-vsctl\fR program configures \fBovs\-vswitchd\fR(8) by
-providing a high\-level interface to its configuration
-database.  This program is mainly intended for use when
-\fBovs\-vswitchd\fR is running.  If it is used when
-\fBovs\-vswitchd\fR is not running, then \fB\-\-no\-wait\fR should be
-specified and configuration changes will only take effect when
-\fBovs\-vswitchd\fR is started.
+providing a high\-level interface to its configuration database.
+See \fBovs\-vswitchd.conf.db\fR(5) for comprehensive documentation of
+the database schema.
 .PP
-By default, each time \fBovs\-vsctl\fR runs, it connects to an
-\fBovsdb\-server\fR process that maintains an Open vSwitch
-configuration database.  Using this connection, it queries and
-possibly applies changes to the database, depending on the supplied
-commands.  Then, if it applied any changes, it waits until
-\fBovs\-vswitchd\fR has finished reconfiguring itself before it exits.
+\fBovs\-vsctl\fR connects to an \fBovsdb\-server\fR process that
+maintains an Open vSwitch configuration database.  Using this
+connection, it queries and possibly applies changes to the database,
+depending on the supplied commands.  Then, if it applied any changes,
+by default it waits until \fBovs\-vswitchd\fR has finished
+reconfiguring itself before it exits.  (If you use \fBovs\-vsctl\fR
+when \fBovs\-vswitchd\fR is not running, use \fB\-\-no\-wait\fR.)
 .PP
 \fBovs\-vsctl\fR can perform any number of commands in a single run,
 implemented as a single atomic transaction against the database.
@@ -197,9 +195,10 @@ Without \fB\-\-if\-exists\fR, attempting to delete a bridge that does
 not exist is an error.  With \fB\-\-if\-exists\fR, attempting to
 delete a bridge that does not exist has no effect.
 .
-.IP "\fBlist\-br\fR"
+.IP "[\fB\-\-real\fR|\fB\-\-fake\fR] \fBlist\-br\fR"
 Lists all existing real and fake bridges on standard output, one per
-line.
+line.  With \fB\-\-real\fR or \fB\-\-fake\fR, only bridges of that type
+are returned.
 .
 .IP "\fBbr\-exists \fIbridge\fR"
 Tests whether \fIbridge\fR exists as a real or fake bridge.  If so,
@@ -487,6 +486,9 @@ A bridge port.  Records may be identified by port name.
 .IP "\fBInterface\fR"
 A network device attached to a port.  Records may be identified by
 name.
+.IP "\fBFlow_Table\fR"
+Configuration for a particular OpenFlow flow table.  Records may be
+identified by name.
 .IP "\fBQoS\fR"
 Quality-of-service configuration for a \fBPort\fR.  Records may be
 identified by port name.
@@ -559,8 +561,10 @@ follow the syntax for the column's key type and value type,
 respectively.  When multiple pairs are present (separated by spaces or
 a comma), duplicate keys are not allowed, and again the order is not
 important.  Duplicate values are allowed.  An empty map is represented
-as \fB{}\fR, and curly braces may be optionally enclose non-empty maps
-as well.
+as \fB{}\fR.  Curly braces may optionally enclose non-empty maps as
+well (but use quotes to prevent the shell from expanding
+\fBother-config={0=x,1=y}\fR into \fBother-config=0=x
+other-config=1=y\fR, which may not have the desired effect).
 .
 .ST "Database Command Syntax"
 .IP "[\fB\-\-columns=\fIcolumn\fR[\fB,\fIcolumn\fR]...] \fBlist \fItable \fR[\fIrecord\fR]..."
@@ -574,11 +578,56 @@ alphabetical order by column name.
 .IP "[\fB\-\-columns=\fIcolumn\fR[\fB,\fIcolumn\fR]...] \fBfind \fItable \fR[\fIcolumn\fR[\fB:\fIkey\fR]\fB=\fIvalue\fR]..."
 Lists the data in each record in \fItable\fR whose \fIcolumn\fR equals
 \fIvalue\fR or, if \fIkey\fR is specified, whose \fIcolumn\fR contains
-a \fIkey\fR with the specified \fIvalue\fR.  Any of the operators
-\fB!=\fR, \fB<\fR, \fB>\fR, \fB<=\fR, or \fB>=\fR may be substituted
-for \fB=\fR to test for inequality, less than, greater than, less than
-or equal to, or greater than or equal to, respectively.  (Don't forget
-to escape \fB<\fR or \fB>\fR from interpretation by the shell.)
+a \fIkey\fR with the specified \fIvalue\fR.  The following operators
+may be used where \fB=\fR is written in the syntax summary:
+.RS
+.IP "\fB= != < > <= >=\fR"
+Selects records in which \fIcolumn\fR[\fB:\fIkey\fR] equals, does not
+equal, is less than, is greater than, is less than or equal to, or is
+greater than or equal to \fIvalue\fR, respectively.
+.IP
+Consider \fIcolumn\fR[\fB:\fIkey\fR] and \fIvalue\fR as sets of
+elements.  Identical sets are considered equal.  Otherwise, if the
+sets have different numbers of elements, then the set with more
+elements is considered to be larger.  Otherwise, consider a element
+from each set pairwise, in increasing order within each set.  The
+first pair that differs determines the result.  (For a column that
+contains key-value pairs, first all the keys are compared, and values
+are considered only if the two sets contain identical keys.)
+.IP "\fB{=} {!=}\fR"
+Test for set equality or inequality, respectively.
+.IP "\fB{<=}\fR"
+Selects records in which \fIcolumn\fR[\fB:\fIkey\fR] is a subset of
+\fIvalue\fR.  For example, \fBflood-vlans{<=}1,2\fR selects records in
+which the \fBflood-vlans\fR column is the empty set or contains 1 or 2
+or both.
+.IP "\fB{<}\fR"
+Selects records in which \fIcolumn\fR[\fB:\fIkey\fR] is a proper
+subset of \fIvalue\fR.  For example, \fBflood-vlans{<}1,2\fR selects
+records in which the \fBflood-vlans\fR column is the empty set or
+contains 1 or 2 but not both.
+.IP "\fB{>=} {>}\fR"
+Same as \fB{<=}\fR and \fB{<}\fR, respectively, except that the
+relationship is reversed.  For example, \fBflood-vlans{>=}1,2\fR
+selects records in which the \fBflood-vlans\fR column contains both 1
+and 2.
+.RE
+.IP
+For arithmetic operators (\fB= != < > <= >=\fR), when \fIkey\fR is
+specified but a particular record's \fIcolumn\fR does not contain
+\fIkey\fR, the record is always omitted from the results.  Thus, the
+condition \fBother-config:mtu!=1500\fR matches records that have a
+\fBmtu\fR key whose value is not 1500, but not those that lack an
+\fBmtu\fR key.
+.IP
+For the set operators, when \fIkey\fR is specified but a particular
+record's \fIcolumn\fR does not contain \fIkey\fR, the comparison is
+done against an empty set.  Thus, the condition
+\fBother-config:mtu{!=}1500\fR matches records that have a \fBmtu\fR
+key whose value is not 1500 and those that lack an \fBmtu\fR key.
+.IP
+Don't forget to escape \fB<\fR or \fB>\fR from interpretation by the
+shell.
 .IP
 If \fB\-\-columns\fR is specified, only the requested columns are
 listed, in the specified order.  Otherwise all columns are listed, in
@@ -666,6 +715,8 @@ this.
 .IP "\fR[\fB\-\-if\-exists\fR] \fBdestroy \fItable record\fR..."
 Deletes each specified \fIrecord\fR from \fItable\fR.  Unless
 \fB\-\-if\-exists\fR is specified, each \fIrecord\fRs must exist.
+.IP "\fB\-\-all destroy \fItable\fR"
+Deletes all records from the \fItable\fR.
 .IP
 The \fBdestroy\fR command is only useful for records in the \fBQoS\fR
 or \fBQueue\fR tables.  Records in other tables are automatically
@@ -739,6 +790,12 @@ access port for VLAN 10, and configure it with an IP address:
 .IP
 .B "ifconfig vlan10 192.168.0.123"
 .
+.PP
+Add a GRE tunnel port \fBgre0\fR to remote IP address 1.2.3.4 to
+bridge \fBbr0\fR:
+.IP
+.B "ovs\-vsctl add\-port br0 gre0 \-\- set Interface gre0 type=gre options:remote_ip=1.2.3.4"
+.
 .SS "Port Mirroring"
 .PP
 Mirror all packets received or sent on \fBeth0\fR or \fBeth1\fR onto
@@ -759,7 +816,13 @@ ignored):
 Remove the mirror created above from \fBbr0\fR, which also destroys
 the Mirror record (since it is now unreferenced):
 .IP
-.B "remove Bridge br0 mirrors mymirror"
+.B "ovs\-vsctl \-\- \-\-id=@rec get Mirror mymirror \(rs"
+.IP
+.B "\-\- remove Bridge br0 mirrors @rec"
+.PP
+The following simpler command also works:
+.IP
+.B "ovs\-vsctl clear Bridge br0 mirrors"
 .SS "Quality of Service (QoS)"
 .PP
 Create a \fBlinux\-htb\fR QoS record that points to a few queues and
@@ -788,7 +851,8 @@ unreferenced QoS records are not automatically destroyed):
 (This command will leave two unreferenced Queue records in the
 database.  To delete them, use "\fBovs\-vsctl list Queue\fR" to find
 their UUIDs, then "\fBovs\-vsctl destroy Queue \fIuuid1\fR
-\fIuuid2\fR" to destroy each of them.)
+\fIuuid2\fR" to destroy each of them or use
+"\fBovs\-vsctl -- --all destroy Queue\fR" to delete all records.)
 .SS "Connectivity Monitoring"
 .PP
 Monitor connectivity to a remote maintenance point on eth0.
@@ -859,4 +923,5 @@ bridge that does not exist.
 .SH "SEE ALSO"
 .
 .BR ovsdb\-server (1),
-.BR ovs\-vswitchd (8).
+.BR ovs\-vswitchd (8),
+.BR ovs\-vswitchd.conf.db (5).

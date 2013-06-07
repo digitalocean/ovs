@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 
 struct ofpbuf;
 struct ds;
+struct flow;
 
 bool dpid_from_string(const char *s, uint64_t *dpidp);
 
@@ -63,6 +64,12 @@ static inline bool eth_addr_is_zero(const uint8_t ea[6])
 {
     return !(ea[0] | ea[1] | ea[2] | ea[3] | ea[4] | ea[5]);
 }
+
+static inline int eth_mask_is_exact(const uint8_t ea[ETH_ADDR_LEN])
+{
+    return (ea[0] & ea[1] & ea[2] & ea[3] & ea[4] & ea[5]) == 0xff;
+}
+
 static inline int eth_addr_compare_3way(const uint8_t a[ETH_ADDR_LEN],
                                         const uint8_t b[ETH_ADDR_LEN])
 {
@@ -72,6 +79,17 @@ static inline bool eth_addr_equals(const uint8_t a[ETH_ADDR_LEN],
                                    const uint8_t b[ETH_ADDR_LEN])
 {
     return !eth_addr_compare_3way(a, b);
+}
+static inline bool eth_addr_equal_except(const uint8_t a[ETH_ADDR_LEN],
+                                    const uint8_t b[ETH_ADDR_LEN],
+                                    const uint8_t mask[ETH_ADDR_LEN])
+{
+    return !(((a[0] ^ b[0]) & mask[0])
+             || ((a[1] ^ b[1]) & mask[1])
+             || ((a[2] ^ b[2]) & mask[2])
+             || ((a[3] ^ b[3]) & mask[3])
+             || ((a[4] ^ b[4]) & mask[4])
+             || ((a[5] ^ b[5]) & mask[5]));
 }
 static inline uint64_t eth_addr_to_uint64(const uint8_t ea[ETH_ADDR_LEN])
 {
@@ -113,26 +131,21 @@ static inline void eth_addr_nicira_random(uint8_t ea[ETH_ADDR_LEN])
     /* Set the top bit to indicate random Nicira address. */
     ea[3] |= 0x80;
 }
-/* Returns true if 'ea' is a reserved multicast address, that a bridge must
- * never forward, false otherwise. */
-static inline bool eth_addr_is_reserved(const uint8_t ea[ETH_ADDR_LEN])
-{
-    return (ea[0] == 0x01
-            && ea[1] == 0x80
-            && ea[2] == 0xc2
-            && ea[3] == 0x00
-            && ea[4] == 0x00
-            && (ea[5] & 0xf0) == 0x00);
-}
 
+bool eth_addr_is_reserved(const uint8_t ea[ETH_ADDR_LEN]);
 bool eth_addr_from_string(const char *, uint8_t ea[ETH_ADDR_LEN]);
 
-void compose_benign_packet(struct ofpbuf *, const char *tag,
-                           uint16_t snap_type,
-                           const uint8_t eth_src[ETH_ADDR_LEN]);
+void compose_rarp(struct ofpbuf *, const uint8_t eth_src[ETH_ADDR_LEN]);
 
 void eth_push_vlan(struct ofpbuf *, ovs_be16 tci);
 void eth_pop_vlan(struct ofpbuf *);
+
+const char *eth_from_hex(const char *hex, struct ofpbuf **packetp);
+void eth_format_masked(const uint8_t eth[ETH_ADDR_LEN],
+                       const uint8_t mask[ETH_ADDR_LEN], struct ds *s);
+void eth_addr_bitand(const uint8_t src[ETH_ADDR_LEN],
+                     const uint8_t mask[ETH_ADDR_LEN],
+                     uint8_t dst[ETH_ADDR_LEN]);
 
 /* Example:
  *
@@ -167,6 +180,9 @@ void eth_pop_vlan(struct ofpbuf *);
 #define ETH_TYPE_VLAN          0x8100
 #define ETH_TYPE_IPV6          0x86dd
 #define ETH_TYPE_LACP          0x8809
+#define ETH_TYPE_RARP          0x8035
+#define ETH_TYPE_MPLS          0x8847
+#define ETH_TYPE_MPLS_MCAST    0x8848
 
 /* Minimum value for an Ethernet type.  Values below this are IEEE 802.2 frame
  * lengths. */
@@ -304,7 +320,15 @@ void ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *);
 #define IP_IHL(ip_ihl_ver) ((ip_ihl_ver) & 15)
 #define IP_IHL_VER(ihl, ver) (((ver) << 4) | (ihl))
 
+#ifndef IPPROTO_SCTP
+#define IPPROTO_SCTP 132
+#endif
+
 /* TOS fields. */
+#define IP_ECN_NOT_ECT 0x0
+#define IP_ECN_ECT_1 0x01
+#define IP_ECN_ECT_0 0x02
+#define IP_ECN_CE 0x03
 #define IP_ECN_MASK 0x03
 #define IP_DSCP_MASK 0xfc
 
@@ -367,6 +391,7 @@ BUILD_ASSERT_DECL(UDP_HEADER_LEN == sizeof(struct udp_header));
 #define TCP_ACK 0x10
 #define TCP_URG 0x20
 
+#define TCP_CTL(flags, offset) (htons((flags) | ((offset) << 12)))
 #define TCP_FLAGS(tcp_ctl) (ntohs(tcp_ctl) & 0x003f)
 #define TCP_OFFSET(tcp_ctl) (ntohs(tcp_ctl) >> 12)
 
@@ -387,6 +412,7 @@ BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
 #define ARP_PRO_IP 0x0800
 #define ARP_OP_REQUEST 1
 #define ARP_OP_REPLY 2
+#define ARP_OP_RARP 3
 
 #define ARP_ETH_HEADER_LEN 28
 struct arp_eth_header {
@@ -460,5 +486,15 @@ void *eth_compose(struct ofpbuf *, const uint8_t eth_dst[ETH_ADDR_LEN],
 void *snap_compose(struct ofpbuf *, const uint8_t eth_dst[ETH_ADDR_LEN],
                    const uint8_t eth_src[ETH_ADDR_LEN],
                    unsigned int oui, uint16_t snap_type, size_t size);
+void packet_set_ipv4(struct ofpbuf *, ovs_be32 src, ovs_be32 dst, uint8_t tos,
+                     uint8_t ttl);
+void packet_set_ipv6(struct ofpbuf *, uint8_t proto, const ovs_be32 src[4],
+                     const ovs_be32 dst[4], uint8_t tc,
+                     ovs_be32 fl, uint8_t hlmit);
+void packet_set_tcp_port(struct ofpbuf *, ovs_be16 src, ovs_be16 dst);
+void packet_set_udp_port(struct ofpbuf *, ovs_be16 src, ovs_be16 dst);
+
+uint8_t packet_get_tcp_flags(const struct ofpbuf *, const struct flow *);
+void packet_format_tcp_flags(struct ds *, uint8_t);
 
 #endif /* packets.h */

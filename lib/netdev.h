@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ extern "C" {
 struct ofpbuf;
 struct in_addr;
 struct in6_addr;
-struct shash;
+struct smap;
 struct sset;
 
 enum netdev_flags {
@@ -93,8 +93,8 @@ bool netdev_is_open(const char *name);
 void netdev_parse_name(const char *netdev_name, char **name, char **type);
 
 /* Options. */
-int netdev_set_config(struct netdev *, const struct shash *args);
-int netdev_get_config(const struct netdev *, struct shash *);
+int netdev_set_config(struct netdev *, const struct smap *args);
+int netdev_get_config(const struct netdev *, struct smap *);
 
 /* Basic properties. */
 const char *netdev_get_name(const struct netdev *);
@@ -120,22 +120,46 @@ int netdev_get_etheraddr(const struct netdev *, uint8_t mac[6]);
 bool netdev_get_carrier(const struct netdev *);
 long long int netdev_get_carrier_resets(const struct netdev *);
 int netdev_set_miimon_interval(struct netdev *, long long int interval);
+
+/* Features. */
+enum netdev_features {
+    NETDEV_F_10MB_HD =    1 << 0,  /* 10 Mb half-duplex rate support. */
+    NETDEV_F_10MB_FD =    1 << 1,  /* 10 Mb full-duplex rate support. */
+    NETDEV_F_100MB_HD =   1 << 2,  /* 100 Mb half-duplex rate support. */
+    NETDEV_F_100MB_FD =   1 << 3,  /* 100 Mb full-duplex rate support. */
+    NETDEV_F_1GB_HD =     1 << 4,  /* 1 Gb half-duplex rate support. */
+    NETDEV_F_1GB_FD =     1 << 5,  /* 1 Gb full-duplex rate support. */
+    NETDEV_F_10GB_FD =    1 << 6,  /* 10 Gb full-duplex rate support. */
+    NETDEV_F_40GB_FD =    1 << 7,  /* 40 Gb full-duplex rate support. */
+    NETDEV_F_100GB_FD =   1 << 8,  /* 100 Gb full-duplex rate support. */
+    NETDEV_F_1TB_FD =     1 << 9,  /* 1 Tb full-duplex rate support. */
+    NETDEV_F_OTHER =      1 << 10, /* Other rate, not in the list. */
+    NETDEV_F_COPPER =     1 << 11, /* Copper medium. */
+    NETDEV_F_FIBER =      1 << 12, /* Fiber medium. */
+    NETDEV_F_AUTONEG =    1 << 13, /* Auto-negotiation. */
+    NETDEV_F_PAUSE =      1 << 14, /* Pause. */
+    NETDEV_F_PAUSE_ASYM = 1 << 15, /* Asymmetric pause. */
+};
+
 int netdev_get_features(const struct netdev *,
-                        uint32_t *current, uint32_t *advertised,
-                        uint32_t *supported, uint32_t *peer);
-uint64_t netdev_features_to_bps(uint32_t features);
-bool netdev_features_is_full_duplex(uint32_t features);
-int netdev_set_advertisements(struct netdev *, uint32_t advertise);
+                        enum netdev_features *current,
+                        enum netdev_features *advertised,
+                        enum netdev_features *supported,
+                        enum netdev_features *peer);
+uint64_t netdev_features_to_bps(enum netdev_features features);
+bool netdev_features_is_full_duplex(enum netdev_features features);
+int netdev_set_advertisements(struct netdev *, enum netdev_features advertise);
 
 /* TCP/IP stack interface. */
 int netdev_get_in4(const struct netdev *, struct in_addr *address,
                    struct in_addr *netmask);
 int netdev_set_in4(struct netdev *, struct in_addr addr, struct in_addr mask);
+int netdev_get_in4_by_name(const char *device_name, struct in_addr *in4);
 int netdev_get_in6(const struct netdev *, struct in6_addr *);
 int netdev_add_router(struct netdev *, struct in_addr router);
 int netdev_get_next_hop(const struct netdev *, const struct in_addr *host,
                         struct in_addr *next_hop, char **);
-int netdev_get_status(const struct netdev *, struct shash *sh);
+int netdev_get_drv_info(const struct netdev *, struct smap *);
 int netdev_arp_lookup(const struct netdev *, ovs_be32 ip, uint8_t mac[6]);
 
 int netdev_get_flags(const struct netdev *, enum netdev_flags *);
@@ -171,20 +195,20 @@ int netdev_get_n_queues(const struct netdev *,
                         const char *type, unsigned int *n_queuesp);
 
 int netdev_get_qos(const struct netdev *,
-                   const char **typep, struct shash *details);
+                   const char **typep, struct smap *details);
 int netdev_set_qos(struct netdev *,
-                   const char *type, const struct shash *details);
+                   const char *type, const struct smap *details);
 
 int netdev_get_queue(const struct netdev *,
-                     unsigned int queue_id, struct shash *details);
+                     unsigned int queue_id, struct smap *details);
 int netdev_set_queue(struct netdev *,
-                     unsigned int queue_id, const struct shash *details);
+                     unsigned int queue_id, const struct smap *details);
 int netdev_delete_queue(struct netdev *, unsigned int queue_id);
 int netdev_get_queue_stats(const struct netdev *, unsigned int queue_id,
                            struct netdev_queue_stats *);
 
 typedef void netdev_dump_queues_cb(unsigned int queue_id,
-                                   const struct shash *details, void *aux);
+                                   const struct smap *details, void *aux);
 int netdev_dump_queues(const struct netdev *,
                        netdev_dump_queues_cb *, void *aux);
 

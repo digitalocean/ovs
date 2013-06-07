@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,8 @@
 #include "ofpbuf.h"
 #include "packets.h"
 #include "shash.h"
+#include "simap.h"
+#include "smap.h"
 #include "sset.h"
 #include "timeval.h"
 #include "util.h"
@@ -179,7 +181,7 @@ static void run(int retval, const char *message, ...)
     }
 }
 
-static void do_add_if(int argc, char *argv[]);
+static void dpctl_add_if(int argc, char *argv[]);
 
 static int if_up(const char *netdev_name)
 {
@@ -214,18 +216,18 @@ parsed_dpif_open(const char *arg_, bool create, struct dpif **dpifp)
 }
 
 static void
-do_add_dp(int argc OVS_UNUSED, char *argv[])
+dpctl_add_dp(int argc OVS_UNUSED, char *argv[])
 {
     struct dpif *dpif;
     run(parsed_dpif_open(argv[1], true, &dpif), "add_dp");
     dpif_close(dpif);
     if (argc > 2) {
-        do_add_if(argc, argv);
+        dpctl_add_if(argc, argv);
     }
 }
 
 static void
-do_del_dp(int argc OVS_UNUSED, char *argv[])
+dpctl_del_dp(int argc OVS_UNUSED, char *argv[])
 {
     struct dpif *dpif;
     run(parsed_dpif_open(argv[1], false, &dpif), "opening datapath");
@@ -234,7 +236,7 @@ do_del_dp(int argc OVS_UNUSED, char *argv[])
 }
 
 static void
-do_add_if(int argc OVS_UNUSED, char *argv[])
+dpctl_add_if(int argc OVS_UNUSED, char *argv[])
 {
     bool failure = false;
     struct dpif *dpif;
@@ -245,7 +247,8 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
         const char *name, *type;
         char *save_ptr = NULL;
         struct netdev *netdev = NULL;
-        struct shash args;
+        struct smap args;
+        uint16_t port_no = UINT16_MAX;
         char *option;
         int error;
 
@@ -258,7 +261,7 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
             continue;
         }
 
-        shash_init(&args);
+        smap_init(&args);
         while ((option = strtok_r(NULL, ",", &save_ptr)) != NULL) {
             char *save_ptr_2 = NULL;
             char *key, *value;
@@ -271,7 +274,9 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
 
             if (!strcmp(key, "type")) {
                 type = value;
-            } else if (!shash_add_once(&args, key, value)) {
+            } else if (!strcmp(key, "port_no")) {
+                port_no = atoi(value);
+            } else if (!smap_add_once(&args, key, value)) {
                 ovs_error(0, "duplicate \"%s\" option", key);
             }
         }
@@ -288,7 +293,7 @@ do_add_if(int argc OVS_UNUSED, char *argv[])
             goto next;
         }
 
-        error = dpif_port_add(dpif, netdev, NULL);
+        error = dpif_port_add(dpif, netdev, &port_no);
         if (error) {
             ovs_error(error, "adding %s to %s failed", name, argv[1]);
             goto next;
@@ -309,7 +314,7 @@ next:
 }
 
 static void
-do_set_if(int argc, char *argv[])
+dpctl_set_if(int argc, char *argv[])
 {
     bool failure = false;
     struct dpif *dpif;
@@ -322,7 +327,8 @@ do_set_if(int argc, char *argv[])
         char *save_ptr = NULL;
         char *type = NULL;
         const char *name;
-        struct shash args;
+        struct smap args;
+        uint32_t port_no;
         char *option;
         int error;
 
@@ -340,6 +346,7 @@ do_set_if(int argc, char *argv[])
             goto next;
         }
         type = xstrdup(dpif_port.type);
+        port_no = dpif_port.port_no;
         dpif_port_destroy(&dpif_port);
 
         /* Retrieve its existing configuration. */
@@ -349,7 +356,7 @@ do_set_if(int argc, char *argv[])
             goto next;
         }
 
-        shash_init(&args);
+        smap_init(&args);
         error = netdev_get_config(netdev, &args);
         if (error) {
             ovs_error(error, "%s: failed to fetch configuration", name);
@@ -373,10 +380,17 @@ do_set_if(int argc, char *argv[])
                               name, type, value);
                     failure = true;
                 }
+            } else if (!strcmp(key, "port_no")) {
+                if (port_no != atoi(value)) {
+                    ovs_error(0, "%s: can't change port number from "
+                              "%"PRIu32" to %d",
+                              name, port_no, atoi(value));
+                    failure = true;
+                }
             } else if (value[0] == '\0') {
-                free(shash_find_and_delete(&args, key));
+                smap_remove(&args, key);
             } else {
-                free(shash_replace(&args, key, xstrdup(value)));
+                smap_replace(&args, key, value);
             }
         }
 
@@ -417,7 +431,7 @@ get_port_number(struct dpif *dpif, const char *name, uint16_t *port)
 }
 
 static void
-do_del_if(int argc OVS_UNUSED, char *argv[])
+dpctl_del_if(int argc OVS_UNUSED, char *argv[])
 {
     bool failure = false;
     struct dpif *dpif;
@@ -499,26 +513,26 @@ show_dpif(struct dpif *dpif)
 
             error = netdev_open(dpif_port.name, dpif_port.type, &netdev);
             if (!error) {
-                struct shash config;
+                struct smap config;
 
-                shash_init(&config);
+                smap_init(&config);
                 error = netdev_get_config(netdev, &config);
                 if (!error) {
-                    const struct shash_node **nodes;
+                    const struct smap_node **nodes;
                     size_t i;
 
-                    nodes = shash_sort(&config);
-                    for (i = 0; i < shash_count(&config); i++) {
-                        const struct shash_node *node = nodes[i];
-                        printf("%c %s=%s", i ? ',' : ':',
-                               node->name, (char *) node->data);
+                    nodes = smap_sort(&config);
+                    for (i = 0; i < smap_count(&config); i++) {
+                        const struct smap_node *node = nodes[i];
+                        printf("%c %s=%s", i ? ',' : ':', node->key,
+                               node->value);
                     }
                     free(nodes);
                 } else {
                     printf(", could not retrieve configuration (%s)",
                            strerror(error));
                 }
-                shash_destroy_free_data(&config);
+                smap_destroy(&config);
 
                 netdev_close(netdev);
             } else {
@@ -572,7 +586,7 @@ show_dpif(struct dpif *dpif)
 }
 
 static void
-do_show(int argc, char *argv[])
+dpctl_show(int argc, char *argv[])
 {
     bool failure = false;
     if (argc > 1) {
@@ -627,7 +641,7 @@ do_show(int argc, char *argv[])
 }
 
 static void
-do_dump_dps(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+dpctl_dump_dps(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     struct sset dpif_names, dpif_types;
     const char *type;
@@ -663,7 +677,7 @@ do_dump_dps(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 }
 
 static void
-do_dump_flows(int argc OVS_UNUSED, char *argv[])
+dpctl_dump_flows(int argc OVS_UNUSED, char *argv[])
 {
     const struct dpif_flow_stats *stats;
     const struct nlattr *actions;
@@ -694,7 +708,7 @@ do_dump_flows(int argc OVS_UNUSED, char *argv[])
 }
 
 static void
-do_del_flows(int argc OVS_UNUSED, char *argv[])
+dpctl_del_flows(int argc OVS_UNUSED, char *argv[])
 {
     struct dpif *dpif;
 
@@ -704,7 +718,7 @@ do_del_flows(int argc OVS_UNUSED, char *argv[])
 }
 
 static void
-do_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+dpctl_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     usage();
 }
@@ -712,7 +726,7 @@ do_help(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 /* Undocumented commands for unit testing. */
 
 static void
-do_parse_actions(int argc, char *argv[])
+dpctl_parse_actions(int argc, char *argv[])
 {
     int i;
 
@@ -824,9 +838,9 @@ sort_output_actions(struct nlattr *actions, size_t length)
  * The idea here generalizes beyond VLANs (e.g. to setting other fields) but
  * so far the implementation only covers VLANs. */
 static void
-do_normalize_actions(int argc, char *argv[])
+dpctl_normalize_actions(int argc, char *argv[])
 {
-    struct shash port_names;
+    struct simap port_names;
     struct ofpbuf keybuf;
     struct flow flow;
     struct ofpbuf odp_actions;
@@ -841,7 +855,7 @@ do_normalize_actions(int argc, char *argv[])
 
     ds_init(&s);
 
-    shash_init(&port_names);
+    simap_init(&port_names);
     for (i = 3; i < argc; i++) {
         char name[16];
         int number;
@@ -849,7 +863,7 @@ do_normalize_actions(int argc, char *argv[])
 
         if (sscanf(argv[i], "%15[^=]=%d%n", name, &number, &n) > 0 && n > 0) {
             uintptr_t n = number;
-            shash_add(&port_names, name, (void *) n);
+            simap_put(&port_names, name, n);
         } else {
             ovs_fatal(0, "%s: expected NAME=NUMBER", argv[i]);
         }
@@ -930,20 +944,20 @@ do_normalize_actions(int argc, char *argv[])
 }
 
 static const struct command all_commands[] = {
-    { "add-dp", 1, INT_MAX, do_add_dp },
-    { "del-dp", 1, 1, do_del_dp },
-    { "add-if", 2, INT_MAX, do_add_if },
-    { "del-if", 2, INT_MAX, do_del_if },
-    { "set-if", 2, INT_MAX, do_set_if },
-    { "dump-dps", 0, 0, do_dump_dps },
-    { "show", 0, INT_MAX, do_show },
-    { "dump-flows", 1, 1, do_dump_flows },
-    { "del-flows", 1, 1, do_del_flows },
-    { "help", 0, INT_MAX, do_help },
+    { "add-dp", 1, INT_MAX, dpctl_add_dp },
+    { "del-dp", 1, 1, dpctl_del_dp },
+    { "add-if", 2, INT_MAX, dpctl_add_if },
+    { "del-if", 2, INT_MAX, dpctl_del_if },
+    { "set-if", 2, INT_MAX, dpctl_set_if },
+    { "dump-dps", 0, 0, dpctl_dump_dps },
+    { "show", 0, INT_MAX, dpctl_show },
+    { "dump-flows", 1, 1, dpctl_dump_flows },
+    { "del-flows", 1, 1, dpctl_del_flows },
+    { "help", 0, INT_MAX, dpctl_help },
 
     /* Undocumented commands for testing. */
-    { "parse-actions", 1, INT_MAX, do_parse_actions },
-    { "normalize-actions", 2, INT_MAX, do_normalize_actions },
+    { "parse-actions", 1, INT_MAX, dpctl_parse_actions },
+    { "normalize-actions", 2, INT_MAX, dpctl_normalize_actions },
 
     { NULL, 0, 0, NULL },
 };

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -247,7 +247,7 @@ hmap_next_with_hash__(const struct hmap_node *node, size_t hash)
     while (node != NULL && node->hash != hash) {
         node = node->next;
     }
-    return (struct hmap_node *) node;
+    return CONST_CAST(struct hmap_node *, node);
 }
 
 /* Returns the first node in 'hmap' with the given 'hash', or a null pointer if

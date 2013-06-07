@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -194,7 +194,7 @@ stream_verify_name(const char *name)
  * stores a pointer to the new connection in '*streamp', otherwise a null
  * pointer.  */
 int
-stream_open(const char *name, struct stream **streamp)
+stream_open(const char *name, struct stream **streamp, uint8_t dscp)
 {
     const struct stream_class *class;
     struct stream *stream;
@@ -211,7 +211,7 @@ stream_open(const char *name, struct stream **streamp)
 
     /* Call class's "open" function. */
     suffix_copy = xstrdup(strchr(name, ':') + 1);
-    error = class->open(name, suffix_copy, &stream);
+    error = class->open(name, suffix_copy, &stream, dscp);
     free(suffix_copy);
     if (error) {
         goto error;
@@ -489,6 +489,25 @@ pstream_verify_name(const char *name)
     return pstream_lookup_class(name, &class);
 }
 
+/* Returns 1 if the stream or pstream specified by 'name' needs periodic probes
+ * to verify connectivity.  For [p]streams which need probes, it can take a
+ * long time to notice the connection has been dropped.  Returns 0 if the
+ * stream or pstream does not need probes, and -1 if 'name' is not valid. */
+int
+stream_or_pstream_needs_probes(const char *name)
+{
+    const struct pstream_class *pclass;
+    const struct stream_class *class;
+
+    if (!stream_lookup_class(name, &class)) {
+        return class->needs_probes;
+    } else if (!pstream_lookup_class(name, &pclass)) {
+        return pclass->needs_probes;
+    } else {
+        return -1;
+    }
+}
+
 /* Attempts to start listening for remote stream connections.  'name' is a
  * connection name in the form "TYPE:ARGS", where TYPE is an passive stream
  * class's name and ARGS are stream class-specific.
@@ -497,7 +516,7 @@ pstream_verify_name(const char *name)
  * stores a pointer to the new connection in '*pstreamp', otherwise a null
  * pointer.  */
 int
-pstream_open(const char *name, struct pstream **pstreamp)
+pstream_open(const char *name, struct pstream **pstreamp, uint8_t dscp)
 {
     const struct pstream_class *class;
     struct pstream *pstream;
@@ -514,7 +533,7 @@ pstream_open(const char *name, struct pstream **pstreamp)
 
     /* Call class's "open" function. */
     suffix_copy = xstrdup(strchr(name, ':') + 1);
-    error = class->listen(name, suffix_copy, &pstream);
+    error = class->listen(name, suffix_copy, &pstream, dscp);
     free(suffix_copy);
     if (error) {
         goto error;
@@ -593,6 +612,15 @@ void
 pstream_wait(struct pstream *pstream)
 {
     (pstream->class->wait)(pstream);
+}
+
+int
+pstream_set_dscp(struct pstream *pstream, uint8_t dscp)
+{
+    if (pstream->class->set_dscp) {
+        return pstream->class->set_dscp(pstream, dscp);
+    }
+    return 0;
 }
 
 /* Initializes 'stream' as a new stream named 'name', implemented via 'class'.
@@ -682,7 +710,8 @@ int
 stream_open_with_default_ports(const char *name_,
                                uint16_t default_tcp_port,
                                uint16_t default_ssl_port,
-                               struct stream **streamp)
+                               struct stream **streamp,
+                               uint8_t dscp)
 {
     char *name;
     int error;
@@ -694,7 +723,7 @@ stream_open_with_default_ports(const char *name_,
     } else {
         name = xstrdup(name_);
     }
-    error = stream_open(name, streamp);
+    error = stream_open(name, streamp, dscp);
     free(name);
 
     return error;
@@ -707,7 +736,8 @@ int
 pstream_open_with_default_ports(const char *name_,
                                 uint16_t default_ptcp_port,
                                 uint16_t default_pssl_port,
-                                struct pstream **pstreamp)
+                                struct pstream **pstreamp,
+                                uint8_t dscp)
 {
     char *name;
     int error;
@@ -719,12 +749,32 @@ pstream_open_with_default_ports(const char *name_,
     } else {
         name = xstrdup(name_);
     }
-    error = pstream_open(name, pstreamp);
+    error = pstream_open(name, pstreamp, dscp);
     free(name);
 
     return error;
 }
-
+
+/*
+ * This function extracts IP address and port from the target string.
+ *
+ *     - On success, function returns true and fills *sin structure with port
+ *       and IP address. If port was absent in target string then it will use
+ *       corresponding default port value.
+ *     - On error, function returns false and *sin contains garbage.
+ */
+bool
+stream_parse_target_with_default_ports(const char *target,
+                                       uint16_t default_tcp_port,
+                                       uint16_t default_ssl_port,
+                                       struct sockaddr_in *sin)
+{
+    return (!strncmp(target, "tcp:", 4)
+             && inet_parse_active(target + 4, default_tcp_port, sin)) ||
+            (!strncmp(target, "ssl:", 4)
+             && inet_parse_active(target + 4, default_ssl_port, sin));
+}
+
 /* Attempts to guess the content type of a stream whose first few bytes were
  * the 'size' bytes of 'data'. */
 static enum stream_content_type
@@ -737,7 +787,7 @@ stream_guess_content(const uint8_t *data, ssize_t size)
             return STREAM_SSL;
         case PAIR('{', '"'):
             return STREAM_JSONRPC;
-        case PAIR(OFP_VERSION, OFPT_HELLO):
+        case PAIR(OFP10_VERSION, 0 /* OFPT_HELLO */):
             return STREAM_OPENFLOW;
         }
     }

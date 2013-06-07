@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,25 +55,29 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
 
 static void jsonrpc_received(struct jsonrpc *);
 static void jsonrpc_cleanup(struct jsonrpc *);
+static void jsonrpc_error(struct jsonrpc *, int error);
 
 /* This is just the same as stream_open() except that it uses the default
  * JSONRPC ports if none is specified. */
 int
-jsonrpc_stream_open(const char *name, struct stream **streamp)
+jsonrpc_stream_open(const char *name, struct stream **streamp, uint8_t dscp)
 {
     return stream_open_with_default_ports(name, JSONRPC_TCP_PORT,
-                                          JSONRPC_SSL_PORT, streamp);
+                                          JSONRPC_SSL_PORT, streamp,
+                                          dscp);
 }
 
 /* This is just the same as pstream_open() except that it uses the default
  * JSONRPC ports if none is specified. */
 int
-jsonrpc_pstream_open(const char *name, struct pstream **pstreamp)
+jsonrpc_pstream_open(const char *name, struct pstream **pstreamp, uint8_t dscp)
 {
     return pstream_open_with_default_ports(name, JSONRPC_TCP_PORT,
-                                           JSONRPC_SSL_PORT, pstreamp);
+                                           JSONRPC_SSL_PORT, pstreamp, dscp);
 }
 
+/* Returns a new JSON-RPC stream that uses 'stream' for input and output.  The
+ * new jsonrpc object takes ownership of 'stream'. */
 struct jsonrpc *
 jsonrpc_open(struct stream *stream)
 {
@@ -90,6 +94,8 @@ jsonrpc_open(struct stream *stream)
     return rpc;
 }
 
+/* Destroys 'rpc', closing the stream on which it is based, and frees its
+ * memory. */
 void
 jsonrpc_close(struct jsonrpc *rpc)
 {
@@ -100,6 +106,7 @@ jsonrpc_close(struct jsonrpc *rpc)
     }
 }
 
+/* Performs periodic maintenance on 'rpc', such as flushing output buffers. */
 void
 jsonrpc_run(struct jsonrpc *rpc)
 {
@@ -131,6 +138,8 @@ jsonrpc_run(struct jsonrpc *rpc)
     }
 }
 
+/* Arranges for the poll loop to wake up when 'rpc' needs to perform
+ * maintenance activities. */
 void
 jsonrpc_wait(struct jsonrpc *rpc)
 {
@@ -143,10 +152,16 @@ jsonrpc_wait(struct jsonrpc *rpc)
 }
 
 /*
- * Possible status values:
+ * Returns the current status of 'rpc'.  The possible return values are:
  * - 0: no error yet
  * - >0: errno value
- * - EOF: end of file (remote end closed connection; not necessarily an error)
+ * - EOF: end of file (remote end closed connection; not necessarily an error).
+ *
+ * When this functions nonzero, 'rpc' is effectively out of commission.  'rpc'
+ * will not receive any more messages and any further messages that one
+ * attempts to send with 'rpc' will be discarded.  The caller can keep 'rpc'
+ * around as long as it wants, but it's not going to provide any more useful
+ * services.
  */
 int
 jsonrpc_get_status(const struct jsonrpc *rpc)
@@ -154,12 +169,25 @@ jsonrpc_get_status(const struct jsonrpc *rpc)
     return rpc->status;
 }
 
+/* Returns the number of bytes buffered by 'rpc' to be written to the
+ * underlying stream.  Always returns 0 if 'rpc' has encountered an error or if
+ * the remote end closed the connection. */
 size_t
 jsonrpc_get_backlog(const struct jsonrpc *rpc)
 {
     return rpc->status ? 0 : rpc->backlog;
 }
 
+/* Returns the number of bytes that have been received on 'rpc''s underlying
+ * stream.  (The value wraps around if it exceeds UINT_MAX.) */
+unsigned int
+jsonrpc_get_received_bytes(const struct jsonrpc *rpc)
+{
+    return rpc->input.head;
+}
+
+/* Returns 'rpc''s name, that is, the name returned by stream_get_name() for
+ * the stream underlying 'rpc' when 'rpc' was created. */
 const char *
 jsonrpc_get_name(const struct jsonrpc *rpc)
 {
@@ -197,7 +225,15 @@ jsonrpc_log_msg(const struct jsonrpc *rpc, const char *title,
     }
 }
 
-/* Always takes ownership of 'msg', regardless of success. */
+/* Schedules 'msg' to be sent on 'rpc' and returns 'rpc''s status (as with
+ * jsonrpc_get_status()).
+ *
+ * If 'msg' cannot be sent immediately, it is appended to a buffer.  The caller
+ * is responsible for ensuring that the amount of buffered data is somehow
+ * limited.  (jsonrpc_get_backlog() returns the amount of data currently
+ * buffered in 'rpc'.)
+ *
+ * Always takes ownership of 'msg', regardless of success. */
 int
 jsonrpc_send(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
 {
@@ -230,16 +266,38 @@ jsonrpc_send(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
     return rpc->status;
 }
 
+/* Attempts to receive a message from 'rpc'.
+ *
+ * If successful, stores the received message in '*msgp' and returns 0.  The
+ * caller takes ownership of '*msgp' and must eventually destroy it with
+ * jsonrpc_msg_destroy().
+ *
+ * Otherwise, stores NULL in '*msgp' and returns one of the following:
+ *
+ *   - EAGAIN: No message has been received.
+ *
+ *   - EOF: The remote end closed the connection gracefully.
+ *
+ *   - Otherwise an errno value that represents a JSON-RPC protocol violation
+ *     or another error fatal to the connection.  'rpc' will not send or
+ *     receive any more messages.
+ */
 int
 jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
 {
+    int i;
+
     *msgp = NULL;
     if (rpc->status) {
         return rpc->status;
     }
 
-    while (!rpc->received) {
-        if (byteq_is_empty(&rpc->input)) {
+    for (i = 0; i < 50; i++) {
+        if (rpc->received) {
+            *msgp = rpc->received;
+            rpc->received = NULL;
+            return 0;
+        } else if (byteq_is_empty(&rpc->input)) {
             size_t chunk;
             int retval;
 
@@ -284,11 +342,11 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
         }
     }
 
-    *msgp = rpc->received;
-    rpc->received = NULL;
-    return 0;
+    return EAGAIN;
 }
 
+/* Causes the poll loop to wake up when jsonrpc_recv() may return a value other
+ * than EAGAIN. */
 void
 jsonrpc_recv_wait(struct jsonrpc *rpc)
 {
@@ -299,7 +357,11 @@ jsonrpc_recv_wait(struct jsonrpc *rpc)
     }
 }
 
-/* Always takes ownership of 'msg', regardless of success. */
+/* Sends 'msg' on 'rpc' and waits for it to be successfully queued to the
+ * underlying stream.  Returns 0 if 'msg' was sent successfully, otherwise a
+ * status value (see jsonrpc_get_status()).
+ *
+ * Always takes ownership of 'msg', regardless of success. */
 int
 jsonrpc_send_block(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
 {
@@ -322,6 +384,8 @@ jsonrpc_send_block(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
     }
 }
 
+/* Waits for a message to be received on 'rpc'.  Same semantics as
+ * jsonrpc_recv() except that EAGAIN will never be returned. */
 int
 jsonrpc_recv_block(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
 {
@@ -339,7 +403,15 @@ jsonrpc_recv_block(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
     }
 }
 
-/* Always takes ownership of 'request', regardless of success. */
+/* Sends 'request' to 'rpc' then waits for a reply.  The return value is 0 if
+ * successful, in which case '*replyp' is set to the reply, which the caller
+ * must eventually free with jsonrpc_msg_destroy().  Otherwise returns a status
+ * value (see jsonrpc_get_status()).
+ *
+ * Discards any message received on 'rpc' that is not a reply to 'request'
+ * (based on message id).
+ *
+ * Always takes ownership of 'request', regardless of success. */
 int
 jsonrpc_transact_block(struct jsonrpc *rpc, struct jsonrpc_msg *request,
                        struct jsonrpc_msg **replyp)
@@ -353,9 +425,11 @@ jsonrpc_transact_block(struct jsonrpc *rpc, struct jsonrpc_msg *request,
     if (!error) {
         for (;;) {
             error = jsonrpc_recv_block(rpc, &reply);
-            if (error
-                || (reply->type == JSONRPC_REPLY
-                    && json_equal(id, reply->id))) {
+            if (error) {
+                break;
+            }
+            if ((reply->type == JSONRPC_REPLY || reply->type == JSONRPC_ERROR)
+                && json_equal(id, reply->id)) {
                 break;
             }
             jsonrpc_msg_destroy(reply);
@@ -396,7 +470,7 @@ jsonrpc_received(struct jsonrpc *rpc)
     rpc->received = msg;
 }
 
-void
+static void
 jsonrpc_error(struct jsonrpc *rpc, int error)
 {
     assert(error);
@@ -672,6 +746,7 @@ struct jsonrpc_session {
     struct stream *stream;
     struct pstream *pstream;
     unsigned int seqno;
+    uint8_t dscp;
 };
 
 /* Creates and returns a jsonrpc_session to 'name', which should be a string
@@ -697,9 +772,14 @@ jsonrpc_session_open(const char *name)
     s->stream = NULL;
     s->pstream = NULL;
     s->seqno = 0;
+    s->dscp = 0;
 
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
+    }
+
+    if (!stream_or_pstream_needs_probes(name)) {
+        reconnect_set_probe_interval(s->reconnect, 0);
     }
 
     return s;
@@ -711,7 +791,7 @@ jsonrpc_session_open(const char *name)
  * On the assumption that such connections are likely to be short-lived
  * (e.g. from ovs-vsctl), informational logging for them is suppressed. */
 struct jsonrpc_session *
-jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc)
+jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp)
 {
     struct jsonrpc_session *s;
 
@@ -721,6 +801,7 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc)
     reconnect_set_name(s->reconnect, jsonrpc_get_name(jsonrpc));
     reconnect_set_max_tries(s->reconnect, 0);
     reconnect_connected(s->reconnect, time_msec());
+    s->dscp = dscp;
     s->rpc = jsonrpc;
     s->stream = NULL;
     s->pstream = NULL;
@@ -764,12 +845,13 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
 
     jsonrpc_session_disconnect(s);
     if (!reconnect_is_passive(s->reconnect)) {
-        error = jsonrpc_stream_open(name, &s->stream);
+        error = jsonrpc_stream_open(name, &s->stream, s->dscp);
         if (!error) {
             reconnect_connecting(s->reconnect, time_msec());
         }
     } else {
-        error = s->pstream ? 0 : jsonrpc_pstream_open(name, &s->pstream);
+        error = s->pstream ? 0 : jsonrpc_pstream_open(name, &s->pstream,
+                                                      s->dscp);
         if (!error) {
             reconnect_listening(s->reconnect, time_msec());
         }
@@ -806,9 +888,23 @@ jsonrpc_session_run(struct jsonrpc_session *s)
     }
 
     if (s->rpc) {
+        size_t backlog;
         int error;
 
+        backlog = jsonrpc_get_backlog(s->rpc);
         jsonrpc_run(s->rpc);
+        if (jsonrpc_get_backlog(s->rpc) < backlog) {
+            /* Data previously caught in a queue was successfully sent (or
+             * there's an error, which we'll catch below.)
+             *
+             * We don't count data that is successfully sent immediately as
+             * activity, because there's a lot of queuing downstream from us,
+             * which means that we can push a lot of data into a connection
+             * that has stalled and won't ever recover.
+             */
+            reconnect_activity(s->reconnect, time_msec());
+        }
+
         error = jsonrpc_get_status(s->rpc);
         if (error) {
             reconnect_disconnected(s->reconnect, time_msec(), error);
@@ -900,10 +996,21 @@ struct jsonrpc_msg *
 jsonrpc_session_recv(struct jsonrpc_session *s)
 {
     if (s->rpc) {
+        unsigned int received_bytes;
         struct jsonrpc_msg *msg;
+
+        received_bytes = jsonrpc_get_received_bytes(s->rpc);
         jsonrpc_recv(s->rpc, &msg);
+        if (received_bytes != jsonrpc_get_received_bytes(s->rpc)) {
+            /* Data was successfully received.
+             *
+             * Previously we only counted receiving a full message as activity,
+             * but with large messages or a slow connection that policy could
+             * time out the session mid-message. */
+            reconnect_activity(s->reconnect, time_msec());
+        }
+
         if (msg) {
-            reconnect_received(s->reconnect, time_msec());
             if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
                 /* Echo request.  Send reply. */
                 struct jsonrpc_msg *reply;
@@ -979,4 +1086,28 @@ jsonrpc_session_set_probe_interval(struct jsonrpc_session *s,
                                    int probe_interval)
 {
     reconnect_set_probe_interval(s->reconnect, probe_interval);
+}
+
+void
+jsonrpc_session_set_dscp(struct jsonrpc_session *s,
+                         uint8_t dscp)
+{
+    if (s->dscp != dscp) {
+        if (s->pstream) {
+            int error;
+
+            error = pstream_set_dscp(s->pstream, dscp);
+            if (error) {
+                VLOG_ERR("%s: failed set_dscp %s",
+                         reconnect_get_name(s->reconnect), strerror(error));
+            }
+            /*
+             * TODO:XXX race window between setting dscp to listening socket
+             * and accepting socket. accepted socket may have old dscp value.
+             * Ignore this race window for now.
+             */
+        }
+        s->dscp = dscp;
+        jsonrpc_session_force_reconnect(s);
+    }
 }

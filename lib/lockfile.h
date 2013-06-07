@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009 Nicira Networks
+/* Copyright (c) 2008, 2009 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 struct lockfile;
 
 char *lockfile_name(const char *file);
-int lockfile_lock(const char *file, int timeout, struct lockfile **);
+int lockfile_lock(const char *file, struct lockfile **);
 void lockfile_unlock(struct lockfile *);
 void lockfile_postfork(void);
 

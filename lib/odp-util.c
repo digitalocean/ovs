@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include <arpa/inet.h>
 #include <config.h>
+#include <arpa/inet.h>
 #include "odp-util.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -30,9 +30,8 @@
 #include "flow.h"
 #include "netlink.h"
 #include "ofpbuf.h"
-#include "openvswitch/tunnel.h"
 #include "packets.h"
-#include "shash.h"
+#include "simap.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
@@ -49,7 +48,7 @@ VLOG_DEFINE_THIS_MODULE(odp_util);
  * from another. */
 static const char *delimiters = ", \t\r\n";
 
-static int parse_odp_key_attr(const char *, const struct shash *port_names,
+static int parse_odp_key_attr(const char *, const struct simap *port_names,
                               struct ofpbuf *);
 static void format_odp_key_attr(const struct nlattr *a, struct ds *ds);
 
@@ -93,7 +92,10 @@ ovs_key_attr_to_string(enum ovs_key_attr attr)
     switch (attr) {
     case OVS_KEY_ATTR_UNSPEC: return "unspec";
     case OVS_KEY_ATTR_ENCAP: return "encap";
-    case OVS_KEY_ATTR_PRIORITY: return "priority";
+    case OVS_KEY_ATTR_PRIORITY: return "skb_priority";
+    case OVS_KEY_ATTR_SKB_MARK: return "skb_mark";
+    case OVS_KEY_ATTR_TUN_ID: return "tun_id";
+    case OVS_KEY_ATTR_TUNNEL: return "tunnel";
     case OVS_KEY_ATTR_IN_PORT: return "in_port";
     case OVS_KEY_ATTR_ETHERNET: return "eth";
     case OVS_KEY_ATTR_VLAN: return "vlan";
@@ -106,7 +108,6 @@ ovs_key_attr_to_string(enum ovs_key_attr attr)
     case OVS_KEY_ATTR_ICMPV6: return "icmpv6";
     case OVS_KEY_ATTR_ARP: return "arp";
     case OVS_KEY_ATTR_ND: return "nd";
-    case OVS_KEY_ATTR_TUN_ID: return "tun_id";
 
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -166,6 +167,79 @@ format_odp_sample_action(struct ds *ds, const struct nlattr *attr)
     ds_put_format(ds, "))");
 }
 
+static const char *
+slow_path_reason_to_string(uint32_t data)
+{
+    enum slow_path_reason bit = (enum slow_path_reason) data;
+
+    switch (bit) {
+    case SLOW_CFM:
+        return "cfm";
+    case SLOW_LACP:
+        return "lacp";
+    case SLOW_STP:
+        return "stp";
+    case SLOW_IN_BAND:
+        return "in_band";
+    case SLOW_CONTROLLER:
+        return "controller";
+    case SLOW_MATCH:
+        return "match";
+    default:
+        return NULL;
+    }
+}
+
+static int
+parse_flags(const char *s, const char *(*bit_to_string)(uint32_t),
+            uint32_t *res)
+{
+    uint32_t result = 0;
+    int n = 0;
+
+    if (s[n] != '(') {
+        return -EINVAL;
+    }
+    n++;
+
+    while (s[n] != ')') {
+        unsigned long long int flags;
+        uint32_t bit;
+        int n0;
+
+        if (sscanf(&s[n], "%lli%n", &flags, &n0) > 0 && n0 > 0) {
+            n += n0 + (s[n + n0] == ',');
+            result |= flags;
+            continue;
+        }
+
+        for (bit = 1; bit; bit <<= 1) {
+            const char *name = bit_to_string(bit);
+            size_t len;
+
+            if (!name) {
+                continue;
+            }
+
+            len = strlen(name);
+            if (!strncmp(s + n, name, len) &&
+                (s[n + len] == ',' || s[n + len] == ')')) {
+                result |= bit;
+                n += len + (s[n + len] == ',');
+                break;
+            }
+        }
+
+        if (!bit) {
+            return -EINVAL;
+        }
+    }
+    n++;
+
+    *res = result;
+    return n;
+}
+
 static void
 format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
 {
@@ -185,19 +259,30 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
 
     if (a[OVS_USERSPACE_ATTR_USERDATA]) {
         uint64_t userdata = nl_attr_get_u64(a[OVS_USERSPACE_ATTR_USERDATA]);
-        struct user_action_cookie cookie;
+        union user_action_cookie cookie;
 
         memcpy(&cookie, &userdata, sizeof cookie);
 
-        if (cookie.type == USER_ACTION_COOKIE_CONTROLLER) {
-            ds_put_format(ds, ",controller,length=%"PRIu32, cookie.data);
-        } else if (cookie.type == USER_ACTION_COOKIE_SFLOW) {
-            ds_put_format(ds, ",sFlow,n_output=%"PRIu8","
-                          "vid=%"PRIu16",pcp=%"PRIu8",ifindex=%"PRIu32,
-                          cookie.n_output, vlan_tci_to_vid(cookie.vlan_tci),
-                          vlan_tci_to_pcp(cookie.vlan_tci), cookie.data);
-        } else {
+        switch (cookie.type) {
+        case USER_ACTION_COOKIE_SFLOW:
+            ds_put_format(ds, ",sFlow("
+                          "vid=%"PRIu16",pcp=%"PRIu8",output=%"PRIu32")",
+                          vlan_tci_to_vid(cookie.sflow.vlan_tci),
+                          vlan_tci_to_pcp(cookie.sflow.vlan_tci),
+                          cookie.sflow.output);
+            break;
+
+        case USER_ACTION_COOKIE_SLOW_PATH:
+            ds_put_cstr(ds, ",slow_path(");
+            format_flags(ds, slow_path_reason_to_string,
+                         cookie.slow_path.reason, ',');
+            ds_put_format(ds, ")");
+            break;
+
+        case USER_ACTION_COOKIE_UNSPEC:
+        default:
             ds_put_format(ds, ",userdata=0x%"PRIx64, userdata);
+            break;
         }
     }
 
@@ -232,7 +317,7 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
 
     switch (type) {
     case OVS_ACTION_ATTR_OUTPUT:
-        ds_put_format(ds, "%"PRIu16, nl_attr_get_u32(a));
+        ds_put_format(ds, "%"PRIu32, nl_attr_get_u32(a));
         break;
     case OVS_ACTION_ATTR_USERSPACE:
         format_odp_userspace_action(ds, a);
@@ -280,10 +365,16 @@ format_odp_actions(struct ds *ds, const struct nlattr *actions,
             format_odp_action(ds, a);
         }
         if (left) {
+            int i;
+
             if (left == actions_len) {
                 ds_put_cstr(ds, "<empty>");
             }
-            ds_put_format(ds, ",***%u leftover bytes***", left);
+            ds_put_format(ds, ",***%u leftover bytes*** (", left);
+            for (i = 0; i < left; i++) {
+                ds_put_format(ds, "%02x", ((const uint8_t *) a)[i]);
+            }
+            ds_put_char(ds, ')');
         }
     } else {
         ds_put_cstr(ds, "drop");
@@ -291,7 +382,7 @@ format_odp_actions(struct ds *ds, const struct nlattr *actions,
 }
 
 static int
-parse_odp_action(const char *s, const struct shash *port_names,
+parse_odp_action(const char *s, const struct simap *port_names,
                  struct ofpbuf *actions)
 {
     /* Many of the sscanf calls in this function use oversized destination
@@ -316,42 +407,29 @@ parse_odp_action(const char *s, const struct shash *port_names,
 
     if (port_names) {
         int len = strcspn(s, delimiters);
-        struct shash_node *node;
+        struct simap_node *node;
 
-        node = shash_find_len(port_names, s, len);
+        node = simap_find_len(port_names, s, len);
         if (node) {
-            nl_msg_put_u32(actions, OVS_ACTION_ATTR_OUTPUT,
-                           (uintptr_t) node->data);
+            nl_msg_put_u32(actions, OVS_ACTION_ATTR_OUTPUT, node->data);
             return len;
         }
     }
 
     {
         unsigned long long int pid;
-        unsigned long long int length;
-        unsigned long long int ifindex;
+        unsigned long long int output;
         char userdata_s[32];
-        int n_output;
         int vid, pcp;
         int n = -1;
 
         if (sscanf(s, "userspace(pid=%lli)%n", &pid, &n) > 0 && n > 0) {
             odp_put_userspace_action(pid, NULL, actions);
             return n;
-        } else if (sscanf(s, "userspace(pid=%lli,controller,length=%lli)%n",
-                          &pid, &length, &n) > 0 && n > 0) {
-            struct user_action_cookie cookie;
-
-            cookie.type = USER_ACTION_COOKIE_CONTROLLER;
-            cookie.n_output = 0;
-            cookie.vlan_tci = htons(0);
-            cookie.data = length;
-            odp_put_userspace_action(pid, &cookie, actions);
-            return n;
-        } else if (sscanf(s, "userspace(pid=%lli,sFlow,n_output=%i,vid=%i,"
-                          "pcp=%i,ifindex=%lli)%n", &pid, &n_output,
-                          &vid, &pcp, &ifindex, &n) > 0 && n > 0) {
-            struct user_action_cookie cookie;
+        } else if (sscanf(s, "userspace(pid=%lli,sFlow(vid=%i,"
+                          "pcp=%i,output=%lli))%n",
+                          &pid, &vid, &pcp, &output, &n) > 0 && n > 0) {
+            union user_action_cookie cookie;
             uint16_t tci;
 
             tci = vid | (pcp << VLAN_PCP_SHIFT);
@@ -360,15 +438,36 @@ parse_odp_action(const char *s, const struct shash *port_names,
             }
 
             cookie.type = USER_ACTION_COOKIE_SFLOW;
-            cookie.n_output = n_output;
-            cookie.vlan_tci = htons(tci);
-            cookie.data = ifindex;
+            cookie.sflow.vlan_tci = htons(tci);
+            cookie.sflow.output = output;
+            odp_put_userspace_action(pid, &cookie, actions);
+            return n;
+        } else if (sscanf(s, "userspace(pid=%lli,slow_path%n", &pid, &n) > 0
+                   && n > 0) {
+            union user_action_cookie cookie;
+            int res;
+
+            cookie.type = USER_ACTION_COOKIE_SLOW_PATH;
+            cookie.slow_path.unused = 0;
+            cookie.slow_path.reason = 0;
+
+            res = parse_flags(&s[n], slow_path_reason_to_string,
+                              &cookie.slow_path.reason);
+            if (res < 0) {
+                return res;
+            }
+            n += res;
+            if (s[n] != ')') {
+                return -EINVAL;
+            }
+            n++;
+
             odp_put_userspace_action(pid, &cookie, actions);
             return n;
         } else if (sscanf(s, "userspace(pid=%lli,userdata="
                           "%31[x0123456789abcdefABCDEF])%n", &pid, userdata_s,
                           &n) > 0 && n > 0) {
-            struct user_action_cookie cookie;
+            union user_action_cookie cookie;
             uint64_t userdata;
 
             userdata = strtoull(userdata_s, NULL, 0);
@@ -474,7 +573,7 @@ parse_odp_action(const char *s, const struct shash *port_names,
  * Netlink attributes.  On failure, no data is appended to 'actions'.  Either
  * way, 'actions''s data might be reallocated. */
 int
-odp_actions_from_string(const char *s, const struct shash *port_names,
+odp_actions_from_string(const char *s, const struct simap *port_names,
                         struct ofpbuf *actions)
 {
     size_t old_size;
@@ -516,7 +615,9 @@ odp_flow_key_attr_len(uint16_t type)
     switch ((enum ovs_key_attr) type) {
     case OVS_KEY_ATTR_ENCAP: return -2;
     case OVS_KEY_ATTR_PRIORITY: return 4;
+    case OVS_KEY_ATTR_SKB_MARK: return 4;
     case OVS_KEY_ATTR_TUN_ID: return 8;
+    case OVS_KEY_ATTR_TUNNEL: return -2;
     case OVS_KEY_ATTR_IN_PORT: return 4;
     case OVS_KEY_ATTR_ETHERNET: return sizeof(struct ovs_key_ethernet);
     case OVS_KEY_ATTR_VLAN: return sizeof(ovs_be16);
@@ -571,6 +672,111 @@ ovs_frag_type_to_string(enum ovs_frag_type type)
     }
 }
 
+static int
+tunnel_key_attr_len(int type)
+{
+    switch (type) {
+    case OVS_TUNNEL_KEY_ATTR_ID: return 8;
+    case OVS_TUNNEL_KEY_ATTR_IPV4_SRC: return 4;
+    case OVS_TUNNEL_KEY_ATTR_IPV4_DST: return 4;
+    case OVS_TUNNEL_KEY_ATTR_TOS: return 1;
+    case OVS_TUNNEL_KEY_ATTR_TTL: return 1;
+    case OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT: return 0;
+    case OVS_TUNNEL_KEY_ATTR_CSUM: return 0;
+    case __OVS_TUNNEL_KEY_ATTR_MAX:
+        return -1;
+    }
+    return -1;
+}
+
+static enum odp_key_fitness
+tun_key_from_attr(const struct nlattr *attr, struct flow_tnl *tun)
+{
+    unsigned int left;
+    const struct nlattr *a;
+    bool ttl = false;
+    bool unknown = false;
+
+    NL_NESTED_FOR_EACH(a, left, attr) {
+        uint16_t type = nl_attr_type(a);
+        size_t len = nl_attr_get_size(a);
+        int expected_len = tunnel_key_attr_len(type);
+
+        if (len != expected_len && expected_len >= 0) {
+            return ODP_FIT_ERROR;
+        }
+
+        switch (type) {
+        case OVS_TUNNEL_KEY_ATTR_ID:
+            tun->tun_id = nl_attr_get_be64(a);
+            tun->flags |= FLOW_TNL_F_KEY;
+            break;
+        case OVS_TUNNEL_KEY_ATTR_IPV4_SRC:
+            tun->ip_src = nl_attr_get_be32(a);
+            break;
+        case OVS_TUNNEL_KEY_ATTR_IPV4_DST:
+            tun->ip_dst = nl_attr_get_be32(a);
+            break;
+        case OVS_TUNNEL_KEY_ATTR_TOS:
+            tun->ip_tos = nl_attr_get_u8(a);
+            break;
+        case OVS_TUNNEL_KEY_ATTR_TTL:
+            tun->ip_ttl = nl_attr_get_u8(a);
+            ttl = true;
+            break;
+        case OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT:
+            tun->flags |= FLOW_TNL_F_DONT_FRAGMENT;
+            break;
+        case OVS_TUNNEL_KEY_ATTR_CSUM:
+            tun->flags |= FLOW_TNL_F_CSUM;
+            break;
+        default:
+            /* Allow this to show up as unexpected, if there are unknown
+             * tunnel attribute, eventually resulting in ODP_FIT_TOO_MUCH. */
+            unknown = true;
+            break;
+        }
+    }
+
+    if (!ttl) {
+        return ODP_FIT_ERROR;
+    }
+    if (unknown) {
+            return ODP_FIT_TOO_MUCH;
+    }
+    return ODP_FIT_PERFECT;
+}
+
+static void
+tun_key_to_attr(struct ofpbuf *a, const struct flow_tnl *tun_key)
+{
+    size_t tun_key_ofs;
+
+    tun_key_ofs = nl_msg_start_nested(a, OVS_KEY_ATTR_TUNNEL);
+
+    if (tun_key->flags & FLOW_TNL_F_KEY) {
+        nl_msg_put_be64(a, OVS_TUNNEL_KEY_ATTR_ID, tun_key->tun_id);
+    }
+    if (tun_key->ip_src) {
+        nl_msg_put_be32(a, OVS_TUNNEL_KEY_ATTR_IPV4_SRC, tun_key->ip_src);
+    }
+    if (tun_key->ip_dst) {
+        nl_msg_put_be32(a, OVS_TUNNEL_KEY_ATTR_IPV4_DST, tun_key->ip_dst);
+    }
+    if (tun_key->ip_tos) {
+        nl_msg_put_u8(a, OVS_TUNNEL_KEY_ATTR_TOS, tun_key->ip_tos);
+    }
+    nl_msg_put_u8(a, OVS_TUNNEL_KEY_ATTR_TTL, tun_key->ip_ttl);
+    if (tun_key->flags & FLOW_TNL_F_DONT_FRAGMENT) {
+        nl_msg_put_flag(a, OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT);
+    }
+    if (tun_key->flags & FLOW_TNL_F_CSUM) {
+        nl_msg_put_flag(a, OVS_TUNNEL_KEY_ATTR_CSUM);
+    }
+
+    nl_msg_end_nested(a, tun_key_ofs);
+}
+
 static void
 format_odp_key_attr(const struct nlattr *a, struct ds *ds)
 {
@@ -583,6 +789,7 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
     const struct ovs_key_icmpv6 *icmpv6_key;
     const struct ovs_key_arp *arp_key;
     const struct ovs_key_nd *nd_key;
+    struct flow_tnl tun_key;
     enum ovs_key_attr attr = nl_attr_type(a);
     int expected_len;
 
@@ -606,11 +813,34 @@ format_odp_key_attr(const struct nlattr *a, struct ds *ds)
         break;
 
     case OVS_KEY_ATTR_PRIORITY:
-        ds_put_format(ds, "(%"PRIu32")", nl_attr_get_u32(a));
+        ds_put_format(ds, "(%#"PRIx32")", nl_attr_get_u32(a));
+        break;
+
+    case OVS_KEY_ATTR_SKB_MARK:
+        ds_put_format(ds, "(%#"PRIx32")", nl_attr_get_u32(a));
         break;
 
     case OVS_KEY_ATTR_TUN_ID:
         ds_put_format(ds, "(%#"PRIx64")", ntohll(nl_attr_get_be64(a)));
+        break;
+
+    case OVS_KEY_ATTR_TUNNEL:
+        memset(&tun_key, 0, sizeof tun_key);
+        if (tun_key_from_attr(a, &tun_key) == ODP_FIT_ERROR) {
+            ds_put_format(ds, "(error)");
+        } else {
+            ds_put_format(ds, "(tun_id=0x%"PRIx64",src="IP_FMT",dst="IP_FMT","
+                          "tos=0x%"PRIx8",ttl=%"PRIu8",flags(",
+                          ntohll(tun_key.tun_id),
+                          IP_ARGS(&tun_key.ip_src),
+                          IP_ARGS(&tun_key.ip_dst),
+                          tun_key.ip_tos, tun_key.ip_ttl);
+
+            format_flags(ds, flow_tun_flag_to_string,
+                         (uint32_t) tun_key.flags, ',');
+            ds_put_format(ds, "))");
+        }
+
         break;
 
     case OVS_KEY_ATTR_IN_PORT:
@@ -739,10 +969,16 @@ odp_flow_key_format(const struct nlattr *key, size_t key_len, struct ds *ds)
             format_odp_key_attr(a, ds);
         }
         if (left) {
+            int i;
+            
             if (left == key_len) {
                 ds_put_cstr(ds, "<empty>");
             }
-            ds_put_format(ds, ",***%u leftover bytes***", left);
+            ds_put_format(ds, ",***%u leftover bytes*** (", left);
+            for (i = 0; i < left; i++) {
+                ds_put_format(ds, "%02x", ((const uint8_t *) a)[i]);
+            }
+            ds_put_char(ds, ')');
         }
     } else {
         ds_put_cstr(ds, "<empty>");
@@ -785,7 +1021,7 @@ ovs_frag_type_from_string(const char *s, enum ovs_frag_type *type)
 }
 
 static int
-parse_odp_key_attr(const char *s, const struct shash *port_names,
+parse_odp_key_attr(const char *s, const struct simap *port_names,
                    struct ofpbuf *key)
 {
     /* Many of the sscanf calls in this function use oversized destination
@@ -802,8 +1038,18 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
         unsigned long long int priority;
         int n = -1;
 
-        if (sscanf(s, "priority(%lli)%n", &priority, &n) > 0 && n > 0) {
+        if (sscanf(s, "skb_priority(%llx)%n", &priority, &n) > 0 && n > 0) {
             nl_msg_put_u32(key, OVS_KEY_ATTR_PRIORITY, priority);
+            return n;
+        }
+    }
+
+    {
+        unsigned long long int mark;
+        int n = -1;
+
+        if (sscanf(s, "skb_mark(%llx)%n", &mark, &n) > 0 && n > 0) {
+            nl_msg_put_u32(key, OVS_KEY_ATTR_SKB_MARK, mark);
             return n;
         }
     }
@@ -821,6 +1067,40 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
     }
 
     {
+        char tun_id_s[32];
+        int tos, ttl;
+        struct flow_tnl tun_key;
+        int n = -1;
+
+        if (sscanf(s, "tunnel(tun_id=%31[x0123456789abcdefABCDEF],"
+                   "src="IP_SCAN_FMT",dst="IP_SCAN_FMT
+                   ",tos=%i,ttl=%i,flags%n", tun_id_s,
+                    IP_SCAN_ARGS(&tun_key.ip_src),
+                    IP_SCAN_ARGS(&tun_key.ip_dst), &tos, &ttl,
+                    &n) > 0 && n > 0) {
+            int res;
+            uint32_t flags;
+
+            tun_key.tun_id = htonll(strtoull(tun_id_s, NULL, 0));
+            tun_key.ip_tos = tos;
+            tun_key.ip_ttl = ttl;
+            res = parse_flags(&s[n], flow_tun_flag_to_string, &flags);
+            tun_key.flags = (uint16_t) flags;
+
+            if (res < 0) {
+                return res;
+            }
+            n += res;
+            if (s[n] != ')') {
+                return -EINVAL;
+            }
+            n++;
+            tun_key_to_attr(key, &tun_key);
+            return n;
+        }
+    }
+
+    {
         unsigned long long int in_port;
         int n = -1;
 
@@ -832,14 +1112,14 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
 
     if (port_names && !strncmp(s, "in_port(", 8)) {
         const char *name;
-        const struct shash_node *node;
+        const struct simap_node *node;
         int name_len;
 
         name = s + 8;
         name_len = strcspn(s, ")");
-        node = shash_find_len(port_names, name, name_len);
+        node = simap_find_len(port_names, name, name_len);
         if (node) {
-            nl_msg_put_u32(key, OVS_KEY_ATTR_IN_PORT, (uintptr_t) node->data);
+            nl_msg_put_u32(key, OVS_KEY_ATTR_IN_PORT, node->data);
             return 8 + name_len + 1;
         }
     }
@@ -1116,15 +1396,15 @@ parse_odp_key_attr(const char *s, const struct shash *port_names,
  * data is appended to 'key'.  Either way, 'key''s data might be
  * reallocated.
  *
- * If 'port_names' is nonnull, it points to an shash that maps from a port name
- * to a port number cast to void *.  (Port names may be used instead of port
- * numbers in in_port.)
+ * If 'port_names' is nonnull, it points to an simap that maps from a port name
+ * to a port number.  (Port names may be used instead of port numbers in
+ * in_port.)
  *
  * On success, the attributes appended to 'key' are individually syntactically
  * valid, but they may not be valid as a sequence.  'key' might, for example,
  * have duplicated keys.  odp_flow_key_to_flow() will detect those errors. */
 int
-odp_flow_key_from_string(const char *s, const struct shash *port_names,
+odp_flow_key_from_string(const char *s, const struct simap *port_names,
                          struct ofpbuf *key)
 {
     const size_t old_size = key->size;
@@ -1148,11 +1428,11 @@ odp_flow_key_from_string(const char *s, const struct shash *port_names,
 }
 
 static uint8_t
-ovs_to_odp_frag(uint8_t ovs_frag)
+ovs_to_odp_frag(uint8_t nw_frag)
 {
-    return (ovs_frag & FLOW_NW_FRAG_LATER ? OVS_FRAG_TYPE_LATER
-            : ovs_frag & FLOW_NW_FRAG_ANY ? OVS_FRAG_TYPE_FIRST
-            : OVS_FRAG_TYPE_NONE);
+    return (nw_frag == 0 ? OVS_FRAG_TYPE_NONE
+          : nw_frag == FLOW_NW_FRAG_ANY ? OVS_FRAG_TYPE_FIRST
+          : OVS_FRAG_TYPE_LATER);
 }
 
 /* Appends a representation of 'flow' as OVS_KEY_ATTR_* attributes to 'buf'.
@@ -1165,12 +1445,16 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
     struct ovs_key_ethernet *eth_key;
     size_t encap;
 
-    if (flow->priority) {
-        nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, flow->priority);
+    if (flow->skb_priority) {
+        nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, flow->skb_priority);
     }
 
-    if (flow->tun_id != htonll(0)) {
-        nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tun_id);
+    if (flow->tunnel.tun_id != htonll(0)) {
+        nl_msg_put_be64(buf, OVS_KEY_ATTR_TUN_ID, flow->tunnel.tun_id);
+    }
+
+    if (flow->skb_mark) {
+        nl_msg_put_u32(buf, OVS_KEY_ATTR_SKB_MARK, flow->skb_mark);
     }
 
     if (flow->in_port != OFPP_NONE && flow->in_port != OFPP_CONTROLLER) {
@@ -1223,7 +1507,8 @@ odp_flow_key_from_flow(struct ofpbuf *buf, const struct flow *flow)
         ipv6_key->ipv6_tclass = flow->nw_tos;
         ipv6_key->ipv6_hlimit = flow->nw_ttl;
         ipv6_key->ipv6_frag = ovs_to_odp_frag(flow->nw_frag);
-    } else if (flow->dl_type == htons(ETH_TYPE_ARP)) {
+    } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
+               flow->dl_type == htons(ETH_TYPE_RARP)) {
         struct ovs_key_arp *arp_key;
 
         arp_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ARP,
@@ -1479,7 +1764,8 @@ parse_l3_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                 return ODP_FIT_ERROR;
             }
         }
-    } else if (flow->dl_type == htons(ETH_TYPE_ARP)) {
+    } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
+               flow->dl_type == htons(ETH_TYPE_RARP)) {
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ARP;
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ARP)) {
             const struct ovs_key_arp *arp_key;
@@ -1657,12 +1943,17 @@ odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
 
     /* Metadata. */
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_PRIORITY)) {
-        flow->priority = nl_attr_get_u32(attrs[OVS_KEY_ATTR_PRIORITY]);
+        flow->skb_priority = nl_attr_get_u32(attrs[OVS_KEY_ATTR_PRIORITY]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_PRIORITY;
     }
 
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_SKB_MARK)) {
+        flow->skb_mark = nl_attr_get_u32(attrs[OVS_KEY_ATTR_SKB_MARK]);
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_SKB_MARK;
+    }
+
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TUN_ID)) {
-        flow->tun_id = nl_attr_get_be64(attrs[OVS_KEY_ATTR_TUN_ID]);
+        flow->tunnel.tun_id = nl_attr_get_be64(attrs[OVS_KEY_ATTR_TUN_ID]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TUN_ID;
     }
 
@@ -1702,13 +1993,31 @@ odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
                            expected_attrs, flow, key, key_len);
 }
 
+/* Returns 'fitness' as a string, for use in debug messages. */
+const char *
+odp_key_fitness_to_string(enum odp_key_fitness fitness)
+{
+    switch (fitness) {
+    case ODP_FIT_PERFECT:
+        return "OK";
+    case ODP_FIT_TOO_MUCH:
+        return "too_much";
+    case ODP_FIT_TOO_LITTLE:
+        return "too_little";
+    case ODP_FIT_ERROR:
+        return "error";
+    default:
+        return "<unknown>";
+    }
+}
+
 /* Appends an OVS_ACTION_ATTR_USERSPACE action to 'odp_actions' that specifies
  * Netlink PID 'pid'.  If 'cookie' is nonnull, adds a userdata attribute whose
  * contents contains 'cookie' and returns the offset within 'odp_actions' of
  * the start of the cookie.  (If 'cookie' is null, then the return value is not
  * meaningful.) */
 size_t
-odp_put_userspace_action(uint32_t pid, const struct user_action_cookie *cookie,
+odp_put_userspace_action(uint32_t pid, const union user_action_cookie *cookie,
                          struct ofpbuf *odp_actions)
 {
     size_t offset;
@@ -1739,13 +2048,13 @@ static void
 commit_set_tun_id_action(const struct flow *flow, struct flow *base,
                          struct ofpbuf *odp_actions)
 {
-    if (base->tun_id == flow->tun_id) {
+    if (base->tunnel.tun_id == flow->tunnel.tun_id) {
         return;
     }
-    base->tun_id = flow->tun_id;
+    base->tunnel.tun_id = flow->tunnel.tun_id;
 
     commit_set_action(odp_actions, OVS_KEY_ATTR_TUN_ID,
-                      &base->tun_id, sizeof(base->tun_id));
+                      &base->tunnel.tun_id, sizeof(base->tunnel.tun_id));
 }
 
 static void
@@ -1793,15 +2102,10 @@ commit_vlan_action(const struct flow *flow, struct flow *base,
 }
 
 static void
-commit_set_nw_action(const struct flow *flow, struct flow *base,
+commit_set_ipv4_action(const struct flow *flow, struct flow *base,
                      struct ofpbuf *odp_actions)
 {
     struct ovs_key_ipv4 ipv4_key;
-
-    if (base->dl_type != htons(ETH_TYPE_IP) ||
-        !base->nw_src || !base->nw_dst) {
-        return;
-    }
 
     if (base->nw_src == flow->nw_src &&
         base->nw_dst == flow->nw_dst &&
@@ -1816,19 +2120,63 @@ commit_set_nw_action(const struct flow *flow, struct flow *base,
     ipv4_key.ipv4_tos = base->nw_tos = flow->nw_tos;
     ipv4_key.ipv4_ttl = base->nw_ttl = flow->nw_ttl;
     ipv4_key.ipv4_proto = base->nw_proto;
-    ipv4_key.ipv4_frag = (base->nw_frag == 0 ? OVS_FRAG_TYPE_NONE
-                          : base->nw_frag == FLOW_NW_FRAG_ANY
-                          ? OVS_FRAG_TYPE_FIRST : OVS_FRAG_TYPE_LATER);
+    ipv4_key.ipv4_frag = ovs_to_odp_frag(base->nw_frag);
 
     commit_set_action(odp_actions, OVS_KEY_ATTR_IPV4,
                       &ipv4_key, sizeof(ipv4_key));
 }
 
 static void
+commit_set_ipv6_action(const struct flow *flow, struct flow *base,
+                       struct ofpbuf *odp_actions)
+{
+    struct ovs_key_ipv6 ipv6_key;
+
+    if (ipv6_addr_equals(&base->ipv6_src, &flow->ipv6_src) &&
+        ipv6_addr_equals(&base->ipv6_dst, &flow->ipv6_dst) &&
+        base->ipv6_label == flow->ipv6_label &&
+        base->nw_tos == flow->nw_tos &&
+        base->nw_ttl == flow->nw_ttl &&
+        base->nw_frag == flow->nw_frag) {
+        return;
+    }
+
+    base->ipv6_src = flow->ipv6_src;
+    memcpy(&ipv6_key.ipv6_src, &base->ipv6_src, sizeof(ipv6_key.ipv6_src));
+    base->ipv6_dst = flow->ipv6_dst;
+    memcpy(&ipv6_key.ipv6_dst, &base->ipv6_dst, sizeof(ipv6_key.ipv6_dst));
+
+    ipv6_key.ipv6_label = base->ipv6_label = flow->ipv6_label;
+    ipv6_key.ipv6_tclass = base->nw_tos = flow->nw_tos;
+    ipv6_key.ipv6_hlimit = base->nw_ttl = flow->nw_ttl;
+    ipv6_key.ipv6_proto = base->nw_proto;
+    ipv6_key.ipv6_frag = ovs_to_odp_frag(base->nw_frag);
+
+    commit_set_action(odp_actions, OVS_KEY_ATTR_IPV6,
+                      &ipv6_key, sizeof(ipv6_key));
+}
+
+static void
+commit_set_nw_action(const struct flow *flow, struct flow *base,
+                     struct ofpbuf *odp_actions)
+{
+    /* Check if flow really have an IP header. */
+    if (!flow->nw_proto) {
+        return;
+    }
+
+    if (base->dl_type == htons(ETH_TYPE_IP)) {
+        commit_set_ipv4_action(flow, base, odp_actions);
+    } else if (base->dl_type == htons(ETH_TYPE_IPV6)) {
+        commit_set_ipv6_action(flow, base, odp_actions);
+    }
+}
+
+static void
 commit_set_port_action(const struct flow *flow, struct flow *base,
                        struct ofpbuf *odp_actions)
 {
-    if (!base->tp_src || !base->tp_dst) {
+    if (!base->tp_src && !base->tp_dst) {
         return;
     }
 
@@ -1861,15 +2209,27 @@ static void
 commit_set_priority_action(const struct flow *flow, struct flow *base,
                            struct ofpbuf *odp_actions)
 {
-    if (base->priority == flow->priority) {
+    if (base->skb_priority == flow->skb_priority) {
         return;
     }
-    base->priority = flow->priority;
+    base->skb_priority = flow->skb_priority;
 
     commit_set_action(odp_actions, OVS_KEY_ATTR_PRIORITY,
-                      &base->priority, sizeof(base->priority));
+                      &base->skb_priority, sizeof(base->skb_priority));
 }
 
+static void
+commit_set_skb_mark_action(const struct flow *flow, struct flow *base,
+                           struct ofpbuf *odp_actions)
+{
+    if (base->skb_mark == flow->skb_mark) {
+        return;
+    }
+    base->skb_mark = flow->skb_mark;
+
+    commit_set_action(odp_actions, OVS_KEY_ATTR_SKB_MARK,
+                      &base->skb_mark, sizeof(base->skb_mark));
+}
 /* If any of the flow key data that ODP actions can modify are different in
  * 'base' and 'flow', appends ODP actions to 'odp_actions' that change the flow
  * key from 'base' into 'flow', and then changes 'base' the same way. */
@@ -1883,4 +2243,5 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     commit_set_nw_action(flow, base, odp_actions);
     commit_set_port_action(flow, base, odp_actions);
     commit_set_priority_action(flow, base, odp_actions);
+    commit_set_skb_mark_action(flow, base, odp_actions);
 }

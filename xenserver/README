@@ -85,11 +85,15 @@ debugging.  The sources for the extensions are in
             * ovs-bugtool-lcap-show
             * ovs-bugtool-ovsdb-dump
             * ovs-bugtool-tc-class-show
+            * ovs-bugtool-bond-show
 
     system-configuration/openvswitch.xml
 
         Collect system configuration information relevant to Open vSwitch,
-        including timezone.
+        including timezone. Runs the following script which is described
+        below:
+
+            * ovs-bugtool-daemons-ver
 
     system-configuration.xml
 
@@ -118,19 +122,12 @@ scripts are located in ../utilities/bugtool:
 
         Script to dump tc class configuration for all network interfaces.
 
-To install, build the Open vSwitch RPM with a command like this:
+    ovs-bugtool-daemons-ver
 
-        rpmbuild -D "openvswitch_version $full_version" \
-                -D "xen_version $XENKERNEL" \
-                -D "build_number --with-build-number=$buildnr" \
-                -bb openvswitch-xen.spec
-
-Then, "rpm -U" the resulting Open vSwitch package on the XenServer hosts in
-question and reboot them.  (The openvswitch-dbg package that is also
-produced need not be installed, but it is harmless to do so.)
+        Script to dump version information for all Open vSwitch daemons.
 
 ----------------------------------------------------------------------
-Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
+Copyright (C) 2009, 2010, 2011 Nicira, Inc.
 
 Copying and distribution of this file, with or without modification,
 are permitted in any medium without royalty provided the copyright

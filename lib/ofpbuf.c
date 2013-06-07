@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,21 +47,42 @@ ofpbuf_use(struct ofpbuf *b, void *base, size_t allocated)
 
 /* Initializes 'b' as an empty ofpbuf that contains the 'allocated' bytes of
  * memory starting at 'base'.  'base' should point to a buffer on the stack.
- *
- * An ofpbuf operation that requires reallocating data will assert-fail if this
- * function was used to initialize it.
+ * (Nothing actually relies on 'base' being allocated on the stack.  It could
+ * be static or malloc()'d memory.  But stack space is the most common use
+ * case.)
  *
  * 'base' should be appropriately aligned.  Using an array of uint32_t or
  * uint64_t for the buffer is a reasonable way to ensure appropriate alignment
- * for 32- or 64-bit data.
+ * for 32- or 64-bit data.  OFPBUF_STACK_BUFFER is a convenient way to do so.
  *
- * (Nothing actually relies on 'base' being allocated on the stack.  It could
- * be static or malloc()'d memory.  But stack space is the most common use
- * case.) */
+ * An ofpbuf operation that requires reallocating data will assert-fail if this
+ * function was used to initialize it.  Thus, one need not call ofpbuf_uninit()
+ * on an ofpbuf initialized by this function (though doing so is harmless),
+ * because it is guaranteed that 'b' does not own any heap-allocated memory. */
 void
 ofpbuf_use_stack(struct ofpbuf *b, void *base, size_t allocated)
 {
     ofpbuf_use__(b, base, allocated, OFPBUF_STACK);
+}
+
+/* Initializes 'b' as an empty ofpbuf that contains the 'allocated' bytes of
+ * memory starting at 'base'.  'base' should point to a buffer on the stack.
+ * (Nothing actually relies on 'base' being allocated on the stack.  It could
+ * be static or malloc()'d memory.  But stack space is the most common usen
+ * case.)
+ *
+ * 'base' should be appropriately aligned.  Using an array of uint32_t or
+ * uint64_t for the buffer is a reasonable way to ensure appropriate alignment
+ * for 32- or 64-bit data.  OFPBUF_STACK_BUFFER is a convenient way to do so.
+ *
+ * An ofpbuf operation that requires reallocating data will copy the provided
+ * buffer into a malloc()'d buffer.  Thus, it is wise to call ofpbuf_uninit()
+ * on an ofpbuf initialized by this function, so that if it expanded into the
+ * heap, that memory is freed. */
+void
+ofpbuf_use_stub(struct ofpbuf *b, void *base, size_t allocated)
+{
+    ofpbuf_use__(b, base, allocated, OFPBUF_STUB);
 }
 
 /* Initializes 'b' as an ofpbuf whose data starts at 'data' and continues for
@@ -74,7 +95,7 @@ ofpbuf_use_stack(struct ofpbuf *b, void *base, size_t allocated)
 void
 ofpbuf_use_const(struct ofpbuf *b, const void *data, size_t size)
 {
-    ofpbuf_use__(b, (void *) data, size, OFPBUF_STACK);
+    ofpbuf_use__(b, CONST_CAST(void *, data), size, OFPBUF_STACK);
     b->size = size;
 }
 
@@ -93,6 +114,15 @@ ofpbuf_uninit(struct ofpbuf *b)
     if (b && b->source == OFPBUF_MALLOC) {
         free(b->base);
     }
+}
+
+/* Returns a pointer that may be passed to free() to accomplish the same thing
+ * as ofpbuf_uninit(b).  The return value is a null pointer if ofpbuf_uninit()
+ * would not free any memory. */
+void *
+ofpbuf_get_uninit_pointer(struct ofpbuf *b)
+{
+    return b && b->source == OFPBUF_MALLOC ? b->base : NULL;
 }
 
 /* Frees memory that 'b' points to and allocates a new ofpbuf */
@@ -129,7 +159,7 @@ ofpbuf_new_with_headroom(size_t size, size_t headroom)
 struct ofpbuf *
 ofpbuf_clone(const struct ofpbuf *buffer)
 {
-    return ofpbuf_clone_data(buffer->data, buffer->size);
+    return ofpbuf_clone_with_headroom(buffer, 0);
 }
 
 /* Creates and returns a new ofpbuf whose data are copied from 'buffer'.   The
@@ -137,8 +167,27 @@ ofpbuf_clone(const struct ofpbuf *buffer)
 struct ofpbuf *
 ofpbuf_clone_with_headroom(const struct ofpbuf *buffer, size_t headroom)
 {
-    return ofpbuf_clone_data_with_headroom(buffer->data, buffer->size,
-                                           headroom);
+    struct ofpbuf *new_buffer;
+    uintptr_t data_delta;
+
+    new_buffer = ofpbuf_clone_data_with_headroom(buffer->data, buffer->size,
+                                                 headroom);
+    data_delta = (char *) new_buffer->data - (char *) buffer->data;
+
+    if (buffer->l2) {
+        new_buffer->l2 = (char *) buffer->l2 + data_delta;
+    }
+    if (buffer->l3) {
+        new_buffer->l3 = (char *) buffer->l3 + data_delta;
+    }
+    if (buffer->l4) {
+        new_buffer->l4 = (char *) buffer->l4 + data_delta;
+    }
+    if (buffer->l7) {
+        new_buffer->l7 = (char *) buffer->l7 + data_delta;
+    }
+
+    return new_buffer;
 }
 
 /* Creates and returns a new ofpbuf that initially contains a copy of the
@@ -226,6 +275,12 @@ ofpbuf_resize__(struct ofpbuf *b, size_t new_headroom, size_t new_tailroom)
 
     case OFPBUF_STACK:
         NOT_REACHED();
+
+    case OFPBUF_STUB:
+        b->source = OFPBUF_MALLOC;
+        new_base = xmalloc(new_allocated);
+        ofpbuf_copy__(b, new_base, new_headroom, new_tailroom);
+        break;
 
     default:
         NOT_REACHED();
@@ -353,7 +408,7 @@ ofpbuf_put_hex(struct ofpbuf *b, const char *s, size_t *n)
             if (n) {
                 *n = b->size - initial_size;
             }
-            return (char *) s;
+            return CONST_CAST(char *, s);
         }
 
         ofpbuf_put(b, &byte, 1);

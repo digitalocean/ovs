@@ -34,6 +34,12 @@ static inline void skb_copy_to_linear_data_offset(struct sk_buff *skb,
 
 #endif	/* !HAVE_SKB_COPY_FROM_LINEAR_DATA_OFFSET */
 
+#ifndef HAVE_SKB_RESET_TAIL_POINTER
+static inline void skb_reset_tail_pointer(struct sk_buff *skb)
+{
+	skb->tail = skb->data;
+}
+#endif
 /*
  * The networking layer reserves some headroom in skb data (via
  * dev_alloc_skb). This is used to avoid having to reallocate skb data when
@@ -232,14 +238,14 @@ static inline bool skb_warn_if_lro(const struct sk_buff *skb)
 #define consume_skb kfree_skb
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0)
+#ifndef HAVE_SKB_FRAG_PAGE
 static inline struct page *skb_frag_page(const skb_frag_t *frag)
 {
 	return frag->page;
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+#ifndef HAVE_SKB_RESET_MAC_LEN
 static inline void skb_reset_mac_len(struct sk_buff *skb)
 {
 	skb->mac_len = skb->network_header - skb->mac_header;

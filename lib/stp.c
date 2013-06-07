@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "byte-order.h"
 #include "ofpbuf.h"
 #include "packets.h"
+#include "unixctl.h"
 #include "util.h"
 #include "vlog.h"
 
@@ -101,6 +102,8 @@ struct stp_port {
 };
 
 struct stp {
+    struct list node;               /* Node in all_stps list. */
+
     /* Static bridge data. */
     char *name;                     /* Human-readable name for log messages. */
     stp_identifier bridge_id;       /* 8.5.3.7: This bridge. */
@@ -131,10 +134,13 @@ struct stp {
     struct stp_port ports[STP_MAX_PORTS];
 
     /* Interface to client. */
+    bool fdb_needs_flush;          /* MAC learning tables needs flushing. */
     struct stp_port *first_changed_port;
     void (*send_bpdu)(struct ofpbuf *bpdu, int port_no, void *aux);
     void *aux;
 };
+
+static struct list all_stps = LIST_INITIALIZER(&all_stps);
 
 #define FOR_EACH_ENABLED_PORT(PORT, STP)                        \
     for ((PORT) = stp_next_enabled_port((STP), (STP)->ports);   \
@@ -145,7 +151,7 @@ stp_next_enabled_port(const struct stp *stp, const struct stp_port *port)
 {
     for (; port < &stp->ports[ARRAY_SIZE(stp->ports)]; port++) {
         if (port->state != STP_DISABLED) {
-            return (struct stp_port *) port;
+            return CONST_CAST(struct stp_port *, port);
         }
     }
     return NULL;
@@ -198,6 +204,15 @@ static void stp_stop_timer(struct stp_timer *);
 static bool stp_timer_expired(struct stp_timer *, int elapsed, int timeout);
 
 static void stp_send_bpdu(struct stp_port *, const void *, size_t);
+static void stp_unixctl_tcn(struct unixctl_conn *, int argc,
+                            const char *argv[], void *aux);
+
+void
+stp_init(void)
+{
+    unixctl_command_register("stp/tcn", "[bridge]", 0, 1, stp_unixctl_tcn,
+                             NULL);
+}
 
 /* Creates and returns a new STP instance that initially has no ports enabled.
  *
@@ -255,6 +270,7 @@ stp_create(const char *name, stp_identifier bridge_id,
         p->path_cost = 19;      /* Recommended default for 100 Mb/s link. */
         stp_initialize_port(p, STP_DISABLED);
     }
+    list_push_back(&all_stps, &stp->node);
     return stp;
 }
 
@@ -263,6 +279,7 @@ void
 stp_destroy(struct stp *stp)
 {
     if (stp) {
+        list_remove(&stp->node);
         free(stp->name);
         free(stp);
     }
@@ -446,6 +463,17 @@ int
 stp_get_forward_delay(const struct stp *stp)
 {
     return timer_to_ms(stp->bridge_forward_delay);
+}
+
+/* Returns true if something has happened to 'stp' which necessitates flushing
+ * the client's MAC learning table.  Calling this function resets 'stp' so that
+ * future calls will return false until flushing is required again. */
+bool
+stp_check_and_reset_fdb_flush(struct stp *stp)
+{
+    bool needs_flush = stp->fdb_needs_flush;
+    stp->fdb_needs_flush = false;
+    return needs_flush;
 }
 
 /* Returns the port in 'stp' with index 'port_no', which must be between 0 and
@@ -1040,6 +1068,8 @@ stp_set_port_state(struct stp_port *p, enum stp_state state)
 static void
 stp_topology_change_detection(struct stp *stp)
 {
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
     if (stp_is_root_bridge(stp)) {
         stp->topology_change = true;
         stp_start_timer(&stp->topology_change_timer, 0);
@@ -1047,7 +1077,9 @@ stp_topology_change_detection(struct stp *stp)
         stp_transmit_tcn(stp);
         stp_start_timer(&stp->tcn_timer, 0);
     }
+    stp->fdb_needs_flush = true;
     stp->topology_change_detected = true;
+    VLOG_INFO_RL(&rl, "%s: detected topology change.", stp->name);
 }
 
 static void
@@ -1094,6 +1126,9 @@ stp_received_config_bpdu(struct stp *stp, struct stp_port *p,
                 stp_config_bpdu_generation(stp);
                 if (config->flags & STP_CONFIG_TOPOLOGY_CHANGE_ACK) {
                     stp_topology_change_acknowledged(stp);
+                }
+                if (config->flags & STP_CONFIG_TOPOLOGY_CHANGE) {
+                    stp->fdb_needs_flush = true;
                 }
             }
         } else if (stp_is_designated_port(p)) {
@@ -1311,4 +1346,42 @@ stp_send_bpdu(struct stp_port *p, const void *bpdu, size_t bpdu_size)
 
     p->stp->send_bpdu(pkt, stp_port_no(p), p->stp->aux);
     p->tx_count++;
+}
+
+/* Unixctl. */
+
+static struct stp *
+stp_find(const char *name)
+{
+    struct stp *stp;
+
+    LIST_FOR_EACH (stp, node, &all_stps) {
+        if (!strcmp(stp->name, name)) {
+            return stp;
+        }
+    }
+    return NULL;
+}
+
+static void
+stp_unixctl_tcn(struct unixctl_conn *conn, int argc,
+                const char *argv[], void *aux OVS_UNUSED)
+{
+    if (argc > 1) {
+        struct stp *stp = stp_find(argv[1]);
+
+        if (!stp) {
+            unixctl_command_reply_error(conn, "no such stp object");
+            return;
+        }
+        stp_topology_change_detection(stp);
+    } else {
+        struct stp *stp;
+
+        LIST_FOR_EACH (stp, node, &all_stps) {
+            stp_topology_change_detection(stp);
+        }
+    }
+
+    unixctl_command_reply(conn, "OK");
 }

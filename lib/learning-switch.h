@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ struct lswitch_config {
     enum lswitch_mode mode;
 
     /* 0 to use exact-match flow entries,
-     * a OFPFW_* bitmask to enable specific wildcards,
+     * a OFPFW10_* bitmask to enable specific wildcards,
      * or UINT32_MAX to use the default wildcards (wildcarding as many fields
      * as possible.
      *
@@ -46,26 +46,30 @@ struct lswitch_config {
      * OFP_FLOW_PERMANENT: Set up permanent flows. */
     int max_idle;
 
-    /* Optionally, a list of one or more "struct ofpbuf"s containing OpenFlow
-     * messages to send to the switch at time of connection.  Presumably these
-     * will be OFPT_FLOW_MOD requests to set up the flow table. */
-    const struct list *default_flows;
+    /* Optional "flow mod" requests to send to the switch at connection time,
+     * to set up the flow table. */
+    const struct ofputil_flow_mod *default_flows;
+    size_t n_default_flows;
 
     /* The OpenFlow queue to use by default.  Use UINT32_MAX to avoid
      * specifying a particular queue. */
     uint32_t default_queue;
 
-    /* Maps from a port name to a queue_id (cast to void *). */
-    const struct shash *port_queues;
+    /* Maps from a port name to a queue_id. */
+    const struct simap *port_queues;
+
+    /* If true, do not reply to any messages from the switch (for debugging
+     * fail-open mode). */
+    bool mute;
 };
 
 struct lswitch *lswitch_create(struct rconn *, const struct lswitch_config *);
+bool lswitch_is_alive(const struct lswitch *);
 void lswitch_set_queue(struct lswitch *sw, uint32_t queue);
 void lswitch_run(struct lswitch *);
 void lswitch_wait(struct lswitch *);
 void lswitch_destroy(struct lswitch *);
-void lswitch_process_packet(struct lswitch *, struct rconn *,
-                            const struct ofpbuf *);
 
+void lswitch_mute(struct lswitch *);
 
 #endif /* learning-switch.h */

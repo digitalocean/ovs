@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Nicira Networks.
+ * Copyright (c) 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #ifndef ROUTE_TABLE_H
 #define ROUTE_TABLE_H 1
 
+#include <sys/socket.h>
 #include <net/if.h>
 #include <stdbool.h>
 #include <stdint.h>

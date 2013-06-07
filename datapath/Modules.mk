@@ -1,7 +1,7 @@
 # Some modules should be built and distributed, e.g. openvswitch.
 #
 # Some modules should be distributed but not built, e.g. we do not build
-# veth if the kernel in question already has it.
+# brcompat if configured without it
 #
 # Some modules should be built but not distributed, e.g. third-party
 # hwtable modules.
@@ -17,6 +17,7 @@ openvswitch_sources = \
 	dp_sysfs_dp.c \
 	dp_sysfs_if.c \
 	flow.c \
+	genl_exec.c \
 	tunnel.c \
 	vlan.c \
 	vport.c \
@@ -33,9 +34,11 @@ openvswitch_headers = \
 	datapath.h \
 	dp_sysfs.h \
 	flow.h \
+	genl_exec.h \
 	tunnel.h \
 	vlan.h \
 	vport.h \
+	vport-capwap.h \
 	vport-generic.h \
 	vport-internal_dev.h \
 	vport-netdev.h

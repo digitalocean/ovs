@@ -13,9 +13,10 @@
  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301
  USA.
 
- Copyright (C) 2011 Nicira Networks.
+ Copyright (C) 2011 Nicira, Inc.
 -->
 
 <collect>
     <command label="timezone">date --rfc-3339=seconds</command>
+    <command label="ovs-daemons-ver" filters="ovs">/usr/share/openvswitch/scripts/ovs-bugtool-daemons-ver</command>
 </collect>

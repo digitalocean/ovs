@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,10 @@ struct cfm_settings;
 struct cls_rule;
 struct netdev;
 struct ofproto;
+struct ofport;
 struct shash;
+struct simap;
+struct netdev_stats;
 
 struct ofproto_controller_info {
     bool is_connected;
@@ -119,16 +122,19 @@ struct ofproto_controller {
     char *target;               /* e.g. "tcp:127.0.0.1" */
     int max_backoff;            /* Maximum reconnection backoff, in seconds. */
     int probe_interval;         /* Max idle time before probing, in seconds. */
-    enum ofproto_band band;      /* In-band or out-of-band? */
+    enum ofproto_band band;     /* In-band or out-of-band? */
+    bool enable_async_msgs;     /* Initially enable asynchronous messages? */
 
     /* OpenFlow packet-in rate-limiting. */
     int rate_limit;             /* Max packet-in rate in packets per second. */
     int burst_limit;            /* Limit on accumulating packet credits. */
+
+    uint8_t dscp;               /* DSCP value for controller connection. */
 };
 
-#define DEFAULT_MFR_DESC "Nicira Networks, Inc."
+#define DEFAULT_MFR_DESC "Nicira, Inc."
 #define DEFAULT_HW_DESC "Open vSwitch"
-#define DEFAULT_SW_DESC VERSION BUILDNR
+#define DEFAULT_SW_DESC VERSION
 #define DEFAULT_SERIAL_DESC "None"
 #define DEFAULT_DP_DESC "None"
 
@@ -147,6 +153,8 @@ int ofproto_run(struct ofproto *);
 int ofproto_run_fast(struct ofproto *);
 void ofproto_wait(struct ofproto *);
 bool ofproto_is_alive(const struct ofproto *);
+
+void ofproto_get_memory_usage(const struct ofproto *, struct simap *);
 
 /* A port within an OpenFlow switch.
  *
@@ -182,16 +190,18 @@ int ofproto_port_dump_done(struct ofproto_port_dump *);
           : (ofproto_port_dump_done(DUMP), false));         \
         )
 
-#define OFPROTO_FLOW_EVICTON_THRESHOLD_DEFAULT	1000
-#define OFPROTO_FLOW_EVICTION_THRESHOLD_MIN	100
+#define OFPROTO_FLOW_EVICTION_THRESHOLD_DEFAULT  1000
+#define OFPROTO_FLOW_EVICTION_THRESHOLD_MIN 100
 
 int ofproto_port_add(struct ofproto *, struct netdev *, uint16_t *ofp_portp);
 int ofproto_port_del(struct ofproto *, uint16_t ofp_port);
+int ofproto_port_get_stats(const struct ofport *, struct netdev_stats *stats);
 
 int ofproto_port_query_by_name(const struct ofproto *, const char *devname,
                                struct ofproto_port *);
 
 /* Top-level configuration. */
+uint64_t ofproto_get_datapath_id(const struct ofproto *);
 void ofproto_set_datapath_id(struct ofproto *, uint64_t datapath_id);
 void ofproto_set_controllers(struct ofproto *,
                              const struct ofproto_controller *, size_t n);
@@ -215,7 +225,6 @@ int ofproto_set_stp(struct ofproto *, const struct ofproto_stp_settings *);
 int ofproto_get_stp_status(struct ofproto *, struct ofproto_stp_status *);
 
 /* Configuration of ports. */
-
 void ofproto_port_unregister(struct ofproto *, uint16_t ofp_port);
 
 void ofproto_port_clear_cfm(struct ofproto *, uint16_t ofp_port);
@@ -312,6 +321,27 @@ int ofproto_mirror_get_stats(struct ofproto *, void *aux,
 int ofproto_set_flood_vlans(struct ofproto *, unsigned long *flood_vlans);
 bool ofproto_is_mirror_output_bundle(const struct ofproto *, void *aux);
 
+/* Configuration of OpenFlow tables. */
+struct ofproto_table_settings {
+    char *name;                 /* Name exported via OpenFlow or NULL. */
+    unsigned int max_flows;     /* Maximum number of flows or UINT_MAX. */
+
+    /* These members determine the handling of an attempt to add a flow that
+     * would cause the table to have more than 'max_flows' flows.
+     *
+     * If 'groups' is NULL, overflows will be rejected with an error.
+     *
+     * If 'groups' is nonnull, an overflow will cause a flow to be removed.
+     * The flow to be removed is chosen to give fairness among groups
+     * distinguished by different values for the subfields within 'groups'. */
+    struct mf_subfield *groups;
+    size_t n_groups;
+};
+
+int ofproto_get_n_tables(const struct ofproto *);
+void ofproto_configure_table(struct ofproto *, int table_id,
+                             const struct ofproto_table_settings *);
+
 /* Configuration querying. */
 bool ofproto_has_snoops(const struct ofproto *);
 void ofproto_get_snoops(const struct ofproto *, struct sset *);
@@ -319,10 +349,12 @@ void ofproto_get_all_flows(struct ofproto *p, struct ds *);
 void ofproto_get_netflow_ids(const struct ofproto *,
                              uint8_t *engine_type, uint8_t *engine_id);
 int ofproto_port_get_cfm_fault(const struct ofproto *, uint16_t ofp_port);
+int ofproto_port_get_cfm_opup(const struct ofproto *, uint16_t ofp_port);
 int ofproto_port_get_cfm_remote_mpids(const struct ofproto *,
                                       uint16_t ofp_port, const uint64_t **rmps,
                                       size_t *n_rmps);
-
+int ofproto_port_get_cfm_health(const struct ofproto *ofproto,
+                                uint16_t ofp_port);
 void ofproto_get_ofproto_controller_info(const struct ofproto *, struct shash *);
 void ofproto_free_ofproto_controller_info(struct shash *);
 

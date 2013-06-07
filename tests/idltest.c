@@ -7,6 +7,13 @@
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
 
+#ifdef __CHECKER__
+/* Sparse dislikes sizeof(bool) ("warning: expression using sizeof bool"). */
+enum { sizeof_bool = 1 };
+#else
+enum { sizeof_bool = sizeof(bool) };
+#endif
+
 static bool inited;
 
 
@@ -115,6 +122,18 @@ static void
 idltest_link1_unparse_l2(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
+}
+
+static void
+idltest_link1_init__(struct ovsdb_idl_row *row)
+{
+    idltest_link1_init(idltest_link1_cast(row));
+}
+
+void
+idltest_link1_init(struct idltest_link1 *row)
+{
+    memset(row, 0, sizeof *row); 
 }
 
 const struct idltest_link1 *
@@ -337,6 +356,7 @@ idltest_link1_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_link1_parse_i;
     c->unparse = idltest_link1_unparse_i;
 
@@ -349,6 +369,7 @@ idltest_link1_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_link1_parse_k;
     c->unparse = idltest_link1_unparse_k;
 
@@ -361,6 +382,7 @@ idltest_link1_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
+    c->mutable = true;
     c->parse = idltest_link1_parse_ka;
     c->unparse = idltest_link1_unparse_ka;
 
@@ -373,6 +395,7 @@ idltest_link1_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_link1_parse_l2;
     c->unparse = idltest_link1_unparse_l2;
 }
@@ -415,6 +438,18 @@ static void
 idltest_link2_unparse_l1(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
+}
+
+static void
+idltest_link2_init__(struct ovsdb_idl_row *row)
+{
+    idltest_link2_init(idltest_link2_cast(row));
+}
+
+void
+idltest_link2_init(struct idltest_link2 *row)
+{
+    memset(row, 0, sizeof *row); 
 }
 
 const struct idltest_link2 *
@@ -547,6 +582,7 @@ idltest_link2_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_link2_parse_i;
     c->unparse = idltest_link2_unparse_i;
 
@@ -559,6 +595,7 @@ idltest_link2_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_link2_parse_l1;
     c->unparse = idltest_link2_unparse_l1;
 }
@@ -582,17 +619,18 @@ static void
 idltest_simple_parse_ba(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
+    size_t n = MIN(1, datum->n);
+    size_t i;
 
     assert(inited);
-    if (datum->n >= 1) {
-        static const bool false_value = false;
-        static const bool true_value = true;
-
-        row->n_ba = 1;
-        row->ba = datum->keys[0].boolean ? &true_value : &false_value;
-    } else {
-        row->n_ba = 0;
-        row->ba = NULL;
+    row->ba = NULL;
+    row->n_ba = 0;
+    for (i = 0; i < n; i++) {
+        if (!row->n_ba) {
+            row->ba = xmalloc(n * sizeof_bool);
+        }
+        row->ba[row->n_ba] = datum->keys[i].boolean;
+        row->n_ba++;
     }
 }
 
@@ -727,9 +765,12 @@ idltest_simple_unparse_b(struct ovsdb_idl_row *row OVS_UNUSED)
 }
 
 static void
-idltest_simple_unparse_ba(struct ovsdb_idl_row *row OVS_UNUSED)
+idltest_simple_unparse_ba(struct ovsdb_idl_row *row_)
 {
-    /* Nothing to do. */
+    struct idltest_simple *row = idltest_simple_cast(row_);
+
+    assert(inited);
+    free(row->ba);
 }
 
 static void
@@ -790,6 +831,18 @@ idltest_simple_unparse_ua(struct ovsdb_idl_row *row_)
 
     assert(inited);
     free(row->ua);
+}
+
+static void
+idltest_simple_init__(struct ovsdb_idl_row *row)
+{
+    idltest_simple_init(idltest_simple_cast(row));
+}
+
+void
+idltest_simple_init(struct idltest_simple *row)
+{
+    memset(row, 0, sizeof *row); 
 }
 
 const struct idltest_simple *
@@ -1281,6 +1334,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_b;
     c->unparse = idltest_simple_unparse_b;
 
@@ -1291,6 +1345,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_ba;
     c->unparse = idltest_simple_unparse_ba;
 
@@ -1301,6 +1356,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_i;
     c->unparse = idltest_simple_unparse_i;
 
@@ -1311,6 +1367,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
+    c->mutable = true;
     c->parse = idltest_simple_parse_ia;
     c->unparse = idltest_simple_unparse_ia;
 
@@ -1321,6 +1378,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_r;
     c->unparse = idltest_simple_unparse_r;
 
@@ -1331,6 +1389,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
+    c->mutable = true;
     c->parse = idltest_simple_parse_ra;
     c->unparse = idltest_simple_unparse_ra;
 
@@ -1342,6 +1401,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_s;
     c->unparse = idltest_simple_unparse_s;
 
@@ -1353,6 +1413,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
+    c->mutable = true;
     c->parse = idltest_simple_parse_sa;
     c->unparse = idltest_simple_unparse_sa;
 
@@ -1363,6 +1424,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 1;
     c->type.n_max = 1;
+    c->mutable = true;
     c->parse = idltest_simple_parse_u;
     c->unparse = idltest_simple_unparse_u;
 
@@ -1373,6 +1435,7 @@ idltest_simple_columns_init(void)
     ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
     c->type.n_min = 0;
     c->type.n_max = UINT_MAX;
+    c->mutable = true;
     c->parse = idltest_simple_parse_ua;
     c->unparse = idltest_simple_unparse_ua;
 }
@@ -1380,13 +1443,13 @@ idltest_simple_columns_init(void)
 struct ovsdb_idl_table_class idltest_table_classes[IDLTEST_N_TABLES] = {
     {"link1", true,
      idltest_link1_columns, ARRAY_SIZE(idltest_link1_columns),
-     sizeof(struct idltest_link1)},
+     sizeof(struct idltest_link1), idltest_link1_init__},
     {"link2", true,
      idltest_link2_columns, ARRAY_SIZE(idltest_link2_columns),
-     sizeof(struct idltest_link2)},
+     sizeof(struct idltest_link2), idltest_link2_init__},
     {"simple", true,
      idltest_simple_columns, ARRAY_SIZE(idltest_simple_columns),
-     sizeof(struct idltest_simple)},
+     sizeof(struct idltest_simple), idltest_simple_init__},
 };
 
 struct ovsdb_idl_class idltest_idl_class = {

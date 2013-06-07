@@ -2,7 +2,7 @@
 # Spec file for Open vSwitch kernel modules on Red Hat Enterprise
 # Linux 5.
 
-# Copyright (C) 2009, 2010, 2011 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -13,7 +13,7 @@
 %{!?kversion: %define kversion 2.6.18-238.12.1.el5}
 
 Name:    %{kmod_name}-kmod
-Version: 1.4.2
+Version: 1.9.2
 Release: 1%{?dist}
 Group:   System Environment/Kernel
 License: GPLv2
@@ -75,7 +75,7 @@ export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=extra/%{kmod_name}
 for kvariant in %{kvariants} ; do
     KSRC=%{_usrsrc}/kernels/%{kversion}${kvariant:+-$kvariant}-%{_target_cpu}
-    %{__make} -C "${KSRC}" modules_install M=$PWD/_kmod_build_$kvariant/datapath/linux
+    %{__make} -C "${KSRC}" modules_install M="`pwd`"/_kmod_build_$kvariant/datapath/linux
 done
 %{__install} -d %{buildroot}%{_sysconfdir}/depmod.d/
 %{__install} kmod-%{kmod_name}.conf %{buildroot}%{_sysconfdir}/depmod.d/

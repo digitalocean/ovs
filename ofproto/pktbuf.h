@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@
 #ifndef PKTBUF_H
 #define PKTBUF_H 1
 
+#include <stddef.h>
 #include <stdint.h>
+
+#include "ofp-errors.h"
 
 struct pktbuf;
 struct ofpbuf;
@@ -26,10 +29,13 @@ int pktbuf_capacity(void);
 
 struct pktbuf *pktbuf_create(void);
 void pktbuf_destroy(struct pktbuf *);
-uint32_t pktbuf_save(struct pktbuf *, struct ofpbuf *buffer, uint16_t in_port);
+uint32_t pktbuf_save(struct pktbuf *, const void *buffer, size_t buffer_size,
+                     uint16_t in_port);
 uint32_t pktbuf_get_null(void);
-int pktbuf_retrieve(struct pktbuf *, uint32_t id, struct ofpbuf **bufferp,
-                    uint16_t *in_port);
+enum ofperr pktbuf_retrieve(struct pktbuf *, uint32_t id,
+                            struct ofpbuf **bufferp, uint16_t *in_port);
 void pktbuf_discard(struct pktbuf *, uint32_t id);
+
+unsigned int pktbuf_count_packets(const struct pktbuf *);
 
 #endif /* pktbuf.h */

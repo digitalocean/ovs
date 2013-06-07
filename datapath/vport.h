@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -20,15 +20,20 @@
 #define VPORT_H 1
 
 #include <linux/list.h>
+#include <linux/netlink.h>
 #include <linux/openvswitch.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/u64_stats_sync.h>
 
-#include "datapath.h"
+#include "vport-capwap.h"
 
 struct vport;
 struct vport_parms;
+
+struct vport_net {
+	struct capwap_net capwap;
+};
 
 /* The following definitions are for users of the vport subsytem: */
 
@@ -38,7 +43,7 @@ void ovs_vport_exit(void);
 struct vport *ovs_vport_add(const struct vport_parms *);
 void ovs_vport_del(struct vport *);
 
-struct vport *ovs_vport_locate(const char *name);
+struct vport *ovs_vport_locate(struct net *net, const char *name);
 
 int ovs_vport_set_addr(struct vport *, const unsigned char *);
 void ovs_vport_set_stats(struct vport *, struct ovs_vport_stats *);
@@ -75,10 +80,10 @@ struct vport_err_stats {
  * @linkname: The name of the link from /sys/class/net/<datapath>/brif to this
  * &struct vport.  (We keep this around so that we can delete it if the
  * device gets renamed.)  Set to the null string when no link exists.
- * @node: Element in @dp's @port_list.
- * @upcall_pid: The Netlink port to use for packets received on this port that
+ * @upcall_portid: The Netlink port to use for packets received on this port that
  * miss the flow table.
  * @hash_node: Element in @dev_table hash table in vport.c.
+ * @dp_hash_node: Element in @datapath->ports hash table in datapath.c.
  * @ops: Class structure.
  * @percpu_stats: Points to per-CPU statistics used and maintained by vport
  * @stats_lock: Protects @err_stats and @offset_stats.
@@ -92,10 +97,10 @@ struct vport {
 	struct datapath	*dp;
 	struct kobject kobj;
 	char linkname[IFNAMSIZ];
-	struct list_head node;
-	u32 upcall_pid;
+	u32 upcall_portid;
 
 	struct hlist_node hash_node;
+	struct hlist_node dp_hash_node;
 	const struct vport_ops *ops;
 
 	struct vport_percpu_stats __percpu *percpu_stats;
@@ -127,7 +132,7 @@ struct vport_parms {
 	/* For ovs_vport_alloc(). */
 	struct datapath *dp;
 	u16 port_no;
-	u32 upcall_pid;
+	u32 upcall_portid;
 };
 
 /**
@@ -249,6 +254,8 @@ extern const struct vport_ops ovs_netdev_vport_ops;
 extern const struct vport_ops ovs_internal_vport_ops;
 extern const struct vport_ops ovs_patch_vport_ops;
 extern const struct vport_ops ovs_gre_vport_ops;
+extern const struct vport_ops ovs_gre_ft_vport_ops;
+extern const struct vport_ops ovs_gre64_vport_ops;
 extern const struct vport_ops ovs_capwap_vport_ops;
 
 #endif /* vport.h */

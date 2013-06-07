@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,13 @@
 
 struct tm;
 
+/* A "dynamic string", that is, a buffer that can be used to construct a
+ * string across a series of operations that extend or modify it.
+ *
+ * The 'string' member does not always point to a null-terminated string.
+ * Initially it is NULL, and even when it is nonnull, some operations do not
+ * ensure that it is null-terminated.  Use ds_cstr() to ensure that memory is
+ * allocated for the string and that it is null-terminated. */
 struct ds {
     char *string;       /* Null-terminated string. */
     size_t length;      /* Bytes used, not including null terminator. */
@@ -49,12 +56,13 @@ void ds_put_format(struct ds *, const char *, ...) PRINTF_FORMAT(2, 3);
 void ds_put_format_valist(struct ds *, const char *, va_list)
     PRINTF_FORMAT(2, 0);
 void ds_put_printable(struct ds *, const char *, size_t);
-void ds_put_strftime(struct ds *, const char *, const struct tm *)
+void ds_put_strftime(struct ds *, const char *, bool utc)
     STRFTIME_FORMAT(2);
 void ds_put_hex_dump(struct ds *ds, const void *buf_, size_t size,
                      uintptr_t ofs, bool ascii);
 int ds_get_line(struct ds *, FILE *);
 int ds_get_preprocessed_line(struct ds *, FILE *);
+int ds_get_test_line(struct ds *, FILE *);
 
 char *ds_cstr(struct ds *);
 const char *ds_cstr_ro(const struct ds *);

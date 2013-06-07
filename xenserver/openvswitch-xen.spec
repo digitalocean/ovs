@@ -1,6 +1,7 @@
+# Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 # Spec file for Open vSwitch.
 
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -8,16 +9,26 @@
 # without warranty of any kind.
 
 # When building, the rpmbuild command line should define
-# openvswitch_version, kernel_name, kernel_version, kernel_flavor,
-# and build_number using -D arguments.
+# openvswitch_version, kernel_name, kernel_version, and kernel_flavor
+# using -D arguments.
 # for example:
 #
 #    rpmbuild -D "openvswitch_version 1.1.0+build123"
 #      -D "kernel_name  NAME-xen"
 #      -D "kernel_version 2.6.32.12-0.7.1.xs5.6.100.323.170596"
 #      -D "kernel_flavor xen"
-#      -D "build_number --with-build-number=123"
 #      -bb /usr/src/redhat/SPECS/openvswitch-xen.spec
+
+%if %{?openvswitch_version:0}%{!?openvswitch_version:1}
+%define openvswitch_version 1.9.2
+%endif
+
+%if %{?kernel_name:0}%{!?kernel_name:1}
+%define kernel %(rpm -qa 'kernel*xen-devel' | head -1)
+%define kernel_name %(rpm -q --queryformat "%%{Name}" %{kernel} | sed 's/-devel//' | sed 's/kernel-//')
+%define kernel_version %(rpm -q --queryformat "%%{Version}-%%{Release}" %{kernel})
+%define kernel_flavor xen
+%endif
 
 %define xen_version %{kernel_version}%{kernel_flavor}
 
@@ -31,14 +42,14 @@ Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Vendor: Nicira Networks, Inc.
+Vendor: Nicira, Inc.
 Version: %{openvswitch_version}
 
 License: ASL 2.0
 Release: 1
 Source: openvswitch-%{openvswitch_version}.tar.gz
 Buildroot: /tmp/openvswitch-xen-rpm
-Requires: openvswitch_mod.ko.%{module_abi_version}
+Requires: openvswitch.ko.%{module_abi_version}
 
 %description
 Open vSwitch provides standard network bridging functions augmented with
@@ -49,7 +60,7 @@ traffic.
 Summary: Open vSwitch kernel module
 Group: System Environment/Kernel
 License: GPLv2
-Provides: %{name}-modules-%{kernel_flavor} = %{kernel_version}, openvswitch_mod.ko.%{module_abi_version}
+Provides: %{name}-modules-%{kernel_flavor} = %{kernel_version}, openvswitch.ko.%{module_abi_version}
 Requires: kernel-%{kernel_name} = %{kernel_version}
 
 %description %{module_package}
@@ -60,7 +71,7 @@ Open vSwitch Linux kernel module compiled against kernel version
 %setup -q -n openvswitch-%{openvswitch_version}
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{xen_version}/build --enable-ssl %{build_number}
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{xen_version}/build --enable-ssl
 make %{_smp_mflags}
 
 %install
@@ -115,13 +126,15 @@ rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-benchmark \
     $RPM_BUILD_ROOT/usr/sbin/ovs-bugtool \
     $RPM_BUILD_ROOT/usr/bin/ovs-controller \
+    $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/bin/ovs-pki \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8 \
     $RPM_BUILD_ROOT/usr/share/man/man1/ovs-benchmark.1 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-bugtool.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-pki.8
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-pki.8 \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
 
@@ -222,11 +235,11 @@ if test ! -e /etc/openvswitch/conf.db; then
     install -d -m 755 -o root -g root /etc/openvswitch
 
     # Create ovs-vswitchd config database
-    ovsdb-tool -vANY:console:off create /etc/openvswitch/conf.db \
+    ovsdb-tool -vconsole:off create /etc/openvswitch/conf.db \
             /usr/share/openvswitch/vswitch.ovsschema
 
     # Create initial table in config database
-    ovsdb-tool -vANY:console:off transact /etc/openvswitch/conf.db \
+    ovsdb-tool -vconsole:off transact /etc/openvswitch/conf.db \
             '[{"op": "insert", "table": "Open_vSwitch", "row": {}}]' \
             > /dev/null
 fi
@@ -281,10 +294,10 @@ done
 # Ensure all required services are set to run
 for s in openvswitch openvswitch-xapi-update; do
     if chkconfig --list $s >/dev/null 2>&1; then
-        chkconfig --del $s || printf "Could not remove $s init script."
+        chkconfig --del $s || printf "Could not remove $s init script.\n"
     fi
-    chkconfig --add $s || printf "Could not add $s init script."
-    chkconfig $s on || printf "Could not enable $s init script."
+    chkconfig --add $s || printf "Could not add $s init script.\n"
+    chkconfig $s on || printf "Could not enable $s init script.\n"
 done
 
 if [ "$1" = "1" ]; then    # $1 = 1 for install
@@ -297,12 +310,8 @@ else    # $1 = 2 for upgrade
         printf "\nThe server is not configured to run Open vSwitch.  To run in\n"
         printf "vswitch mode, you must run the following command:\n\n"
         printf "\txe-switch-network-backend vswitch"
-    else
-        printf "\nTo use the new Open vSwitch install, you should reboot the\n"
-        printf "server now.  Failure to do so may result in incorrect operation."
+        printf "\n\n"
     fi
-
-    printf "\n\n"
 fi
 
 %posttrans %{module_package}
@@ -314,6 +323,15 @@ fi
 # we use %post then depmod may find the old versions that are about to
 # be removed.
 depmod %{xen_version}
+
+mode=$(cat /etc/xensource/network.conf)
+if [ "$mode" = "vswitch" ] || [ "$mode" = "openvswitch" ]; then
+    printf "\nTo use the newly installed Open vSwitch kernel module, you\n"
+    printf "will either have to reboot the hypervisor or follow any\n"
+    printf "workarounds provided by your administration guide. Failure to do\n"
+    printf "so may result in incorrect operation."
+    printf "\n\n"
+fi
 
 %preun
 if [ "$1" = "0" ]; then     # $1 = 0 for uninstall
@@ -392,6 +410,7 @@ exit 0
 /etc/logrotate.d/openvswitch
 /etc/profile.d/openvswitch.sh
 /usr/share/openvswitch/python/
+/usr/share/openvswitch/scripts/ovs-check-dead-ifs
 /usr/share/openvswitch/scripts/ovs-xapi-sync
 /usr/share/openvswitch/scripts/interface-reconfigure
 /usr/share/openvswitch/scripts/InterfaceReconfigure.py
@@ -410,6 +429,7 @@ exit 0
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
 /usr/bin/ovs-ofctl
+/usr/bin/ovs-parse-backtrace
 /usr/bin/ovs-parse-leaks
 /usr/bin/ovs-pcap
 /usr/bin/ovs-tcpundump
@@ -426,6 +446,7 @@ exit 0
 /usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
+/usr/share/man/man8/ovs-parse-backtrace.8.gz
 /usr/share/man/man8/ovs-parse-leaks.8.gz
 /usr/share/man/man1/ovs-pcap.1.gz
 /usr/share/man/man1/ovs-tcpundump.1.gz
@@ -443,5 +464,5 @@ exit 0
 %exclude /usr/share/openvswitch/python/ovs/db/*.py[co]
 
 %files %{module_package}
-/lib/modules/%{xen_version}/extra/openvswitch/openvswitch_mod.ko
-%exclude /lib/modules/%{xen_version}/extra/openvswitch/brcompat_mod.ko
+/lib/modules/%{xen_version}/extra/openvswitch/openvswitch.ko
+%exclude /lib/modules/%{xen_version}/extra/openvswitch/brcompat.ko

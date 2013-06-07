@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -138,11 +138,11 @@ print_and_free_json(struct json *json)
 
 /* Command implementations. */
 
-static void
+static int
 handle_rpc(struct jsonrpc *rpc, struct jsonrpc_msg *msg, bool *done)
 {
-    struct jsonrpc_msg *reply = NULL;
     if (msg->type == JSONRPC_REQUEST) {
+        struct jsonrpc_msg *reply = NULL;
         if (!strcmp(msg->method, "echo")) {
             reply = jsonrpc_create_reply(json_clone(msg->params), msg->id);
         } else {
@@ -151,21 +151,19 @@ handle_rpc(struct jsonrpc *rpc, struct jsonrpc_msg *msg, bool *done)
             reply = jsonrpc_create_error(error, msg->id);
             ovs_error(0, "unknown request %s", msg->method);
         }
-
+        jsonrpc_send(rpc, reply);
+        return 0;
     } else if (msg->type == JSONRPC_NOTIFY) {
         if (!strcmp(msg->method, "shutdown")) {
             *done = true;
+            return 0;
         } else {
-            jsonrpc_error(rpc, ENOTTY);
             ovs_error(0, "unknown notification %s", msg->method);
+            return ENOTTY;
         }
     } else {
-        jsonrpc_error(rpc, EPROTO);
         ovs_error(0, "unsolicited JSON-RPC reply or error");
-    }
-
-    if (reply) {
-        jsonrpc_send(rpc, reply);
+        return EPROTO;
     }
 }
 
@@ -178,7 +176,7 @@ do_listen(int argc OVS_UNUSED, char *argv[])
     bool done;
     int error;
 
-    error = jsonrpc_pstream_open(argv[1], &pstream);
+    error = jsonrpc_pstream_open(argv[1], &pstream, DSCP_DEFAULT);
     if (error) {
         ovs_fatal(error, "could not listen on \"%s\"", argv[1]);
     }
@@ -212,12 +210,16 @@ do_listen(int argc OVS_UNUSED, char *argv[])
             if (!jsonrpc_get_backlog(rpc)) {
                 error = jsonrpc_recv(rpc, &msg);
                 if (!error) {
-                    handle_rpc(rpc, msg, &done);
+                    error = handle_rpc(rpc, msg, &done);
                     jsonrpc_msg_destroy(msg);
+                } else if (error == EAGAIN) {
+                    error = 0;
                 }
             }
 
-            error = jsonrpc_get_status(rpc);
+            if (!error) {
+                error = jsonrpc_get_status(rpc);
+            }
             if (error) {
                 jsonrpc_close(rpc);
                 ovs_error(error, "connection closed");
@@ -267,7 +269,8 @@ do_request(int argc OVS_UNUSED, char *argv[])
         ovs_fatal(0, "not a valid JSON-RPC request: %s", string);
     }
 
-    error = stream_open_block(jsonrpc_stream_open(argv[1], &stream), &stream);
+    error = stream_open_block(jsonrpc_stream_open(argv[1], &stream,
+                              DSCP_DEFAULT), &stream);
     if (error) {
         ovs_fatal(error, "could not open \"%s\"", argv[1]);
     }
@@ -306,7 +309,8 @@ do_notify(int argc OVS_UNUSED, char *argv[])
         ovs_fatal(0, "not a JSON RPC-valid notification: %s", string);
     }
 
-    error = stream_open_block(jsonrpc_stream_open(argv[1], &stream), &stream);
+    error = stream_open_block(jsonrpc_stream_open(argv[1], &stream,
+                              DSCP_DEFAULT), &stream);
     if (error) {
         ovs_fatal(error, "could not open \"%s\"", argv[1]);
     }

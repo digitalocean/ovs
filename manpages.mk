@@ -34,8 +34,10 @@ ovsdb/ovsdb-server.1: \
 	ovsdb/ovsdb-server.1.in \
 	lib/common-syn.man \
 	lib/common.man \
+	lib/coverage-unixctl.man \
 	lib/daemon-syn.man \
 	lib/daemon.man \
+	lib/memory-unixctl.man \
 	lib/ssl-bootstrap-syn.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl-syn.man \
@@ -51,8 +53,10 @@ ovsdb/ovsdb-server.1: \
 ovsdb/ovsdb-server.1.in:
 lib/common-syn.man:
 lib/common.man:
+lib/coverage-unixctl.man:
 lib/daemon-syn.man:
 lib/daemon.man:
+lib/memory-unixctl.man:
 lib/ssl-bootstrap-syn.man:
 lib/ssl-bootstrap.man:
 lib/ssl-syn.man:
@@ -118,14 +122,24 @@ utilities/ovs-dpctl.8.in:
 lib/common.man:
 lib/vlog.man:
 
+utilities/ovs-l3ping.8: \
+	utilities/ovs-l3ping.8.in \
+	lib/common-syn.man \
+	lib/common.man
+utilities/ovs-l3ping.8.in:
+lib/common-syn.man:
+lib/common.man:
+
 utilities/ovs-ofctl.8: \
 	utilities/ovs-ofctl.8.in \
 	lib/common.man \
+	lib/daemon.man \
 	lib/ssl.man \
 	lib/vconn-active.man \
 	lib/vlog.man
 utilities/ovs-ofctl.8.in:
 lib/common.man:
+lib/daemon.man:
 lib/ssl.man:
 lib/vconn-active.man:
 lib/vlog.man:
@@ -221,6 +235,7 @@ vswitchd/ovs-vswitchd.8: \
 	lib/common.man \
 	lib/daemon.man \
 	lib/leak-checker.man \
+	lib/memory-unixctl.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl.man \
 	lib/stress-unixctl.man \
@@ -233,6 +248,7 @@ vswitchd/ovs-vswitchd.8.in:
 lib/common.man:
 lib/daemon.man:
 lib/leak-checker.man:
+lib/memory-unixctl.man:
 lib/ssl-bootstrap.man:
 lib/ssl.man:
 lib/stress-unixctl.man:

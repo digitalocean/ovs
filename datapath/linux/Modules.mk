@@ -1,20 +1,24 @@
 openvswitch_sources += \
 	linux/compat/addrconf_core-openvswitch.c \
 	linux/compat/dev-openvswitch.c \
+	linux/compat/exthdrs_core.c \
 	linux/compat/flex_array.c \
 	linux/compat/genetlink-openvswitch.c \
 	linux/compat/ip_output-openvswitch.c \
 	linux/compat/kmemdup.c \
 	linux/compat/netdevice.c \
+	linux/compat/net_namespace.c \
 	linux/compat/reciprocal_div.c \
 	linux/compat/skbuff-openvswitch.c \
-	linux/compat/time.c
+	linux/compat/time.c	\
+	linux/compat/workqueue.c
 openvswitch_headers += \
 	linux/compat/include/linux/compiler.h \
 	linux/compat/include/linux/compiler-gcc.h \
 	linux/compat/include/linux/cpumask.h \
 	linux/compat/include/linux/dmi.h \
 	linux/compat/include/linux/err.h \
+	linux/compat/include/linux/etherdevice.h \
 	linux/compat/include/linux/flex_array.h \
 	linux/compat/include/linux/genetlink.h \
 	linux/compat/include/linux/icmp.h \
@@ -33,6 +37,7 @@ openvswitch_headers += \
 	linux/compat/include/linux/lockdep.h \
 	linux/compat/include/linux/log2.h \
 	linux/compat/include/linux/mutex.h \
+	linux/compat/include/linux/net.h \
 	linux/compat/include/linux/netdevice.h \
 	linux/compat/include/linux/netfilter_bridge.h \
 	linux/compat/include/linux/netfilter_ipv4.h \
@@ -54,13 +59,19 @@ openvswitch_headers += \
 	linux/compat/include/net/checksum.h \
 	linux/compat/include/net/dst.h \
 	linux/compat/include/net/genetlink.h \
+	linux/compat/include/net/inet_frag.h \
 	linux/compat/include/net/ip.h \
+	linux/compat/include/net/ipv6.h \
 	linux/compat/include/net/net_namespace.h \
 	linux/compat/include/net/netlink.h \
 	linux/compat/include/net/protocol.h \
 	linux/compat/include/net/route.h \
+	linux/compat/include/net/sock.h \
+	linux/compat/include/net/netns/generic.h \
 	linux/compat/genetlink.inc
 
-both_modules += brcompat
-brcompat_sources = linux/compat/genetlink-brcompat.c brcompat.c
+# always distribute brcompat source regardless of local build configuration
+dist_modules += brcompat
+build_modules += $(if $(BUILD_BRCOMPAT),brcompat)
+brcompat_sources = linux/compat/genetlink-brcompat.c brcompat_main.c
 brcompat_headers =

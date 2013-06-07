@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -149,9 +149,9 @@ enum {
 
 /* These were introduced all together in 2.6.24. */
 #ifndef NLA_TYPE_MASK
-#define NLA_F_NESTED		(1 << 15)
-#define NLA_F_NET_BYTEORDER	(1 << 14)
-#define NLA_TYPE_MASK		~(NLA_F_NESTED | NLA_F_NET_BYTEORDER)
+#define NLA_F_NESTED        (1 << 15)
+#define NLA_F_NET_BYTEORDER (1 << 14)
+#define NLA_TYPE_MASK       ~(NLA_F_NESTED | NLA_F_NET_BYTEORDER)
 #endif
 
 /* These were introduced all together in 2.6.14.  (We want our programs to
@@ -170,10 +170,10 @@ enum {
 #define CTRL_ATTR_MCAST_GROUPS 7
 
 enum {
-	CTRL_ATTR_MCAST_GRP_UNSPEC,
-	CTRL_ATTR_MCAST_GRP_NAME,
-	CTRL_ATTR_MCAST_GRP_ID,
-	__CTRL_ATTR_MCAST_GRP_MAX,
+    CTRL_ATTR_MCAST_GRP_UNSPEC,
+    CTRL_ATTR_MCAST_GRP_NAME,
+    CTRL_ATTR_MCAST_GRP_ID,
+    __CTRL_ATTR_MCAST_GRP_MAX,
 };
 
 #define CTRL_ATTR_MCAST_GRP_MAX (__CTRL_ATTR_MCAST_GRP_MAX - 1)

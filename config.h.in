@@ -3,15 +3,24 @@
 /* Define if building universal (internal helper macro) */
 #undef AC_APPLE_UNIVERSAL_BUILD
 
-/* Official build number as a VERSION suffix string, e.g. "+build123", or ""
-   if this is not an official build. */
-#undef BUILDNR
+/* Define to 1 to enable time caching, to 0 to disable time caching, or leave
+   undefined to use the default (as one should ordinarily do). */
+#undef CACHE_TIME
+
+/* Define to 1 if building on ESX. */
+#undef ESX
 
 /* Define to 1 if you have the `backtrace' function. */
 #undef HAVE_BACKTRACE
 
+/* Define to 1 if you have the <execinfo.h> header file. */
+#undef HAVE_EXECINFO_H
+
 /* Define to 1 if you have the `getloadavg' function. */
 #undef HAVE_GETLOADAVG
+
+/* Define to 1 if net/if_dl.h is available. */
+#undef HAVE_IF_DL
 
 /* Define to 1 if net/if_packet.h is available. */
 #undef HAVE_IF_PACKET
@@ -91,6 +100,9 @@
 
 /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
 #undef HAVE_VALGRIND_VALGRIND_H
+
+/* System uses the linux datapath module. */
+#undef LINUX_DATAPATH
 
 /* Define to 1 if your C compiler doesn't accept -c and -o together. */
 #undef NO_MINUS_C_MINUS_O

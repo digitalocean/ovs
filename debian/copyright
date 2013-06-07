@@ -9,43 +9,66 @@ Upstream Authors (from AUTHORS):
   Andrew Evans            aevans@nicira.com
   Andrew Lambeth          wal@nicira.com
   Andy Southgate          andy.southgate@citrix.com
+  Anupam Chanda           achanda@nicira.com
+  Arun Sharma             arun.sharma@calsoftinc.com
   Ben Pfaff               blp@nicira.com
   Brian Kruger            bkruger+ovsdev@gmail.com
+  Bruce Davie             bsd@nicira.com
   Bryan Phillippe         bp@toroki.com
   Casey Barker            crbarker@google.com
   Chris Wright            chrisw@sous-sol.org
   Chuck Short             zulcss@ubuntu.com
+  Dan Carpenter           dan.carpenter@oracle.com
   Dan Wendlandt           dan@nicira.com
   Daniel Roman            droman@nicira.com
+  Danny Kukawka           danny.kukawka@bisect.de
   David Erickson          derickso@stanford.edu
+  David S. Miller         davem@davemloft.net
+  Devendra Naga           devendra.aaru@gmail.com
   Dominic Curran          dominic.curran@citrix.com
+  Ed Maste                emaste at freebsd.org
   Edward Tomasz Napierała trasz@freebsd.org
   Ethan Jackson           ethan@nicira.com
   Gaetano Catalli         gaetano.catalli@gmail.com
   Giuseppe Lettieri       g.lettieri@iet.unipi.it
   Glen Gibb               grg@stanford.edu
+  Gurucharan Shetty       gshetty@nicira.com
+  Henry Mai               hmai@nicira.com
   Hao Zheng               hzheng@nicira.com
   Ian Campbell            Ian.Campbell@citrix.com
+  Isaku Yamahata          yamahata@valinux.co.jp
   Jean Tourrilhes         jt@hpl.hp.com
   Jeremy Stribling        strib@nicira.com
   Jesse Gross             jesse@nicira.com
   Joe Perches             joe@perches.com
+  Joe Stringer            joe@wand.net.nz
   Jun Nakajima            jun.nakajima@intel.com
   Justin Pettit           jpettit@nicira.com
   Keith Amidon            keith@nicira.com
+  Kyle Mestery            kmestery@cisco.com
+  Leo Alterman            lalterman@nicira.com
+  Luca Giraudo            lgiraudo@nicira.com
   Martin Casado           casado@nicira.com
+  Mehak Mahajan           mmahajan@nicira.com
   Natasha Gude            natasha@nicira.com
   Neil McKee              neil.mckee@inmon.com
   Paul Fazzone            pfazzone@nicira.com
   Philippe Jung           phil.jung@free.fr
   Pravin B Shelar         pshelar@nicira.com
+  Raju Subramanian        rsubramanian@nicira.com
+  Ravi Kerur              Ravi.Kerur@telekom.com
   Reid Price              reid@nicira.com
+  Rob Hoes                rob.hoes@citrix.com
   Romain Lenglet          romain.lenglet@berabera.info
   Sajjad Lateef           slateef@nicira.com
   Sanjay Sane             ssane@nicira.com
+  Shan Wei                davidshan@tencent.com
   Shih-Hao Li             shli@nicira.com
   Simon Horman            horms@verge.net.au
+  Tadaaki Nagao           nagao@stratosphere.co.jp
   Tetsuo NAKAGAWA         nakagawa@mxc.nes.nec.co.jp
+  Thomas Goirand          zigo@debian.org
+  Thomas Graf             tgraf@redhat.com
   Thomas Lacroix          thomas.lacroix@citrix.com
   Todd Deshane            deshantm@gmail.com
   Tom Everman             teverman@google.com
@@ -54,14 +77,17 @@ Upstream Authors (from AUTHORS):
   Valient Gough           vgough@pobox.com
   Vivien Bernet-Rollande  vbr@soprive.net
   Wei Yongjun             yjwei@cn.fujitsu.com
+  Yasuhito Takamiya       yasuhito@gmail.com
   Yu Zhiguo               yuzg@cn.fujitsu.com
+  Zhi Yong Wu             zwu.kernel@gmail.com
 
 Upstream Copyright Holders:
 
-	Copyright (c) 2007, 2008, 2009, 2010, 2011 Nicira Networks.
+	Copyright (c) 2007, 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
 	Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
 	Copyright (c) 2008,2009,2010 Citrix Systems, Inc.
 	and authors listed above.
+	Copyright (c) 2011 Gaetano Catalli
 
 License:
 
@@ -103,9 +129,7 @@ License:
   GNU Lesser General Public License version 2.1.
 
 	utilities/bugtool/ovs-bugtool
-	utilities/bugtool/ovs-bugtool-cfm-show
-	utilities/bugtool/ovs-bugtool-lacp-show
-	utilities/bugtool/ovs-bugtool-tc-class-show
+	utilities/bugtool/ovs-bugtool-*
 	utilities/bugtool/plugins/kernel-info/openvswitch.xml
 	utilities/bugtool/plugins/network-status/openvswitch.xml
 	utilities/bugtool/plugins/system-configuration.xml

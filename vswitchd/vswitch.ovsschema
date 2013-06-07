@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "6.4.0",
- "cksum": "923041702 15687",
+ "version": "6.10.0",
+ "cksum": "3699312094 16958",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -25,11 +25,6 @@
          "type": "integer"},
        "cur_cfg": {
          "type": "integer"},
-       "capabilities": {
-         "type": {"key": "string",
-                  "value": {"type": "uuid",
-                            "refTable": "Capability"},
-                  "min": 0, "max": "unlimited"}},
        "statistics": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"},
          "ephemeral": true},
@@ -47,11 +42,6 @@
                   "min": 0, "max": 1}}},
      "isRoot": true,
      "maxRows": 1},
-   "Capability": {
-     "columns": {
-       "details": {
-         "type": {"key": "string", "value": "string",
-                  "min": 0, "max": "unlimited"}}}},
    "Bridge": {
      "columns": {
        "name": {
@@ -99,7 +89,14 @@
          "type": {"key": {"type": "integer",
                           "minInteger": 0,
                           "maxInteger": 4095},
-                  "min": 0, "max": 4096}}},
+                  "min": 0, "max": 4096}},
+       "flow_tables": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 254},
+                  "value": {"type": "uuid",
+                            "refTable": "Flow_Table"},
+                  "min": 0, "max": "unlimited"}}},
      "indexes": [["name"]]},
    "Port": {
      "columns": {
@@ -198,6 +195,21 @@
            "min": 0,
            "max": 1},
          "ephemeral": true},
+       "cfm_fault_status": {
+         "type": {
+           "key": "string", "min": 0, "max": "unlimited"},
+           "ephemeral": true},
+       "cfm_remote_opstate": {
+         "type": {"key": {"type": "string",
+                          "enum": ["set", ["up", "down"]]},
+                  "min": 0, "max": 1},
+         "ephemeral": true},
+       "cfm_health": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 100},
+                  "min": 0, "max": 1},
+           "ephemeral": true},
        "lacp_current": {
          "type": {"key": {"type": "boolean"},
                   "min": 0, "max": 1},
@@ -236,6 +248,19 @@
          "type": {"key": "integer", "min": 0, "max": 1},
          "ephemeral": true}},
      "indexes": [["name"]]},
+   "Flow_Table": {
+     "columns": {
+       "name": {
+	 "type": {"key": "string", "min": 0, "max": 1}},
+       "flow_limit": {
+	 "type": {"key": {"type": "integer", "minInteger": 0},
+		  "min": 0, "max": 1}},
+       "overflow_policy": {
+	 "type": {"key": {"type": "string",
+			  "enum": ["set", ["refuse", "evict"]]},
+		  "min": 0, "max": 1}},
+       "groups": {
+	 "type": {"key": "string", "min": 0, "max": "unlimited"}}}},
    "QoS": {
      "columns": {
        "type": {
@@ -367,6 +392,9 @@
        "local_gateway": {
          "type": {"key": {"type": "string"},
                   "min": 0, "max": 1}},
+       "enable_async_messages": {
+         "type": {"key": {"type": "boolean"},
+                  "min": 0, "max": 1}},
        "controller_rate_limit": {
          "type": {"key": {"type": "integer",
                           "minInteger": 100},
@@ -375,6 +403,8 @@
          "type": {"key": {"type": "integer",
                           "minInteger": 25},
                   "min": 0, "max": 1}},
+       "other_config": {
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}},
@@ -403,6 +433,8 @@
          "type": {"key": {"type": "string",
                   "enum": ["set", ["in-band", "out-of-band"]]},
                   "min": 0, "max": 1}},
+       "other_config": {
+         "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "external_ids": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}},

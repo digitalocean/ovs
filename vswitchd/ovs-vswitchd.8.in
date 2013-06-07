@@ -108,8 +108,6 @@ how to configure Open vSwitch.
 .SS "GENERAL COMMANDS"
 .IP "\fBexit\fR"
 Causes \fBovs\-vswitchd\fR to gracefully terminate.
-.IP "\fBcoverage/log\fR"
-Logs coverage counters at level warn.
 .IP "\fBqos/show\fR \fIinterface\fR"
 Queries the kernel for Quality of Service configuration and statistics
 associated with the given \fIinterface\fR.
@@ -118,6 +116,15 @@ Displays detailed information about Connectivity Fault Management
 configured on \fIinterface\fR.  If \fIinterface\fR is not specified,
 then displays detailed information about all interfaces with CFM
 enabled.
+.IP "\fBcfm/set-fault\fR [\fIinterface\fR] \fIstatus\fR"
+Force the fault status of the CFM module on \fIinterface\fR (or all
+interfaces if none is given) to be \fIstatus\fR.  \fIstatus\fR can be
+"true", "false", or "normal" which reverts to the standard behavior.
+.IP "\fBstp/tcn\fR [\fIbridge\fR]"
+Forces a topology change event on \fIbridge\fR if it's running STP.  This
+may cause it to send Topology Change Notifications to its peers and flush
+its MAC table..  If no \fIbridge\fR is given, forces a topology change
+event on all bridges.
 .SS "BRIDGE COMMANDS"
 These commands manage bridges.
 .IP "\fBfdb/flush\fR [\fIbridge\fR]"
@@ -151,15 +158,15 @@ value are then assigned to a single slave.
 .IP "\fBbond/list\fR"
 Lists all of the bonds, and their slaves, on each bridge.
 .
-.IP "\fBbond/show\fR \fIport\fR"
-Lists all of the bond-specific information about the given bonded
-\fIport\fR: updelay, downdelay, time until the next rebalance.  Also
-lists information about each slave: whether it is enabled or disabled,
-the time to completion of an updelay or downdelay if one is in
-progress, whether it is the active slave, the MAC hashes assigned to
-the slave, and the MAC learning table entries that hash to each MAC.
-Any LACP information related to this bond may be found using the
-\fBlacp/show\fR command.
+.IP "\fBbond/show\fR [\fIport\fR]"
+Lists all of the bond-specific information (updelay, downdelay, time
+until the next rebalance) about the given bonded \fIport\fR, or all
+bonded ports if no \fIport\fR is given.  Also lists information about
+each slave: whether it is enabled or disabled, the time to completion
+of an updelay or downdelay if one is in progress, whether it is the
+active slave, the hashes assigned to the slave.  Any LACP information
+related to this bond may be found using the \fBlacp/show\fR command.
+.
 .IP "\fBbond/migrate\fR \fIport\fR \fIhash\fR \fIslave\fR"
 Only valid for SLB bonds.  Assigns a given MAC hash to a new slave.
 \fIport\fR specifies the bond port, \fIhash\fR the MAC hash to be
@@ -199,7 +206,51 @@ enabled.
 .
 .so ofproto/ofproto-unixctl.man
 .so lib/vlog-unixctl.man
+.so lib/memory-unixctl.man
 .so lib/stress-unixctl.man
+.
+.SH "LIMITS"
+.
+.PP
+We believe these limits to be accurate as of this writing.  These
+limits assume the use of the Linux kernel datapath.
+.
+.IP \(bu
+Approximately 256 bridges given the allowance of 5,000 file
+descriptors that \fBovs\-ctl\fR(8) configures.  (\fBovs\-vswitchd\fR
+requires 17 file descriptors per datapath.)
+.
+.IP \(bu
+65,280 ports per bridge.  Performance will degrade beyond 1,024 ports
+per bridge due to fixed hash table sizing.
+.
+.IP \(bu
+2,048 MAC learning entries per bridge.
+.
+.IP \(bu
+Kernel flows are limited only by memory available to the kernel.
+Performance will degrade beyond 1,048,576 kernel flows per bridge with
+a 32-bit kernel, beyond 262,144 with a 64-bit kernel.
+(\fBovs\-vswitchd\fR should never install anywhere near that many
+flows.)
+.
+.IP \(bu
+OpenFlow flows are limited only by available memory.  Performance is
+linear in the number of unique wildcard patterns.  That is, an
+OpenFlow table that contains many flows that all match on the same
+fields in the same way has a constant-time lookup, but a table that
+contains many flows that match on different fields requires lookup
+time linear in the number of flows.
+.
+.IP \(bu
+255 ports per bridge participating in 802.1D Spanning Tree Protocol.
+.
+.IP \(bu
+32 mirrors per bridge.
+.
+.IP \(bu
+15 bytes for the name of a port.  (This is a Linux kernel limitation.)
+.
 .SH "SEE ALSO"
 .BR ovs\-appctl (8),
 .BR ovs\-brcompatd (8),

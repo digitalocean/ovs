@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include "ofpbuf.h"
 #include "packets.h"
+#include "vlog.h"
 
 struct bpdu {
     int port_no;
@@ -440,6 +441,9 @@ main(int argc, char *argv[])
     FILE *input_file;
     int i;
 
+    vlog_set_pattern(VLF_CONSOLE, "%c|%p|%m");
+    vlog_set_levels(NULL, VLF_SYSLOG, VLL_OFF);
+
     if (argc != 2) {
         ovs_fatal(0, "usage: test-stp INPUT.STP\n");
     }
@@ -652,7 +656,7 @@ main(int argc, char *argv[])
 
     for (i = 0; i < tc->n_lans; i++) {
         struct lan *lan = tc->lans[i];
-        free((char *) lan->name);
+        free(CONST_CAST(char *, lan->name));
         free(lan);
     }
     for (i = 0; i < tc->n_bridges; i++) {

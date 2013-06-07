@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 #include "flow.h"
 #include "mac-learning.h"
 #include "odp-util.h"
+#include "ofp-actions.h"
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "ofproto.h"
@@ -115,19 +116,23 @@ fail_open_is_active(const struct fail_open *fo)
 static void
 send_bogus_packet_ins(struct fail_open *fo)
 {
+    struct ofputil_packet_in pin;
     uint8_t mac[ETH_ADDR_LEN];
-    struct ofpbuf *opi;
     struct ofpbuf b;
 
-    /* Compose ofp_packet_in. */
     ofpbuf_init(&b, 128);
     eth_addr_nicira_random(mac);
-    compose_benign_packet(&b, "Open vSwitch Controller Probe", 0xa033, mac);
-    opi = make_packet_in(pktbuf_get_null(), OFPP_LOCAL, OFPR_NO_MATCH, &b, 64);
-    ofpbuf_uninit(&b);
+    compose_rarp(&b, mac);
 
-    /* Send. */
-    connmgr_broadcast(fo->connmgr, opi);
+    memset(&pin, 0, sizeof pin);
+    pin.packet = b.data;
+    pin.packet_len = b.size;
+    pin.reason = OFPR_NO_MATCH;
+    pin.send_len = b.size;
+    pin.fmd.in_port = OFPP_LOCAL;
+    connmgr_send_packet_in(fo->connmgr, &pin);
+
+    ofpbuf_uninit(&b);
 }
 
 /* Enter fail-open mode if we should be in it. */
@@ -186,14 +191,14 @@ fail_open_maybe_recover(struct fail_open *fo)
 static void
 fail_open_recover(struct fail_open *fo)
 {
-    struct cls_rule rule;
+    struct match match;
 
     VLOG_WARN("No longer in fail-open mode");
     fo->last_disconn_secs = 0;
     fo->next_bogus_packet_in = LLONG_MAX;
 
-    cls_rule_init_catchall(&rule, FAIL_OPEN_PRIORITY);
-    ofproto_delete_flow(fo->ofproto, &rule);
+    match_init_catchall(&match);
+    ofproto_delete_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY);
 }
 
 void
@@ -210,18 +215,20 @@ fail_open_flushed(struct fail_open *fo)
     int disconn_secs = connmgr_failure_duration(fo->connmgr);
     bool open = disconn_secs >= trigger_duration(fo);
     if (open) {
-        union ofp_action action;
-        struct cls_rule rule;
+        struct ofpbuf ofpacts;
+        struct match match;
 
         /* Set up a flow that matches every packet and directs them to
          * OFPP_NORMAL. */
-        memset(&action, 0, sizeof action);
-        action.type = htons(OFPAT_OUTPUT);
-        action.output.len = htons(sizeof action);
-        action.output.port = htons(OFPP_NORMAL);
+        ofpbuf_init(&ofpacts, OFPACT_OUTPUT_SIZE);
+        ofpact_put_OUTPUT(&ofpacts)->port = OFPP_NORMAL;
+        ofpact_pad(&ofpacts);
 
-        cls_rule_init_catchall(&rule, FAIL_OPEN_PRIORITY);
-        ofproto_add_flow(fo->ofproto, &rule, &action, 1);
+        match_init_catchall(&match);
+        ofproto_add_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY,
+                         ofpacts.data, ofpacts.size);
+
+        ofpbuf_uninit(&ofpacts);
     }
 }
 

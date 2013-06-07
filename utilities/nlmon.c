@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,9 @@ static const struct nl_policy rtnlgrp_link_policy[] = {
 int
 main(int argc OVS_UNUSED, char *argv[])
 {
+    uint64_t buf_stub[4096 / 64];
     struct nl_sock *sock;
+    struct ofpbuf buf;
     int error;
 
     set_program_name(argv[0]);
@@ -55,9 +57,8 @@ main(int argc OVS_UNUSED, char *argv[])
         ovs_fatal(error, "could not join RTNLGRP_LINK multicast group");
     }
 
+    ofpbuf_use_stub(&buf, buf_stub, sizeof buf_stub);
     for (;;) {
-        struct ofpbuf *buf;
-
         error = nl_sock_recv(sock, &buf, false);
         if (error == EAGAIN) {
             /* Nothing to do. */
@@ -66,23 +67,46 @@ main(int argc OVS_UNUSED, char *argv[])
         } else if (error) {
             ovs_fatal(error, "error on network monitor socket");
         } else {
+            struct iff_flag {
+                unsigned int flag;
+                const char *name;
+            };
+
+            static const struct iff_flag flags[] = {
+                { IFF_UP, "UP", },
+                { IFF_BROADCAST, "BROADCAST", },
+                { IFF_DEBUG, "DEBUG", },
+                { IFF_LOOPBACK, "LOOPBACK", },
+                { IFF_POINTOPOINT, "POINTOPOINT", },
+                { IFF_NOTRAILERS, "NOTRAILERS", },
+                { IFF_RUNNING, "RUNNING", },
+                { IFF_NOARP, "NOARP", },
+                { IFF_PROMISC, "PROMISC", },
+                { IFF_ALLMULTI, "ALLMULTI", },
+                { IFF_MASTER, "MASTER", },
+                { IFF_SLAVE, "SLAVE", },
+                { IFF_MULTICAST, "MULTICAST", },
+                { IFF_PORTSEL, "PORTSEL", },
+                { IFF_AUTOMEDIA, "AUTOMEDIA", },
+                { IFF_DYNAMIC, "DYNAMIC", },
+            };
+
             struct nlattr *attrs[ARRAY_SIZE(rtnlgrp_link_policy)];
             struct nlmsghdr *nlh;
             struct ifinfomsg *iim;
+            int i;
 
-            nlh = ofpbuf_at(buf, 0, NLMSG_HDRLEN);
-            iim = ofpbuf_at(buf, NLMSG_HDRLEN, sizeof *iim);
+            nlh = ofpbuf_at(&buf, 0, NLMSG_HDRLEN);
+            iim = ofpbuf_at(&buf, NLMSG_HDRLEN, sizeof *iim);
             if (!iim) {
                 ovs_error(0, "received bad rtnl message (no ifinfomsg)");
-                ofpbuf_delete(buf);
                 continue;
             }
 
-            if (!nl_policy_parse(buf, NLMSG_HDRLEN + sizeof(struct ifinfomsg),
+            if (!nl_policy_parse(&buf, NLMSG_HDRLEN + sizeof(struct ifinfomsg),
                                  rtnlgrp_link_policy,
                                  attrs, ARRAY_SIZE(rtnlgrp_link_policy))) {
                 ovs_error(0, "received bad rtnl message (policy)");
-                ofpbuf_delete(buf);
                 continue;
             }
             printf("netdev %s changed (%s):\n",
@@ -92,6 +116,13 @@ main(int argc OVS_UNUSED, char *argv[])
                     : nlh->nlmsg_type == RTM_GETLINK ? "RTM_GETLINK"
                     : nlh->nlmsg_type == RTM_SETLINK ? "RTM_SETLINK"
                     : "other"));
+            printf("\tflags:");
+            for (i = 0; i < ARRAY_SIZE(flags); i++) {
+                if (iim->ifi_flags & flags[i].flag) {
+                    printf(" %s", flags[i].name);
+                }
+            }
+            printf("\n");
             if (attrs[IFLA_MASTER]) {
                 uint32_t idx = nl_attr_get_u32(attrs[IFLA_MASTER]);
                 char ifname[IFNAMSIZ];
@@ -100,7 +131,6 @@ main(int argc OVS_UNUSED, char *argv[])
                 }
                 printf("\tmaster=%"PRIu32" (%s)\n", idx, ifname);
             }
-            ofpbuf_delete(buf);
         }
 
         nl_sock_wait(sock, POLLIN);

@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2009, 2010, 2011 Nicira Networks
+# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,11 +37,20 @@ from ovs.db import types
 import ovs.util
 import ovs.daemon
 import ovs.db.idl
+import ovs.unixctl
+import ovs.unixctl.server
 import ovs.vlog
 
 vlog = ovs.vlog.Vlog("ovs-monitor-ipsec")
 root_prefix = ''                # Prefix for absolute file names, for testing.
-setkey = "/usr/sbin/setkey"
+SETKEY = "/usr/sbin/setkey"
+exiting = False
+
+
+def unixctl_exit(conn, unused_argv, unused_aux):
+    global exiting
+    exiting = True
+    conn.reply(None)
 
 
 # Class to configure the racoon daemon, which handles IKE negotiation
@@ -258,11 +267,11 @@ class IPsec:
 
     def call_setkey(self, cmds):
         try:
-            p = subprocess.Popen([root_prefix + setkey, "-c"],
+            p = subprocess.Popen([root_prefix + SETKEY, "-c"],
                                  stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE)
         except:
-            vlog.err("could not call %s%s" % (root_prefix, setkey))
+            vlog.err("could not call %s%s" % (root_prefix, SETKEY))
             sys.exit(1)
 
         # xxx It is safer to pass the string into the communicate()
@@ -344,49 +353,6 @@ class IPsec:
             self.entries.remove(remote_ip)
 
 
-def keep_table_columns(schema, table_name, column_types):
-    table = schema.tables.get(table_name)
-    if not table:
-        raise error.Error("schema has no %s table" % table_name)
-
-    new_columns = {}
-    for column_name, column_type in column_types.iteritems():
-        column = table.columns.get(column_name)
-        if not column:
-            raise error.Error("%s table schema lacks %s column"
-                              % (table_name, column_name))
-        if column.type != column_type:
-            raise error.Error("%s column in %s table has type \"%s\", "
-                              "expected type \"%s\""
-                              % (column_name, table_name,
-                                 column.type.toEnglish(),
-                                 column_type.toEnglish()))
-        new_columns[column_name] = column
-    table.columns = new_columns
-    return table
-
-
-def prune_schema(schema):
-    string_type = types.Type(types.BaseType(types.StringType))
-    optional_ssl_type = types.Type(types.BaseType(types.UuidType,
-        ref_table_name='SSL'), None, 0, 1)
-    string_map_type = types.Type(types.BaseType(types.StringType),
-                                 types.BaseType(types.StringType),
-                                 0, sys.maxint)
-
-    new_tables = {}
-    new_tables["Interface"] = keep_table_columns(
-        schema, "Interface", {"name": string_type,
-                              "type": string_type,
-                              "options": string_map_type})
-    new_tables["Open_vSwitch"] = keep_table_columns(
-        schema, "Open_vSwitch", {"ssl": optional_ssl_type})
-    new_tables["SSL"] = keep_table_columns(
-        schema, "SSL", {"certificate": string_type,
-                        "private_key": string_type})
-    schema.tables = new_tables
-
-
 def update_ipsec(ipsec, interfaces, new_interfaces):
     for name, vals in interfaces.iteritems():
         if name not in new_interfaces:
@@ -396,11 +362,13 @@ def update_ipsec(ipsec, interfaces, new_interfaces):
         orig_vals = interfaces.get(name)
         if orig_vals:
             # Configuration for this host already exists.  Check if it's
-            # changed.
-            if vals == orig_vals:
-                continue
-            else:
+            # changed.  We use set difference, since we want to ignore
+            # any local additions to "orig_vals" that we've made
+            # (e.g. the "peer_cert_file" key).
+            if set(vals.items()) - set(orig_vals.items()):
                 ipsec.del_entry(vals["local_ip"], vals["remote_ip"])
+            else:
+                continue
 
         try:
             ipsec.add_entry(vals["local_ip"], vals["remote_ip"], vals)
@@ -438,28 +406,42 @@ def main():
         root_prefix = args.root_prefix
 
     remote = args.database
-    schema_file = "%s/vswitch.ovsschema" % ovs.dirs.PKGDATADIR
-    schema = ovs.db.schema.DbSchema.from_json(ovs.json.from_file(schema_file))
-    prune_schema(schema)
-    idl = ovs.db.idl.Idl(remote, schema)
+    schema_helper = ovs.db.idl.SchemaHelper()
+    schema_helper.register_columns("Interface", ["name", "type", "options"])
+    schema_helper.register_columns("Open_vSwitch", ["ssl"])
+    schema_helper.register_columns("SSL", ["certificate", "private_key"])
+    idl = ovs.db.idl.Idl(remote, schema_helper)
 
     ovs.daemon.daemonize()
+
+    ovs.unixctl.command_register("exit", "", 0, 0, unixctl_exit, None)
+    error, unixctl_server = ovs.unixctl.server.UnixctlServer.create(None)
+    if error:
+        ovs.util.ovs_fatal(error, "could not create unixctl server", vlog)
 
     ipsec = IPsec()
 
     interfaces = {}
+    seqno = idl.change_seqno    # Sequence number when we last processed the db
     while True:
-        if not idl.run():
+        unixctl_server.run()
+        if exiting:
+            break
+
+        idl.run()
+        if seqno == idl.change_seqno:
             poller = ovs.poller.Poller()
+            unixctl_server.wait(poller)
             idl.wait(poller)
             poller.block()
             continue
+        seqno = idl.change_seqno
 
         ssl_cert = get_ssl_cert(idl.tables)
 
         new_interfaces = {}
         for rec in idl.tables["Interface"].rows.itervalues():
-            if rec.type == "ipsec_gre":
+            if rec.type == "ipsec_gre" or rec.type == "ipsec_gre64":
                 name = rec.name
                 options = rec.options
                 peer_cert_name = "ovs-%s.pem" % (options.get("remote_ip"))
@@ -496,6 +478,9 @@ def main():
         if interfaces != new_interfaces:
             update_ipsec(ipsec, interfaces, new_interfaces)
             interfaces = new_interfaces
+
+    unixctl_server.close()
+    idl.close()
 
 
 if __name__ == '__main__':

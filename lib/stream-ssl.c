@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <openssl/err.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <poll.h>
@@ -34,6 +35,7 @@
 #include <unistd.h>
 #include "coverage.h"
 #include "dynamic-string.h"
+#include "entropy.h"
 #include "leak-checker.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
@@ -204,8 +206,8 @@ want_to_poll_events(int want)
 
 static int
 new_ssl_stream(const char *name, int fd, enum session_type type,
-              enum ssl_state state, const struct sockaddr_in *remote,
-              struct stream **streamp)
+               enum ssl_state state, const struct sockaddr_in *remote,
+               struct stream **streamp)
 {
     struct sockaddr_in local;
     socklen_t local_len = sizeof local;
@@ -228,7 +230,7 @@ new_ssl_stream(const char *name, int fd, enum session_type type,
         VLOG_ERR("CA certificate must be configured to use SSL");
         retval = ENOPROTOOPT;
     }
-    if (!SSL_CTX_check_private_key(ctx)) {
+    if (!retval && !SSL_CTX_check_private_key(ctx)) {
         VLOG_ERR("Private key does not match certificate public key: %s",
                  ERR_error_string(ERR_get_error(), NULL));
         retval = ENOPROTOOPT;
@@ -307,7 +309,7 @@ ssl_stream_cast(struct stream *stream)
 }
 
 static int
-ssl_open(const char *name, char *suffix, struct stream **streamp)
+ssl_open(const char *name, char *suffix, struct stream **streamp, uint8_t dscp)
 {
     struct sockaddr_in sin;
     int error, fd;
@@ -317,7 +319,8 @@ ssl_open(const char *name, char *suffix, struct stream **streamp)
         return error;
     }
 
-    error = inet_open_active(SOCK_STREAM, suffix, OFP_SSL_PORT, &sin, &fd);
+    error = inet_open_active(SOCK_STREAM, suffix, OFP_SSL_PORT, &sin, &fd,
+                             dscp);
     if (fd >= 0) {
         int state = error ? STATE_TCP_CONNECTING : STATE_SSL_CONNECTING;
         return new_ssl_stream(name, fd, CLIENT, state, &sin, streamp);
@@ -476,7 +479,7 @@ ssl_connect(struct stream *stream)
              * certificate, but that's more trouble than it's worth.  These
              * connections will succeed the next time they retry, assuming that
              * they have a certificate against the correct CA.) */
-            VLOG_ERR("rejecting SSL connection during bootstrap race window");
+            VLOG_INFO("rejecting SSL connection during bootstrap race window");
             return EPROTO;
         } else {
             return 0;
@@ -754,6 +757,7 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
 
 const struct stream_class ssl_stream_class = {
     "ssl",                      /* name */
+    true,                       /* needs_probes */
     ssl_open,                   /* open */
     ssl_close,                  /* close */
     ssl_connect,                /* connect */
@@ -782,7 +786,8 @@ pssl_pstream_cast(struct pstream *pstream)
 }
 
 static int
-pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp)
+pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
+          uint8_t dscp)
 {
     struct pssl_pstream *pssl;
     struct sockaddr_in sin;
@@ -795,7 +800,7 @@ pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp)
         return retval;
     }
 
-    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_SSL_PORT, &sin);
+    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_SSL_PORT, &sin, dscp);
     if (fd < 0) {
         return -fd;
     }
@@ -847,7 +852,7 @@ pssl_accept(struct pstream *pstream, struct stream **new_streamp)
         sprintf(strchr(name, '\0'), ":%"PRIu16, ntohs(sin.sin_port));
     }
     return new_ssl_stream(name, new_fd, SERVER, STATE_SSL_CONNECTING, &sin,
-                         new_streamp);
+                          new_streamp);
 }
 
 static void
@@ -857,12 +862,21 @@ pssl_wait(struct pstream *pstream)
     poll_fd_wait(pssl->fd, POLLIN);
 }
 
+static int
+pssl_set_dscp(struct pstream *pstream, uint8_t dscp)
+{
+    struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
+    return set_dscp(pssl->fd, dscp);
+}
+
 const struct pstream_class pssl_pstream_class = {
     "pssl",
+    true,
     pssl_open,
     pssl_close,
     pssl_accept,
     pssl_wait,
+    pssl_set_dscp,
 };
 
 /*
@@ -896,9 +910,39 @@ do_ssl_init(void)
     SSL_library_init();
     SSL_load_error_strings();
 
+    if (!RAND_status()) {
+        /* We occasionally see OpenSSL fail to seed its random number generator
+         * in heavily loaded hypervisors.  I suspect the following scenario:
+         *
+         * 1. OpenSSL calls read() to get 32 bytes from /dev/urandom.
+         * 2. The kernel generates 10 bytes of randomness and copies it out.
+         * 3. A signal arrives (perhaps SIGALRM).
+         * 4. The kernel interrupts the system call to service the signal.
+         * 5. Userspace gets 10 bytes of entropy.
+         * 6. OpenSSL doesn't read again to get the final 22 bytes.  Therefore
+         *    OpenSSL doesn't have enough entropy to consider itself
+         *    initialized.
+         *
+         * The only part I'm not entirely sure about is #6, because the OpenSSL
+         * code is so hard to read. */
+        uint8_t seed[32];
+        int retval;
+
+        VLOG_WARN("OpenSSL random seeding failed, reseeding ourselves");
+
+        retval = get_entropy(seed, sizeof seed);
+        if (retval) {
+            VLOG_ERR("failed to obtain entropy (%s)",
+                     ovs_retval_to_string(retval));
+            return retval > 0 ? retval : ENOPROTOOPT;
+        }
+
+        RAND_seed(seed, sizeof seed);
+    }
+
     /* New OpenSSL changed TLSv1_method() to return a "const" pointer, so the
      * cast is needed to avoid a warning with those newer versions. */
-    method = (SSL_METHOD *) TLSv1_method();
+    method = CONST_CAST(SSL_METHOD *, TLSv1_method());
     if (method == NULL) {
         VLOG_ERR("TLSv1_method: %s", ERR_error_string(ERR_get_error(), NULL));
         return ENOPROTOOPT;

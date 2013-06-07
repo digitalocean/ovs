@@ -1,4 +1,4 @@
- /* Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
+ /* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,75 +55,71 @@ struct lockfile {
 static struct hmap lock_table = HMAP_INITIALIZER(&lock_table);
 
 static void lockfile_unhash(struct lockfile *);
-static int lockfile_try_lock(const char *name, bool block,
+static int lockfile_try_lock(const char *name, pid_t *pidp,
                              struct lockfile **lockfilep);
 
 /* Returns the name of the lockfile that would be created for locking a file
- * named 'file_name'.  The caller is responsible for freeing the returned
- * name, with free(), when it is no longer needed. */
+ * named 'filename_'.  The caller is responsible for freeing the returned name,
+ * with free(), when it is no longer needed. */
 char *
-lockfile_name(const char *file_name)
+lockfile_name(const char *filename_)
 {
-    const char *slash = strrchr(file_name, '/');
-    return (slash
-            ? xasprintf("%.*s/.%s.~lock~",
-                        (int) (slash - file_name), file_name, slash + 1)
-            : xasprintf(".%s.~lock~", file_name));
+    char *filename;
+    const char *slash;
+    char *lockname;
+
+    /* If 'filename_' is a symlink, base the name of the lockfile on the
+     * symlink's target rather than the name of the symlink.  That way, if a
+     * file is symlinked, but there is no symlink for its lockfile, then there
+     * is only a single lockfile for both the source and the target of the
+     * symlink, not one for each. */
+    filename = follow_symlinks(filename_);
+    slash = strrchr(filename, '/');
+    lockname = (slash
+                ? xasprintf("%.*s/.%s.~lock~",
+                            (int) (slash - filename), filename, slash + 1)
+                : xasprintf(".%s.~lock~", filename));
+    free(filename);
+
+    return lockname;
 }
 
 /* Locks the configuration file against modification by other processes and
  * re-reads it from disk.
  *
- * The 'timeout' specifies the maximum number of milliseconds to wait for the
- * config file to become free.  Use 0 to avoid waiting or INT_MAX to wait
- * forever.
- *
  * Returns 0 on success, otherwise a positive errno value.  On success,
  * '*lockfilep' is set to point to a new "struct lockfile *" that may be
  * unlocked with lockfile_unlock().  On failure, '*lockfilep' is set to
- * NULL. */
+ * NULL.  Will not block if the lock cannot be immediately acquired. */
 int
-lockfile_lock(const char *file, int timeout, struct lockfile **lockfilep)
+lockfile_lock(const char *file, struct lockfile **lockfilep)
 {
     /* Only exclusive ("write") locks are supported.  This is not a problem
      * because the Open vSwitch code that currently uses lock files does so in
      * stylized ways such that any number of readers may access a file while it
      * is being written. */
-    long long int warn_elapsed = 1000;
-    long long int start, elapsed;
     char *lock_name;
+    pid_t pid;
     int error;
 
     COVERAGE_INC(lockfile_lock);
 
     lock_name = lockfile_name(file);
-    time_refresh();
-    start = time_msec();
 
-    do {
-        error = lockfile_try_lock(lock_name, timeout > 0, lockfilep);
-        time_refresh();
-        elapsed = time_msec() - start;
-        if (elapsed > warn_elapsed) {
-            warn_elapsed *= 2;
-            VLOG_WARN("%s: waiting for lock file, %lld ms elapsed",
-                      lock_name, elapsed);
-        }
-    } while (error == EINTR && (timeout == INT_MAX || elapsed < timeout));
+    error = lockfile_try_lock(lock_name, &pid, lockfilep);
 
-    if (error == EINTR) {
-        COVERAGE_INC(lockfile_timeout);
-        VLOG_WARN("%s: giving up on lock file after %lld ms",
-                  lock_name, elapsed);
-        error = ETIMEDOUT;
-    } else if (error) {
+    if (error) {
         COVERAGE_INC(lockfile_error);
         if (error == EACCES) {
             error = EAGAIN;
         }
-        VLOG_WARN("%s: failed to lock file "
-                  "(after %lld ms, with %d-ms timeout): %s",
-                  lock_name, elapsed, timeout, strerror(error));
+        if (pid) {
+            VLOG_WARN("%s: cannot lock file because it is already locked by "
+                      "pid %ld", lock_name, (long int) pid);
+        } else {
+            VLOG_WARN("%s: failed to lock file: %s",
+                      lock_name, strerror(error));
+        }
     }
 
     free(lock_name);
@@ -212,7 +208,7 @@ lockfile_register(const char *name, dev_t device, ino_t inode, int fd)
 }
 
 static int
-lockfile_try_lock(const char *name, bool block, struct lockfile **lockfilep)
+lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
 {
     struct flock l;
     struct stat s;
@@ -220,42 +216,25 @@ lockfile_try_lock(const char *name, bool block, struct lockfile **lockfilep)
     int fd;
 
     *lockfilep = NULL;
+    *pidp = 0;
 
-    /* Open the lock file, first creating it if necessary. */
-    for (;;) {
-        /* Check whether we've already got a lock on that file. */
-        if (!stat(name, &s)) {
-            if (lockfile_find(s.st_dev, s.st_ino)) {
-                return EDEADLK;
-            }
-        } else if (errno != ENOENT) {
-            VLOG_WARN("%s: failed to stat lock file: %s",
-                      name, strerror(errno));
-            return errno;
+    /* Check whether we've already got a lock on that file. */
+    if (!stat(name, &s)) {
+        if (lockfile_find(s.st_dev, s.st_ino)) {
+            return EDEADLK;
         }
+    } else if (errno != ENOENT) {
+        VLOG_WARN("%s: failed to stat lock file: %s",
+                  name, strerror(errno));
+        return errno;
+    }
 
-        /* Try to open an existing lock file. */
-        fd = open(name, O_RDWR);
-        if (fd >= 0) {
-            break;
-        } else if (errno != ENOENT) {
-            VLOG_WARN("%s: failed to open lock file: %s",
-                      name, strerror(errno));
-            return errno;
-        }
-
-        /* Try to create a new lock file. */
-        VLOG_INFO("%s: lock file does not exist, creating", name);
-        fd = open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
-        if (fd >= 0) {
-            break;
-        } else if (errno != EEXIST) {
-            VLOG_WARN("%s: failed to create lock file: %s",
-                      name, strerror(errno));
-            return errno;
-        }
-
-        /* Someone else created the lock file.  Try again. */
+    /* Open the lock file. */
+    fd = open(name, O_RDWR | O_CREAT, 0600);
+    if (fd < 0) {
+        VLOG_WARN("%s: failed to open lock file: %s",
+                  name, strerror(errno));
+        return errno;
     }
 
     /* Get the inode and device number for the lock table. */
@@ -273,12 +252,15 @@ lockfile_try_lock(const char *name, bool block, struct lockfile **lockfilep)
     l.l_len = 0;
 
     time_disable_restart();
-    error = fcntl(fd, block ? F_SETLKW : F_SETLK, &l) == -1 ? errno : 0;
+    error = fcntl(fd, F_SETLK, &l) == -1 ? errno : 0;
     time_enable_restart();
 
     if (!error) {
         *lockfilep = lockfile_register(name, s.st_dev, s.st_ino, fd);
     } else {
+        if (!fcntl(fd, F_GETLK, &l) && l.l_type != F_UNLCK) {
+            *pidp = l.l_pid;
+        }
         close(fd);
     }
     return error;

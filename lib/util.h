@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #ifndef UTIL_H
 #define UTIL_H 1
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -61,7 +62,18 @@
 #define BUILD_ASSERT_DECL_GCCONLY(EXPR) ((void) 0)
 #endif
 
+/* Casts 'pointer' to 'type' and issues a compiler warning if the cast changes
+ * anything other than an outermost "const" or "volatile" qualifier.
+ *
+ * The cast to int is present only to suppress an "expression using sizeof
+ * bool" warning from "sparse" (see
+ * http://permalink.gmane.org/gmane.comp.parsers.sparse/2967). */
+#define CONST_CAST(TYPE, POINTER)                               \
+    ((void) sizeof ((int) ((POINTER) == (TYPE) (POINTER))),     \
+     (TYPE) (POINTER))
+
 extern const char *program_name;
+extern const char *subprogram_name;
 
 /* Returns the number of elements in ARRAY. */
 #define ARRAY_SIZE(ARRAY) (sizeof ARRAY / sizeof *ARRAY)
@@ -77,6 +89,28 @@ extern const char *program_name;
 
 /* Returns true if X is a power of 2, otherwise false. */
 #define IS_POW2(X) ((X) && !((X) & ((X) - 1)))
+
+static inline bool
+is_pow2(uintmax_t x)
+{
+    return IS_POW2(x);
+}
+
+/* Returns the rightmost 1-bit in 'x' (e.g. 01011000 => 00001000), or 0 if 'x'
+ * is 0. */
+static inline uintmax_t
+rightmost_1bit(uintmax_t x)
+{
+    return x & -x;
+}
+
+/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
+ * 01010000), or 0 if 'x' is 0. */
+static inline uintmax_t
+zero_rightmost_1bit(uintmax_t x)
+{
+    return x & (x - 1);
+}
 
 #ifndef MIN
 #define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
@@ -148,9 +182,10 @@ extern const char *program_name;
 extern "C" {
 #endif
 
-void set_program_name__(const char *name, const char *date, const char *time);
+void set_program_name__(const char *name, const char *version,
+                        const char *date, const char *time);
 #define set_program_name(name) \
-        set_program_name__(name, __DATE__, __TIME__)
+        set_program_name__(name, VERSION, __DATE__, __TIME__)
 
 const char *get_program_version(void);
 void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
@@ -172,6 +207,8 @@ void ovs_strzcpy(char *dst, const char *src, size_t size);
 
 void ovs_abort(int err_no, const char *format, ...)
     PRINTF_FORMAT(2, 3) NO_RETURN;
+void ovs_abort_valist(int err_no, const char *format, va_list)
+    PRINTF_FORMAT(2, 0) NO_RETURN;
 void ovs_fatal(int err_no, const char *format, ...)
     PRINTF_FORMAT(2, 3) NO_RETURN;
 void ovs_fatal_valist(int err_no, const char *format, va_list)
@@ -201,13 +238,54 @@ char *dir_name(const char *file_name);
 char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
 
+char *xreadlink(const char *filename);
+char *follow_symlinks(const char *filename);
+
 void ignore(bool x OVS_UNUSED);
+
+/* Returns the number of trailing 0-bits in 'n'.  Undefined if 'n' == 0.
+ *
+ * This compiles to a single machine instruction ("bsf") with GCC on x86. */
+#if !defined(UINT_MAX) || !defined(UINT32_MAX)
+#error "Someone screwed up the #includes."
+#elif __GNUC__ >= 4 && UINT_MAX == UINT32_MAX
+static inline int
+raw_ctz(uint32_t n)
+{
+    return __builtin_ctz(n);
+}
+#else
+/* Defined in util.c. */
+int raw_ctz(uint32_t n);
+#endif
+
+/* Returns the number of trailing 0-bits in 'n', or 32 if 'n' is 0. */
+static inline int
+ctz(uint32_t n)
+{
+    return n ? raw_ctz(n) : 32;
+}
+
 int log_2_floor(uint32_t);
 int log_2_ceil(uint32_t);
-int ctz(uint32_t);
+int popcount(uint32_t);
 
 bool is_all_zeros(const uint8_t *, size_t);
 bool is_all_ones(const uint8_t *, size_t);
+void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,
+                  void *dst, unsigned int dst_len, unsigned int dst_ofs,
+                  unsigned int n_bits);
+void bitwise_zero(void *dst_, unsigned int dst_len, unsigned dst_ofs,
+                  unsigned int n_bits);
+void bitwise_one(void *dst_, unsigned int dst_len, unsigned dst_ofs,
+                 unsigned int n_bits);
+bool bitwise_is_all_zeros(const void *, unsigned int len, unsigned int ofs,
+                          unsigned int n_bits);
+void bitwise_put(uint64_t value,
+                 void *dst, unsigned int dst_len, unsigned int dst_ofs,
+                 unsigned int n_bits);
+uint64_t bitwise_get(const void *src, unsigned int src_len,
+                     unsigned int src_ofs, unsigned int n_bits);
 
 #ifdef  __cplusplus
 }

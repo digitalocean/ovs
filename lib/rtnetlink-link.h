@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira Networks.
+ * Copyright (c) 2009 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@
 #define RTNETLINK_LINK_H 1
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <linux/if_ether.h>
 
 struct ofpbuf;
 struct nln_notifier;
@@ -37,7 +39,9 @@ struct rtnetlink_link_change {
     /* Extracted from Netlink attributes. */
     const char *ifname;         /* Name of network device. */
     int master_ifindex;         /* Ifindex of datapath master (0 if none). */
-    bool running;               /* Carrier of network device. */
+    int mtu;                    /* Current MTU. */
+    uint8_t addr[ETH_ALEN];
+    unsigned int ifi_flags;     /* Flags of network device. */
 };
 
 /* Function called to report that a netdev has changed.  'change' describes the

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,10 +26,11 @@ struct pstream;
 struct sockaddr;
 
 int new_fd_stream(const char *name, int fd, int connect_status,
-                      char *unlink_path, struct stream **streamp);
+                  struct stream **streamp);
 int new_fd_pstream(const char *name, int fd,
                    int (*accept_cb)(int fd, const struct sockaddr *,
                                     size_t sa_len, struct stream **),
+                   int (*set_dscp_cb)(int fd, uint8_t dscp),
                    char *unlink_path,
                    struct pstream **pstreamp);
 

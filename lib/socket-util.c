@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include <config.h>
 #include "socket-util.h"
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <net/if.h>
@@ -29,14 +30,16 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "packets.h"
+#include "poll-loop.h"
 #include "util.h"
 #include "vlog.h"
-#if AF_PACKET && __linux__
+#if AF_PACKET && LINUX_DATAPATH
 #include <linux/if_packet.h>
 #endif
 #ifdef HAVE_NETLINK
@@ -48,11 +51,9 @@ VLOG_DEFINE_THIS_MODULE(socket_util);
 
 /* #ifdefs make it a pain to maintain code: you have to try to build both ways.
  * Thus, this file compiles all of the code regardless of the target, by
- * writing "if (LINUX)" instead of "#ifdef __linux__". */
-#ifdef __linux__
-#define LINUX 1
-#else
-#define LINUX 0
+ * writing "if (LINUX_DATAPATH)" instead of "#ifdef __linux__". */
+#ifndef LINUX_DATAPATH
+#define LINUX_DATAPATH 0
 #endif
 
 #ifndef O_DIRECTORY
@@ -79,6 +80,31 @@ set_nonblocking(int fd)
         VLOG_ERR("fcntl(F_GETFL) failed: %s", strerror(errno));
         return errno;
     }
+}
+
+void
+xset_nonblocking(int fd)
+{
+    if (set_nonblocking(fd)) {
+        exit(EXIT_FAILURE);
+    }
+}
+
+int
+set_dscp(int fd, uint8_t dscp)
+{
+    int val;
+
+    if (dscp > 63) {
+        return EINVAL;
+    }
+
+    val = dscp << 2;
+    if (setsockopt(fd, IPPROTO_IP, IP_TOS, &val, sizeof val)) {
+        return errno;
+    }
+
+    return 0;
 }
 
 static bool
@@ -155,7 +181,7 @@ lookup_ipv6(const char *host_name, struct in6_addr *addr)
  * Most Open vSwitch code should not use this because it causes deadlocks:
  * gethostbyname() sends out a DNS request but that starts a new flow for which
  * OVS must set up a flow, but it can't because it's waiting for a DNS reply.
- * The synchronous lookup also delays other activty.  (Of course we can solve
+ * The synchronous lookup also delays other activity.  (Of course we can solve
  * this but it doesn't seem worthwhile quite yet.)  */
 int
 lookup_hostname(const char *host_name, struct in_addr *addr)
@@ -238,7 +264,7 @@ drain_rcvbuf(int fd)
          *
          * On other Unix-like OSes, MSG_TRUNC has no effect in the flags
          * argument. */
-        char buffer[LINUX ? 1 : 2048];
+        char buffer[LINUX_DATAPATH ? 1 : 2048];
         ssize_t n_bytes = recv(fd, buffer, sizeof buffer,
                                MSG_TRUNC | MSG_DONTWAIT);
         if (n_bytes <= 0 || n_bytes >= rcvbuf) {
@@ -307,7 +333,7 @@ make_sockaddr_un(const char *name, struct sockaddr_un *un, socklen_t *un_len,
     if (strlen(name) > MAX_UN_LEN) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
 
-        if (LINUX) {
+        if (LINUX_DATAPATH) {
             /* 'name' is too long to fit in a sockaddr_un, but we have a
              * workaround for that on Linux: shorten it by opening a file
              * descriptor for the directory part of the name and indirecting
@@ -368,12 +394,11 @@ bind_unix_socket(int fd, struct sockaddr *sun, socklen_t sun_len)
 /* Creates a Unix domain socket in the given 'style' (either SOCK_DGRAM or
  * SOCK_STREAM) that is bound to '*bind_path' (if 'bind_path' is non-null) and
  * connected to '*connect_path' (if 'connect_path' is non-null).  If 'nonblock'
- * is true, the socket is made non-blocking.  If 'passcred' is true, the socket
- * is configured to receive SCM_CREDENTIALS control messages.
+ * is true, the socket is made non-blocking.
  *
  * Returns the socket's fd if successful, otherwise a negative errno value. */
 int
-make_unix_socket(int style, bool nonblock, bool passcred OVS_UNUSED,
+make_unix_socket(int style, bool nonblock,
                  const char *bind_path, const char *connect_path)
 {
     int error;
@@ -440,16 +465,6 @@ make_unix_socket(int style, bool nonblock, bool passcred OVS_UNUSED,
             goto error;
         }
     }
-
-#ifdef SCM_CREDENTIALS
-    if (passcred) {
-        int enable = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &enable, sizeof(enable))) {
-            error = errno;
-            goto error;
-        }
-    }
-#endif
 
     return fd;
 
@@ -544,10 +559,14 @@ exit:
  * and stores -1 into '*fdp'.
  *
  * If 'sinp' is non-null, then on success the target address is stored into
- * '*sinp'. */
+ * '*sinp'.
+ *
+ * 'dscp' becomes the DSCP bits in the IP headers for the new connection.  It
+ * should be in the range [0, 63] and will automatically be shifted to the
+ * appropriately place in the IP tos field. */
 int
 inet_open_active(int style, const char *target, uint16_t default_port,
-                 struct sockaddr_in *sinp, int *fdp)
+                 struct sockaddr_in *sinp, int *fdp, uint8_t dscp)
 {
     struct sockaddr_in sin;
     int fd = -1;
@@ -568,31 +587,34 @@ inet_open_active(int style, const char *target, uint16_t default_port,
     }
     error = set_nonblocking(fd);
     if (error) {
-        goto exit_close;
+        goto exit;
+    }
+
+    /* The dscp bits must be configured before connect() to ensure that the TOS
+     * field is set during the connection establishment.  If set after
+     * connect(), the handshake SYN frames will be sent with a TOS of 0. */
+    error = set_dscp(fd, dscp);
+    if (error) {
+        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        goto exit;
     }
 
     /* Connect. */
     error = connect(fd, (struct sockaddr *) &sin, sizeof sin) == 0 ? 0 : errno;
     if (error == EINPROGRESS) {
         error = EAGAIN;
-    } else if (error && error != EAGAIN) {
-        goto exit_close;
     }
 
-    /* Success: error is 0 or EAGAIN. */
-    goto exit;
-
-exit_close:
-    close(fd);
 exit:
     if (!error || error == EAGAIN) {
         if (sinp) {
             *sinp = sin;
         }
-        *fdp = fd;
-    } else {
-        *fdp = -1;
+    } else if (fd >= 0) {
+        close(fd);
+        fd = -1;
     }
+    *fdp = fd;
     return error;
 }
 
@@ -663,10 +685,14 @@ exit:
  * negative errno value.
  *
  * If 'sinp' is non-null, then on success the bound address is stored into
- * '*sinp'. */
+ * '*sinp'.
+ *
+ * 'dscp' becomes the DSCP bits in the IP headers for the new connection.  It
+ * should be in the range [0, 63] and will automatically be shifted to the
+ * appropriately place in the IP tos field. */
 int
 inet_open_passive(int style, const char *target, int default_port,
-                  struct sockaddr_in *sinp)
+                  struct sockaddr_in *sinp, uint8_t dscp)
 {
     struct sockaddr_in sin;
     int fd = 0, error;
@@ -701,8 +727,17 @@ inet_open_passive(int style, const char *target, int default_port,
         goto error;
     }
 
+    /* The dscp bits must be configured before connect() to ensure that the TOS
+     * field is set during the connection establishment.  If set after
+     * connect(), the handshake SYN frames will be sent with a TOS of 0. */
+    error = set_dscp(fd, dscp);
+    if (error) {
+        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        goto error;
+    }
+
     /* Listen. */
-    if (listen(fd, 10) < 0) {
+    if (style == SOCK_STREAM && listen(fd, 10) < 0) {
         error = errno;
         VLOG_ERR("%s: listen: %s", target, strerror(error));
         goto error;
@@ -857,6 +892,22 @@ xpipe(int fds[2])
     }
 }
 
+void
+xpipe_nonblocking(int fds[2])
+{
+    xpipe(fds);
+    xset_nonblocking(fds[0]);
+    xset_nonblocking(fds[1]);
+}
+
+void
+xsocketpair(int domain, int type, int protocol, int fds[2])
+{
+    if (socketpair(domain, type, protocol, fds)) {
+        VLOG_FATAL("failed to create socketpair (%s)", strerror(errno));
+    }
+}
+
 static int
 getsockopt_int(int fd, int level, int option, const char *optname, int *valuep)
 {
@@ -936,7 +987,7 @@ describe_sockaddr(struct ds *string, int fd,
             }
         }
 #endif
-#if AF_PACKET && __linux__
+#if AF_PACKET && LINUX_DATAPATH
         else if (ss.ss_family == AF_PACKET) {
             struct sockaddr_ll sll;
 
@@ -966,7 +1017,7 @@ describe_sockaddr(struct ds *string, int fd,
 }
 
 
-#ifdef __linux__
+#ifdef LINUX_DATAPATH
 static void
 put_fd_filename(struct ds *string, int fd)
 {
@@ -1010,9 +1061,255 @@ describe_fd(int fd)
                               : S_ISFIFO(s.st_mode) ? "FIFO"
                               : S_ISLNK(s.st_mode) ? "symbolic link"
                               : "unknown"));
-#ifdef __linux__
+#ifdef LINUX_DATAPATH
         put_fd_filename(&string, fd);
 #endif
     }
     return ds_steal_cstr(&string);
+}
+
+/* Returns the total of the 'iov_len' members of the 'n_iovs' in 'iovs'.
+ * The caller must ensure that the total does not exceed SIZE_MAX. */
+size_t
+iovec_len(const struct iovec iovs[], size_t n_iovs)
+{
+    size_t len = 0;
+    size_t i;
+
+    for (i = 0; i < n_iovs; i++) {
+        len += iovs[i].iov_len;
+    }
+    return len;
+}
+
+/* Returns true if all of the 'n_iovs' iovecs in 'iovs' have length zero. */
+bool
+iovec_is_empty(const struct iovec iovs[], size_t n_iovs)
+{
+    size_t i;
+
+    for (i = 0; i < n_iovs; i++) {
+        if (iovs[i].iov_len) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Sends the 'n_iovs' iovecs of data in 'iovs' and the 'n_fds' file descriptors
+ * in 'fds' on Unix domain socket 'sock'.  Returns the number of bytes
+ * successfully sent or -1 if an error occurred.  On error, sets errno
+ * appropriately.  */
+int
+send_iovec_and_fds(int sock,
+                   const struct iovec *iovs, size_t n_iovs,
+                   const int fds[], size_t n_fds)
+{
+    assert(sock >= 0);
+    if (n_fds > 0) {
+        union {
+            struct cmsghdr cm;
+            char control[CMSG_SPACE(SOUTIL_MAX_FDS * sizeof *fds)];
+        } cmsg;
+        struct msghdr msg;
+
+        assert(!iovec_is_empty(iovs, n_iovs));
+        assert(n_fds <= SOUTIL_MAX_FDS);
+
+        memset(&cmsg, 0, sizeof cmsg);
+        cmsg.cm.cmsg_len = CMSG_LEN(n_fds * sizeof *fds);
+        cmsg.cm.cmsg_level = SOL_SOCKET;
+        cmsg.cm.cmsg_type = SCM_RIGHTS;
+        memcpy(CMSG_DATA(&cmsg.cm), fds, n_fds * sizeof *fds);
+
+        msg.msg_name = NULL;
+        msg.msg_namelen = 0;
+        msg.msg_iov = (struct iovec *) iovs;
+        msg.msg_iovlen = n_iovs;
+        msg.msg_control = &cmsg.cm;
+        msg.msg_controllen = CMSG_SPACE(n_fds * sizeof *fds);
+        msg.msg_flags = 0;
+
+        return sendmsg(sock, &msg, 0);
+    } else {
+        return writev(sock, iovs, n_iovs);
+    }
+}
+
+/* Sends the 'n_iovs' iovecs of data in 'iovs' and the 'n_fds' file descriptors
+ * in 'fds' on Unix domain socket 'sock'.  If 'skip_bytes' is nonzero, then the
+ * first 'skip_bytes' of data in the iovecs are not sent, and none of the file
+ * descriptors are sent.  The function continues to retry sending until an
+ * error (other than EINTR) occurs or all the data and fds are sent.
+ *
+ * Returns 0 if all the data and fds were successfully sent, otherwise a
+ * positive errno value.  Regardless of success, stores the number of bytes
+ * sent (always at least 'skip_bytes') in '*bytes_sent'.  (If at least one byte
+ * is sent, then all the fds have been sent.)
+ *
+ * 'skip_bytes' must be less than or equal to iovec_len(iovs, n_iovs). */
+int
+send_iovec_and_fds_fully(int sock,
+                         const struct iovec iovs[], size_t n_iovs,
+                         const int fds[], size_t n_fds,
+                         size_t skip_bytes, size_t *bytes_sent)
+{
+    *bytes_sent = 0;
+    while (n_iovs > 0) {
+        int retval;
+
+        if (skip_bytes) {
+            retval = skip_bytes;
+            skip_bytes = 0;
+        } else if (!*bytes_sent) {
+            retval = send_iovec_and_fds(sock, iovs, n_iovs, fds, n_fds);
+        } else {
+            retval = writev(sock, iovs, n_iovs);
+        }
+
+        if (retval > 0) {
+            *bytes_sent += retval;
+            while (retval > 0) {
+                const uint8_t *base = iovs->iov_base;
+                size_t len = iovs->iov_len;
+
+                if (retval < len) {
+                    size_t sent;
+                    int error;
+
+                    error = write_fully(sock, base + retval, len - retval,
+                                        &sent);
+                    *bytes_sent += sent;
+                    retval += sent;
+                    if (error) {
+                        return error;
+                    }
+                }
+                retval -= len;
+                iovs++;
+                n_iovs--;
+            }
+        } else if (retval == 0) {
+            if (iovec_is_empty(iovs, n_iovs)) {
+                break;
+            }
+            VLOG_WARN("send returned 0");
+            return EPROTO;
+        } else if (errno != EINTR) {
+            return errno;
+        }
+    }
+
+    return 0;
+}
+
+/* Sends the 'n_iovs' iovecs of data in 'iovs' and the 'n_fds' file descriptors
+ * in 'fds' on Unix domain socket 'sock'.  The function continues to retry
+ * sending until an error (other than EAGAIN or EINTR) occurs or all the data
+ * and fds are sent.  Upon EAGAIN, the function blocks until the socket is
+ * ready for more data.
+ *
+ * Returns 0 if all the data and fds were successfully sent, otherwise a
+ * positive errno value. */
+int
+send_iovec_and_fds_fully_block(int sock,
+                               const struct iovec iovs[], size_t n_iovs,
+                               const int fds[], size_t n_fds)
+{
+    size_t sent = 0;
+
+    for (;;) {
+        int error;
+
+        error = send_iovec_and_fds_fully(sock, iovs, n_iovs,
+                                         fds, n_fds, sent, &sent);
+        if (error != EAGAIN) {
+            return error;
+        }
+        poll_fd_wait(sock, POLLOUT);
+        poll_block();
+    }
+}
+
+/* Attempts to receive from Unix domain socket 'sock' up to 'size' bytes of
+ * data into 'data' and up to SOUTIL_MAX_FDS file descriptors into 'fds'.
+ *
+ *      - Upon success, returns the number of bytes of data copied into 'data'
+ *        and stores the number of received file descriptors into '*n_fdsp'.
+ *
+ *      - On failure, returns a negative errno value and stores 0 in
+ *        '*n_fdsp'.
+ *
+ *      - On EOF, returns 0 and stores 0 in '*n_fdsp'. */
+int
+recv_data_and_fds(int sock,
+                  void *data, size_t size,
+                  int fds[SOUTIL_MAX_FDS], size_t *n_fdsp)
+{
+    union {
+        struct cmsghdr cm;
+        char control[CMSG_SPACE(SOUTIL_MAX_FDS * sizeof *fds)];
+    } cmsg;
+    struct msghdr msg;
+    int retval;
+    struct cmsghdr *p;
+    size_t i;
+
+    *n_fdsp = 0;
+
+    do {
+        struct iovec iov;
+
+        iov.iov_base = data;
+        iov.iov_len = size;
+
+        msg.msg_name = NULL;
+        msg.msg_namelen = 0;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = &cmsg.cm;
+        msg.msg_controllen = sizeof cmsg.control;
+        msg.msg_flags = 0;
+
+        retval = recvmsg(sock, &msg, 0);
+    } while (retval < 0 && errno == EINTR);
+    if (retval <= 0) {
+        return retval < 0 ? -errno : 0;
+    }
+
+    for (p = CMSG_FIRSTHDR(&msg); p; p = CMSG_NXTHDR(&msg, p)) {
+        if (p->cmsg_level != SOL_SOCKET || p->cmsg_type != SCM_RIGHTS) {
+            VLOG_ERR("unexpected control message %d:%d",
+                     p->cmsg_level, p->cmsg_type);
+            goto error;
+        } else if (*n_fdsp) {
+            VLOG_ERR("multiple SCM_RIGHTS received");
+            goto error;
+        } else {
+            size_t n_fds = (p->cmsg_len - CMSG_LEN(0)) / sizeof *fds;
+            const int *fds_data = (const int *) CMSG_DATA(p);
+
+            assert(n_fds > 0);
+            if (n_fds > SOUTIL_MAX_FDS) {
+                VLOG_ERR("%zu fds received but only %d supported",
+                         n_fds, SOUTIL_MAX_FDS);
+                for (i = 0; i < n_fds; i++) {
+                    close(fds_data[i]);
+                }
+                goto error;
+            }
+
+            *n_fdsp = n_fds;
+            memcpy(fds, fds_data, n_fds * sizeof *fds);
+        }
+    }
+
+    return retval;
+
+error:
+    for (i = 0; i < *n_fdsp; i++) {
+        close(fds[i]);
+    }
+    *n_fdsp = 0;
+    return EPROTO;
 }

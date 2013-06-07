@@ -1,4 +1,4 @@
-# Copyright (C) 2007, 2008, 2009, 2010, 2011 Nicira Networks, Inc.
+# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -20,25 +20,38 @@ AM_CFLAGS += $(WARNING_FLAGS)
 if NDEBUG
 AM_CPPFLAGS += -DNDEBUG
 AM_CFLAGS += -fomit-frame-pointer
-else
-AM_LDFLAGS = -export-dynamic
 endif
+
+# PYTHONDONTWRITEBYTECODE=yes keeps Python from creating .pyc and .pyo
+# files.  Creating .py[co] works OK for any given version of Open
+# vSwitch, but it causes trouble if you switch from a version with
+# foo/__init__.py into an (older) version with plain foo.py, since
+# foo/__init__.pyc will cause Python to ignore foo.py.
+run_python = \
+	PYTHONDONTWRITEBYTECODE=yes \
+	PYTHONPATH=$(top_srcdir)/python:$$PYTHONPATH \
+	$(PYTHON)
 
 ALL_LOCAL =
 BUILT_SOURCES =
 CLEANFILES =
 CLEAN_LOCAL =
 DISTCLEANFILES =
+PYCOV_CLEAN_FILES = build-aux/check-structs,cover
 EXTRA_DIST = \
 	CodingStyle \
 	DESIGN \
+	FAQ \
+	INSTALL \
+	INSTALL.Fedora \
 	INSTALL.KVM \
-	INSTALL.Linux \
+	INSTALL.Libvirt \
 	INSTALL.RHEL \
 	INSTALL.SSL \
 	INSTALL.XenServer \
 	INSTALL.bridge \
 	INSTALL.userspace \
+	IntegrationGuide \
 	NOTICE \
 	PORTING \
 	README-gcov \
@@ -96,11 +109,11 @@ SUFFIXES += .in
 	    sed \
 		-e 's,[@]PKIDIR[@],$(PKIDIR),g' \
                 -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
+                -e 's,[@]DBDIR[@],$(DBDIR),g' \
                 -e 's,[@]PERL[@],$(PERL),g' \
                 -e 's,[@]PYTHON[@],$(PYTHON),g' \
                 -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
                 -e 's,[@]VERSION[@],$(VERSION),g' \
-                -e 's,[@]BUILDNR[@],$(BUILDNR),g' \
                 -e 's,[@]localstatedir[@],$(localstatedir),g' \
                 -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
                 -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
@@ -115,8 +128,18 @@ SUFFIXES += .in
 	fi
 	mv $@.tmp $@
 
+.PHONY: clean-pycov
+clean-pycov:
+	cd $(srcdir) && rm -f $(PYCOV_CLEAN_FILES)
+CLEAN_LOCAL += clean-pycov
+
 # If we're checked out from a Git repository, make sure that every
 # file that is in Git is distributed.
+#
+# We only enable this check when GNU make is in use because the
+# Makefile in datapath/linux, needed to get the list of files to
+# distribute, requires GNU make extensions.
+if GNU_MAKE
 ALL_LOCAL += dist-hook-git
 dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
@@ -142,6 +165,8 @@ distfiles: Makefile
 	  sed -e "s|^$$srcdirstrip/||;t" \
 	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | sort -u > $@
 CLEANFILES += distfiles
+endif
+.PHONY: dist-hook-git
 
 # Check that "struct vlog_ratelimit" is always declared "static".
 ALL_LOCAL += rate-limit-check
@@ -153,6 +178,7 @@ rate-limit-check:
 	    echo "'struct vlog_rate_limit' must always be 'static'"; \
 	    exit 1; \
 	 fi
+.PHONY: rate-limit-check
 
 if HAVE_GROFF
 ALL_LOCAL += manpage-check
@@ -184,6 +210,11 @@ clean-local: $(CLEAN_LOCAL)
 install-data-local: $(INSTALL_DATA_LOCAL)
 uninstall-local: $(UNINSTALL_LOCAL)
 .PHONY: $(DIST_HOOKS) $(CLEAN_LOCAL) $(INSTALL_DATA_LOCAL) $(UNINSTALL_LOCAL)
+
+modules_install:
+if LINUX_ENABLED
+	cd datapath/linux && $(MAKE) modules_install
+endif
 
 include lib/automake.mk
 include ofproto/automake.mk

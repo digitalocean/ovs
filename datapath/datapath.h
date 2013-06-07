@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -25,17 +25,18 @@
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/u64_stats_sync.h>
-#include <linux/version.h>
 
 #include "checksum.h"
 #include "compat.h"
-#include "flow.h"
 #include "dp_sysfs.h"
+#include "flow.h"
+#include "tunnel.h"
 #include "vlan.h"
+#include "vport.h"
 
-struct vport;
+#define DP_MAX_PORTS		USHRT_MAX
+#define DP_VPORT_HASH_BUCKETS	1024
 
-#define DP_MAX_PORTS 1024
 #define SAMPLE_ACTION_DEPTH 3
 
 /**
@@ -64,11 +65,10 @@ struct dp_stats_percpu {
  * @ifobj: Represents /sys/class/net/<devname>/brif.  Protected by RTNL.
  * @n_flows: Number of flows currently in flow table.
  * @table: Current flow table.  Protected by genl_lock and RCU.
- * @ports: Map from port number to &struct vport.  %OVSP_LOCAL port
- * always exists, other ports may be %NULL.  Protected by RTNL and RCU.
- * @port_list: List of all ports in @ports in arbitrary order.  RTNL required
- * to iterate or modify.
+ * @ports: Hash table for ports.  %OVSP_LOCAL port always exists.  Protected by
+ * RTNL and RCU.
  * @stats_percpu: Per-CPU datapath statistics.
+ * @net: Reference to net namespace.
  *
  * Context: See the comment on locking at the top of datapath.c for additional
  * locking information.
@@ -82,17 +82,22 @@ struct datapath {
 	struct flow_table __rcu *table;
 
 	/* Switch ports. */
-	struct vport __rcu *ports[DP_MAX_PORTS];
-	struct list_head port_list;
+	struct hlist_head *ports;
 
 	/* Stats. */
 	struct dp_stats_percpu __percpu *stats_percpu;
+
+#ifdef CONFIG_NET_NS
+	/* Network namespace ref. */
+	struct net *net;
+#endif
 };
 
 /**
  * struct ovs_skb_cb - OVS data in skb CB
  * @flow: The flow associated with this packet.  May be %NULL if no flow.
- * @tun_id: ID of the tunnel that encapsulated this packet.  It is 0 if the
+ * @tun_key: Key for the tunnel that encapsulated this packet. NULL if the
+ * packet is not being tunneled.
  * @ip_summed: Consistently stores L4 checksumming status across different
  * kernel versions.
  * @csum_start: Stores the offset from which to start checksumming independent
@@ -103,7 +108,7 @@ struct datapath {
  */
 struct ovs_skb_cb {
 	struct sw_flow		*flow;
-	__be64			tun_id;
+	struct ovs_key_ipv4_tunnel  *tun_key;
 #ifdef NEED_CSUM_NORMALIZE
 	enum csum_type		ip_summed;
 	u16			csum_start;
@@ -120,7 +125,7 @@ struct ovs_skb_cb {
  * @key: Becomes %OVS_PACKET_ATTR_KEY.  Must be nonnull.
  * @userdata: If nonnull, its u64 value is extracted and passed to userspace as
  * %OVS_PACKET_ATTR_USERDATA.
- * @pid: Netlink PID to which packet should be sent.  If @pid is 0 then no
+ * @portid: Netlink PID to which packet should be sent.  If @portid is 0 then no
  * packet is sent and the packet is accounted in the datapath's @n_lost
  * counter.
  */
@@ -128,8 +133,51 @@ struct dp_upcall_info {
 	u8 cmd;
 	const struct sw_flow_key *key;
 	const struct nlattr *userdata;
-	u32 pid;
+	u32 portid;
 };
+
+/**
+ * struct ovs_net - Per net-namespace data for ovs.
+ * @dps: List of datapaths to enable dumping them all out.
+ * Protected by genl_mutex.
+ * @vport_net: Per network namespace data for vport.
+ */
+struct ovs_net {
+	struct list_head dps;
+	struct vport_net vport_net;
+};
+
+extern int ovs_net_id;
+
+static inline struct net *ovs_dp_get_net(struct datapath *dp)
+{
+	return read_pnet(&dp->net);
+}
+
+static inline void ovs_dp_set_net(struct datapath *dp, struct net *net)
+{
+	write_pnet(&dp->net, net);
+}
+
+struct vport *ovs_lookup_vport(const struct datapath *dp, u16 port_no);
+
+static inline struct vport *ovs_vport_rcu(const struct datapath *dp, int port_no)
+{
+	WARN_ON_ONCE(!rcu_read_lock_held());
+	return ovs_lookup_vport(dp, port_no);
+}
+
+static inline struct vport *ovs_vport_rtnl_rcu(const struct datapath *dp, int port_no)
+{
+	WARN_ON_ONCE(!rcu_read_lock_held() && !rtnl_is_locked());
+	return ovs_lookup_vport(dp, port_no);
+}
+
+static inline struct vport *ovs_vport_rtnl(const struct datapath *dp, int port_no)
+{
+	ASSERT_RTNL();
+	return ovs_lookup_vport(dp, port_no);
+}
 
 extern struct notifier_block ovs_dp_device_notifier;
 extern struct genl_multicast_group ovs_dp_vport_multicast_group;
@@ -141,7 +189,7 @@ int ovs_dp_upcall(struct datapath *, struct sk_buff *,
 		  const struct dp_upcall_info *);
 
 const char *ovs_dp_name(const struct datapath *dp);
-struct sk_buff *ovs_vport_cmd_build_info(struct vport *, u32 pid, u32 seq,
+struct sk_buff *ovs_vport_cmd_build_info(struct vport *, u32 portid, u32 seq,
 					 u8 cmd);
 
 int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb);

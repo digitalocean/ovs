@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@
 int
 main(int argc OVS_UNUSED, char *argv[])
 {
-    struct ofp_match expected_match;
+    struct ofp10_match expected_match;
     FILE *flows, *pcap;
     int retval;
     int n = 0, errors = 0;
@@ -55,8 +55,8 @@ main(int argc OVS_UNUSED, char *argv[])
 
     while (fread(&expected_match, sizeof expected_match, 1, flows)) {
         struct ofpbuf *packet;
-        struct ofp_match extracted_match;
-        struct cls_rule rule;
+        struct ofp10_match extracted_match;
+        struct match match;
         struct flow flow;
 
         n++;
@@ -68,19 +68,19 @@ main(int argc OVS_UNUSED, char *argv[])
             ovs_fatal(retval, "error reading pcap file");
         }
 
-        flow_extract(packet, 0, 0, 1, &flow);
-        cls_rule_init_exact(&flow, 0, &rule);
-        ofputil_cls_rule_to_match(&rule, &extracted_match);
+        flow_extract(packet, 0, 0, NULL, 1, &flow);
+        match_init_exact(&match, &flow);
+        ofputil_match_to_ofp10_match(&match, &extracted_match);
 
         if (memcmp(&expected_match, &extracted_match, sizeof expected_match)) {
-            char *exp_s = ofp_match_to_string(&expected_match, 2);
-            char *got_s = ofp_match_to_string(&extracted_match, 2);
+            char *exp_s = ofp10_match_to_string(&expected_match, 2);
+            char *got_s = ofp10_match_to_string(&extracted_match, 2);
             errors++;
             printf("mismatch on packet #%d (1-based).\n", n);
             printf("Packet:\n");
-            ofp_print_packet(stdout, packet->data, packet->size, packet->size);
+            ofp_print_packet(stdout, packet->data, packet->size);
             ovs_hex_dump(stdout, packet->data, packet->size, 0, true);
-            cls_rule_print(&rule);
+            match_print(&match);
             printf("Expected flow:\n%s\n", exp_s);
             printf("Actually extracted flow:\n%s\n", got_s);
             ovs_hex_dump(stdout, &expected_match, sizeof expected_match, 0, false);

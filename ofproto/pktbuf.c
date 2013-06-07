@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -92,8 +92,9 @@ make_id(unsigned int buffer_idx, unsigned int cookie)
 }
 
 /* Attempts to allocate an OpenFlow packet buffer id within 'pb'.  The packet
- * buffer will store a copy of 'buffer' and the port number 'in_port', which
- * should be the datapath port number on which 'buffer' was received.
+ * buffer will store a copy of 'buffer_size' bytes in 'buffer' and the port
+ * number 'in_port', which should be the OpenFlow port number on which 'buffer'
+ * was received.
  *
  * If successful, returns the packet buffer id (a number other than
  * UINT32_MAX).  pktbuf_retrieve() can later be used to retrieve the buffer and
@@ -102,7 +103,8 @@ make_id(unsigned int buffer_idx, unsigned int cookie)
  *
  * The caller retains ownership of 'buffer'. */
 uint32_t
-pktbuf_save(struct pktbuf *pb, struct ofpbuf *buffer, uint16_t in_port)
+pktbuf_save(struct pktbuf *pb, const void *buffer, size_t buffer_size,
+            uint16_t in_port)
 {
     struct packet *p = &pb->packets[pb->buffer_idx];
     pb->buffer_idx = (pb->buffer_idx + 1) & PKTBUF_MASK;
@@ -117,9 +119,10 @@ pktbuf_save(struct pktbuf *pb, struct ofpbuf *buffer, uint16_t in_port)
     if (++p->cookie >= COOKIE_MAX) {
         p->cookie = 0;
     }
-    p->buffer = ofpbuf_new_with_headroom(buffer->size,
-                                         sizeof(struct ofp_packet_in));
-    ofpbuf_put(p->buffer, buffer->data, buffer->size);
+    p->buffer = ofpbuf_clone_data_with_headroom(buffer, buffer_size,
+                                                sizeof(struct ofp_packet_in));
+
+
     p->timeout = time_msec() + OVERWRITE_MSECS;
     p->in_port = in_port;
     return make_id(p - pb->packets, p->cookie);
@@ -152,8 +155,7 @@ pktbuf_get_null(void)
 }
 
 /* Attempts to retrieve a saved packet with the given 'id' from 'pb'.  Returns
- * 0 if successful, otherwise an OpenFlow error code constructed with
- * ofp_mkerr().
+ * 0 if successful, otherwise an OpenFlow error code.
  *
  * On success, ordinarily stores the buffered packet in '*bufferp' and the
  * datapath port number on which the packet was received in '*in_port'.  The
@@ -167,13 +169,13 @@ pktbuf_get_null(void)
  * headroom.
  *
  * On failure, stores NULL in in '*bufferp' and UINT16_MAX in '*in_port'. */
-int
+enum ofperr
 pktbuf_retrieve(struct pktbuf *pb, uint32_t id, struct ofpbuf **bufferp,
                 uint16_t *in_port)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 20);
     struct packet *p;
-    int error;
+    enum ofperr error;
 
     if (id == UINT32_MAX) {
         error = 0;
@@ -183,7 +185,7 @@ pktbuf_retrieve(struct pktbuf *pb, uint32_t id, struct ofpbuf **bufferp,
     if (!pb) {
         VLOG_WARN_RL(&rl, "attempt to send buffered packet via connection "
                      "without buffers");
-        return ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_BUFFER_UNKNOWN);
+        return OFPERR_OFPBRC_BUFFER_UNKNOWN;
     }
 
     p = &pb->packets[id & PKTBUF_MASK];
@@ -200,13 +202,13 @@ pktbuf_retrieve(struct pktbuf *pb, uint32_t id, struct ofpbuf **bufferp,
         } else {
             COVERAGE_INC(pktbuf_reuse_error);
             VLOG_WARN_RL(&rl, "attempt to reuse buffer %08"PRIx32, id);
-            error = ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_BUFFER_EMPTY);
+            error = OFPERR_OFPBRC_BUFFER_EMPTY;
         }
     } else if (id >> PKTBUF_BITS != COOKIE_MAX) {
         COVERAGE_INC(pktbuf_buffer_unknown);
         VLOG_WARN_RL(&rl, "cookie mismatch: %08"PRIx32" != %08"PRIx32,
                      id, (id & PKTBUF_MASK) | (p->cookie << PKTBUF_BITS));
-        error = ofp_mkerr(OFPET_BAD_REQUEST, OFPBRC_BUFFER_UNKNOWN);
+        error = OFPERR_OFPBRC_BUFFER_UNKNOWN;
     } else {
         COVERAGE_INC(pktbuf_null_cookie);
         VLOG_INFO_RL(&rl, "Received null cookie %08"PRIx32" (this is normal "
@@ -229,4 +231,24 @@ pktbuf_discard(struct pktbuf *pb, uint32_t id)
         ofpbuf_delete(p->buffer);
         p->buffer = NULL;
     }
+}
+
+/* Returns the number of packets buffered in 'pb'.  Returns 0 if 'pb' is
+ * null. */
+unsigned int
+pktbuf_count_packets(const struct pktbuf *pb)
+{
+    int n = 0;
+
+    if (pb) {
+        int i;
+
+        for (i = 0; i < PKTBUF_CNT; i++) {
+            if (pb->packets[i].buffer) {
+                n++;
+            }
+        }
+    }
+
+    return n;
 }

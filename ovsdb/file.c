@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira Networks
+/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -531,11 +531,14 @@ ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
 {
     long long int now = time_msec();
     struct ovsdb_file *file;
+    char *deref_name;
     char *abs_name;
 
     /* Use the absolute name of the file because ovsdb-server opens its
      * database before daemonize() chdirs to "/". */
-    abs_name = abs_file_name(NULL, file_name);
+    deref_name = follow_symlinks(file_name);
+    abs_name = abs_file_name(NULL, deref_name);
+    free(deref_name);
     if (!abs_name) {
         *filep = NULL;
         return ovsdb_io_error(0, "could not determine current "
@@ -646,7 +649,7 @@ ovsdb_file_compact(struct ovsdb_file *file)
 
     /* Lock temporary file. */
     tmp_name = xasprintf("%s.tmp", file->file_name);
-    retval = lockfile_lock(tmp_name, 0, &tmp_lock);
+    retval = lockfile_lock(tmp_name, &tmp_lock);
     if (retval) {
         error = ovsdb_io_error(retval, "could not get lock on %s", tmp_name);
         goto exit;

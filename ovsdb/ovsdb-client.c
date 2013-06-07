@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
 #include "sort.h"
-#include "sset.h"
+#include "svec.h"
 #include "stream.h"
 #include "stream-ssl.h"
 #include "table.h"
@@ -64,6 +64,9 @@ struct ovsdb_client_command {
                     int argc, char *argv[]);
 };
 
+/* --timestamp: Print a timestamp before each update on "monitor" command? */
+static bool timestamp;
+
 /* Format for table output. */
 static struct table_style table_style = TABLE_STYLE_DEFAULT;
 
@@ -72,7 +75,7 @@ static const struct ovsdb_client_command all_commands[];
 static void usage(void) NO_RETURN;
 static void parse_options(int argc, char *argv[]);
 static struct jsonrpc *open_jsonrpc(const char *server);
-static void fetch_dbs(struct jsonrpc *, struct sset *dbs);
+static void fetch_dbs(struct jsonrpc *, struct svec *dbs);
 
 int
 main(int argc, char *argv[])
@@ -115,22 +118,22 @@ main(int argc, char *argv[])
     }
 
     if (command->need == NEED_DATABASE) {
-        struct sset dbs;
+        struct svec dbs;
 
-        sset_init(&dbs);
+        svec_init(&dbs);
         fetch_dbs(rpc, &dbs);
         if (argc - optind > command->min_args
-            && sset_contains(&dbs, argv[optind])) {
+            && svec_contains(&dbs, argv[optind])) {
             database = argv[optind++];
-        } else if (sset_count(&dbs) == 1) {
-            database = xstrdup(SSET_FIRST(&dbs));
-        } else if (sset_contains(&dbs, "Open_vSwitch")) {
+        } else if (dbs.n == 1) {
+            database = xstrdup(dbs.names[0]);
+        } else if (svec_contains(&dbs, "Open_vSwitch")) {
             database = "Open_vSwitch";
         } else {
             ovs_fatal(0, "no default database for `%s' command, please "
                       "specify a database name", command->name);
         }
-        sset_destroy(&dbs);
+        svec_destroy(&dbs);
     } else {
         database = NULL;
     }
@@ -160,6 +163,7 @@ parse_options(int argc, char *argv[])
 {
     enum {
         OPT_BOOTSTRAP_CA_CERT = UCHAR_MAX + 1,
+        OPT_TIMESTAMP,
         DAEMON_OPTION_ENUMS,
         TABLE_OPTION_ENUMS
     };
@@ -167,6 +171,7 @@ parse_options(int argc, char *argv[])
         {"verbose", optional_argument, NULL, 'v'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
+        {"timestamp", no_argument, NULL, OPT_TIMESTAMP},
         DAEMON_LONG_OPTIONS,
 #ifdef HAVE_OPENSSL
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
@@ -205,6 +210,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_BOOTSTRAP_CA_CERT:
             stream_ssl_set_ca_cert_file(optarg, true);
+            break;
+
+        case OPT_TIMESTAMP:
+            timestamp = true;
             break;
 
         case '?':
@@ -256,7 +265,8 @@ usage(void)
            "                              (\"table\", \"html\", \"csv\", "
            "or \"json\")\n"
            "  --no-headings               omit table heading row\n"
-           "  --pretty                    pretty-print JSON in output");
+           "  --pretty                    pretty-print JSON in output\n"
+           "  --timestamp                 timestamp \"monitor\" output");
     daemon_usage();
     vlog_usage();
     printf("\nOther options:\n"
@@ -265,6 +275,21 @@ usage(void)
     exit(EXIT_SUCCESS);
 }
 
+static void
+check_txn(int error, struct jsonrpc_msg **reply_)
+{
+    struct jsonrpc_msg *reply = *reply_;
+
+    if (error) {
+        ovs_fatal(error, "transaction failed");
+    }
+
+    if (reply->error) {
+        ovs_fatal(error, "transaction returned error: %s",
+                  json_to_string(reply->error, table_style.json_flags));
+    }
+}
+
 static struct json *
 parse_json(const char *s)
 {
@@ -281,11 +306,12 @@ open_jsonrpc(const char *server)
     struct stream *stream;
     int error;
 
-    error = stream_open_block(jsonrpc_stream_open(server, &stream), &stream);
+    error = stream_open_block(jsonrpc_stream_open(server, &stream,
+                              DSCP_DEFAULT), &stream);
     if (error == EAFNOSUPPORT) {
         struct pstream *pstream;
 
-        error = jsonrpc_pstream_open(server, &pstream);
+        error = jsonrpc_pstream_open(server, &pstream, DSCP_DEFAULT);
         if (error) {
             ovs_fatal(error, "failed to connect or listen to \"%s\"", server);
         }
@@ -332,16 +358,12 @@ fetch_schema(struct jsonrpc *rpc, const char *database)
 {
     struct jsonrpc_msg *request, *reply;
     struct ovsdb_schema *schema;
-    int error;
 
     request = jsonrpc_create_request("get_schema",
                                      json_array_create_1(
                                          json_string_create(database)),
                                      NULL);
-    error = jsonrpc_transact_block(rpc, request, &reply);
-    if (error) {
-        ovs_fatal(error, "transaction failed");
-    }
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
     check_ovsdb_error(ovsdb_schema_from_json(reply->result, &schema));
     jsonrpc_msg_destroy(reply);
 
@@ -349,19 +371,15 @@ fetch_schema(struct jsonrpc *rpc, const char *database)
 }
 
 static void
-fetch_dbs(struct jsonrpc *rpc, struct sset *dbs)
+fetch_dbs(struct jsonrpc *rpc, struct svec *dbs)
 {
     struct jsonrpc_msg *request, *reply;
-    int error;
     size_t i;
 
     request = jsonrpc_create_request("list_dbs", json_array_create_empty(),
                                      NULL);
-    error = jsonrpc_transact_block(rpc, request, &reply);
-    if (error) {
-        ovs_fatal(error, "transaction failed");
-    }
 
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
     if (reply->result->type != JSON_ARRAY) {
         ovs_fatal(0, "list_dbs response is not array");
     }
@@ -372,9 +390,10 @@ fetch_dbs(struct jsonrpc *rpc, struct sset *dbs)
         if (name->type != JSON_STRING) {
             ovs_fatal(0, "list_dbs response %zu is not string", i);
         }
-        sset_add(dbs, name->u.string);
+        svec_add(dbs, name->u.string);
     }
     jsonrpc_msg_destroy(reply);
+    svec_sort(dbs);
 }
 
 static void
@@ -382,14 +401,15 @@ do_list_dbs(struct jsonrpc *rpc, const char *database OVS_UNUSED,
             int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     const char *db_name;
-    struct sset dbs;
+    struct svec dbs;
+    size_t i;
 
-    sset_init(&dbs);
+    svec_init(&dbs);
     fetch_dbs(rpc, &dbs);
-    SSET_FOR_EACH (db_name, &dbs) {
+    SVEC_FOR_EACH (i, db_name, &dbs) {
         puts(db_name);
     }
-    sset_destroy(&dbs);
+    svec_destroy(&dbs);
 }
 
 static void
@@ -475,19 +495,11 @@ do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
 {
     struct jsonrpc_msg *request, *reply;
     struct json *transaction;
-    int error;
 
     transaction = parse_json(argv[0]);
 
     request = jsonrpc_create_request("transact", transaction, NULL);
-    error = jsonrpc_transact_block(rpc, request, &reply);
-    if (error) {
-        ovs_fatal(error, "transaction failed");
-    }
-    if (reply->error) {
-        ovs_fatal(error, "transaction returned error: %s",
-                  json_to_string(reply->error, table_style.json_flags));
-    }
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
     print_json(reply->result);
     putchar('\n');
     jsonrpc_msg_destroy(reply);
@@ -532,6 +544,7 @@ monitor_print(struct json *table_updates,
     size_t i;
 
     table_init(&t);
+    table_set_timestamp(&t, timestamp);
 
     if (table_updates->type != JSON_OBJECT) {
         ovs_error(0, "<table-updates> is not object");
@@ -722,12 +735,8 @@ do_monitor(struct jsonrpc *rpc, const char *database,
             monitor_print(msg->result, table, &columns, true);
             fflush(stdout);
             if (get_detach()) {
-                /* daemonize() closes the standard file descriptors.  We output
-                 * to stdout, so we need to save and restore STDOUT_FILENO. */
-                int fd = dup(STDOUT_FILENO);
+                daemon_save_fd(STDOUT_FILENO);
                 daemonize();
-                dup2(fd, STDOUT_FILENO);
-                close(fd);
             }
         } else if (msg->type == JSONRPC_NOTIFY
                    && !strcmp(msg->method, "update")) {
@@ -878,10 +887,15 @@ dump_table(const struct ovsdb_table_schema *ts, struct json_array *rows)
             struct cell *cell = table_add_cell(&t);
             cell->json = ovsdb_datum_to_json(&data[y][x], &columns[x]->type);
             cell->type = &columns[x]->type;
+            ovsdb_datum_destroy(&data[y][x], &columns[x]->type);
         }
+        free(data[y]);
     }
     table_print(&t, &table_style);
     table_destroy(&t);
+
+    free(data);
+    free(columns);
 }
 
 static void
@@ -891,7 +905,6 @@ do_dump(struct jsonrpc *rpc, const char *database,
     struct jsonrpc_msg *request, *reply;
     struct ovsdb_schema *schema;
     struct json *transaction;
-    int error;
 
     const struct shash_node **tables;
     size_t n_tables;
@@ -928,10 +941,7 @@ do_dump(struct jsonrpc *rpc, const char *database,
 
     /* Send request, get reply. */
     request = jsonrpc_create_request("transact", transaction, NULL);
-    error = jsonrpc_transact_block(rpc, request, &reply);
-    if (error) {
-        ovs_fatal(error, "transaction failed");
-    }
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
 
     /* Print database contents. */
     if (reply->result->type != JSON_ARRAY
@@ -954,6 +964,10 @@ do_dump(struct jsonrpc *rpc, const char *database,
 
         dump_table(ts, &rows->u.array);
     }
+
+    jsonrpc_msg_destroy(reply);
+    free(tables);
+    ovsdb_schema_destroy(schema);
 }
 
 static void

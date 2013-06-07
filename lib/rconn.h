@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,8 +37,10 @@
 struct vconn;
 struct rconn_packet_counter;
 
-struct rconn *rconn_create(int inactivity_probe_interval, int max_backoff);
-
+struct rconn *rconn_create(int inactivity_probe_interval,
+			   int max_backoff, uint8_t dscp);
+void rconn_set_dscp(struct rconn *rc, uint8_t dscp);
+uint8_t rconn_get_dscp(const struct rconn *rc);
 void rconn_set_max_backoff(struct rconn *, int max_backoff);
 int rconn_get_max_backoff(const struct rconn *);
 void rconn_set_probe_interval(struct rconn *, int inactivity_probe_interval);
@@ -76,35 +78,25 @@ ovs_be32 rconn_get_remote_ip(const struct rconn *);
 ovs_be16 rconn_get_remote_port(const struct rconn *);
 ovs_be32 rconn_get_local_ip(const struct rconn *);
 ovs_be16 rconn_get_local_port(const struct rconn *);
+int rconn_get_version(const struct rconn *);
 
 const char *rconn_get_state(const struct rconn *);
-unsigned int rconn_get_attempted_connections(const struct rconn *);
-unsigned int rconn_get_successful_connections(const struct rconn *);
 time_t rconn_get_last_connection(const struct rconn *);
 time_t rconn_get_last_disconnect(const struct rconn *);
-time_t rconn_get_last_received(const struct rconn *);
-time_t rconn_get_creation_time(const struct rconn *);
-unsigned long int rconn_get_total_time_connected(const struct rconn *);
-int rconn_get_backoff(const struct rconn *);
-unsigned int rconn_get_state_elapsed(const struct rconn *);
 unsigned int rconn_get_connection_seqno(const struct rconn *);
 int rconn_get_last_error(const struct rconn *);
+unsigned int rconn_count_txqlen(const struct rconn *);
 
-/* Counts the number of packets queued into an rconn by a given source. */
+/* Counts packets and bytes queued into an rconn by a given source. */
 struct rconn_packet_counter {
-    int n;                      /* Number of packets queued. */
+    unsigned int n_packets;     /* Number of packets queued. */
+    unsigned int n_bytes;       /* Number of bytes queued. */
     int ref_cnt;                /* Number of owners. */
 };
 
 struct rconn_packet_counter *rconn_packet_counter_create(void);
 void rconn_packet_counter_destroy(struct rconn_packet_counter *);
-void rconn_packet_counter_inc(struct rconn_packet_counter *);
-void rconn_packet_counter_dec(struct rconn_packet_counter *);
-
-static inline int
-rconn_packet_counter_read(const struct rconn_packet_counter *counter)
-{
-    return counter->n;
-}
+void rconn_packet_counter_inc(struct rconn_packet_counter *, unsigned n_bytes);
+void rconn_packet_counter_dec(struct rconn_packet_counter *, unsigned n_bytes);
 
 #endif /* rconn.h */

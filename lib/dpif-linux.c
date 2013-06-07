@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,19 +54,18 @@
 #include "random.h"
 #include "shash.h"
 #include "sset.h"
+#include "timeval.h"
 #include "unaligned.h"
 #include "util.h"
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(dpif_linux);
+enum { MAX_PORTS = USHRT_MAX };
 
-enum { LRU_MAX_PORTS = 1024 };
-enum { LRU_MASK = LRU_MAX_PORTS - 1};
-BUILD_ASSERT_DECL(IS_POW2(LRU_MAX_PORTS));
-
-enum { N_UPCALL_SOCKS = 16 };
-BUILD_ASSERT_DECL(IS_POW2(N_UPCALL_SOCKS));
-BUILD_ASSERT_DECL(N_UPCALL_SOCKS <= 32); /* We use a 32-bit word as a mask. */
+enum { N_CHANNELS = 17 };
+BUILD_ASSERT_DECL(IS_POW2(N_CHANNELS - 1));
+BUILD_ASSERT_DECL(N_CHANNELS > 1);
+BUILD_ASSERT_DECL(N_CHANNELS <= 32); /* We use a 32-bit word as a mask. */
 
 /* This ethtool flag was introduced in Linux 2.6.24, so it might be
  * missing if we have old headers. */
@@ -132,27 +131,76 @@ static int dpif_linux_flow_transact(struct dpif_linux_flow *request,
 static void dpif_linux_flow_get_stats(const struct dpif_linux_flow *,
                                       struct dpif_flow_stats *);
 
+/* Packet drop monitoring.
+ *
+ * When kernel-to-user Netlink buffers overflow, the kernel notifies us that
+ * one or more packets were dropped, but it doesn't tell us anything about
+ * those packets.  However, the administrator really wants to know.  So we do
+ * the next best thing, and keep track of the top sources of packets received
+ * on each kernel-to-user channel, since the top sources are those that will
+ * cause the buffers to overflow.
+ *
+ * We use a variation on the "Space-Saving" algorithm in Metwally et al.,
+ * "Efficient Computation of Frequent and Top-k Elements in Data Streams", ACM
+ * Transactions on Database Systems 31:3 (2006).  This algorithm yields
+ * perfectly accurate results when the data stream's unique values (in this
+ * case, port numbers) fit into our data structure, and degrades gracefully
+ * even for challenging distributions (e.g. Zipf).
+ *
+ * Our implementation is very simple, without any of the special flourishes
+ * described in the paper.  It avoids the need to use a hash for lookup by
+ * keeping the constant factor (N_SKETCHES) very small.  The error calculations
+ * in the paper make it sound like the results should still be satisfactory.
+ *
+ * "space-saving" and "Metwally" seem like awkward names for data structures,
+ * so we call this a "sketch" even though technically that's a different sort
+ * of summary structure.
+ */
+
+/* One of N_SKETCHES counting elements per channel in the Metwally
+ * "space-saving" algorithm. */
+enum { N_SKETCHES = 8 };        /* Number of elements per channel. */
+struct dpif_sketch {
+    uint32_t port_no;           /* Port number. */
+    unsigned int hits;          /* Number of hits. */
+    unsigned int error;         /* Upper bound on error in 'hits'. */
+};
+
+/* One of N_CHANNELS channels per dpif between the kernel and userspace. */
+struct dpif_channel {
+    struct nl_sock *sock;       /* Netlink socket. */
+    struct dpif_sketch sketches[N_SKETCHES]; /* From max to min 'hits'. */
+    long long int last_poll;    /* Last time this channel was polled. */
+};
+
+static void update_sketch(struct dpif_channel *, uint32_t port_no);
+static void scale_sketches(struct dpif *);
+static void report_loss(struct dpif *, struct dpif_channel *);
+
+/* Interval, in milliseconds, at which to scale down the sketch values by a
+ * factor of 2.  The Metwally algorithm doesn't do this, which makes sense in
+ * the context it assumes, but in our situation we ought to weight recent data
+ * more heavily than old data, so in my opinion this is reasonable. */
+#define SCALE_INTERVAL (60 * 1000)
+
 /* Datapath interface for the openvswitch Linux kernel module. */
 struct dpif_linux {
     struct dpif dpif;
     int dp_ifindex;
 
     /* Upcall messages. */
-    struct nl_sock *upcall_socks[N_UPCALL_SOCKS];
+    struct dpif_channel channels[N_CHANNELS];
     uint32_t ready_mask;        /* 1-bit for each sock with unread messages. */
-    unsigned int listen_mask;   /* Mask of DPIF_UC_* bits. */
-    int epoll_fd;               /* epoll fd that includes the upcall socks. */
+    int epoll_fd;               /* epoll fd that includes channel socks. */
+    long long int next_scale;   /* Next time to scale down the sketches. */
 
     /* Change notification. */
     struct sset changed_ports;  /* Ports that have changed. */
     struct nln_notifier *port_notifier;
     bool change_error;
 
-    /* Queue of unused ports. */
-    unsigned long *lru_bitmap;
-    uint16_t lru_ports[LRU_MAX_PORTS];
-    size_t lru_head;
-    size_t lru_tail;
+    /* Port number allocation. */
+    uint16_t alloc_port_no;
 };
 
 static struct vlog_rate_limit error_rl = VLOG_RATE_LIMIT_INIT(9999, 5);
@@ -171,9 +219,7 @@ static int dpif_linux_init(void);
 static void open_dpif(const struct dpif_linux_dp *, struct dpif **);
 static bool dpif_linux_nln_parse(struct ofpbuf *, void *);
 static void dpif_linux_port_changed(const void *vport, void *dpif);
-static uint32_t dpif_linux_port_get_pid__(const struct dpif *,
-                                          uint16_t port_no,
-                                          enum dpif_upcall_type);
+static uint32_t dpif_linux_port_get_pid(const struct dpif *, uint16_t port_no);
 
 static void dpif_linux_vport_to_ofpbuf(const struct dpif_linux_vport *,
                                        struct ofpbuf *);
@@ -185,29 +231,6 @@ dpif_linux_cast(const struct dpif *dpif)
 {
     dpif_assert_class(dpif, &dpif_linux_class);
     return CONTAINER_OF(dpif, struct dpif_linux, dpif);
-}
-
-static void
-dpif_linux_push_port(struct dpif_linux *dp, uint16_t port)
-{
-    if (port < LRU_MAX_PORTS && !bitmap_is_set(dp->lru_bitmap, port)) {
-        bitmap_set1(dp->lru_bitmap, port);
-        dp->lru_ports[dp->lru_head++ & LRU_MASK] = port;
-    }
-}
-
-static uint32_t
-dpif_linux_pop_port(struct dpif_linux *dp)
-{
-    uint16_t port;
-
-    if (dp->lru_head == dp->lru_tail) {
-        return UINT32_MAX;
-    }
-
-    port = dp->lru_ports[dp->lru_tail++ & LRU_MASK];
-    bitmap_set0(dp->lru_bitmap, port);
-    return port;
 }
 
 static int
@@ -271,7 +294,6 @@ static void
 open_dpif(const struct dpif_linux_dp *dp, struct dpif **dpifp)
 {
     struct dpif_linux *dpif;
-    int i;
 
     dpif = xzalloc(sizeof *dpif);
     dpif->port_notifier = nln_notifier_create(nln, dpif_linux_port_changed,
@@ -281,30 +303,27 @@ open_dpif(const struct dpif_linux_dp *dp, struct dpif **dpifp)
     dpif_init(&dpif->dpif, &dpif_linux_class, dp->name,
               dp->dp_ifindex, dp->dp_ifindex);
 
+    dpif->next_scale = LLONG_MAX;
+
     dpif->dp_ifindex = dp->dp_ifindex;
     sset_init(&dpif->changed_ports);
     *dpifp = &dpif->dpif;
-
-    dpif->lru_bitmap = bitmap_allocate(LRU_MAX_PORTS);
-    bitmap_set1(dpif->lru_bitmap, OVSP_LOCAL);
-    for (i = 1; i < LRU_MAX_PORTS; i++) {
-        dpif_linux_push_port(dpif, i);
-    }
 }
 
 static void
-destroy_upcall_socks(struct dpif_linux *dpif)
+destroy_channels(struct dpif_linux *dpif)
 {
-    int i;
+    struct dpif_channel *ch;
 
     if (dpif->epoll_fd >= 0) {
         close(dpif->epoll_fd);
         dpif->epoll_fd = -1;
     }
-    for (i = 0; i < N_UPCALL_SOCKS; i++) {
-        nl_sock_destroy(dpif->upcall_socks[i]);
-        dpif->upcall_socks[i] = NULL;
+    for (ch = dpif->channels; ch < &dpif->channels[N_CHANNELS]; ch++) {
+        nl_sock_destroy(ch->sock);
+        ch->sock = NULL;
     }
+    dpif->next_scale = LLONG_MAX;
 }
 
 static void
@@ -313,9 +332,8 @@ dpif_linux_close(struct dpif *dpif_)
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
     nln_notifier_destroy(dpif->port_notifier);
-    destroy_upcall_socks(dpif);
+    destroy_channels(dpif);
     sset_destroy(&dpif->changed_ports);
-    free(dpif->lru_bitmap);
     free(dpif);
 }
 
@@ -332,8 +350,15 @@ dpif_linux_destroy(struct dpif *dpif_)
 }
 
 static void
-dpif_linux_run(struct dpif *dpif OVS_UNUSED)
+dpif_linux_run(struct dpif *dpif_)
 {
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+
+    if (time_msec() >= dpif->next_scale) {
+        dpif->next_scale = time_msec() + SCALE_INTERVAL;
+        scale_sketches(dpif_);
+    }
+
     if (nln) {
         nln_run(nln);
     }
@@ -375,7 +400,7 @@ dpif_linux_port_add(struct dpif *dpif_, struct netdev *netdev,
     struct dpif_linux_vport request, reply;
     const struct ofpbuf *options;
     struct ofpbuf *buf;
-    int error;
+    int error, i = 0, max_ports = MAX_PORTS;
 
     dpif_linux_vport_init(&request);
     request.cmd = OVS_VPORT_CMD_NEW;
@@ -399,13 +424,14 @@ dpif_linux_port_add(struct dpif *dpif_, struct netdev *netdev,
         netdev_linux_ethtool_set_flag(netdev, ETH_FLAG_LRO, "LRO", false);
     }
 
-    /* Loop until we find a port that isn't used. */
+    /* Unless a specific port was requested, loop until we find a port
+     * that isn't used. */
     do {
         uint32_t upcall_pid;
 
-        request.port_no = dpif_linux_pop_port(dpif);
-        upcall_pid = dpif_linux_port_get_pid__(dpif_, request.port_no,
-                                               DPIF_UC_MISS);
+        request.port_no = *port_nop != UINT16_MAX ? *port_nop
+                          : ++dpif->alloc_port_no;
+        upcall_pid = dpif_linux_port_get_pid(dpif_, request.port_no);
         request.upcall_pid = &upcall_pid;
         error = dpif_linux_vport_transact(&request, &reply, &buf);
 
@@ -413,9 +439,17 @@ dpif_linux_port_add(struct dpif *dpif_, struct netdev *netdev,
             *port_nop = reply.port_no;
             VLOG_DBG("%s: assigning port %"PRIu32" to netlink pid %"PRIu32,
                      dpif_name(dpif_), request.port_no, upcall_pid);
+        } else if (error == EFBIG) {
+            /* Older datapath has lower limit. */
+            max_ports = dpif->alloc_port_no;
+            dpif->alloc_port_no = 0;
+        } else if (error == EBUSY && *port_nop != UINT16_MAX) {
+            VLOG_INFO("%s: requested port %"PRIu16" is in use",
+                     dpif_name(dpif_), *port_nop);
         }
+
         ofpbuf_delete(buf);
-    } while (request.port_no != UINT32_MAX
+    } while ((*port_nop == UINT16_MAX) && (i++ < max_ports)
              && (error == EBUSY || error == EFBIG));
 
     return error;
@@ -434,9 +468,6 @@ dpif_linux_port_del(struct dpif *dpif_, uint16_t port_no)
     vport.port_no = port_no;
     error = dpif_linux_vport_transact(&vport, NULL, NULL);
 
-    if (!error) {
-        dpif_linux_push_port(dpif, port_no);
-    }
     return error;
 }
 
@@ -488,29 +519,24 @@ dpif_linux_port_query_by_name(const struct dpif *dpif, const char *devname,
 static int
 dpif_linux_get_max_ports(const struct dpif *dpif OVS_UNUSED)
 {
-    /* If the datapath increases its range of supported ports, then it should
-     * start reporting that. */
-    return 1024;
+    return MAX_PORTS;
 }
 
 static uint32_t
-dpif_linux_port_get_pid__(const struct dpif *dpif_, uint16_t port_no,
-                          enum dpif_upcall_type upcall_type)
+dpif_linux_port_get_pid(const struct dpif *dpif_, uint16_t port_no)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
-    if (!(dpif->listen_mask & (1u << upcall_type))) {
+    if (dpif->epoll_fd < 0) {
         return 0;
     } else {
-        int idx = port_no & (N_UPCALL_SOCKS - 1);
-        return nl_sock_pid(dpif->upcall_socks[idx]);
-    }
-}
+        int idx;
 
-static uint32_t
-dpif_linux_port_get_pid(const struct dpif *dpif, uint16_t port_no)
-{
-    return dpif_linux_port_get_pid__(dpif, port_no, DPIF_UC_ACTION);
+        idx = (port_no != UINT16_MAX
+               ? 1 + (port_no & (N_CHANNELS - 2))
+               : 0);
+        return nl_sock_pid(dpif->channels[idx].sock);
+    }
 }
 
 static int
@@ -527,8 +553,6 @@ dpif_linux_flow_flush(struct dpif *dpif_)
 
 struct dpif_linux_port_state {
     struct nl_dump dump;
-    unsigned long *port_bitmap; /* Ports in the datapath. */
-    bool complete;              /* Dump completed without error. */
 };
 
 static int
@@ -540,8 +564,6 @@ dpif_linux_port_dump_start(const struct dpif *dpif_, void **statep)
     struct ofpbuf *buf;
 
     *statep = state = xmalloc(sizeof *state);
-    state->port_bitmap = bitmap_allocate(LRU_MAX_PORTS);
-    state->complete = false;
 
     dpif_linux_vport_init(&request);
     request.cmd = OVS_DP_CMD_GET;
@@ -565,7 +587,6 @@ dpif_linux_port_dump_next(const struct dpif *dpif OVS_UNUSED, void *state_,
     int error;
 
     if (!nl_dump_next(&state->dump, &buf)) {
-        state->complete = true;
         return EOF;
     }
 
@@ -574,34 +595,18 @@ dpif_linux_port_dump_next(const struct dpif *dpif OVS_UNUSED, void *state_,
         return error;
     }
 
-    if (vport.port_no < LRU_MAX_PORTS) {
-        bitmap_set1(state->port_bitmap, vport.port_no);
-    }
-
-    dpif_port->name = (char *) vport.name;
-    dpif_port->type = (char *) netdev_vport_get_netdev_type(&vport);
+    dpif_port->name = CONST_CAST(char *, vport.name);
+    dpif_port->type = CONST_CAST(char *, netdev_vport_get_netdev_type(&vport));
     dpif_port->port_no = vport.port_no;
     return 0;
 }
 
 static int
-dpif_linux_port_dump_done(const struct dpif *dpif_, void *state_)
+dpif_linux_port_dump_done(const struct dpif *dpif_ OVS_UNUSED, void *state_)
 {
-    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
     struct dpif_linux_port_state *state = state_;
     int error = nl_dump_done(&state->dump);
 
-    if (state->complete) {
-        uint16_t i;
-
-        for (i = 0; i < LRU_MAX_PORTS; i++) {
-            if (!bitmap_is_set(state->port_bitmap, i)) {
-                dpif_linux_push_port(dpif, i);
-            }
-        }
-    }
-
-    free(state->port_bitmap);
     free(state);
     return error;
 }
@@ -663,7 +668,7 @@ dpif_linux_flow_get(const struct dpif *dpif_,
             dpif_linux_flow_get_stats(&reply, stats);
         }
         if (actionsp) {
-            buf->data = (void *) reply.actions;
+            buf->data = CONST_CAST(struct nlattr *, reply.actions);
             buf->size = reply.actions_len;
             *actionsp = buf;
         } else {
@@ -674,9 +679,7 @@ dpif_linux_flow_get(const struct dpif *dpif_,
 }
 
 static void
-dpif_linux_init_flow_put(struct dpif *dpif_, enum dpif_flow_put_flags flags,
-                         const struct nlattr *key, size_t key_len,
-                         const struct nlattr *actions, size_t actions_len,
+dpif_linux_init_flow_put(struct dpif *dpif_, const struct dpif_flow_put *put,
                          struct dpif_linux_flow *request)
 {
     static struct nlattr dummy_action;
@@ -684,62 +687,64 @@ dpif_linux_init_flow_put(struct dpif *dpif_, enum dpif_flow_put_flags flags,
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
     dpif_linux_flow_init(request);
-    request->cmd = (flags & DPIF_FP_CREATE
+    request->cmd = (put->flags & DPIF_FP_CREATE
                     ? OVS_FLOW_CMD_NEW : OVS_FLOW_CMD_SET);
     request->dp_ifindex = dpif->dp_ifindex;
-    request->key = key;
-    request->key_len = key_len;
+    request->key = put->key;
+    request->key_len = put->key_len;
     /* Ensure that OVS_FLOW_ATTR_ACTIONS will always be included. */
-    request->actions = actions ? actions : &dummy_action;
-    request->actions_len = actions_len;
-    if (flags & DPIF_FP_ZERO_STATS) {
+    request->actions = put->actions ? put->actions : &dummy_action;
+    request->actions_len = put->actions_len;
+    if (put->flags & DPIF_FP_ZERO_STATS) {
         request->clear = true;
     }
-    request->nlmsg_flags = flags & DPIF_FP_MODIFY ? 0 : NLM_F_CREATE;
+    request->nlmsg_flags = put->flags & DPIF_FP_MODIFY ? 0 : NLM_F_CREATE;
 }
 
 static int
-dpif_linux_flow_put(struct dpif *dpif_, enum dpif_flow_put_flags flags,
-                    const struct nlattr *key, size_t key_len,
-                    const struct nlattr *actions, size_t actions_len,
-                    struct dpif_flow_stats *stats)
+dpif_linux_flow_put(struct dpif *dpif_, const struct dpif_flow_put *put)
 {
     struct dpif_linux_flow request, reply;
     struct ofpbuf *buf;
     int error;
 
-    dpif_linux_init_flow_put(dpif_, flags, key, key_len, actions, actions_len,
-                             &request);
+    dpif_linux_init_flow_put(dpif_, put, &request);
     error = dpif_linux_flow_transact(&request,
-                                     stats ? &reply : NULL,
-                                     stats ? &buf : NULL);
-    if (!error && stats) {
-        dpif_linux_flow_get_stats(&reply, stats);
+                                     put->stats ? &reply : NULL,
+                                     put->stats ? &buf : NULL);
+    if (!error && put->stats) {
+        dpif_linux_flow_get_stats(&reply, put->stats);
         ofpbuf_delete(buf);
     }
     return error;
 }
 
-static int
-dpif_linux_flow_del(struct dpif *dpif_,
-                    const struct nlattr *key, size_t key_len,
-                    struct dpif_flow_stats *stats)
+static void
+dpif_linux_init_flow_del(struct dpif *dpif_, const struct dpif_flow_del *del,
+                         struct dpif_linux_flow *request)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+
+    dpif_linux_flow_init(request);
+    request->cmd = OVS_FLOW_CMD_DEL;
+    request->dp_ifindex = dpif->dp_ifindex;
+    request->key = del->key;
+    request->key_len = del->key_len;
+}
+
+static int
+dpif_linux_flow_del(struct dpif *dpif_, const struct dpif_flow_del *del)
+{
     struct dpif_linux_flow request, reply;
     struct ofpbuf *buf;
     int error;
 
-    dpif_linux_flow_init(&request);
-    request.cmd = OVS_FLOW_CMD_DEL;
-    request.dp_ifindex = dpif->dp_ifindex;
-    request.key = key;
-    request.key_len = key_len;
+    dpif_linux_init_flow_del(dpif_, del, &request);
     error = dpif_linux_flow_transact(&request,
-                                     stats ? &reply : NULL,
-                                     stats ? &buf : NULL);
-    if (!error && stats) {
-        dpif_linux_flow_get_stats(&reply, stats);
+                                     del->stats ? &reply : NULL,
+                                     del->stats ? &buf : NULL);
+    if (!error && del->stats) {
+        dpif_linux_flow_get_stats(&reply, del->stats);
         ofpbuf_delete(buf);
     }
     return error;
@@ -836,141 +841,195 @@ dpif_linux_flow_dump_done(const struct dpif *dpif OVS_UNUSED, void *state_)
     return error;
 }
 
-static struct ofpbuf *
-dpif_linux_encode_execute(int dp_ifindex,
-                          const struct nlattr *key, size_t key_len,
-                          const struct nlattr *actions, size_t actions_len,
-                          const struct ofpbuf *packet)
+static void
+dpif_linux_encode_execute(int dp_ifindex, const struct dpif_execute *d_exec,
+                          struct ofpbuf *buf)
 {
-    struct ovs_header *execute;
-    struct ofpbuf *buf;
+    struct ovs_header *k_exec;
 
-    buf = ofpbuf_new(128 + actions_len + packet->size);
+    ofpbuf_prealloc_tailroom(buf, (64
+                                   + d_exec->packet->size
+                                   + d_exec->key_len
+                                   + d_exec->actions_len));
 
     nl_msg_put_genlmsghdr(buf, 0, ovs_packet_family, NLM_F_REQUEST,
                           OVS_PACKET_CMD_EXECUTE, OVS_PACKET_VERSION);
 
-    execute = ofpbuf_put_uninit(buf, sizeof *execute);
-    execute->dp_ifindex = dp_ifindex;
+    k_exec = ofpbuf_put_uninit(buf, sizeof *k_exec);
+    k_exec->dp_ifindex = dp_ifindex;
 
-    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_PACKET, packet->data, packet->size);
-    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_KEY, key, key_len);
-    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_ACTIONS, actions, actions_len);
-
-    return buf;
+    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_PACKET,
+                      d_exec->packet->data, d_exec->packet->size);
+    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_KEY, d_exec->key, d_exec->key_len);
+    nl_msg_put_unspec(buf, OVS_PACKET_ATTR_ACTIONS,
+                      d_exec->actions, d_exec->actions_len);
 }
 
 static int
-dpif_linux_execute__(int dp_ifindex, const struct nlattr *key, size_t key_len,
-                     const struct nlattr *actions, size_t actions_len,
-                     const struct ofpbuf *packet)
+dpif_linux_execute__(int dp_ifindex, const struct dpif_execute *execute)
 {
-    struct ofpbuf *request;
+    uint64_t request_stub[1024 / 8];
+    struct ofpbuf request;
     int error;
 
-    request = dpif_linux_encode_execute(dp_ifindex,
-                                        key, key_len, actions, actions_len,
-                                        packet);
-    error = nl_sock_transact(genl_sock, request, NULL);
-    ofpbuf_delete(request);
+    ofpbuf_use_stub(&request, request_stub, sizeof request_stub);
+    dpif_linux_encode_execute(dp_ifindex, execute, &request);
+    error = nl_sock_transact(genl_sock, &request, NULL);
+    ofpbuf_uninit(&request);
 
     return error;
 }
 
 static int
-dpif_linux_execute(struct dpif *dpif_,
-                   const struct nlattr *key, size_t key_len,
-                   const struct nlattr *actions, size_t actions_len,
-                   const struct ofpbuf *packet)
+dpif_linux_execute(struct dpif *dpif_, const struct dpif_execute *execute)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
-    return dpif_linux_execute__(dpif->dp_ifindex, key, key_len,
-                                actions, actions_len, packet);
+    return dpif_linux_execute__(dpif->dp_ifindex, execute);
+}
+
+#define MAX_OPS 50
+
+static void
+dpif_linux_operate__(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
+{
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+
+    struct op_auxdata {
+        struct nl_transaction txn;
+
+        struct ofpbuf request;
+        uint64_t request_stub[1024 / 8];
+
+        struct ofpbuf reply;
+        uint64_t reply_stub[1024 / 8];
+    } auxes[MAX_OPS];
+
+    struct nl_transaction *txnsp[MAX_OPS];
+    size_t i;
+
+    assert(n_ops <= MAX_OPS);
+    for (i = 0; i < n_ops; i++) {
+        struct op_auxdata *aux = &auxes[i];
+        struct dpif_op *op = ops[i];
+        struct dpif_flow_put *put;
+        struct dpif_flow_del *del;
+        struct dpif_execute *execute;
+        struct dpif_linux_flow flow;
+
+        ofpbuf_use_stub(&aux->request,
+                        aux->request_stub, sizeof aux->request_stub);
+        aux->txn.request = &aux->request;
+
+        ofpbuf_use_stub(&aux->reply, aux->reply_stub, sizeof aux->reply_stub);
+        aux->txn.reply = NULL;
+
+        switch (op->type) {
+        case DPIF_OP_FLOW_PUT:
+            put = &op->u.flow_put;
+            dpif_linux_init_flow_put(dpif_, put, &flow);
+            if (put->stats) {
+                flow.nlmsg_flags |= NLM_F_ECHO;
+                aux->txn.reply = &aux->reply;
+            }
+            dpif_linux_flow_to_ofpbuf(&flow, &aux->request);
+            break;
+
+        case DPIF_OP_FLOW_DEL:
+            del = &op->u.flow_del;
+            dpif_linux_init_flow_del(dpif_, del, &flow);
+            if (del->stats) {
+                flow.nlmsg_flags |= NLM_F_ECHO;
+                aux->txn.reply = &aux->reply;
+            }
+            dpif_linux_flow_to_ofpbuf(&flow, &aux->request);
+            break;
+
+        case DPIF_OP_EXECUTE:
+            execute = &op->u.execute;
+            dpif_linux_encode_execute(dpif->dp_ifindex, execute,
+                                      &aux->request);
+            break;
+
+        default:
+            NOT_REACHED();
+        }
+    }
+
+    for (i = 0; i < n_ops; i++) {
+        txnsp[i] = &auxes[i].txn;
+    }
+    nl_sock_transact_multiple(genl_sock, txnsp, n_ops);
+
+    for (i = 0; i < n_ops; i++) {
+        struct op_auxdata *aux = &auxes[i];
+        struct nl_transaction *txn = &auxes[i].txn;
+        struct dpif_op *op = ops[i];
+        struct dpif_flow_put *put;
+        struct dpif_flow_del *del;
+
+        op->error = txn->error;
+
+        switch (op->type) {
+        case DPIF_OP_FLOW_PUT:
+            put = &op->u.flow_put;
+            if (put->stats) {
+                if (!op->error) {
+                    struct dpif_linux_flow reply;
+
+                    op->error = dpif_linux_flow_from_ofpbuf(&reply,
+                                                            txn->reply);
+                    if (!op->error) {
+                        dpif_linux_flow_get_stats(&reply, put->stats);
+                    }
+                }
+
+                if (op->error) {
+                    memset(put->stats, 0, sizeof *put->stats);
+                }
+            }
+            break;
+
+        case DPIF_OP_FLOW_DEL:
+            del = &op->u.flow_del;
+            if (del->stats) {
+                if (!op->error) {
+                    struct dpif_linux_flow reply;
+
+                    op->error = dpif_linux_flow_from_ofpbuf(&reply,
+                                                            txn->reply);
+                    if (!op->error) {
+                        dpif_linux_flow_get_stats(&reply, del->stats);
+                    }
+                }
+
+                if (op->error) {
+                    memset(del->stats, 0, sizeof *del->stats);
+                }
+            }
+            break;
+
+        case DPIF_OP_EXECUTE:
+            break;
+
+        default:
+            NOT_REACHED();
+        }
+
+        ofpbuf_uninit(&aux->request);
+        ofpbuf_uninit(&aux->reply);
+    }
 }
 
 static void
-dpif_linux_operate(struct dpif *dpif_, union dpif_op **ops, size_t n_ops)
+dpif_linux_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
 {
-    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
-    struct nl_transaction **txnsp;
-    struct nl_transaction *txns;
-    size_t i;
-
-    txns = xmalloc(n_ops * sizeof *txns);
-    for (i = 0; i < n_ops; i++) {
-        struct nl_transaction *txn = &txns[i];
-        union dpif_op *op = ops[i];
-
-        if (op->type == DPIF_OP_FLOW_PUT) {
-            struct dpif_flow_put *put = &op->flow_put;
-            struct dpif_linux_flow request;
-
-            dpif_linux_init_flow_put(dpif_, put->flags, put->key, put->key_len,
-                                     put->actions, put->actions_len,
-                                     &request);
-            if (put->stats) {
-                request.nlmsg_flags |= NLM_F_ECHO;
-            }
-            txn->request = ofpbuf_new(1024);
-            dpif_linux_flow_to_ofpbuf(&request, txn->request);
-        } else if (op->type == DPIF_OP_EXECUTE) {
-            struct dpif_execute *execute = &op->execute;
-
-            txn->request = dpif_linux_encode_execute(
-                dpif->dp_ifindex, execute->key, execute->key_len,
-                execute->actions, execute->actions_len, execute->packet);
-        } else {
-            NOT_REACHED();
-        }
+    while (n_ops > 0) {
+        size_t chunk = MIN(n_ops, MAX_OPS);
+        dpif_linux_operate__(dpif, ops, chunk);
+        ops += chunk;
+        n_ops -= chunk;
     }
-
-    txnsp = xmalloc(n_ops * sizeof *txnsp);
-    for (i = 0; i < n_ops; i++) {
-        txnsp[i] = &txns[i];
-    }
-
-    nl_sock_transact_multiple(genl_sock, txnsp, n_ops);
-
-    free(txnsp);
-
-    for (i = 0; i < n_ops; i++) {
-        struct nl_transaction *txn = &txns[i];
-        union dpif_op *op = ops[i];
-
-        if (op->type == DPIF_OP_FLOW_PUT) {
-            struct dpif_flow_put *put = &op->flow_put;
-            int error = txn->error;
-
-            if (!error && put->stats) {
-                struct dpif_linux_flow reply;
-
-                error = dpif_linux_flow_from_ofpbuf(&reply, txn->reply);
-                if (!error) {
-                    dpif_linux_flow_get_stats(&reply, put->stats);
-                }
-            }
-            put->error = error;
-        } else if (op->type == DPIF_OP_EXECUTE) {
-            struct dpif_execute *execute = &op->execute;
-
-            execute->error = txn->error;
-        } else {
-            NOT_REACHED();
-        }
-
-        ofpbuf_delete(txn->request);
-        ofpbuf_delete(txn->reply);
-    }
-    free(txns);
-}
-
-static int
-dpif_linux_recv_get_mask(const struct dpif *dpif_, int *listen_mask)
-{
-    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
-    *listen_mask = dpif->listen_mask;
-    return 0;
 }
 
 static void
@@ -982,8 +1041,7 @@ set_upcall_pids(struct dpif *dpif_)
     int error;
 
     DPIF_PORT_FOR_EACH (&port, &port_dump, &dpif->dpif) {
-        uint32_t upcall_pid = dpif_linux_port_get_pid__(dpif_, port.port_no,
-                                                        DPIF_UC_MISS);
+        uint32_t upcall_pid = dpif_linux_port_get_pid(dpif_, port.port_no);
         struct dpif_linux_vport vport_request;
 
         dpif_linux_vport_init(&vport_request);
@@ -1004,48 +1062,53 @@ set_upcall_pids(struct dpif *dpif_)
 }
 
 static int
-dpif_linux_recv_set_mask(struct dpif *dpif_, int listen_mask)
+dpif_linux_recv_set(struct dpif *dpif_, bool enable)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
-    if (listen_mask == dpif->listen_mask) {
+    if ((dpif->epoll_fd >= 0) == enable) {
         return 0;
     }
 
-    if (!listen_mask) {
-        destroy_upcall_socks(dpif);
-    } else if (!dpif->listen_mask) {
-        int i;
+    if (!enable) {
+        destroy_channels(dpif);
+    } else {
+        struct dpif_channel *ch;
         int error;
 
-        dpif->epoll_fd = epoll_create(N_UPCALL_SOCKS);
+        dpif->epoll_fd = epoll_create(N_CHANNELS);
         if (dpif->epoll_fd < 0) {
             return errno;
         }
 
-        for (i = 0; i < N_UPCALL_SOCKS; i++) {
+        for (ch = dpif->channels; ch < &dpif->channels[N_CHANNELS]; ch++) {
+            int indx = ch - dpif->channels;
             struct epoll_event event;
 
-            error = nl_sock_create(NETLINK_GENERIC, &dpif->upcall_socks[i]);
+            error = nl_sock_create(NETLINK_GENERIC, &ch->sock);
             if (error) {
-                destroy_upcall_socks(dpif);
+                destroy_channels(dpif);
                 return error;
             }
 
+            memset(&event, 0, sizeof event);
             event.events = EPOLLIN;
-            event.data.u32 = i;
-            if (epoll_ctl(dpif->epoll_fd, EPOLL_CTL_ADD,
-                          nl_sock_fd(dpif->upcall_socks[i]), &event) < 0) {
+            event.data.u32 = indx;
+            if (epoll_ctl(dpif->epoll_fd, EPOLL_CTL_ADD, nl_sock_fd(ch->sock),
+                          &event) < 0) {
                 error = errno;
-                destroy_upcall_socks(dpif);
+                destroy_channels(dpif);
                 return error;
             }
+
+            memset(ch->sketches, 0, sizeof ch->sketches);
+            ch->last_poll = LLONG_MIN;
         }
 
         dpif->ready_mask = 0;
+        dpif->next_scale = time_msec() + SCALE_INTERVAL;
     }
 
-    dpif->listen_mask = listen_mask;
     set_upcall_pids(dpif_);
 
     return 0;
@@ -1106,9 +1169,11 @@ parse_odp_packet(struct ofpbuf *buf, struct dpif_upcall *upcall,
     memset(upcall, 0, sizeof *upcall);
     upcall->type = type;
     upcall->packet = buf;
-    upcall->packet->data = (void *) nl_attr_get(a[OVS_PACKET_ATTR_PACKET]);
+    upcall->packet->data = CONST_CAST(struct nlattr *,
+                                      nl_attr_get(a[OVS_PACKET_ATTR_PACKET]));
     upcall->packet->size = nl_attr_get_size(a[OVS_PACKET_ATTR_PACKET]);
-    upcall->key = (void *) nl_attr_get(a[OVS_PACKET_ATTR_KEY]);
+    upcall->key = CONST_CAST(struct nlattr *,
+                             nl_attr_get(a[OVS_PACKET_ATTR_KEY]));
     upcall->key_len = nl_attr_get_size(a[OVS_PACKET_ATTR_KEY]);
     upcall->userdata = (a[OVS_PACKET_ATTR_USERDATA]
                         ? nl_attr_get_u64(a[OVS_PACKET_ATTR_USERDATA])
@@ -1119,22 +1184,23 @@ parse_odp_packet(struct ofpbuf *buf, struct dpif_upcall *upcall,
 }
 
 static int
-dpif_linux_recv(struct dpif *dpif_, struct dpif_upcall *upcall)
+dpif_linux_recv(struct dpif *dpif_, struct dpif_upcall *upcall,
+                struct ofpbuf *buf)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
     int read_tries = 0;
 
-    if (!dpif->listen_mask) {
+    if (dpif->epoll_fd < 0) {
        return EAGAIN;
     }
 
     if (!dpif->ready_mask) {
-        struct epoll_event events[N_UPCALL_SOCKS];
+        struct epoll_event events[N_CHANNELS];
         int retval;
         int i;
 
         do {
-            retval = epoll_wait(dpif->epoll_fd, events, N_UPCALL_SOCKS, 0);
+            retval = epoll_wait(dpif->epoll_fd, events, N_CHANNELS, 0);
         } while (retval < 0 && errno == EINTR);
         if (retval < 0) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
@@ -1148,12 +1214,11 @@ dpif_linux_recv(struct dpif *dpif_, struct dpif_upcall *upcall)
 
     while (dpif->ready_mask) {
         int indx = ffs(dpif->ready_mask) - 1;
-        struct nl_sock *upcall_sock = dpif->upcall_socks[indx];
+        struct dpif_channel *ch = &dpif->channels[indx];
 
         dpif->ready_mask &= ~(1u << indx);
 
         for (;;) {
-            struct ofpbuf *buf;
             int dp_ifindex;
             int error;
 
@@ -1161,21 +1226,35 @@ dpif_linux_recv(struct dpif *dpif_, struct dpif_upcall *upcall)
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(upcall_sock, &buf, false);
-            if (error == EAGAIN) {
-                break;
-            } else if (error) {
+            error = nl_sock_recv(ch->sock, buf, false);
+            if (error == ENOBUFS) {
+                /* ENOBUFS typically means that we've received so many
+                 * packets that the buffer overflowed.  Try again
+                 * immediately because there's almost certainly a packet
+                 * waiting for us. */
+                report_loss(dpif_, ch);
+                continue;
+            }
+
+            ch->last_poll = time_msec();
+            if (error) {
+                if (error == EAGAIN) {
+                    break;
+                }
                 return error;
             }
 
             error = parse_odp_packet(buf, upcall, &dp_ifindex);
-            if (!error
-                && dp_ifindex == dpif->dp_ifindex
-                && dpif->listen_mask & (1u << upcall->type)) {
+            if (!error && dp_ifindex == dpif->dp_ifindex) {
+                const struct nlattr *in_port;
+
+                in_port = nl_attr_find__(upcall->key, upcall->key_len,
+                                         OVS_KEY_ATTR_IN_PORT);
+                if (in_port) {
+                    update_sketch(ch, nl_attr_get_u32(in_port));
+                }
                 return 0;
             }
-
-            ofpbuf_delete(buf);
             if (error) {
                 return error;
             }
@@ -1190,7 +1269,7 @@ dpif_linux_recv_wait(struct dpif *dpif_)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
 
-    if (!dpif->listen_mask) {
+    if (dpif->epoll_fd < 0) {
        return;
     }
 
@@ -1201,14 +1280,14 @@ static void
 dpif_linux_recv_purge(struct dpif *dpif_)
 {
     struct dpif_linux *dpif = dpif_linux_cast(dpif_);
-    int i;
+    struct dpif_channel *ch;
 
-    if (!dpif->listen_mask) {
+    if (dpif->epoll_fd < 0) {
        return;
     }
 
-    for (i = 0; i < N_UPCALL_SOCKS; i++) {
-        nl_sock_drain(dpif->upcall_socks[i]);
+    for (ch = dpif->channels; ch < &dpif->channels[N_CHANNELS]; ch++) {
+        nl_sock_drain(ch->sock);
     }
 }
 
@@ -1241,8 +1320,7 @@ const struct dpif_class dpif_linux_class = {
     dpif_linux_flow_dump_done,
     dpif_linux_execute,
     dpif_linux_operate,
-    dpif_linux_recv_get_mask,
-    dpif_linux_recv_set_mask,
+    dpif_linux_recv_set,
     dpif_linux_queue_to_priority,
     dpif_linux_recv,
     dpif_linux_recv_wait,
@@ -1316,11 +1394,12 @@ dpif_linux_vport_send(int dp_ifindex, uint32_t port_no,
 {
     struct ofpbuf actions, key, packet;
     struct odputil_keybuf keybuf;
+    struct dpif_execute execute;
     struct flow flow;
     uint64_t action;
 
     ofpbuf_use_const(&packet, data, size);
-    flow_extract(&packet, 0, htonll(0), 0, &flow);
+    flow_extract(&packet, 0, 0, NULL, 0, &flow);
 
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
     odp_flow_key_from_flow(&key, &flow);
@@ -1328,8 +1407,12 @@ dpif_linux_vport_send(int dp_ifindex, uint32_t port_no,
     ofpbuf_use_stack(&actions, &action, sizeof action);
     nl_msg_put_u32(&actions, OVS_ACTION_ATTR_OUTPUT, port_no);
 
-    return dpif_linux_execute__(dp_ifindex, key.data, key.size,
-                                actions.data, actions.size, &packet);
+    execute.key = key.data;
+    execute.key_len = key.size;
+    execute.actions = actions.data;
+    execute.actions_len = actions.size;
+    execute.packet = &packet;
+    return dpif_linux_execute__(dp_ifindex, &execute);
 }
 
 static bool
@@ -1829,4 +1912,97 @@ dpif_linux_flow_get_stats(const struct dpif_linux_flow *flow,
     }
     stats->used = flow->used ? get_32aligned_u64(flow->used) : 0;
     stats->tcp_flags = flow->tcp_flags ? *flow->tcp_flags : 0;
+}
+
+/* Metwally "space-saving" algorithm implementation. */
+
+/* Updates 'ch' to record that a packet was received on 'port_no'. */
+static void
+update_sketch(struct dpif_channel *ch, uint32_t port_no)
+{
+    struct dpif_sketch *sk;
+
+    /* Find an existing counting element for 'port_no' or, if none, replace the
+     * counting element with the fewest hits by 'port_no'. */
+    for (sk = ch->sketches; ; sk++) {
+        if (port_no == sk->port_no) {
+            break;
+        } else if (sk == &ch->sketches[N_SKETCHES - 1]) {
+            sk->port_no = port_no;
+            sk->error = sk->hits;
+            break;
+        }
+    }
+
+    /* Increment the hit count, then re-sort the counting elements (usually
+     * nothing needs to be done). */
+    sk->hits++;
+    while (sk > ch->sketches && sk[-1].hits > sk->hits) {
+        struct dpif_sketch tmp = sk[-1];
+        sk[-1] = *sk;
+        *sk = tmp;
+        sk--;
+    }
+}
+
+/* Divide the counts of all the the counting elements in 'dpif' by 2.  See the
+ * comment on SCALE_INTERVAL. */
+static void
+scale_sketches(struct dpif *dpif_)
+{
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+    struct dpif_channel *ch;
+
+    for (ch = dpif->channels; ch < &dpif->channels[N_CHANNELS]; ch++) {
+        struct dpif_sketch *sk;
+
+        for (sk = ch->sketches; sk < &ch->sketches[N_SKETCHES]; sk++) {
+            sk->hits /= 2;
+            sk->error /= 2;
+        }
+    }
+}
+
+/* Logs information about a packet that was recently lost in 'ch' (in
+ * 'dpif_'). */
+static void
+report_loss(struct dpif *dpif_, struct dpif_channel *ch)
+{
+    struct dpif_linux *dpif = dpif_linux_cast(dpif_);
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    struct dpif_sketch *sk;
+    struct ds s;
+
+    if (VLOG_DROP_WARN(&rl)) {
+        return;
+    }
+
+    ds_init(&s);
+    if (ch->last_poll != LLONG_MIN) {
+        ds_put_format(&s, " (last polled %lld ms ago)",
+                      time_msec() - ch->last_poll);
+    }
+    ds_put_cstr(&s, ", most frequent sources are");
+    for (sk = ch->sketches; sk < &ch->sketches[N_SKETCHES]; sk++) {
+        if (sk->hits) {
+            struct dpif_port port;
+
+            ds_put_format(&s, " %"PRIu32, sk->port_no);
+            if (!dpif_port_query_by_number(dpif_, sk->port_no, &port)) {
+                ds_put_format(&s, "(%s)", port.name);
+                dpif_port_destroy(&port);
+            }
+            if (sk->error) {
+                ds_put_format(&s, ": %u to %u,",
+                              sk->hits - sk->error, sk->hits);
+            } else {
+                ds_put_format(&s, ": %u,", sk->hits);
+            }
+        }
+    }
+    ds_chomp(&s, ',');
+
+    VLOG_WARN("%s: lost packet on channel %td%s",
+              dpif_name(dpif_), ch - dpif->channels, ds_cstr(&s));
+    ds_destroy(&s);
 }

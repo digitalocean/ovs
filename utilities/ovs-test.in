@@ -16,165 +16,126 @@
 ovs test utility that allows to do tests between remote hosts
 """
 
-import twisted
-import xmlrpclib
-import time
-import socket
+import fcntl
 import math
-from ovstest import args, rpcserver
+import os
+import select
+import signal
+import socket
+import subprocess
+import sys
+import time
+import xmlrpclib
 
+import argparse
+import twisted
 
-def bandwidth_to_string(bwidth):
-    """Convert bandwidth from long to string and add units"""
-    bwidth = bwidth * 8 #  Convert back to bits/second
-    if bwidth >= 10000000:
-        return str(int(bwidth / 1000000)) + "Mbps"
-    elif bwidth > 10000:
-        return str(int(bwidth / 1000)) + "Kbps"
-    else:
-        return str(int(bwidth)) + "bps"
+import ovstest.args as args
+import ovstest.rpcserver as rpcserver
+import ovstest.tests as tests
+import ovstest.util as util
+
+DEFAULT_TEST_BRIDGE = "ovstestbr0"
+DEFAULT_TEST_PORT = "ovstestport0"
+DEFAULT_TEST_TUN = "ovstestport1"
 
 
 def collect_information(node):
     """Print information about hosts that will do testing"""
     print "Node %s:%u " % (node[0], node[1])
-    server1 = xmlrpclib.Server("http://%s:%u/" % (node[0], node[1]))
-    interface_name = server1.get_interface(node[2])
-    uname = server1.uname()
+    server = util.rpc_client(node[0], node[1])
+    interface_name = server.get_interface(node[0])
+    phys_iface = None
+    uname = server.uname()
     mtu = 1500
 
-    if interface_name == "":
+    if not interface_name:
         print ("Could not find interface that has %s IP address."
-               "Make sure that you specified correct Test IP." % (node[2]))
+               "Make sure that you specified correct Outer IP." % (node[0]))
     else:
-        mtu = server1.get_interface_mtu(interface_name)
-        driver = server1.get_driver(interface_name)
-        print "Will be using %s(%s) with MTU %u" % (interface_name, node[2],
-                                                    mtu)
-        if driver == "":
-            print "Install ethtool on this host to get NIC driver information"
+        if server.is_ovs_bridge(interface_name):
+            phys_iface = server.get_iface_from_bridge(interface_name)
         else:
-            print "On this host %s has %s." % (interface_name, driver)
+            phys_iface = interface_name
 
-    if uname == "":
+    if phys_iface:
+        driver = server.get_driver(phys_iface)
+        mtu = server.get_interface_mtu(phys_iface)
+
+        print "Will be using %s (%s) with MTU %u" % (phys_iface, node[0],
+                                                    mtu)
+        if not driver:
+            print "Unable to get driver information from ethtool."
+        else:
+            print "On this host %s has %s." % (phys_iface, driver)
+
+    if not uname:
         print "Unable to retrieve kernel information. Is this Linux?"
     else:
         print "Running kernel %s." % uname
     print "\n"
+
     return mtu
 
 
-def do_udp_tests(receiver, sender, tbwidth, duration, sender_mtu):
-    """Schedule UDP tests between receiver and sender"""
-    server1 = xmlrpclib.Server("http://%s:%u/" % (receiver[0], receiver[1]))
-    server2 = xmlrpclib.Server("http://%s:%u/" % (sender[0], sender[1]))
-
-    udpformat = '{0:>15} {1:>15} {2:>15} {3:>15} {4:>15}'
-
-    print ("UDP test from %s:%u to %s:%u with target bandwidth %s" %
-                            (sender[0], sender[1], receiver[0], receiver[1],
-                             bandwidth_to_string(tbwidth)))
-    print udpformat.format("Datagram Size", "Snt Datagrams", "Rcv Datagrams",
-                            "Datagram Loss", "Bandwidth")
-
-    for size in [8, sender_mtu - 100, sender_mtu - 28, sender_mtu]:
-        listen_handle = -1
-        send_handle = -1
-        try:
-            packetcnt = (tbwidth * duration) / size
-
-            listen_handle = server1.create_udp_listener(receiver[3])
-            if listen_handle == -1:
-                print ("Server could not open UDP listening socket on port"
-                        " %u. Try to restart the server.\n" % receiver[3])
-                return
-            send_handle = server2.create_udp_sender(
-                                            (receiver[2], receiver[3]),
-                                            packetcnt, size, duration)
-
-            #Using sleep here because there is no other synchronization source
-            #that would notify us when all sent packets were received
-            time.sleep(duration + 1)
-
-            rcv_packets = server1.get_udp_listener_results(listen_handle)
-            snt_packets = server2.get_udp_sender_results(send_handle)
-
-            loss = math.ceil(((snt_packets - rcv_packets) * 10000.0) /
-                                                        snt_packets) / 100
-            bwidth = (rcv_packets * size) / duration
-
-            print udpformat.format(size, snt_packets, rcv_packets,
-                                '%.2f%%' % loss, bandwidth_to_string(bwidth))
-        finally:
-            if listen_handle != -1:
-                server1.close_udp_listener(listen_handle)
-            if send_handle != -1:
-                server2.close_udp_sender(send_handle)
-    print "\n"
-
-
-def do_tcp_tests(receiver, sender, duration):
-    """Schedule TCP tests between receiver and sender"""
-    server1 = xmlrpclib.Server("http://%s:%u/" % (receiver[0], receiver[1]))
-    server2 = xmlrpclib.Server("http://%s:%u/" % (sender[0], sender[1]))
-
-    tcpformat = '{0:>15} {1:>15} {2:>15}'
-    print "TCP test from %s:%u to %s:%u (full speed)" % (sender[0], sender[1],
-                                                    receiver[0], receiver[1])
-    print tcpformat.format("Snt Bytes", "Rcv Bytes", "Bandwidth")
-
-    listen_handle = -1
-    send_handle = -1
-    try:
-        listen_handle = server1.create_tcp_listener(receiver[3])
-        if listen_handle == -1:
-            print ("Server was unable to open TCP listening socket on port"
-                    " %u. Try to restart the server.\n" % receiver[3])
-            return
-        send_handle = server2.create_tcp_sender(receiver[2], receiver[3],
-                                                    duration)
-
-        time.sleep(duration + 1)
-
-        rcv_bytes = long(server1.get_tcp_listener_results(listen_handle))
-        snt_bytes = long(server2.get_tcp_sender_results(send_handle))
-
-        bwidth = rcv_bytes / duration
-
-        print tcpformat.format(snt_bytes, rcv_bytes,
-                               bandwidth_to_string(bwidth))
-    finally:
-        if listen_handle != -1:
-            server1.close_tcp_listener(listen_handle)
-        if send_handle != -1:
-            server2.close_tcp_sender(send_handle)
-    print "\n"
-
-
 if __name__ == '__main__':
+    local_server = None
     try:
         ovs_args = args.ovs_initialize_args()
 
-        if ovs_args.port is not None: #  Start in server mode
-            print "Starting RPC server"
-            try:
-                rpcserver.start_rpc_server(ovs_args.port)
-            except twisted.internet.error.CannotListenError:
-                print "Couldn't start XMLRPC server on port %u" % ovs_args.port
+        if ovs_args.port is not None:  # Start in pure server mode
+            rpcserver.start_rpc_server(ovs_args.port)
 
-        elif ovs_args.servers is not None: #  Run in client mode
+        elif ovs_args.servers is not None:  # Run in client mode
             node1 = ovs_args.servers[0]
             node2 = ovs_args.servers[1]
-            bandwidth = ovs_args.targetBandwidth
 
-            mtu_node1 = collect_information(node1)
+            # Verify whether client will need to spawn a local instance of
+            # ovs-test server by looking at the first OuterIP. if it is a
+            # 127.0.0.1 then spawn local ovs-test server.
+            if node1[0] == "127.0.0.1":
+                local_server = util.start_local_server(node1[1])
+                # We must determine the IP address that local ovs-test server
+                # will use:
+                me = util.rpc_client(node1[0], node1[1])
+                my_ip = me.get_my_address_from(node2[0], node2[1])
+                node1 = (my_ip, node1[1], node1[2], node1[3])
+
             mtu_node2 = collect_information(node2)
+            mtu_node1 = collect_information(node1)
 
-            do_udp_tests(node1, node2, bandwidth, 5, mtu_node1)
-            do_udp_tests(node2, node1, bandwidth, 5, mtu_node2)
-            do_tcp_tests(node1, node2, 5)
-            do_tcp_tests(node2, node1, 5)
+            bandwidth = ovs_args.targetBandwidth
+            interval = ovs_args.testInterval
+            ps = util.get_datagram_sizes(mtu_node1, mtu_node2)
+
+            direct = ovs_args.direct
+            vlan_tag = ovs_args.vlanTag
+            tunnel_modes = ovs_args.tunnelModes
+
+            if direct is not None:
+                print "Performing direct tests"
+                tests.do_direct_tests(node2, node1, bandwidth, interval, ps)
+
+            if vlan_tag is not None:
+                print "Performing VLAN tests"
+                tests.do_vlan_tests(node2, node1, bandwidth, interval, ps,
+                                    vlan_tag)
+
+            for tmode in tunnel_modes:
+                print "Performing", tmode, "tests"
+                tests.do_l3_tests(node2, node1, bandwidth, interval, ps,
+                                  tmode)
+
     except KeyboardInterrupt:
         pass
+    except xmlrpclib.Fault:
+        print "Couldn't establish XMLRPC control channel"
     except socket.error:
         print "Couldn't establish XMLRPC control channel"
+    except xmlrpclib.ProtocolError:
+        print "XMLRPC control channel was abruptly terminated"
+    except twisted.internet.error.CannotListenError:
+        print "Couldn't start XMLRPC server on port %u" % ovs_args.port
+    finally:
+        if local_server is not None:
+            local_server.terminate()

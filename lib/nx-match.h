@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
+ * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,15 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include "flow.h"
+#include "ofp-errors.h"
 #include "openvswitch/types.h"
 
-struct cls_rule;
 struct ds;
-struct flow;
+struct match;
+struct mf_subfield;
+struct ofpact_reg_move;
+struct ofpact_reg_load;
 struct ofpbuf;
 struct nx_action_reg_load;
 struct nx_action_reg_move;
@@ -34,43 +38,55 @@ struct nx_action_reg_move;
  * See include/openflow/nicira-ext.h for NXM specification.
  */
 
-int nx_pull_match(struct ofpbuf *, unsigned int match_len, uint16_t priority,
-                  struct cls_rule *);
-int nx_put_match(struct ofpbuf *, const struct cls_rule *);
+enum ofperr nx_pull_match(struct ofpbuf *, unsigned int match_len,
+                          struct match *,
+                          ovs_be64 *cookie, ovs_be64 *cookie_mask);
+enum ofperr nx_pull_match_loose(struct ofpbuf *, unsigned int match_len,
+                                struct match *, ovs_be64 *cookie,
+                                ovs_be64 *cookie_mask);
+enum ofperr oxm_pull_match(struct ofpbuf *, struct match *);
+enum ofperr oxm_pull_match_loose(struct ofpbuf *, struct match *);
+int nx_put_match(struct ofpbuf *, const struct match *,
+                 ovs_be64 cookie, ovs_be64 cookie_mask);
+int oxm_put_match(struct ofpbuf *, const struct match *);
 
 char *nx_match_to_string(const uint8_t *, unsigned int match_len);
+char *oxm_match_to_string(const uint8_t *, unsigned int match_len);
 int nx_match_from_string(const char *, struct ofpbuf *);
+int oxm_match_from_string(const char *, struct ofpbuf *);
 
-uint64_t nxm_read_field_bits(ovs_be32 header, ovs_be16 ofs_nbits,
-                             const struct flow *);
+void nxm_parse_reg_move(struct ofpact_reg_move *, const char *);
+void nxm_parse_reg_load(struct ofpact_reg_load *, const char *);
 
-void nxm_parse_reg_move(struct nx_action_reg_move *, const char *);
-void nxm_parse_reg_load(struct nx_action_reg_load *, const char *);
+void nxm_format_reg_move(const struct ofpact_reg_move *, struct ds *);
+void nxm_format_reg_load(const struct ofpact_reg_load *, struct ds *);
 
-void nxm_format_reg_move(const struct nx_action_reg_move *, struct ds *);
-void nxm_format_reg_load(const struct nx_action_reg_load *, struct ds *);
+enum ofperr nxm_reg_move_from_openflow(const struct nx_action_reg_move *,
+                                       struct ofpbuf *ofpacts);
+enum ofperr nxm_reg_load_from_openflow(const struct nx_action_reg_load *,
+                                       struct ofpbuf *ofpacts);
+enum ofperr nxm_reg_load_from_openflow12_set_field(
+    const struct ofp12_action_set_field * oasf, struct ofpbuf *ofpacts);
 
-int nxm_check_reg_move(const struct nx_action_reg_move *, const struct flow *);
-int nxm_check_reg_load(const struct nx_action_reg_load *, const struct flow *);
-int nxm_src_check(ovs_be32 src, unsigned int ofs, unsigned int n_bits,
-                  const struct flow *);
-int nxm_dst_check(ovs_be32 dst, unsigned int ofs, unsigned int n_bits,
-                  const struct flow *);
+enum ofperr nxm_reg_move_check(const struct ofpact_reg_move *,
+                               const struct flow *);
+enum ofperr nxm_reg_load_check(const struct ofpact_reg_load *,
+                               const struct flow *);
 
-void nxm_execute_reg_move(const struct nx_action_reg_move *, struct flow *);
-void nxm_execute_reg_load(const struct nx_action_reg_load *, struct flow *);
-void nxm_reg_load(ovs_be32 dst, ovs_be16 ofs_nbits, uint64_t src_data,
+void nxm_reg_move_to_nxast(const struct ofpact_reg_move *,
+                           struct ofpbuf *openflow);
+void nxm_reg_load_to_nxast(const struct ofpact_reg_load *,
+                           struct ofpbuf *openflow);
+
+void nxm_execute_reg_move(const struct ofpact_reg_move *, struct flow *);
+void nxm_execute_reg_load(const struct ofpact_reg_load *, struct flow *);
+void nxm_reg_load(const struct mf_subfield *, uint64_t src_data,
                   struct flow *);
 
 int nxm_field_bytes(uint32_t header);
 int nxm_field_bits(uint32_t header);
 
-const char *nxm_parse_field_bits(const char *s,
-                                 uint32_t *headerp, int *ofsp, int *n_bitsp);
-void nxm_format_field_bits(struct ds *, uint32_t header, int ofs, int n_bits);
-
-/* Dealing with the 'ofs_nbits' members of struct nx_action_reg_load and struct
- * nx_action_multipath. */
+/* Dealing with the 'ofs_nbits' members in several Nicira extensions. */
 
 static inline ovs_be16
 nxm_encode_ofs_nbits(int ofs, int n_bits)
@@ -90,41 +106,6 @@ nxm_decode_n_bits(ovs_be16 ofs_nbits)
     return (ntohs(ofs_nbits) & 0x3f) + 1;
 }
 
-/* Upper bound on the length of an nx_match.  The longest nx_match (an
- * IPV6 neighbor discovery message using 5 registers) would be:
- *
- *                   header  value  mask  total
- *                   ------  -----  ----  -----
- *  NXM_OF_IN_PORT      4       2    --      6
- *  NXM_OF_ETH_DST_W    4       6     6     16
- *  NXM_OF_ETH_SRC      4       6    --     10
- *  NXM_OF_ETH_TYPE     4       2    --      6
- *  NXM_OF_VLAN_TCI     4       2     2      8
- *  NXM_OF_IP_TOS       4       1    --      5
- *  NXM_NX_IP_ECN       4       1    --      5
- *  NXM_OF_IP_TTL       4       1    --      5
- *  NXM_NX_IP_FRAG      4       1     1      8
- *  NXM_OF_IP_PROTO     4       2    --      6
- *  NXM_OF_IPV6_SRC_W   4      16    16     36
- *  NXM_OF_IPV6_DST_W   4      16    16     36
- *  NXM_OF_IPV6_LABEL   4       4    --      8
- *  NXM_OF_ICMP_TYPE    4       1    --      5
- *  NXM_OF_ICMP_CODE    4       1    --      5
- *  NXM_NX_ND_TARGET    4      16    --     20
- *  NXM_NX_ND_SLL       4       6    --     10
- *  NXM_NX_REG_W(0)     4       4     4     12
- *  NXM_NX_REG_W(1)     4       4     4     12
- *  NXM_NX_REG_W(2)     4       4     4     12
- *  NXM_NX_REG_W(3)     4       4     4     12
- *  NXM_NX_REG_W(4)     4       4     4     12
- *  NXM_NX_TUN_ID_W     4       8     8     20
- *  -------------------------------------------
- *  total                                  275
- *
- * So this value is conservative.
- */
-#define NXM_MAX_LEN 384
-
 /* This is my guess at the length of a "typical" nx_match, for use in
  * predicting space requirements. */
 #define NXM_TYPICAL_LEN 64

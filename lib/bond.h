@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 struct flow;
 struct netdev;
 struct ofpbuf;
+enum lacp_status;
 
 /* How flows are balanced among bond slaves. */
 enum bond_mode {
@@ -45,7 +46,8 @@ struct bond_settings {
 
     /* Balancing configuration. */
     enum bond_mode balance;
-    int rebalance_interval;     /* Milliseconds between rebalances. */
+    int rebalance_interval;     /* Milliseconds between rebalances.
+                                   Zero to disable rebalancing. */
 
     /* Link status detection. */
     int up_delay;               /* ms before enabling an up slave. */
@@ -68,7 +70,7 @@ void bond_slave_register(struct bond *, void *slave_,
 void bond_slave_set_netdev(struct bond *, void *slave_, struct netdev *);
 void bond_slave_unregister(struct bond *, const void *slave);
 
-void bond_run(struct bond *, struct tag_set *, bool lacp_negotiated);
+void bond_run(struct bond *, struct tag_set *, enum lacp_status);
 void bond_wait(struct bond *);
 
 void bond_slave_set_may_enable(struct bond *, void *slave_, bool may_enable);

@@ -4,6 +4,7 @@ export srcdir = @abs_srcdir@
 export top_srcdir = @abs_top_srcdir@
 export KSRC = @KBUILD@
 export VERSION = @VERSION@
+export BUILD_BRCOMPAT = @BUILD_BRCOMPAT@
 
 include $(srcdir)/../Modules.mk
 include $(srcdir)/Modules.mk
@@ -29,7 +30,7 @@ check: all
 installcheck:
 mostlyclean:
 clean:
-	rm -f *.o *.ko *_mod.* Module.symvers *.cmd kcompat.h.new
+	rm -f *.o *.ko *.mod.* Module.symvers *.cmd kcompat.h.new
 	for d in $(build_links); do if test -h $$d; then rm $$d; fi; done
 distclean: clean
 	rm -f kcompat.h
@@ -52,7 +53,10 @@ endif
 
 VERSION_FILE := $(KOBJ)/include/linux/version.h
 ifeq (,$(wildcard $(VERSION_FILE)))
-  $(error Linux kernel source not configured - missing version.h)
+  VERSION_FILE := $(KOBJ)/include/generated/uapi/linux/version.h
+  ifeq (,$(wildcard $(VERSION_FILE)))
+    $(error Linux kernel source not configured - missing version.h)
+  endif
 endif
 
 CONFIG_FILE := $(KSRC)/include/generated/autoconf.h

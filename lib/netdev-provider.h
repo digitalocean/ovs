@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include "netdev.h"
 #include "list.h"
 #include "shash.h"
+#include "smap.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -126,17 +127,17 @@ struct netdev_class {
     void (*destroy)(struct netdev_dev *netdev_dev);
 
     /* Fetches the device 'netdev_dev''s configuration, storing it in 'args'.
-     * The caller owns 'args' and pre-initializes it to an empty shash.
+     * The caller owns 'args' and pre-initializes it to an empty smap.
      *
      * If this netdev class does not have any configuration options, this may
      * be a null pointer. */
-    int (*get_config)(struct netdev_dev *netdev_dev, struct shash *args);
+    int (*get_config)(struct netdev_dev *netdev_dev, struct smap *args);
 
     /* Changes the device 'netdev_dev''s configuration to 'args'.
      *
      * If this netdev class does not support configuration, this may be a null
      * pointer. */
-    int (*set_config)(struct netdev_dev *netdev_dev, const struct shash *args);
+    int (*set_config)(struct netdev_dev *netdev_dev, const struct smap *args);
 
     /* Attempts to open a network device.  On success, sets 'netdevp'
      * to the new network device. */
@@ -171,6 +172,9 @@ struct netdev_class {
      * 'buffer'.  If successful, returns the number of bytes in the received
      * packet, otherwise a negative errno value.  Returns -EAGAIN immediately
      * if no packet is ready to be received.
+     *
+     * Returns -EMSGSIZE, and discards the packet, if the received packet is
+     * longer than 'size' bytes.
      *
      * This function can only be expected to return a packet if ->listen() has
      * been called successfully.
@@ -228,7 +232,10 @@ struct netdev_class {
     /* Sets 'netdev''s Ethernet address to 'mac' */
     int (*set_etheraddr)(struct netdev *netdev, const uint8_t mac[6]);
 
-    /* Retrieves 'netdev''s Ethernet address into 'mac'. */
+    /* Retrieves 'netdev''s Ethernet address into 'mac'.
+     *
+     * This address will be advertised as 'netdev''s MAC address through the
+     * OpenFlow protocol, among other uses. */
     int (*get_etheraddr)(const struct netdev *netdev, uint8_t mac[6]);
 
     /* Retrieves 'netdev''s MTU into '*mtup'.
@@ -305,20 +312,23 @@ struct netdev_class {
 
     /* Stores the features supported by 'netdev' into each of '*current',
      * '*advertised', '*supported', and '*peer'.  Each value is a bitmap of
-     * "enum ofp_port_features" bits, in host byte order.
+     * NETDEV_F_* bits.
      *
      * This function may be set to null if it would always return EOPNOTSUPP.
      */
     int (*get_features)(const struct netdev *netdev,
-                        uint32_t *current, uint32_t *advertised,
-                        uint32_t *supported, uint32_t *peer);
+                        enum netdev_features *current,
+                        enum netdev_features *advertised,
+                        enum netdev_features *supported,
+                        enum netdev_features *peer);
 
     /* Set the features advertised by 'netdev' to 'advertise', which is a
-     * bitmap of "enum ofp_port_features" bits, in host byte order.
+     * set of NETDEV_F_* bits.
      *
      * This function may be set to null for a network device that does not
      * support configuring advertisements. */
-    int (*set_advertisements)(struct netdev *netdev, uint32_t advertise);
+    int (*set_advertisements)(struct netdev *netdev,
+                              enum netdev_features advertise);
 
     /* Attempts to set input rate limiting (policing) policy, such that up to
      * 'kbits_rate' kbps of traffic is accepted, with a maximum accumulative
@@ -372,7 +382,7 @@ struct netdev_class {
      *
      * May be NULL if 'netdev' does not support QoS at all. */
     int (*get_qos)(const struct netdev *netdev,
-                   const char **typep, struct shash *details);
+                   const char **typep, struct smap *details);
 
     /* Attempts to reconfigure QoS on 'netdev', changing the form of QoS to
      * 'type' with details of configuration from 'details'.
@@ -392,7 +402,7 @@ struct netdev_class {
      *
      * May be NULL if 'netdev' does not support QoS at all. */
     int (*set_qos)(struct netdev *netdev,
-                   const char *type, const struct shash *details);
+                   const char *type, const struct smap *details);
 
     /* Queries 'netdev' for information about the queue numbered 'queue_id'.
      * If successful, adds that information as string key-value pairs to
@@ -411,7 +421,7 @@ struct netdev_class {
      * vswitchd/vswitch.xml (which is built as ovs-vswitchd.conf.db(8)).
      */
     int (*get_queue)(const struct netdev *netdev,
-                     unsigned int queue_id, struct shash *details);
+                     unsigned int queue_id, struct smap *details);
 
     /* Configures the queue numbered 'queue_id' on 'netdev' with the key-value
      * string pairs in 'details'.  The contents of 'details' should be
@@ -431,7 +441,7 @@ struct netdev_class {
      *
      * May be NULL if 'netdev' does not support QoS at all. */
     int (*set_queue)(struct netdev *netdev,
-                     unsigned int queue_id, const struct shash *details);
+                     unsigned int queue_id, const struct smap *details);
 
     /* Attempts to delete the queue numbered 'queue_id' from 'netdev'.
      *
@@ -466,7 +476,7 @@ struct netdev_class {
      */
     int (*dump_queues)(const struct netdev *netdev,
                        void (*cb)(unsigned int queue_id,
-                                  const struct shash *details,
+                                  const struct smap *details,
                                   void *aux),
                        void *aux);
 
@@ -534,19 +544,18 @@ struct netdev_class {
     int (*get_next_hop)(const struct in_addr *host, struct in_addr *next_hop,
                         char **netdev_name);
 
-    /* Retrieves the status of the device.
+    /* Retrieves driver information of the device.
      *
      * Populates 'sh' with key-value pairs representing the status of the
-     * device.  A device's status is a set of key-value string pairs
+     * device.  Driver info is a set of key-value string pairs
      * representing netdev type specific information.  For more information see
      * ovs-vswitchd.conf.db(5).
      *
-     * The data of 'sh' are heap allocated strings which the caller is
-     * responsible for deallocating.
+     * The caller is responsible for destroying 'smap' and its data.
      *
      * This function may be set to null if it would always return EOPNOTSUPP
      * anyhow. */
-    int (*get_status)(const struct netdev *netdev, struct shash *sh);
+    int (*get_drv_info)(const struct netdev *netdev, struct smap *smap);
 
     /* Looks up the ARP table entry for 'ip' on 'netdev' and stores the
      * corresponding MAC address in 'mac'.  A return value of ENXIO, in
@@ -587,6 +596,9 @@ const struct netdev_class *netdev_lookup_provider(const char *type);
 extern const struct netdev_class netdev_linux_class;
 extern const struct netdev_class netdev_internal_class;
 extern const struct netdev_class netdev_tap_class;
+#ifdef __FreeBSD__
+extern const struct netdev_class netdev_bsd_class;
+#endif
 
 #ifdef  __cplusplus
 }

@@ -1,13 +1,199 @@
-v1.4.2 - 01 June 2012
+v1.9.2 - 05 Apr 2013
 ------------------------
-    - Allow OFPP_CONTROLLER as the in_port for packet-out messages.
     - Bug fixes
 
-v1.4.1 - 30 Apr 2012
+v1.9.1 - 14 Mar 2013
 ------------------------
+    - Bug fixes
+
+v1.9.0 - 26 Feb 2013
+------------------------
+    - Datapath:
+      - Support for ipv6 set action.
+      - SKB mark matching and setting.
+      - support for Linux kernels up to 3.8
+    - FreeBSD is now a supported platform, thanks to code contributions from
+      Gaetano Catalli, Ed Maste, and Giuseppe Lettieri.
+    - ovs-bugtool: New --ovs option to report only OVS related information.
+    - New %t and %T log escapes to identify the subprogram within a
+      cooperating group of processes or threads that emitted a log message.
+      The default log patterns now include this information.
+    - OpenFlow:
+      - Allow bitwise masking for SHA and THA fields in ARP, SLL and TLL
+        fields in IPv6 neighbor discovery messages, and IPv6 flow label.
+      - Adds support for writing to the metadata field for a flow.
+    - Tunneling:
+      - The tunneling code no longer assumes input and output keys are
+        symmetric.  If they are not, PMTUD needs to be disabled for
+        tunneling to work. Note this only applies to flow-based keys.
+      - New support for a nonstandard form of GRE that supports a 64-bit key.
+      - Tunnel Path MTU Discovery default value was set to 'disabled'.
+        This feature is deprecated and will be removed soon.
+      - Tunnel header caching removed.
+    - ovs-ofctl:
+      - Commands and actions that accept port numbers now also accept keywords
+        that represent those ports (such as LOCAL, NONE, and ALL).  This is
+        also the recommended way to specify these ports, for compatibility
+        with OpenFlow 1.1 and later (which use the OpenFlow 1.0 numbers
+        for these ports for different purposes).
+    - ovs-dpctl:
+      - Support requesting the port number with the "port_no" option in
+        the "add-if" command.
+    - ovs-pki: The "online PKI" features have been removed, along with
+      the ovs-pki-cgi program that facilitated it, because of some
+      alarmist insecurity claims.  We do not believe that these claims
+      are true, but because we do not know of any users for this
+      feature it seems better on balance to remove it.  (The ovs-pki-cgi
+      program was not included in distribution packaging.)
+    - ovsdb-server now enforces the immutability of immutable columns.  This
+      was not enforced in earlier versions due to an oversight.
+    - The following features are now deprecated.  They will be removed no
+      earlier than February 2013.  Please email dev@openvswitch.org with
+      concerns.
+        - Bridge compatibility.
+        - Stable bond mode.
+        - The autopath action.
+        - Interface type "null".
+        - Numeric values for reserved ports (see "ovs-ofctl" note above).
+        - Tunnel Path MTU Discovery.
+        - CAPWAP tunnel support.
+    - The data in the RARP packets can now be matched in the same way as the
+      data in ARP packets.
+
+
+v1.8.0 - 26 Feb 2013
+------------------------
+    *** Internal only release ***
+    - New FAQ.  Please send updates and additions!
+    - Authors of controllers, please read the new section titled "Action
+      Reproduction" in DESIGN, which describes an Open vSwitch change in
+      behavior in corner cases that may affect some controllers.
+    - ovs-l3ping:
+        - A new test utility that can create L3 tunnel between two Open
+          vSwitches and detect connectivity issues.
+    - ovs-ofctl:
+        - New --sort and --rsort options for "dump-flows" command.
+        - "mod-port" command can now control all OpenFlow config flags.
+    - OpenFlow:
+      - Allow general bitwise masking for IPv4 and IPv6 addresses in
+        IPv4, IPv6, and ARP packets.  (Previously, only CIDR masks
+        were allowed.)
+      - Allow support for arbitrary Ethernet masks.  (Previously, only
+        the multicast bit in the destination address could be individually
+	masked.)
+      - New field OXM_OF_METADATA, to align with OpenFlow 1.1.
+      - The OFPST_QUEUE request now reports an error if a specified port or
+        queue does not exist, or for requests for a specific queue on all
+        ports, if the specified queue does not exist on any port.  (Previous
+        versions generally reported an empty set of results.)
+      - New "flow monitor" feature to allow controllers to be notified of
+        flow table changes as they happen.
+    - Additional protocols are not mirrored and dropped when forward-bpdu is
+      false.  For a full list, see the ovs-vswitchd.conf.db man page.
+    - Open vSwitch now sends RARP packets in situations where it previously
+      sent a custom protocol, making it consistent with behavior of QEMU and
+      VMware.
+    - All Open vSwitch programs and log files now show timestamps in UTC,
+      instead the local timezone, by default.
+
+
+v1.7.0 - 30 Jul 2012
+------------------------
+    - kernel modules are renamed. openvswitch_mod.ko is now
+      openvswitch.ko and brcompat_mod.ko is now brcompat.ko.
+    - Increased the number of NXM registers to 8.
+    - Added ability to configure DSCP setting for manager and controller
+      connections.  By default, these connections have a DSCP value of
+      Internetwork Control (0xc0).
+    - Added the granular link health statistics, 'cfm_health', to an
+      interface.
+    - OpenFlow:
+        - Added support to mask nd_target for ICMPv6 neighbor discovery flows.
+        - Added support for OpenFlow 1.3 port description (OFPMP_PORT_DESC)
+          multipart messages.
+    - ovs-ofctl:
+        - Added the "dump-ports-desc" command to retrieve port
+          information using the new port description multipart messages.
+    - ovs-test:
+        - Added support for spawning ovs-test server from the client.
+        - Now ovs-test is able to automatically create test bridges and ports.
+    - "ovs-dpctl dump-flows" now prints observed TCP flags in TCP flows.
+    - Tripled flow setup performance.
+    - The "coverage/log" command previously available through ovs-appctl
+      has been replaced by "coverage/show".  The new command replies with
+      coverage counter values, instead of logging them.
+
+
+v1.6.1 - 25 Jun 2012
+------------------------
+    - Allow OFPP_CONTROLLER as the in_port for packet-out messages.
+
+
+v1.6.0 - 24 Feb 2012
+------------------------
+    *** Internal only release ***
+    - bonding
+        - LACP bonds no longer fall back to balance-slb when negotiations fail.
+          Instead they drop traffic.
+        - The default bond_mode changed from SLB to active-backup, to protect
+          unsuspecting users from the significant risks of SLB bonds (which are
+          documented in vswitchd/INTERNALS).
+        - Load balancing can be disabled by setting the bond-rebalance-interval
+          to zero.
+    - OpenFlow:
+        - Added support for bitwise matching on TCP and UDP ports.
+          See ovs-ofctl(8) for more information.
+        - NXM flow dumps now include times elapsed toward idle and hard
+          timeouts.
+        - Added an OpenFlow extension NXT_SET_ASYNC_CONFIG that allows
+          controllers more precise control over which OpenFlow messages they
+          receive asynchronously.
+        - New "fin_timeout" action.
+        - Added "fin_timeout" support to "learn" action.
+        - New Nicira action NXAST_CONTROLLER that offers additional features
+          over output to OFPP_CONTROLLER.
+    - When QoS settings for an interface do not configure a default queue
+      (queue 0), Open vSwitch now uses a default configuration for that
+      queue, instead of dropping all packets as in previous versions.
+    - Logging:
+        - Logging to console and file will have UTC timestamp as a default for
+          all the daemons. An example of the default format is
+          2012-01-27T16:35:17Z.  ovs-appctl can be used to change the default
+          format as before.
+        - The syntax of commands and options to set log levels was simplified,
+          to make it easier to remember.
+    - New support for limiting the number of flows in an OpenFlow flow
+      table, with configurable policy for evicting flows upon
+      overflow.  See the Flow_Table table in ovs-vswitch.conf.db(5)
+      for more information.
+    - New "enable-async-messages" column in the Controller table.  If set to
+      false, OpenFlow connections to the controller will initially have all
+      asynchronous messages disabled, overriding normal OpenFlow behavior.
+    - ofproto-provider interface:
+        - "struct rule" has a new member "used" that ofproto implementations
+          should maintain by updating with ofproto_rule_update_used().
+    - ovsdb-client:
+        - The new option --timestamp causes the "monitor" command to print
+          a timestamp with every update.
+    - CFM module CCM broadcasts can now be tagged with an 802.1p priority.
+
+
+v1.5.0 - 01 Jun 2012
+------------------------
+    - OpenFlow:
+        - Added support for querying, modifying, and deleting flows
+          based on flow cookie when using NXM.
+        - Added new NXM_PACKET_IN format.
+        - Added new NXAST_DEC_TTL action.
+    - ovs-ofctl:
+        - Added daemonization support to the monitor and snoop commands.
+    - ovs-vsctl:
+        - The "find" command supports new set relational operators
+          {=}, {!=}, {<}, {>}, {<=}, and {>=}.
+    - ovsdb-tool now uses the typical database and schema installation
+      directories as defaults.
     - The default MAC learning timeout has been increased from 60 seconds
       to 300 seconds.  The MAC learning timeout is now configurable.
-    - Bug fixes
 
 
 v1.4.0 - 30 Jan 2012
@@ -29,6 +215,8 @@ v1.4.0 - 30 Jan 2012
          now be properly mirrored for any flows, regardless of their
          actions.
        - Track packet and byte statistics sent on mirrors.
+       - The sFlow implementation can now usually infer the correct agent
+         device instead of having to be told explicitly.
     - ovs-appctl:
       - New "fdb/flush" command to flush bridge's MAC learning table.
     - ovs-test:

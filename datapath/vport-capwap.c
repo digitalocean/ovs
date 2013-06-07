@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  * Distributed under the terms of the GNU GPL version 2.
  *
  * Significant portions of this file may be copied from parts of the Linux
@@ -16,6 +16,7 @@
 #include <linux/ip.h>
 #include <linux/list.h>
 #include <linux/net.h>
+#include <net/net_namespace.h>
 
 #include <net/icmp.h>
 #include <net/inet_frag.h>
@@ -23,6 +24,7 @@
 #include <net/protocol.h>
 #include <net/udp.h>
 
+#include "datapath.h"
 #include "tunnel.h"
 #include "vport.h"
 #include "vport-generic.h"
@@ -137,13 +139,15 @@ struct frag_skb_cb {
 
 static struct sk_buff *fragment(struct sk_buff *, const struct vport *,
 				struct dst_entry *dst, unsigned int hlen);
-static void defrag_init(void);
-static void defrag_exit(void);
 static struct sk_buff *defrag(struct sk_buff *, bool frag_last);
 
 static void capwap_frag_init(struct inet_frag_queue *, void *match);
 static unsigned int capwap_frag_hash(struct inet_frag_queue *);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0)
 static int capwap_frag_match(struct inet_frag_queue *, void *match);
+#else
+static bool capwap_frag_match(struct inet_frag_queue *, void *match);
+#endif
 static void capwap_frag_expire(unsigned long ifq);
 
 static struct inet_frags frag_state = {
@@ -154,24 +158,22 @@ static struct inet_frags frag_state = {
 	.frag_expire	= capwap_frag_expire,
 	.secret_interval = CAPWAP_FRAG_SECRET_INTERVAL,
 };
-static struct netns_frags frag_netns_state = {
-	.timeout	= CAPWAP_FRAG_TIMEOUT,
-	.high_thresh	= CAPWAP_FRAG_MAX_MEM,
-	.low_thresh	= CAPWAP_FRAG_PRUNE_MEM,
-};
 
-static struct socket *capwap_rcv_socket;
-
-static int capwap_hdr_len(const struct tnl_mutable_config *mutable)
+static int capwap_hdr_len(const struct tnl_mutable_config *mutable,
+			  const struct ovs_key_ipv4_tunnel *tun_key)
 {
 	int size = CAPWAP_MIN_HLEN;
+	u32 flags;
+	__be64 out_key;
+
+	tnl_get_param(mutable, tun_key, &flags, &out_key);
 
 	/* CAPWAP has no checksums. */
-	if (mutable->flags & TNL_F_CSUM)
+	if (flags & TNL_F_CSUM)
 		return -EINVAL;
 
 	/* if keys are specified, then add WSI field */
-	if (mutable->out_key || (mutable->flags & TNL_F_OUT_KEY_ACTION)) {
+	if (out_key || (flags & TNL_F_OUT_KEY_ACTION)) {
 		size += sizeof(struct capwaphdr_wsi) +
 			sizeof(struct capwaphdr_wsi_key);
 	}
@@ -179,12 +181,19 @@ static int capwap_hdr_len(const struct tnl_mutable_config *mutable)
 	return size;
 }
 
-static void capwap_build_header(const struct vport *vport,
-				const struct tnl_mutable_config *mutable,
-				void *header)
+static struct sk_buff *capwap_build_header(const struct vport *vport,
+					    const struct tnl_mutable_config *mutable,
+					    struct dst_entry *dst,
+					    struct sk_buff *skb,
+					    int tunnel_hlen)
 {
-	struct udphdr *udph = header;
+	struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
+	struct udphdr *udph = udp_hdr(skb);
 	struct capwaphdr *cwh = (struct capwaphdr *)(udph + 1);
+	u32 flags;
+	__be64 out_key;
+
+	tnl_get_param(mutable, tun_key, &flags, &out_key);
 
 	udph->source = htons(CAPWAP_SRC_PORT);
 	udph->dest = htons(CAPWAP_DST_PORT);
@@ -193,7 +202,8 @@ static void capwap_build_header(const struct vport *vport,
 	cwh->frag_id = 0;
 	cwh->frag_off = 0;
 
-	if (mutable->out_key || (mutable->flags & TNL_F_OUT_KEY_ACTION)) {
+	if (out_key || flags & TNL_F_OUT_KEY_ACTION) {
+		/* first field in WSI is key */
 		struct capwaphdr_wsi *wsi = (struct capwaphdr_wsi *)(cwh + 1);
 
 		cwh->begin = CAPWAP_KEYED;
@@ -204,43 +214,25 @@ static void capwap_build_header(const struct vport *vport,
 		wsi->flags = CAPWAP_WSI_F_KEY64;
 		wsi->reserved_padding = 0;
 
-		if (mutable->out_key) {
+		if (out_key) {
 			struct capwaphdr_wsi_key *opt = (struct capwaphdr_wsi_key *)(wsi + 1);
-			opt->key = mutable->out_key;
+			opt->key = out_key;
 		}
 	} else {
 		/* make packet readable by old capwap code */
 		cwh->begin = CAPWAP_NO_WSI;
 	}
-}
-
-static struct sk_buff *capwap_update_header(const struct vport *vport,
-					    const struct tnl_mutable_config *mutable,
-					    struct dst_entry *dst,
-					    struct sk_buff *skb)
-{
-	struct udphdr *udph = udp_hdr(skb);
-
-	if (mutable->flags & TNL_F_OUT_KEY_ACTION) {
-		/* first field in WSI is key */
-		struct capwaphdr *cwh = (struct capwaphdr *)(udph + 1);
-		struct capwaphdr_wsi *wsi = (struct capwaphdr_wsi *)(cwh + 1);
-		struct capwaphdr_wsi_key *opt = (struct capwaphdr_wsi_key *)(wsi + 1);
-
-		opt->key = OVS_CB(skb)->tun_id;
-	}
-
 	udph->len = htons(skb->len - skb_transport_offset(skb));
 
 	if (unlikely(skb->len - skb_network_offset(skb) > dst_mtu(dst))) {
-		unsigned int hlen = skb_transport_offset(skb) + capwap_hdr_len(mutable);
+		unsigned int hlen = skb_transport_offset(skb) + capwap_hdr_len(mutable, tun_key);
 		skb = fragment(skb, vport, dst, hlen);
 	}
 
 	return skb;
 }
 
-static int process_capwap_wsi(struct sk_buff *skb, __be64 *key)
+static int process_capwap_wsi(struct sk_buff *skb, __be64 *key, bool *key_present)
 {
 	struct capwaphdr *cwh = capwap_hdr(skb);
 	struct capwaphdr_wsi *wsi;
@@ -277,12 +269,15 @@ static int process_capwap_wsi(struct sk_buff *skb, __be64 *key)
 
 		opt = (struct capwaphdr_wsi_key *)(wsi + 1);
 		*key = opt->key;
+		*key_present = true;
+	} else {
+		*key_present = false;
 	}
 
 	return 0;
 }
 
-static struct sk_buff *process_capwap_proto(struct sk_buff *skb, __be64 *key)
+static struct sk_buff *process_capwap_proto(struct sk_buff *skb, __be64 *key, bool *key_present)
 {
 	struct capwaphdr *cwh = capwap_hdr(skb);
 	int hdr_len = sizeof(struct udphdr);
@@ -308,7 +303,7 @@ static struct sk_buff *process_capwap_proto(struct sk_buff *skb, __be64 *key)
 		cwh = capwap_hdr(skb);
 	}
 
-	if ((cwh->begin & CAPWAP_F_WSI) && process_capwap_wsi(skb, key))
+	if ((cwh->begin & CAPWAP_F_WSI) && process_capwap_wsi(skb, key, key_present))
 		goto error;
 
 	return skb;
@@ -323,29 +318,33 @@ static int capwap_rcv(struct sock *sk, struct sk_buff *skb)
 	struct vport *vport;
 	const struct tnl_mutable_config *mutable;
 	struct iphdr *iph;
+	struct ovs_key_ipv4_tunnel tun_key;
 	__be64 key = 0;
+	bool key_present = false;
 
 	if (unlikely(!pskb_may_pull(skb, CAPWAP_MIN_HLEN + ETH_HLEN)))
 		goto error;
 
-	skb = process_capwap_proto(skb, &key);
+	skb = process_capwap_proto(skb, &key, &key_present);
 	if (unlikely(!skb))
 		goto out;
 
 	iph = ip_hdr(skb);
-	vport = ovs_tnl_find_port(iph->daddr, iph->saddr, key, TNL_T_PROTO_CAPWAP,
-				  &mutable);
-	if (unlikely(!vport)) {
-		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
+	vport = ovs_tnl_find_port(sock_net(sk), iph->daddr, iph->saddr, key,
+				  TNL_T_PROTO_CAPWAP, &mutable);
+	if (unlikely(!vport))
 		goto error;
+
+	if (key_present && mutable->key.daddr &&
+			 !(mutable->flags & TNL_F_IN_KEY_MATCH)) {
+		key_present = false;
+		key = 0;
 	}
 
-	if (mutable->flags & TNL_F_IN_KEY_MATCH)
-		OVS_CB(skb)->tun_id = key;
-	else
-		OVS_CB(skb)->tun_id = 0;
+	tnl_tun_key_init(&tun_key, iph, key, key_present ? OVS_TNL_F_KEY : 0);
+	OVS_CB(skb)->tun_key = &tun_key;
 
-	ovs_tnl_rcv(vport, skb, iph->tos);
+	ovs_tnl_rcv(vport, skb);
 	goto out;
 
 error:
@@ -359,52 +358,107 @@ static const struct tnl_ops capwap_tnl_ops = {
 	.ipproto	= IPPROTO_UDP,
 	.hdr_len	= capwap_hdr_len,
 	.build_header	= capwap_build_header,
-	.update_header	= capwap_update_header,
 };
 
-static struct vport *capwap_create(const struct vport_parms *parms)
+static inline struct capwap_net *ovs_get_capwap_net(struct net *net)
 {
-	return ovs_tnl_create(parms, &ovs_capwap_vport_ops, &capwap_tnl_ops);
+	struct ovs_net *ovs_net = net_generic(net, ovs_net_id);
+	return &ovs_net->vport_net.capwap;
 }
 
-/* Random value.  Irrelevant as long as it's not 0 since we set the handler. */
+/* Arbitrary value.  Irrelevant as long as it's not 0 since we set the handler. */
 #define UDP_ENCAP_CAPWAP 10
-static int capwap_init(void)
+static int init_socket(struct net *net)
 {
 	int err;
+	struct capwap_net *capwap_net = ovs_get_capwap_net(net);
 	struct sockaddr_in sin;
 
-	err = sock_create(AF_INET, SOCK_DGRAM, 0, &capwap_rcv_socket);
+	if (capwap_net->n_tunnels) {
+		capwap_net->n_tunnels++;
+		return 0;
+	}
+
+	err = sock_create_kern(AF_INET, SOCK_DGRAM, 0,
+			       &capwap_net->capwap_rcv_socket);
 	if (err)
 		goto error;
+
+	/* release net ref. */
+	sk_change_net(capwap_net->capwap_rcv_socket->sk, net);
 
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = htonl(INADDR_ANY);
 	sin.sin_port = htons(CAPWAP_DST_PORT);
 
-	err = kernel_bind(capwap_rcv_socket, (struct sockaddr *)&sin,
+	err = kernel_bind(capwap_net->capwap_rcv_socket,
+			  (struct sockaddr *)&sin,
 			  sizeof(struct sockaddr_in));
 	if (err)
 		goto error_sock;
 
-	udp_sk(capwap_rcv_socket->sk)->encap_type = UDP_ENCAP_CAPWAP;
-	udp_sk(capwap_rcv_socket->sk)->encap_rcv = capwap_rcv;
+	udp_sk(capwap_net->capwap_rcv_socket->sk)->encap_type = UDP_ENCAP_CAPWAP;
+	udp_sk(capwap_net->capwap_rcv_socket->sk)->encap_rcv = capwap_rcv;
 
-	defrag_init();
+	capwap_net->frag_state.timeout		= CAPWAP_FRAG_TIMEOUT;
+	capwap_net->frag_state.high_thresh	= CAPWAP_FRAG_MAX_MEM;
+	capwap_net->frag_state.low_thresh	= CAPWAP_FRAG_PRUNE_MEM;
 
+	inet_frags_init_net(&capwap_net->frag_state);
+	udp_encap_enable();
+	capwap_net->n_tunnels++;
 	return 0;
 
 error_sock:
-	sock_release(capwap_rcv_socket);
+	sk_release_kernel(capwap_net->capwap_rcv_socket->sk);
 error:
-	pr_warn("cannot register capwap protocol handler\n");
+	pr_warn("cannot register capwap protocol handler : %d\n", err);
 	return err;
+}
+
+static void release_socket(struct net *net)
+{
+	struct capwap_net *capwap_net = ovs_get_capwap_net(net);
+
+	capwap_net->n_tunnels--;
+	if (capwap_net->n_tunnels)
+		return;
+
+	inet_frags_exit_net(&capwap_net->frag_state, &frag_state);
+	sk_release_kernel(capwap_net->capwap_rcv_socket->sk);
+}
+
+static struct vport *capwap_create(const struct vport_parms *parms)
+{
+	struct vport *vport;
+	int err;
+
+	err = init_socket(ovs_dp_get_net(parms->dp));
+	if (err)
+		return ERR_PTR(err);
+
+	vport = ovs_tnl_create(parms, &ovs_capwap_vport_ops, &capwap_tnl_ops);
+	if (IS_ERR(vport))
+		release_socket(ovs_dp_get_net(parms->dp));
+
+	return vport;
+}
+
+static void capwap_destroy(struct vport *vport)
+{
+	ovs_tnl_destroy(vport);
+	release_socket(ovs_dp_get_net(vport->dp));
+}
+
+static int capwap_init(void)
+{
+	inet_frags_init(&frag_state);
+	return 0;
 }
 
 static void capwap_exit(void)
 {
-	defrag_exit();
-	sock_release(capwap_rcv_socket);
+	inet_frags_fini(&frag_state);
 }
 
 static void copy_skb_metadata(struct sk_buff *from, struct sk_buff *to)
@@ -529,13 +583,14 @@ static u32 frag_hash(struct frag_match *match)
 			    frag_state.rnd) & (INETFRAGS_HASHSZ - 1);
 }
 
-static struct frag_queue *queue_find(struct frag_match *match)
+static struct frag_queue *queue_find(struct netns_frags *ns_frag_state,
+				     struct frag_match *match)
 {
 	struct inet_frag_queue *ifq;
 
 	read_lock(&frag_state.lock);
 
-	ifq = inet_frag_find(&frag_netns_state, &frag_state, match, frag_hash(match));
+	ifq = inet_frag_find(ns_frag_state, &frag_state, match, frag_hash(match));
 	if (!ifq)
 		return NULL;
 
@@ -710,19 +765,20 @@ static struct sk_buff *defrag(struct sk_buff *skb, bool frag_last)
 {
 	struct iphdr *iph = ip_hdr(skb);
 	struct capwaphdr *cwh = capwap_hdr(skb);
+	struct capwap_net *capwap_net = ovs_get_capwap_net(dev_net(skb->dev));
+	struct netns_frags *ns_frag_state = &capwap_net->frag_state;
 	struct frag_match match;
 	u16 frag_off;
 	struct frag_queue *fq;
 
-	if (atomic_read(&frag_netns_state.mem) > frag_netns_state.high_thresh)
-		inet_frag_evictor(&frag_netns_state, &frag_state);
+	inet_frag_evictor(ns_frag_state, &frag_state, false);
 
 	match.daddr = iph->daddr;
 	match.saddr = iph->saddr;
 	match.id = cwh->frag_id;
 	frag_off = ntohs(cwh->frag_off) & FRAG_OFF_MASK;
 
-	fq = queue_find(&match);
+	fq = queue_find(ns_frag_state, &match);
 	if (fq) {
 		spin_lock(&fq->ifq.lock);
 		skb = frag_queue(fq, skb, frag_off, frag_last);
@@ -737,18 +793,6 @@ static struct sk_buff *defrag(struct sk_buff *skb, bool frag_last)
 	return NULL;
 }
 
-static void defrag_init(void)
-{
-	inet_frags_init(&frag_state);
-	inet_frags_init_net(&frag_netns_state);
-}
-
-static void defrag_exit(void)
-{
-	inet_frags_exit_net(&frag_netns_state, &frag_state);
-	inet_frags_fini(&frag_state);
-}
-
 static void capwap_frag_init(struct inet_frag_queue *ifq, void *match_)
 {
 	struct frag_match *match = match_;
@@ -761,7 +805,11 @@ static unsigned int capwap_frag_hash(struct inet_frag_queue *ifq)
 	return frag_hash(&ifq_cast(ifq)->match);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0)
 static int capwap_frag_match(struct inet_frag_queue *ifq, void *a_)
+#else
+static bool capwap_frag_match(struct inet_frag_queue *ifq, void *a_)
+#endif
 {
 	struct frag_match *a = a_;
 	struct frag_match *b = &ifq_cast(ifq)->match;
@@ -791,7 +839,7 @@ const struct vport_ops ovs_capwap_vport_ops = {
 	.init		= capwap_init,
 	.exit		= capwap_exit,
 	.create		= capwap_create,
-	.destroy	= ovs_tnl_destroy,
+	.destroy	= capwap_destroy,
 	.set_addr	= ovs_tnl_set_addr,
 	.get_name	= ovs_tnl_get_name,
 	.get_addr	= ovs_tnl_get_addr,

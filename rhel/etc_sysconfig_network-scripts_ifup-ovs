@@ -34,15 +34,46 @@ if [ ! -x ${OTHERSCRIPT} ]; then
 	OTHERSCRIPT="/etc/sysconfig/network-scripts/ifup-eth"
 fi
 
+check_recursion()
+{
+	[ -n "${UPPEDSTACK}" ] && for _r in ${UPPEDSTACK}; do
+		[ "$_r" = "$1" ] && return 1
+	done
+
+	return 0
+}
+
+if [ -z "${UPPEDSTACK}" ]; then
+	UPPEDSTACK="${DEVICE}"
+fi
+
+[ -n "${OVSREQUIRES}" ] && for _i in ${OVSREQUIRES}; do
+	if ( check_recursion "$_i" ); then
+		UPPEDSTACK="${UPPEDSTACK} $_i" /sbin/ifup "$_i"
+	fi
+done
+
+[ -f /var/lock/subsys/openvswitch ] || /sbin/service openvswitch start
+
 case "$TYPE" in
 	OVSBridge)
 		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-br "$DEVICE" $OVS_OPTIONS ${OVS_EXTRA+-- $OVS_EXTRA}
-		${OTHERSCRIPT} ${CONFIG} ${2}
+		if [ "${OVSBOOTPROTO}" = "dhcp" ] && [ -n "${OVSINTF}" ]; then
+			case " ${OVSDHCPINTERFACES} " in
+				*" ${OVSINTF} "*)
+					BOOTPROTO=dhcp ${OTHERSCRIPT} ${CONFIG}
+				;;
+			esac
+		fi
+		if [ "${OVSBOOTPROTO}" != "dhcp" ] && [ -z "${OVSINTF}" ]; then
+			${OTHERSCRIPT} ${CONFIG}
+		fi
 		;;
 	OVSPort)
 		/sbin/ifup "$OVS_BRIDGE"
 		${OTHERSCRIPT} ${CONFIG} ${2}
 		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-port "$OVS_BRIDGE" "$DEVICE" $OVS_OPTIONS ${OVS_EXTRA+-- $OVS_EXTRA}
+		OVSINTF=${DEVICE} /sbin/ifup "$OVS_BRIDGE"
 		;;
 	OVSIntPort)
 		/sbin/ifup "$OVS_BRIDGE"
@@ -56,6 +87,7 @@ case "$TYPE" in
 		done
 		ovs-vsctl -t ${TIMEOUT} -- --fake-iface add-bond "$OVS_BRIDGE" "$DEVICE" ${BOND_IFACES} $OVS_OPTIONS ${OVS_EXTRA+-- $OVS_EXTRA}
 		${OTHERSCRIPT} ${CONFIG} ${2}
+		OVSINTF=${DEVICE} /sbin/ifup "$OVS_BRIDGE"
 		;;
 	*)
 		echo $"Invalid OVS interface type $TYPE"

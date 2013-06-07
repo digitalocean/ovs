@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Copyright (c) 2011 Nicira Networks Inc.
+# Copyright (c) 2011 Nicira, Inc.
 # Copyright (c) 2007, 2009 Javier Fernandez-Sanguino <jfs@debian.org>
 #
 # This is free software; you may redistribute it and/or modify
@@ -27,6 +27,8 @@
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Open vSwitch controller
+# Description:       The Open vSwitch controller enables OpenFlow switches that connect to it
+#                    to act as MAC-learning Ethernet switches.
 ### END INIT INFO
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -240,9 +242,11 @@ case "$1" in
         ;;
   restart|force-reload)
         log_daemon_msg "Restarting $DESC" "$NAME"
-        stop_server
-        # Wait some sensible amount, some server need this
-        [ -n "$DODTIME" ] && sleep $DODTIME
+        if running; then
+            stop_server
+            # Wait some sensible amount, some server need this.
+            [ -n "$DODTIME" ] && sleep $DODTIME
+        fi
         start_server
         running
         log_end_msg $?

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -296,14 +296,14 @@ struct json_array *
 json_array(const struct json *json)
 {
     assert(json->type == JSON_ARRAY);
-    return (struct json_array *) &json->u.array;
+    return CONST_CAST(struct json_array *, &json->u.array);
 }
 
 struct shash *
 json_object(const struct json *json)
 {
     assert(json->type == JSON_OBJECT);
-    return (struct shash *) json->u.object;
+    return CONST_CAST(struct shash *, json->u.object);
 }
 
 bool
@@ -908,14 +908,6 @@ json_lex_input(struct json_parser *p, unsigned char c)
 {
     struct json_token token;
 
-    p->byte_number++;
-    if (c == '\n') {
-        p->column_number = 0;
-        p->line_number++;
-    } else {
-        p->column_number++;
-    }
-
     switch (p->lex_state) {
     case JSON_LEX_START:
         switch (c) {
@@ -1092,6 +1084,13 @@ json_parser_feed(struct json_parser *p, const char *input, size_t n)
     size_t i;
     for (i = 0; !p->done && i < n; ) {
         if (json_lex_input(p, input[i])) {
+            p->byte_number++;
+            if (input[i] == '\n') {
+                p->column_number = 0;
+                p->line_number++;
+            } else {
+                p->column_number++;
+            }
             i++;
         }
     }

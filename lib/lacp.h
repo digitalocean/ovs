@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Nicira Networks.
+ * Copyright (c) 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,20 +23,18 @@
 
 /* LACP Protocol Implementation. */
 
-enum lacp_time {
-    LACP_TIME_FAST,
-    LACP_TIME_SLOW,
-    LACP_TIME_CUSTOM
+enum lacp_status {
+    LACP_NEGOTIATED,                  /* Successful LACP negotations. */
+    LACP_CONFIGURED,                  /* LACP is enabled but not negotiated. */
+    LACP_DISABLED                     /* LACP is not enabled. */
 };
 
 struct lacp_settings {
-    char *name;
-    uint8_t id[ETH_ADDR_LEN];
-    uint16_t priority;
-    bool active;
-    enum lacp_time lacp_time;
-    long long int custom_time;
-    bool heartbeat;
+    char *name;                       /* Name (for debugging). */
+    uint8_t id[ETH_ADDR_LEN];         /* System ID. Must be nonzero. */
+    uint16_t priority;                /* System priority. */
+    bool active;                      /* Active or passive mode? */
+    bool fast;                        /* Fast or slow probe interval. */
 };
 
 void lacp_init(void);
@@ -48,13 +46,13 @@ bool lacp_is_active(const struct lacp *);
 
 void lacp_process_packet(struct lacp *, const void *slave,
                          const struct ofpbuf *packet);
-bool lacp_negotiated(const struct lacp *);
+enum lacp_status lacp_status(const struct lacp *);
 
 struct lacp_slave_settings {
-    char *name;
-    uint16_t id;
-    uint16_t priority;
-    uint16_t key;
+    char *name;                       /* Name (for debugging). */
+    uint16_t id;                      /* Port ID. */
+    uint16_t priority;                /* Port priority. */
+    uint16_t key;                     /* Aggregation key. */
 };
 
 void lacp_slave_register(struct lacp *, void *slave_,

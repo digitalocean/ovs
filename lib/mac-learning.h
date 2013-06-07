@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -113,6 +113,6 @@ struct mac_entry *mac_learning_lookup(const struct mac_learning *,
 
 /* Flushing. */
 void mac_learning_expire(struct mac_learning *, struct mac_entry *);
-void mac_learning_flush(struct mac_learning *);
+void mac_learning_flush(struct mac_learning *, struct tag_set *);
 
 #endif /* mac-learning.h */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef NETFLOW_H
-#define NETFLOW_H 1
+#ifndef OFPROTO_NETFLOW_H
+#define OFPROTO_NETFLOW_H 1
 
 #include <stdint.h>
 #include "flow.h"

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@
 #include "packets.h"
 #include "poll-loop.h"
 #include "shash.h"
+#include "smap.h"
 #include "sset.h"
 #include "svec.h"
 #include "vlog.h"
@@ -74,11 +75,15 @@ netdev_initialize(void)
 
         fatal_signal_add_hook(close_all_netdevs, NULL, NULL, true);
 
-#ifdef HAVE_NETLINK
+#ifdef LINUX_DATAPATH
         netdev_register_provider(&netdev_linux_class);
         netdev_register_provider(&netdev_internal_class);
         netdev_register_provider(&netdev_tap_class);
         netdev_vport_register();
+#endif
+#ifdef __FreeBSD__
+        netdev_register_provider(&netdev_tap_class);
+        netdev_register_provider(&netdev_bsd_class);
 #endif
     }
 }
@@ -243,15 +248,15 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
 /* Reconfigures the device 'netdev' with 'args'.  'args' may be empty
  * or NULL if none are needed. */
 int
-netdev_set_config(struct netdev *netdev, const struct shash *args)
+netdev_set_config(struct netdev *netdev, const struct smap *args)
 {
     struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
 
     if (netdev_dev->netdev_class->set_config) {
-        struct shash no_args = SHASH_INITIALIZER(&no_args);
+        struct smap no_args = SMAP_INITIALIZER(&no_args);
         return netdev_dev->netdev_class->set_config(netdev_dev,
                                                     args ? args : &no_args);
-    } else if (args && !shash_is_empty(args)) {
+    } else if (args && !smap_is_empty(args)) {
         VLOG_WARN("%s: arguments provided to device that is not configurable",
                   netdev_get_name(netdev));
     }
@@ -260,23 +265,23 @@ netdev_set_config(struct netdev *netdev, const struct shash *args)
 }
 
 /* Returns the current configuration for 'netdev' in 'args'.  The caller must
- * have already initialized 'args' with shash_init().  Returns 0 on success, in
+ * have already initialized 'args' with smap_init().  Returns 0 on success, in
  * which case 'args' will be filled with 'netdev''s configuration.  On failure
  * returns a positive errno value, in which case 'args' will be empty.
  *
  * The caller owns 'args' and its contents and must eventually free them with
- * shash_destroy_free_data(). */
+ * smap_destroy(). */
 int
-netdev_get_config(const struct netdev *netdev, struct shash *args)
+netdev_get_config(const struct netdev *netdev, struct smap *args)
 {
     struct netdev_dev *netdev_dev = netdev_get_dev(netdev);
     int error;
 
-    shash_clear_free_data(args);
+    smap_clear(args);
     if (netdev_dev->netdev_class->get_config) {
         error = netdev_dev->netdev_class->get_config(netdev_dev, args);
         if (error) {
-            shash_clear_free_data(args);
+            smap_clear(args);
         }
     } else {
         error = 0;
@@ -516,7 +521,7 @@ netdev_get_mtu(const struct netdev *netdev, int *mtup)
     if (error) {
         *mtup = 0;
         if (error != EOPNOTSUPP) {
-            VLOG_WARN_RL(&rl, "failed to retrieve MTU for network device %s: "
+            VLOG_DBG_RL(&rl, "failed to retrieve MTU for network device %s: "
                          "%s", netdev_get_name(netdev), strerror(error));
         }
     }
@@ -537,7 +542,7 @@ netdev_set_mtu(const struct netdev *netdev, int mtu)
 
     error = class->set_mtu ? class->set_mtu(netdev, mtu) : EOPNOTSUPP;
     if (error && error != EOPNOTSUPP) {
-        VLOG_WARN_RL(&rl, "failed to set MTU for network device %s: %s",
+        VLOG_DBG_RL(&rl, "failed to set MTU for network device %s: %s",
                      netdev_get_name(netdev), strerror(error));
     }
 
@@ -576,13 +581,17 @@ netdev_get_ifindex(const struct netdev *netdev)
  * cases this function will always return EOPNOTSUPP. */
 int
 netdev_get_features(const struct netdev *netdev,
-                    uint32_t *current, uint32_t *advertised,
-                    uint32_t *supported, uint32_t *peer)
+                    enum netdev_features *current,
+                    enum netdev_features *advertised,
+                    enum netdev_features *supported,
+                    enum netdev_features *peer)
 {
     int (*get_features)(const struct netdev *netdev,
-                        uint32_t *current, uint32_t *advertised,
-                        uint32_t *supported, uint32_t *peer);
-    uint32_t dummy[4];
+                        enum netdev_features *current,
+                        enum netdev_features *advertised,
+                        enum netdev_features *supported,
+                        enum netdev_features *peer);
+    enum netdev_features dummy[4];
     int error;
 
     if (!current) {
@@ -600,7 +609,8 @@ netdev_get_features(const struct netdev *netdev,
 
     get_features = netdev_get_dev(netdev)->netdev_class->get_features;
     error = get_features
-                    ? get_features(netdev, current, advertised, supported, peer)
+                    ? get_features(netdev, current, advertised, supported,
+                                   peer)
                     : EOPNOTSUPP;
     if (error) {
         *current = *advertised = *supported = *peer = 0;
@@ -608,39 +618,47 @@ netdev_get_features(const struct netdev *netdev,
     return error;
 }
 
-/* Returns the maximum speed of a network connection that has the "enum
- * ofp_port_features" bits in 'features', in bits per second.  If no bits that
- * indicate a speed are set in 'features', assumes 100Mbps. */
+/* Returns the maximum speed of a network connection that has the NETDEV_F_*
+ * bits in 'features', in bits per second.  If no bits that indicate a speed
+ * are set in 'features', assumes 100Mbps. */
 uint64_t
-netdev_features_to_bps(uint32_t features)
+netdev_features_to_bps(enum netdev_features features)
 {
     enum {
-        F_10000MB = OFPPF_10GB_FD,
-        F_1000MB = OFPPF_1GB_HD | OFPPF_1GB_FD,
-        F_100MB = OFPPF_100MB_HD | OFPPF_100MB_FD,
-        F_10MB = OFPPF_10MB_HD | OFPPF_10MB_FD
+        F_1000000MB = NETDEV_F_1TB_FD,
+        F_100000MB = NETDEV_F_100GB_FD,
+        F_40000MB = NETDEV_F_40GB_FD,
+        F_10000MB = NETDEV_F_10GB_FD,
+        F_1000MB = NETDEV_F_1GB_HD | NETDEV_F_1GB_FD,
+        F_100MB = NETDEV_F_100MB_HD | NETDEV_F_100MB_FD,
+        F_10MB = NETDEV_F_10MB_HD | NETDEV_F_10MB_FD
     };
 
-    return (  features & F_10000MB  ? UINT64_C(10000000000)
-            : features & F_1000MB   ? UINT64_C(1000000000)
-            : features & F_100MB    ? UINT64_C(100000000)
-            : features & F_10MB     ? UINT64_C(10000000)
-                                    : UINT64_C(100000000));
+    return (  features & F_1000000MB ? UINT64_C(1000000000000)
+            : features & F_100000MB  ? UINT64_C(100000000000)
+            : features & F_40000MB   ? UINT64_C(40000000000)
+            : features & F_10000MB   ? UINT64_C(10000000000)
+            : features & F_1000MB    ? UINT64_C(1000000000)
+            : features & F_100MB     ? UINT64_C(100000000)
+            : features & F_10MB      ? UINT64_C(10000000)
+                                     : UINT64_C(100000000));
 }
 
-/* Returns true if any of the "enum ofp_port_features" bits that indicate a
- * full-duplex link are set in 'features', otherwise false. */
+/* Returns true if any of the NETDEV_F_* bits that indicate a full-duplex link
+ * are set in 'features', otherwise false. */
 bool
-netdev_features_is_full_duplex(uint32_t features)
+netdev_features_is_full_duplex(enum netdev_features features)
 {
-    return (features & (OFPPF_10MB_FD | OFPPF_100MB_FD | OFPPF_1GB_FD
-                        | OFPPF_10GB_FD)) != 0;
+    return (features & (NETDEV_F_10MB_FD | NETDEV_F_100MB_FD | NETDEV_F_1GB_FD
+                        | NETDEV_F_10GB_FD | NETDEV_F_40GB_FD
+                        | NETDEV_F_100GB_FD | NETDEV_F_1TB_FD)) != 0;
 }
 
 /* Set the features advertised by 'netdev' to 'advertise'.  Returns 0 if
  * successful, otherwise a positive errno value. */
 int
-netdev_set_advertisements(struct netdev *netdev, uint32_t advertise)
+netdev_set_advertisements(struct netdev *netdev,
+                          enum netdev_features advertise)
 {
     return (netdev_get_dev(netdev)->netdev_class->set_advertisements
             ? netdev_get_dev(netdev)->netdev_class->set_advertisements(
@@ -692,6 +710,26 @@ netdev_set_in4(struct netdev *netdev, struct in_addr addr, struct in_addr mask)
             : EOPNOTSUPP);
 }
 
+/* Obtains ad IPv4 address from device name and save the address in
+ * in4.  Returns 0 if successful, otherwise a positive errno value.
+ */
+int
+netdev_get_in4_by_name(const char *device_name, struct in_addr *in4)
+{
+    struct netdev *netdev;
+    int error;
+
+    error = netdev_open(device_name, "system", &netdev);
+    if (error) {
+        in4->s_addr = htonl(0);
+        return error;
+    }
+
+    error = netdev_get_in4(netdev, in4, NULL);
+    netdev_close(netdev);
+    return error;
+}
+
 /* Adds 'router' as a default IP gateway for the TCP/IP stack that corresponds
  * to 'netdev'. */
 int
@@ -726,18 +764,18 @@ netdev_get_next_hop(const struct netdev *netdev,
     return error;
 }
 
-/* Populates 'sh' with status information.
+/* Populates 'smap' with status information.
  *
- * Populates 'sh' with 'netdev' specific status information.  This information
- * may be used to populate the status column of the Interface table as defined
- * in ovs-vswitchd.conf.db(5). */
+ * Populates 'smap' with 'netdev' specific status information.  This
+ * information may be used to populate the status column of the Interface table
+ * as defined in ovs-vswitchd.conf.db(5). */
 int
-netdev_get_status(const struct netdev *netdev, struct shash *sh)
+netdev_get_drv_info(const struct netdev *netdev, struct smap *smap)
 {
     struct netdev_dev *dev = netdev_get_dev(netdev);
 
-    return (dev->netdev_class->get_status
-            ? dev->netdev_class->get_status(netdev, sh)
+    return (dev->netdev_class->get_drv_info
+            ? dev->netdev_class->get_drv_info(netdev, smap)
             : EOPNOTSUPP);
 }
 
@@ -809,7 +847,7 @@ do_update_flags(struct netdev *netdev, enum netdev_flags off,
 int
 netdev_get_flags(const struct netdev *netdev_, enum netdev_flags *flagsp)
 {
-    struct netdev *netdev = (struct netdev *) netdev_;
+    struct netdev *netdev = CONST_CAST(struct netdev *, netdev_);
     return do_update_flags(netdev, 0, 0, flagsp, false);
 }
 
@@ -1032,10 +1070,9 @@ netdev_get_n_queues(const struct netdev *netdev,
  *
  * A '*typep' of "" indicates that QoS is currently disabled on 'netdev'.
  *
- * The caller must initialize 'details' as an empty shash (e.g. with
- * shash_init()) before calling this function.  The caller must free 'details',
- * including 'data' members, when it is no longer needed (e.g. with
- * shash_destroy_free_data()).
+ * The caller must initialize 'details' as an empty smap (e.g. with
+ * smap_init()) before calling this function.  The caller must free 'details'
+ * when it is no longer needed (e.g. with smap_destroy()).
  *
  * The caller must not modify or free '*typep'.
  *
@@ -1045,7 +1082,7 @@ netdev_get_n_queues(const struct netdev *netdev,
  * vswitchd/vswitch.xml (which is built as ovs-vswitchd.conf.db(8)). */
 int
 netdev_get_qos(const struct netdev *netdev,
-               const char **typep, struct shash *details)
+               const char **typep, struct smap *details)
 {
     const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
     int retval;
@@ -1054,7 +1091,7 @@ netdev_get_qos(const struct netdev *netdev,
         retval = class->get_qos(netdev, typep, details);
         if (retval) {
             *typep = NULL;
-            shash_clear_free_data(details);
+            smap_clear(details);
         }
         return retval;
     } else {
@@ -1084,7 +1121,7 @@ netdev_get_qos(const struct netdev *netdev,
  * details. */
 int
 netdev_set_qos(struct netdev *netdev,
-               const char *type, const struct shash *details)
+               const char *type, const struct smap *details)
 {
     const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
 
@@ -1094,7 +1131,7 @@ netdev_set_qos(struct netdev *netdev,
 
     if (class->set_qos) {
         if (!details) {
-            static struct shash empty = SHASH_INITIALIZER(&empty);
+            static struct smap empty = SMAP_INITIALIZER(&empty);
             details = &empty;
         }
         return class->set_qos(netdev, type, details);
@@ -1114,12 +1151,12 @@ netdev_set_qos(struct netdev *netdev,
  * given 'type' in the "other_config" column in the "Queue" table in
  * vswitchd/vswitch.xml (which is built as ovs-vswitchd.conf.db(8)).
  *
- * The caller must initialize 'details' (e.g. with shash_init()) before calling
- * this function.  The caller must free 'details', including 'data' members,
- * when it is no longer needed (e.g. with shash_destroy_free_data()). */
+ * The caller must initialize 'details' (e.g. with smap_init()) before calling
+ * this function.  The caller must free 'details' when it is no longer needed
+ * (e.g. with smap_destroy()). */
 int
 netdev_get_queue(const struct netdev *netdev,
-                 unsigned int queue_id, struct shash *details)
+                 unsigned int queue_id, struct smap *details)
 {
     const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
     int retval;
@@ -1128,7 +1165,7 @@ netdev_get_queue(const struct netdev *netdev,
               ? class->get_queue(netdev, queue_id, details)
               : EOPNOTSUPP);
     if (retval) {
-        shash_clear_free_data(details);
+        smap_clear(details);
     }
     return retval;
 }
@@ -1147,7 +1184,7 @@ netdev_get_queue(const struct netdev *netdev,
  * it. */
 int
 netdev_set_queue(struct netdev *netdev,
-                 unsigned int queue_id, const struct shash *details)
+                 unsigned int queue_id, const struct smap *details)
 {
     const struct netdev_class *class = netdev_get_dev(netdev)->netdev_class;
     return (class->set_queue

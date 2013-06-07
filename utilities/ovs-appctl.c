@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,23 +26,25 @@
 #include "daemon.h"
 #include "dirs.h"
 #include "dynamic-string.h"
+#include "jsonrpc.h"
+#include "process.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
 
 static void usage(void);
 static const char *parse_command_line(int argc, char *argv[]);
-static struct unixctl_client *connect_to_target(const char *target);
+static struct jsonrpc *connect_to_target(const char *target);
 
 int
 main(int argc, char *argv[])
 {
-    struct unixctl_client *client;
+    char *cmd_result, *cmd_error;
+    struct jsonrpc *client;
+    char *cmd, **cmd_argv;
     const char *target;
-    struct ds request;
-    int code, error;
-    char *reply;
-    int i;
+    int cmd_argc;
+    int error;
 
     set_program_name(argv[0]);
 
@@ -50,31 +52,29 @@ main(int argc, char *argv[])
     target = parse_command_line(argc, argv);
     client = connect_to_target(target);
 
-    /* Compose request. */
-    ds_init(&request);
-    for (i = optind; i < argc; i++) {
-        if (i != optind) {
-            ds_put_char(&request, ' ');
-        }
-        ds_put_cstr(&request, argv[i]);
-    }
-
     /* Transact request and process reply. */
-    error = unixctl_client_transact(client, ds_cstr(&request), &code, &reply);
+    cmd = argv[optind++];
+    cmd_argc = argc - optind;
+    cmd_argv = cmd_argc ? argv + optind : NULL;
+    error = unixctl_client_transact(client, cmd, cmd_argc, cmd_argv,
+                                    &cmd_result, &cmd_error);
     if (error) {
         ovs_fatal(error, "%s: transaction error", target);
     }
-    if (code / 100 != 2) {
-        fputs(reply, stderr);
-        ovs_error(0, "%s: server returned reply code %03d", target, code);
+
+    if (cmd_error) {
+        fputs(cmd_error, stderr);
+        ovs_error(0, "%s: server returned an error", target);
         exit(2);
+    } else if (cmd_result) {
+        fputs(cmd_result, stdout);
+    } else {
+        NOT_REACHED();
     }
-    fputs(reply, stdout);
 
-    unixctl_client_destroy(client);
-    free(reply);
-    ds_destroy(&request);
-
+    jsonrpc_close(client);
+    free(cmd_result);
+    free(cmd_error);
     return 0;
 }
 
@@ -90,13 +90,14 @@ Common commands:\n\
   help               List commands supported by the target\n\
   version            Print version of the target\n\
   vlog/list          List current logging levels\n\
-  vlog/set MODULE[:FACILITY[:LEVEL]]\n\
-      Set MODULE and FACILITY log level to LEVEL\n\
-      MODULE may be any valid module name or 'ANY'\n\
-      FACILITY may be 'syslog', 'console', 'file', or 'ANY' (default)\n\
-      LEVEL may be 'off', 'emer', 'err', 'warn', 'info', or 'dbg' (default)\n\
+  vlog/set [SPEC]\n\
+      Set log levels as detailed in SPEC, which may include:\n\
+      A valid module name (all modules, by default)\n\
+      'syslog', 'console', 'file' (all facilities, by default))\n\
+      'off', 'emer', 'err', 'warn', 'info', or 'dbg' ('dbg', bydefault)\n\
   vlog/reopen        Make the program reopen its log file\n\
 Other options:\n\
+  --timeout=SECS     wait at most SECS seconds for a response\n\
   -h, --help         Print this helpful information\n\
   -V, --version      Display ovs-appctl version information\n",
            program_name, program_name);
@@ -111,6 +112,7 @@ parse_command_line(int argc, char *argv[])
         {"execute", no_argument, NULL, 'e'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
+        {"timeout", required_argument, NULL, 'T'},
         {NULL, 0, NULL, 0},
     };
     const char *target;
@@ -147,6 +149,10 @@ parse_command_line(int argc, char *argv[])
             usage();
             break;
 
+        case 'T':
+            time_alarm(atoi(optarg));
+            break;
+
         case 'V':
             ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
@@ -167,10 +173,10 @@ parse_command_line(int argc, char *argv[])
     return target ? target : "ovs-vswitchd";
 }
 
-static struct unixctl_client *
+static struct jsonrpc *
 connect_to_target(const char *target)
 {
-    struct unixctl_client *client;
+    struct jsonrpc *client;
     char *socket_name;
     int error;
 

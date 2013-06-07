@@ -1,7 +1,8 @@
 sbin_PROGRAMS += vswitchd/ovs-vswitchd
-man_MANS += \
-	vswitchd/ovs-vswitchd.8 \
-	vswitchd/ovs-brcompatd.8
+man_MANS += vswitchd/ovs-vswitchd.8
+if BUILD_BRCOMPAT
+  man_MANS += vswitchd/ovs-brcompatd.8
+endif
 DISTCLEANFILES += \
 	vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-brcompatd.8
@@ -12,8 +13,6 @@ vswitchd_ovs_vswitchd_SOURCES = \
 	vswitchd/ovs-vswitchd.c \
 	vswitchd/system-stats.c \
 	vswitchd/system-stats.h \
-	vswitchd/vswitch-idl.c \
-	vswitchd/vswitch-idl.h \
 	vswitchd/xenserver.c \
 	vswitchd/xenserver.h
 vswitchd_ovs_vswitchd_LDADD = \
@@ -24,27 +23,19 @@ vswitchd_ovs_vswitchd_LDADD = \
 EXTRA_DIST += vswitchd/INTERNALS
 MAN_ROOTS += vswitchd/ovs-vswitchd.8.in
 
-if HAVE_NETLINK
+if BUILD_BRCOMPAT
+if LINUX_DATAPATH
 sbin_PROGRAMS += vswitchd/ovs-brcompatd
 vswitchd_ovs_brcompatd_SOURCES = \
-	vswitchd/ovs-brcompatd.c \
-	vswitchd/vswitch-idl.c \
-	vswitchd/vswitch-idl.h
+	vswitchd/ovs-brcompatd.c
 vswitchd_ovs_brcompatd_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 endif
 MAN_ROOTS += vswitchd/ovs-brcompatd.8.in
+endif
 
 # vswitch schema and IDL
-OVSIDL_BUILT += \
-	vswitchd/vswitch-idl.c \
-	vswitchd/vswitch-idl.h \
-	vswitchd/vswitch-idl.ovsidl
-VSWITCH_IDL_FILES = vswitchd/vswitch.ovsschema vswitchd/vswitch-idl.ann
-EXTRA_DIST += $(VSWITCH_IDL_FILES)
+EXTRA_DIST += vswitchd/vswitch.ovsschema
 pkgdata_DATA += vswitchd/vswitch.ovsschema
-vswitchd/vswitch-idl.ovsidl: $(VSWITCH_IDL_FILES)
-	$(OVSDB_IDLC) -C $(srcdir) annotate $(VSWITCH_IDL_FILES) > $@.tmp
-	mv $@.tmp $@
 
 # vswitch E-R diagram
 #
@@ -104,3 +95,7 @@ vswitchd/vswitch.ovsschema.stamp: vswitchd/vswitch.ovsschema
 	  exit 1; \
 	fi
 CLEANFILES += vswitchd/vswitch.ovsschema.stamp
+
+# Clean up generated files from older OVS versions.  (This is important so that
+# #include "vswitch-idl.h" doesn't get the wrong copy.)
+CLEANFILES += vswitchd/vswitch-idl.c vswitchd/vswitch-idl.h

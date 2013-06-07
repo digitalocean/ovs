@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,12 @@
 #include "flow.h"
 #include "learn.h"
 #include "multipath.h"
+#include "meta-flow.h"
+#include "netdev.h"
 #include "nx-match.h"
+#include "ofp-actions.h"
+#include "ofp-errors.h"
+#include "ofp-msgs.h"
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
@@ -45,470 +50,272 @@
 #include "util.h"
 
 static void ofp_print_queue_name(struct ds *string, uint32_t port);
-static void ofp_print_error(struct ds *, int error);
+static void ofp_print_error(struct ds *, enum ofperr);
 
 
 /* Returns a string that represents the contents of the Ethernet frame in the
- * 'len' bytes starting at 'data' to 'stream' as output by tcpdump.
- * 'total_len' specifies the full length of the Ethernet frame (of which 'len'
- * bytes were captured).
- *
- * The caller must free the returned string.
- *
- * This starts and kills a tcpdump subprocess so it's quite expensive. */
+ * 'len' bytes starting at 'data'.  The caller must free the returned string.*/
 char *
-ofp_packet_to_string(const void *data, size_t len, size_t total_len OVS_UNUSED)
+ofp_packet_to_string(const void *data, size_t len)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct ofpbuf buf;
-
-    char command[128];
-    FILE *pcap;
-    FILE *tcpdump;
-    int status;
-    int c;
+    struct flow flow;
 
     ofpbuf_use_const(&buf, data, len);
+    flow_extract(&buf, 0, 0, NULL, 0, &flow);
+    flow_format(&ds, &flow);
 
-    pcap = tmpfile();
-    if (!pcap) {
-        ovs_error(errno, "tmpfile");
-        return xstrdup("<error>");
-    }
-    pcap_write_header(pcap);
-    pcap_write(pcap, &buf);
-    fflush(pcap);
-    if (ferror(pcap)) {
-        ovs_error(errno, "error writing temporary file");
-    }
-    rewind(pcap);
-
-    snprintf(command, sizeof command, "/usr/sbin/tcpdump -t -e -n -r /dev/fd/%d 2>/dev/null",
-             fileno(pcap));
-    tcpdump = popen(command, "r");
-    fclose(pcap);
-    if (!tcpdump) {
-        ovs_error(errno, "exec(\"%s\")", command);
-        return xstrdup("<error>");
+    if (buf.l7) {
+        if (flow.nw_proto == IPPROTO_TCP) {
+            struct tcp_header *th = buf.l4;
+            ds_put_format(&ds, " tcp_csum:%"PRIx16,
+                          ntohs(th->tcp_csum));
+        } else if (flow.nw_proto == IPPROTO_UDP) {
+            struct udp_header *uh = buf.l4;
+            ds_put_format(&ds, " udp_csum:%"PRIx16,
+                          ntohs(uh->udp_csum));
+        }
     }
 
-    while ((c = getc(tcpdump)) != EOF) {
-        ds_put_char(&ds, c);
-    }
+    ds_put_char(&ds, '\n');
 
-    status = pclose(tcpdump);
-    if (WIFEXITED(status)) {
-        if (WEXITSTATUS(status))
-            ovs_error(0, "tcpdump exited with status %d", WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
-        ovs_error(0, "tcpdump exited with signal %d", WTERMSIG(status));
-    }
     return ds_cstr(&ds);
 }
 
 static void
-ofp_print_packet_in(struct ds *string, const struct ofp_packet_in *op,
+ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
                     int verbosity)
 {
-    size_t len = ntohs(op->header.length);
-    size_t data_len;
+    struct ofputil_packet_in pin;
+    int error;
+    int i;
 
-    ds_put_format(string, " total_len=%"PRIu16" in_port=",
-                  ntohs(op->total_len));
-    ofputil_format_port(ntohs(op->in_port), string);
+    error = ofputil_decode_packet_in(&pin, oh);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
 
-    if (op->reason == OFPR_ACTION)
-        ds_put_cstr(string, " (via action)");
-    else if (op->reason != OFPR_NO_MATCH)
-        ds_put_format(string, " (***reason %"PRIu8"***)", op->reason);
+    if (pin.table_id) {
+        ds_put_format(string, " table_id=%"PRIu8, pin.table_id);
+    }
 
-    data_len = len - offsetof(struct ofp_packet_in, data);
-    ds_put_format(string, " data_len=%zu", data_len);
-    if (op->buffer_id == htonl(UINT32_MAX)) {
+    if (pin.cookie) {
+        ds_put_format(string, " cookie=0x%"PRIx64, ntohll(pin.cookie));
+    }
+
+    ds_put_format(string, " total_len=%"PRIu16" in_port=", pin.total_len);
+    ofputil_format_port(pin.fmd.in_port, string);
+
+    if (pin.fmd.tun_id != htonll(0)) {
+        ds_put_format(string, " tun_id=0x%"PRIx64, ntohll(pin.fmd.tun_id));
+    }
+
+    if (pin.fmd.metadata != htonll(0)) {
+        ds_put_format(string, " metadata=0x%"PRIx64, ntohll(pin.fmd.metadata));
+    }
+
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        if (pin.fmd.regs[i]) {
+            ds_put_format(string, " reg%d=0x%"PRIx32, i, pin.fmd.regs[i]);
+        }
+    }
+
+    ds_put_format(string, " (via %s)",
+                  ofputil_packet_in_reason_to_string(pin.reason));
+
+    ds_put_format(string, " data_len=%zu", pin.packet_len);
+    if (pin.buffer_id == UINT32_MAX) {
         ds_put_format(string, " (unbuffered)");
-        if (ntohs(op->total_len) != data_len)
+        if (pin.total_len != pin.packet_len) {
             ds_put_format(string, " (***total_len != data_len***)");
+        }
     } else {
-        ds_put_format(string, " buffer=0x%08"PRIx32, ntohl(op->buffer_id));
-        if (ntohs(op->total_len) < data_len)
+        ds_put_format(string, " buffer=0x%08"PRIx32, pin.buffer_id);
+        if (pin.total_len < pin.packet_len) {
             ds_put_format(string, " (***total_len < data_len***)");
+        }
     }
     ds_put_char(string, '\n');
 
     if (verbosity > 0) {
-        struct flow flow;
-        struct ofpbuf packet;
-
-        ofpbuf_use_const(&packet, op->data, data_len);
-        flow_extract(&packet, 0, 0, ntohs(op->in_port), &flow);
-        flow_format(string, &flow);
-        ds_put_char(string, '\n');
-    }
-    if (verbosity > 1) {
-        char *packet = ofp_packet_to_string(op->data, data_len,
-                                            ntohs(op->total_len));
+        char *packet = ofp_packet_to_string(pin.packet, pin.packet_len);
         ds_put_cstr(string, packet);
         free(packet);
     }
 }
 
 static void
-print_note(struct ds *string, const struct nx_action_note *nan)
-{
-    size_t len;
-    size_t i;
-
-    ds_put_cstr(string, "note:");
-    len = ntohs(nan->len) - offsetof(struct nx_action_note, note);
-    for (i = 0; i < len; i++) {
-        if (i) {
-            ds_put_char(string, '.');
-        }
-        ds_put_format(string, "%02"PRIx8, nan->note[i]);
-    }
-}
-
-static void
-ofp_print_action(struct ds *s, const union ofp_action *a,
-                 enum ofputil_action_code code)
-{
-    const struct ofp_action_enqueue *oae;
-    const struct ofp_action_dl_addr *oada;
-    const struct nx_action_set_tunnel64 *nast64;
-    const struct nx_action_set_tunnel *nast;
-    const struct nx_action_set_queue *nasq;
-    const struct nx_action_resubmit *nar;
-    const struct nx_action_reg_move *move;
-    const struct nx_action_reg_load *load;
-    const struct nx_action_multipath *nam;
-    const struct nx_action_autopath *naa;
-    const struct nx_action_output_reg *naor;
-    uint16_t port;
-
-    switch (code) {
-    case OFPUTIL_OFPAT_OUTPUT:
-        port = ntohs(a->output.port);
-        if (port < OFPP_MAX) {
-            ds_put_format(s, "output:%"PRIu16, port);
-        } else {
-            ofputil_format_port(port, s);
-            if (port == OFPP_CONTROLLER) {
-                if (a->output.max_len != htons(0)) {
-                    ds_put_format(s, ":%"PRIu16, ntohs(a->output.max_len));
-                } else {
-                    ds_put_cstr(s, ":all");
-                }
-            }
-        }
-        break;
-
-    case OFPUTIL_OFPAT_ENQUEUE:
-        oae = (const struct ofp_action_enqueue *) a;
-        ds_put_format(s, "enqueue:");
-        ofputil_format_port(ntohs(oae->port), s);
-        ds_put_format(s, "q%"PRIu32, ntohl(oae->queue_id));
-        break;
-
-    case OFPUTIL_OFPAT_SET_VLAN_VID:
-        ds_put_format(s, "mod_vlan_vid:%"PRIu16,
-                      ntohs(a->vlan_vid.vlan_vid));
-        break;
-
-    case OFPUTIL_OFPAT_SET_VLAN_PCP:
-        ds_put_format(s, "mod_vlan_pcp:%"PRIu8, a->vlan_pcp.vlan_pcp);
-        break;
-
-    case OFPUTIL_OFPAT_STRIP_VLAN:
-        ds_put_cstr(s, "strip_vlan");
-        break;
-
-    case OFPUTIL_OFPAT_SET_DL_SRC:
-        oada = (const struct ofp_action_dl_addr *) a;
-        ds_put_format(s, "mod_dl_src:"ETH_ADDR_FMT,
-                      ETH_ADDR_ARGS(oada->dl_addr));
-        break;
-
-    case OFPUTIL_OFPAT_SET_DL_DST:
-        oada = (const struct ofp_action_dl_addr *) a;
-        ds_put_format(s, "mod_dl_dst:"ETH_ADDR_FMT,
-                      ETH_ADDR_ARGS(oada->dl_addr));
-        break;
-
-    case OFPUTIL_OFPAT_SET_NW_SRC:
-        ds_put_format(s, "mod_nw_src:"IP_FMT, IP_ARGS(&a->nw_addr.nw_addr));
-        break;
-
-    case OFPUTIL_OFPAT_SET_NW_DST:
-        ds_put_format(s, "mod_nw_dst:"IP_FMT, IP_ARGS(&a->nw_addr.nw_addr));
-        break;
-
-    case OFPUTIL_OFPAT_SET_NW_TOS:
-        ds_put_format(s, "mod_nw_tos:%d", a->nw_tos.nw_tos);
-        break;
-
-    case OFPUTIL_OFPAT_SET_TP_SRC:
-        ds_put_format(s, "mod_tp_src:%d", ntohs(a->tp_port.tp_port));
-        break;
-
-    case OFPUTIL_OFPAT_SET_TP_DST:
-        ds_put_format(s, "mod_tp_dst:%d", ntohs(a->tp_port.tp_port));
-        break;
-
-    case OFPUTIL_NXAST_RESUBMIT:
-        nar = (struct nx_action_resubmit *)a;
-        ds_put_format(s, "resubmit:");
-        ofputil_format_port(ntohs(nar->in_port), s);
-        break;
-
-    case OFPUTIL_NXAST_RESUBMIT_TABLE:
-        nar = (struct nx_action_resubmit *)a;
-        ds_put_format(s, "resubmit(");
-        if (nar->in_port != htons(OFPP_IN_PORT)) {
-            ofputil_format_port(ntohs(nar->in_port), s);
-        }
-        ds_put_char(s, ',');
-        if (nar->table != 255) {
-            ds_put_format(s, "%"PRIu8, nar->table);
-        }
-        ds_put_char(s, ')');
-        break;
-
-    case OFPUTIL_NXAST_SET_TUNNEL:
-        nast = (struct nx_action_set_tunnel *)a;
-        ds_put_format(s, "set_tunnel:%#"PRIx32, ntohl(nast->tun_id));
-        break;
-
-    case OFPUTIL_NXAST_SET_QUEUE:
-        nasq = (struct nx_action_set_queue *)a;
-        ds_put_format(s, "set_queue:%u", ntohl(nasq->queue_id));
-        break;
-
-    case OFPUTIL_NXAST_POP_QUEUE:
-        ds_put_cstr(s, "pop_queue");
-        break;
-
-    case OFPUTIL_NXAST_NOTE:
-        print_note(s, (const struct nx_action_note *) a);
-        break;
-
-    case OFPUTIL_NXAST_REG_MOVE:
-        move = (const struct nx_action_reg_move *) a;
-        nxm_format_reg_move(move, s);
-        break;
-
-    case OFPUTIL_NXAST_REG_LOAD:
-        load = (const struct nx_action_reg_load *) a;
-        nxm_format_reg_load(load, s);
-        break;
-
-    case OFPUTIL_NXAST_SET_TUNNEL64:
-        nast64 = (const struct nx_action_set_tunnel64 *) a;
-        ds_put_format(s, "set_tunnel64:%#"PRIx64,
-                      ntohll(nast64->tun_id));
-        break;
-
-    case OFPUTIL_NXAST_MULTIPATH:
-        nam = (const struct nx_action_multipath *) a;
-        multipath_format(nam, s);
-        break;
-
-    case OFPUTIL_NXAST_AUTOPATH:
-        naa = (const struct nx_action_autopath *)a;
-        ds_put_format(s, "autopath(%u,", ntohl(naa->id));
-        nxm_format_field_bits(s, ntohl(naa->dst),
-                              nxm_decode_ofs(naa->ofs_nbits),
-                              nxm_decode_n_bits(naa->ofs_nbits));
-        ds_put_char(s, ')');
-        break;
-
-    case OFPUTIL_NXAST_BUNDLE:
-    case OFPUTIL_NXAST_BUNDLE_LOAD:
-        bundle_format((const struct nx_action_bundle *) a, s);
-        break;
-
-    case OFPUTIL_NXAST_OUTPUT_REG:
-        naor = (const struct nx_action_output_reg *) a;
-        ds_put_cstr(s, "output:");
-        nxm_format_field_bits(s, ntohl(naor->src),
-                              nxm_decode_ofs(naor->ofs_nbits),
-                              nxm_decode_n_bits(naor->ofs_nbits));
-        break;
-
-    case OFPUTIL_NXAST_LEARN:
-        learn_format((const struct nx_action_learn *) a, s);
-        break;
-
-    case OFPUTIL_NXAST_EXIT:
-        ds_put_cstr(s, "exit");
-        break;
-
-    default:
-        break;
-    }
-}
-
-void
-ofp_print_actions(struct ds *string, const union ofp_action *actions,
-                  size_t n_actions)
-{
-    const union ofp_action *a;
-    size_t left;
-
-    ds_put_cstr(string, "actions=");
-    if (!n_actions) {
-        ds_put_cstr(string, "drop");
-    }
-
-    OFPUTIL_ACTION_FOR_EACH (a, left, actions, n_actions) {
-        int code = ofputil_decode_action(a);
-        if (code >= 0) {
-            if (a != actions) {
-                ds_put_cstr(string, ",");
-            }
-            ofp_print_action(string, a, code);
-        } else {
-            ofp_print_error(string, -code);
-        }
-    }
-    if (left > 0) {
-        ds_put_format(string, " ***%zu leftover bytes following actions",
-                      left * sizeof *a);
-    }
-}
-
-static void
-ofp_print_packet_out(struct ds *string, const struct ofp_packet_out *opo,
+ofp_print_packet_out(struct ds *string, const struct ofp_header *oh,
                      int verbosity)
 {
-    size_t len = ntohs(opo->header.length);
-    size_t actions_len = ntohs(opo->actions_len);
+    struct ofputil_packet_out po;
+    struct ofpbuf ofpacts;
+    enum ofperr error;
 
-    ds_put_cstr(string, " in_port=");
-    ofputil_format_port(ntohs(opo->in_port), string);
-
-    ds_put_format(string, " actions_len=%zu ", actions_len);
-    if (actions_len > (ntohs(opo->header.length) - sizeof *opo)) {
-        ds_put_format(string, "***packet too short for action length***\n");
+    ofpbuf_init(&ofpacts, 64);
+    error = ofputil_decode_packet_out(&po, oh, &ofpacts);
+    if (error) {
+        ofpbuf_uninit(&ofpacts);
+        ofp_print_error(string, error);
         return;
     }
-    if (actions_len % sizeof(union ofp_action)) {
-        ds_put_format(string, "***action length not a multiple of %zu***\n",
-                      sizeof(union ofp_action));
-    }
-    ofp_print_actions(string, (const union ofp_action *) opo->actions,
-                      actions_len / sizeof(union ofp_action));
 
-    if (ntohl(opo->buffer_id) == UINT32_MAX) {
-        int data_len = len - sizeof *opo - actions_len;
-        ds_put_format(string, " data_len=%d", data_len);
-        if (verbosity > 0 && len > sizeof *opo) {
-            char *packet = ofp_packet_to_string(
-                    (uint8_t *)opo->actions + actions_len, data_len, data_len);
+    ds_put_cstr(string, " in_port=");
+    ofputil_format_port(po.in_port, string);
+
+    ds_put_char(string, ' ');
+    ofpacts_format(po.ofpacts, po.ofpacts_len, string);
+
+    if (po.buffer_id == UINT32_MAX) {
+        ds_put_format(string, " data_len=%zu", po.packet_len);
+        if (verbosity > 0 && po.packet_len > 0) {
+            char *packet = ofp_packet_to_string(po.packet, po.packet_len);
             ds_put_char(string, '\n');
             ds_put_cstr(string, packet);
             free(packet);
         }
     } else {
-        ds_put_format(string, " buffer=0x%08"PRIx32, ntohl(opo->buffer_id));
+        ds_put_format(string, " buffer=0x%08"PRIx32, po.buffer_id);
     }
     ds_put_char(string, '\n');
+
+    ofpbuf_uninit(&ofpacts);
 }
 
 /* qsort comparison function. */
 static int
 compare_ports(const void *a_, const void *b_)
 {
-    const struct ofp_phy_port *a = a_;
-    const struct ofp_phy_port *b = b_;
-    uint16_t ap = ntohs(a->port_no);
-    uint16_t bp = ntohs(b->port_no);
+    const struct ofputil_phy_port *a = a_;
+    const struct ofputil_phy_port *b = b_;
+    uint16_t ap = a->port_no;
+    uint16_t bp = b->port_no;
 
     return ap < bp ? -1 : ap > bp;
 }
 
-struct bit_name {
-    uint32_t bit;
-    const char *name;
-};
-
 static void
 ofp_print_bit_names(struct ds *string, uint32_t bits,
-                    const struct bit_name bit_names[])
+                    const char *(*bit_to_name)(uint32_t bit),
+                    char separator)
 {
     int n = 0;
+    int i;
 
     if (!bits) {
         ds_put_cstr(string, "0");
         return;
     }
 
-    for (; bits && bit_names->name; bit_names++) {
-        if (bits & bit_names->bit) {
-            if (n++) {
-                ds_put_char(string, ' ');
+    for (i = 0; i < 32; i++) {
+        uint32_t bit = UINT32_C(1) << i;
+
+        if (bits & bit) {
+            const char *name = bit_to_name(bit);
+            if (name) {
+                if (n++) {
+                    ds_put_char(string, separator);
+                }
+                ds_put_cstr(string, name);
+                bits &= ~bit;
             }
-            ds_put_cstr(string, bit_names->name);
-            bits &= ~bit_names->bit;
         }
     }
 
     if (bits) {
-        if (n++) {
-            ds_put_char(string, ' ');
+        if (n) {
+            ds_put_char(string, separator);
         }
         ds_put_format(string, "0x%"PRIx32, bits);
     }
 }
 
-static void
-ofp_print_port_features(struct ds *string, uint32_t features)
+static const char *
+netdev_feature_to_name(uint32_t bit)
 {
-    static const struct bit_name feature_bits[] = {
-        { OFPPF_10MB_HD,    "10MB-HD" },
-        { OFPPF_10MB_FD,    "10MB-FD" },
-        { OFPPF_100MB_HD,   "100MB-HD" },
-        { OFPPF_100MB_FD,   "100MB-FD" },
-        { OFPPF_1GB_HD,     "1GB-HD" },
-        { OFPPF_1GB_FD,     "1GB-FD" },
-        { OFPPF_10GB_FD,    "10GB-FD" },
-        { OFPPF_COPPER,     "COPPER" },
-        { OFPPF_FIBER,      "FIBER" },
-        { OFPPF_AUTONEG,    "AUTO_NEG" },
-        { OFPPF_PAUSE,      "AUTO_PAUSE" },
-        { OFPPF_PAUSE_ASYM, "AUTO_PAUSE_ASYM" },
-        { 0,                NULL },
-    };
+    enum netdev_features f = bit;
 
-    ofp_print_bit_names(string, features, feature_bits);
-    ds_put_char(string, '\n');
+    switch (f) {
+    case NETDEV_F_10MB_HD:    return "10MB-HD";
+    case NETDEV_F_10MB_FD:    return "10MB-FD";
+    case NETDEV_F_100MB_HD:   return "100MB-HD";
+    case NETDEV_F_100MB_FD:   return "100MB-FD";
+    case NETDEV_F_1GB_HD:     return "1GB-HD";
+    case NETDEV_F_1GB_FD:     return "1GB-FD";
+    case NETDEV_F_10GB_FD:    return "10GB-FD";
+    case NETDEV_F_40GB_FD:    return "40GB-FD";
+    case NETDEV_F_100GB_FD:   return "100GB-FD";
+    case NETDEV_F_1TB_FD:     return "1TB-FD";
+    case NETDEV_F_OTHER:      return "OTHER";
+    case NETDEV_F_COPPER:     return "COPPER";
+    case NETDEV_F_FIBER:      return "FIBER";
+    case NETDEV_F_AUTONEG:    return "AUTO_NEG";
+    case NETDEV_F_PAUSE:      return "AUTO_PAUSE";
+    case NETDEV_F_PAUSE_ASYM: return "AUTO_PAUSE_ASYM";
+    }
+
+    return NULL;
 }
 
 static void
-ofp_print_port_config(struct ds *string, uint32_t config)
+ofp_print_port_features(struct ds *string, enum netdev_features features)
 {
-    static const struct bit_name config_bits[] = {
-        { OFPPC_PORT_DOWN,    "PORT_DOWN" },
-        { OFPPC_NO_STP,       "NO_STP" },
-        { OFPPC_NO_RECV,      "NO_RECV" },
-        { OFPPC_NO_RECV_STP,  "NO_RECV_STP" },
-        { OFPPC_NO_FLOOD,     "NO_FLOOD" },
-        { OFPPC_NO_FWD,       "NO_FWD" },
-        { OFPPC_NO_PACKET_IN, "NO_PACKET_IN" },
-        { 0,                  NULL },
-    };
-
-    ofp_print_bit_names(string, config, config_bits);
+    ofp_print_bit_names(string, features, netdev_feature_to_name, ' ');
     ds_put_char(string, '\n');
 }
 
-static void
-ofp_print_port_state(struct ds *string, uint32_t state)
+static const char *
+ofputil_port_config_to_name(uint32_t bit)
 {
-    static const struct bit_name state_bits[] = {
-        { OFPPS_LINK_DOWN, "LINK_DOWN" },
-        { 0,               NULL },
-    };
-    uint32_t stp_state;
+    enum ofputil_port_config pc = bit;
+
+    switch (pc) {
+    case OFPUTIL_PC_PORT_DOWN:    return "PORT_DOWN";
+    case OFPUTIL_PC_NO_STP:       return "NO_STP";
+    case OFPUTIL_PC_NO_RECV:      return "NO_RECV";
+    case OFPUTIL_PC_NO_RECV_STP:  return "NO_RECV_STP";
+    case OFPUTIL_PC_NO_FLOOD:     return "NO_FLOOD";
+    case OFPUTIL_PC_NO_FWD:       return "NO_FWD";
+    case OFPUTIL_PC_NO_PACKET_IN: return "NO_PACKET_IN";
+    }
+
+    return NULL;
+}
+
+static void
+ofp_print_port_config(struct ds *string, enum ofputil_port_config config)
+{
+    ofp_print_bit_names(string, config, ofputil_port_config_to_name, ' ');
+    ds_put_char(string, '\n');
+}
+
+static const char *
+ofputil_port_state_to_name(uint32_t bit)
+{
+    enum ofputil_port_state ps = bit;
+
+    switch (ps) {
+    case OFPUTIL_PS_LINK_DOWN: return "LINK_DOWN";
+    case OFPUTIL_PS_BLOCKED:   return "BLOCKED";
+    case OFPUTIL_PS_LIVE:      return "LIVE";
+
+    case OFPUTIL_PS_STP_LISTEN:
+    case OFPUTIL_PS_STP_LEARN:
+    case OFPUTIL_PS_STP_FORWARD:
+    case OFPUTIL_PS_STP_BLOCK:
+        /* Handled elsewhere. */
+        return NULL;
+    }
+
+    return NULL;
+}
+
+static void
+ofp_print_port_state(struct ds *string, enum ofputil_port_state state)
+{
+    enum ofputil_port_state stp_state;
 
     /* The STP state is a 2-bit field so it doesn't fit in with the bitmask
      * pattern.  We have to special case it.
@@ -517,25 +324,27 @@ ofp_print_port_state(struct ds *string, uint32_t state)
      * talking to OVS, so we'd always print STP_LISTEN in that case.
      * Therefore, we don't print anything at all if the value is STP_LISTEN, to
      * avoid confusing users. */
-    stp_state = state & OFPPS_STP_MASK;
+    stp_state = state & OFPUTIL_PS_STP_MASK;
     if (stp_state) {
-        ds_put_cstr(string, (stp_state == OFPPS_STP_LEARN ? "STP_LEARN"
-                             : stp_state == OFPPS_STP_FORWARD ? "STP_FORWARD"
-                             : "STP_BLOCK"));
-        state &= ~OFPPS_STP_MASK;
+        ds_put_cstr(string,
+                    (stp_state == OFPUTIL_PS_STP_LEARN ? "STP_LEARN"
+                     : stp_state == OFPUTIL_PS_STP_FORWARD ? "STP_FORWARD"
+                     : "STP_BLOCK"));
+        state &= ~OFPUTIL_PS_STP_MASK;
         if (state) {
-            ofp_print_bit_names(string, state, state_bits);
+            ofp_print_bit_names(string, state, ofputil_port_state_to_name,
+                                ' ');
         }
     } else {
-        ofp_print_bit_names(string, state, state_bits);
+        ofp_print_bit_names(string, state, ofputil_port_state_to_name, ' ');
     }
     ds_put_char(string, '\n');
 }
 
 static void
-ofp_print_phy_port(struct ds *string, const struct ofp_phy_port *port)
+ofp_print_phy_port(struct ds *string, const struct ofputil_phy_port *port)
 {
-    char name[OFP_MAX_PORT_NAME_LEN];
+    char name[sizeof port->name];
     int j;
 
     memcpy(name, port->name, sizeof name);
@@ -547,69 +356,181 @@ ofp_print_phy_port(struct ds *string, const struct ofp_phy_port *port)
     name[j] = '\0';
 
     ds_put_char(string, ' ');
-    ofputil_format_port(ntohs(port->port_no), string);
+    ofputil_format_port(port->port_no, string);
     ds_put_format(string, "(%s): addr:"ETH_ADDR_FMT"\n",
                   name, ETH_ADDR_ARGS(port->hw_addr));
 
     ds_put_cstr(string, "     config:     ");
-    ofp_print_port_config(string, ntohl(port->config));
+    ofp_print_port_config(string, port->config);
 
     ds_put_cstr(string, "     state:      ");
-    ofp_print_port_state(string, ntohl(port->state));
+    ofp_print_port_state(string, port->state);
 
     if (port->curr) {
         ds_put_format(string, "     current:    ");
-        ofp_print_port_features(string, ntohl(port->curr));
+        ofp_print_port_features(string, port->curr);
     }
     if (port->advertised) {
         ds_put_format(string, "     advertised: ");
-        ofp_print_port_features(string, ntohl(port->advertised));
+        ofp_print_port_features(string, port->advertised);
     }
     if (port->supported) {
         ds_put_format(string, "     supported:  ");
-        ofp_print_port_features(string, ntohl(port->supported));
+        ofp_print_port_features(string, port->supported);
     }
     if (port->peer) {
         ds_put_format(string, "     peer:       ");
-        ofp_print_port_features(string, ntohl(port->peer));
+        ofp_print_port_features(string, port->peer);
     }
+    ds_put_format(string, "     speed: %"PRIu32" Mbps now, "
+                  "%"PRIu32" Mbps max\n",
+                  port->curr_speed / UINT32_C(1000),
+                  port->max_speed / UINT32_C(1000));
+}
+
+/* Given a buffer 'b' that contains an array of OpenFlow ports of type
+ * 'ofp_version', writes a detailed description of each port into
+ * 'string'. */
+static void
+ofp_print_phy_ports(struct ds *string, uint8_t ofp_version,
+                    struct ofpbuf *b)
+{
+    size_t n_ports;
+    struct ofputil_phy_port *ports;
+    enum ofperr error;
+    size_t i;
+
+    n_ports = ofputil_count_phy_ports(ofp_version, b);
+
+    ports = xmalloc(n_ports * sizeof *ports);
+    for (i = 0; i < n_ports; i++) {
+        error = ofputil_pull_phy_port(ofp_version, b, &ports[i]);
+        if (error) {
+            ofp_print_error(string, error);
+            goto exit;
+        }
+    }
+    qsort(ports, n_ports, sizeof *ports, compare_ports);
+    for (i = 0; i < n_ports; i++) {
+        ofp_print_phy_port(string, &ports[i]);
+    }
+
+exit:
+    free(ports);
+}
+
+static const char *
+ofputil_capabilities_to_name(uint32_t bit)
+{
+    enum ofputil_capabilities capabilities = bit;
+
+    switch (capabilities) {
+    case OFPUTIL_C_FLOW_STATS:   return "FLOW_STATS";
+    case OFPUTIL_C_TABLE_STATS:  return "TABLE_STATS";
+    case OFPUTIL_C_PORT_STATS:   return "PORT_STATS";
+    case OFPUTIL_C_IP_REASM:     return "IP_REASM";
+    case OFPUTIL_C_QUEUE_STATS:  return "QUEUE_STATS";
+    case OFPUTIL_C_ARP_MATCH_IP: return "ARP_MATCH_IP";
+    case OFPUTIL_C_STP:          return "STP";
+    case OFPUTIL_C_GROUP_STATS:  return "GROUP_STATS";
+    case OFPUTIL_C_PORT_BLOCKED: return "PORT_BLOCKED";
+    }
+
+    return NULL;
+}
+
+static const char *
+ofputil_action_bitmap_to_name(uint32_t bit)
+{
+    enum ofputil_action_bitmap action = bit;
+
+    switch (action) {
+    case OFPUTIL_A_OUTPUT:         return "OUTPUT";
+    case OFPUTIL_A_SET_VLAN_VID:   return "SET_VLAN_VID";
+    case OFPUTIL_A_SET_VLAN_PCP:   return "SET_VLAN_PCP";
+    case OFPUTIL_A_STRIP_VLAN:     return "STRIP_VLAN";
+    case OFPUTIL_A_SET_DL_SRC:     return "SET_DL_SRC";
+    case OFPUTIL_A_SET_DL_DST:     return "SET_DL_DST";
+    case OFPUTIL_A_SET_NW_SRC:     return "SET_NW_SRC";
+    case OFPUTIL_A_SET_NW_DST:     return "SET_NW_DST";
+    case OFPUTIL_A_SET_NW_ECN:     return "SET_NW_ECN";
+    case OFPUTIL_A_SET_NW_TOS:     return "SET_NW_TOS";
+    case OFPUTIL_A_SET_TP_SRC:     return "SET_TP_SRC";
+    case OFPUTIL_A_SET_TP_DST:     return "SET_TP_DST";
+    case OFPUTIL_A_SET_FIELD:      return "SET_FIELD";
+    case OFPUTIL_A_ENQUEUE:        return "ENQUEUE";
+    case OFPUTIL_A_COPY_TTL_OUT:   return "COPY_TTL_OUT";
+    case OFPUTIL_A_COPY_TTL_IN:    return "COPY_TTL_IN";
+    case OFPUTIL_A_SET_MPLS_LABEL: return "SET_MPLS_LABEL";
+    case OFPUTIL_A_SET_MPLS_TC:    return "SET_MPLS_TC";
+    case OFPUTIL_A_SET_MPLS_TTL:   return "SET_MPLS_TTL";
+    case OFPUTIL_A_DEC_MPLS_TTL:   return "DEC_MPLS_TTL";
+    case OFPUTIL_A_PUSH_VLAN:      return "PUSH_VLAN";
+    case OFPUTIL_A_POP_VLAN:       return "POP_VLAN";
+    case OFPUTIL_A_PUSH_MPLS:      return "PUSH_MPLS";
+    case OFPUTIL_A_POP_MPLS:       return "POP_MPLS";
+    case OFPUTIL_A_SET_QUEUE:      return "SET_QUEUE";
+    case OFPUTIL_A_GROUP:          return "GROUP";
+    case OFPUTIL_A_SET_NW_TTL:     return "SET_NW_TTL";
+    case OFPUTIL_A_DEC_NW_TTL:     return "DEC_NW_TTL";
+    }
+
+    return NULL;
 }
 
 static void
-ofp_print_switch_features(struct ds *string,
-                          const struct ofp_switch_features *osf)
+ofp_print_switch_features(struct ds *string, const struct ofp_header *oh)
 {
-    size_t len = ntohs(osf->header.length);
-    struct ofp_phy_port *port_list;
-    int n_ports;
-    int i;
+    struct ofputil_switch_features features;
+    enum ofperr error;
+    struct ofpbuf b;
 
-    ds_put_format(string, " ver:0x%x, dpid:%016"PRIx64"\n",
-            osf->header.version, ntohll(osf->datapath_id));
-    ds_put_format(string, "n_tables:%d, n_buffers:%d\n", osf->n_tables,
-            ntohl(osf->n_buffers));
-    ds_put_format(string, "features: capabilities:%#x, actions:%#x\n",
-           ntohl(osf->capabilities), ntohl(osf->actions));
-
-    n_ports = (len - sizeof *osf) / sizeof *osf->ports;
-
-    port_list = xmemdup(osf->ports, len - sizeof *osf);
-    qsort(port_list, n_ports, sizeof *port_list, compare_ports);
-    for (i = 0; i < n_ports; i++) {
-        ofp_print_phy_port(string, &port_list[i]);
+    error = ofputil_decode_switch_features(oh, &features, &b);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
     }
-    free(port_list);
+
+    ds_put_format(string, " dpid:%016"PRIx64"\n", features.datapath_id);
+    ds_put_format(string, "n_tables:%"PRIu8", n_buffers:%"PRIu32"\n",
+                  features.n_tables, features.n_buffers);
+
+    ds_put_cstr(string, "capabilities: ");
+    ofp_print_bit_names(string, features.capabilities,
+                        ofputil_capabilities_to_name, ' ');
+    ds_put_char(string, '\n');
+
+    switch ((enum ofp_version)oh->version) {
+    case OFP10_VERSION:
+        ds_put_cstr(string, "actions: ");
+        ofp_print_bit_names(string, features.actions,
+                            ofputil_action_bitmap_to_name, ' ');
+        ds_put_char(string, '\n');
+        break;
+    case OFP11_VERSION:
+    case OFP12_VERSION:
+        break;
+    default:
+        NOT_REACHED();
+    }
+
+    ofp_print_phy_ports(string, oh->version, &b);
 }
 
 static void
 ofp_print_switch_config(struct ds *string, const struct ofp_switch_config *osc)
 {
-    uint16_t flags;
+    enum ofp_config_flags flags;
 
     flags = ntohs(osc->flags);
 
     ds_put_format(string, " frags=%s", ofputil_frag_handling_to_string(flags));
     flags &= ~OFPC_FRAG_MASK;
+
+    if (flags & OFPC_INVALID_TTL_TO_CONTROLLER) {
+        ds_put_format(string, " invalid_ttl_to_controller");
+        flags &= ~OFPC_INVALID_TTL_TO_CONTROLLER;
+    }
 
     if (flags) {
         ds_put_format(string, " ***unknown flags 0x%04"PRIx16"***", flags);
@@ -661,25 +582,25 @@ print_ip_netmask(struct ds *string, const char *leader, ovs_be32 ip,
 }
 
 void
-ofp_print_match(struct ds *f, const struct ofp_match *om, int verbosity)
+ofp10_match_print(struct ds *f, const struct ofp10_match *om, int verbosity)
 {
-    char *s = ofp_match_to_string(om, verbosity);
+    char *s = ofp10_match_to_string(om, verbosity);
     ds_put_cstr(f, s);
     free(s);
 }
 
 char *
-ofp_match_to_string(const struct ofp_match *om, int verbosity)
+ofp10_match_to_string(const struct ofp10_match *om, int verbosity)
 {
     struct ds f = DS_EMPTY_INITIALIZER;
     uint32_t w = ntohl(om->wildcards);
     bool skip_type = false;
     bool skip_proto = false;
 
-    if (!(w & OFPFW_DL_TYPE)) {
+    if (!(w & OFPFW10_DL_TYPE)) {
         skip_type = true;
         if (om->dl_type == htons(ETH_TYPE_IP)) {
-            if (!(w & OFPFW_NW_PROTO)) {
+            if (!(w & OFPFW10_NW_PROTO)) {
                 skip_proto = true;
                 if (om->nw_proto == IPPROTO_ICMP) {
                     ds_put_cstr(&f, "icmp,");
@@ -696,48 +617,53 @@ ofp_match_to_string(const struct ofp_match *om, int verbosity)
             }
         } else if (om->dl_type == htons(ETH_TYPE_ARP)) {
             ds_put_cstr(&f, "arp,");
+        } else if (om->dl_type == htons(ETH_TYPE_RARP)){
+            ds_put_cstr(&f, "rarp,");
         } else {
             skip_type = false;
         }
     }
-    print_wild(&f, "in_port=", w & OFPFW_IN_PORT, verbosity,
+    print_wild(&f, "in_port=", w & OFPFW10_IN_PORT, verbosity,
                "%d", ntohs(om->in_port));
-    print_wild(&f, "dl_vlan=", w & OFPFW_DL_VLAN, verbosity,
+    print_wild(&f, "dl_vlan=", w & OFPFW10_DL_VLAN, verbosity,
                "%d", ntohs(om->dl_vlan));
-    print_wild(&f, "dl_vlan_pcp=", w & OFPFW_DL_VLAN_PCP, verbosity,
+    print_wild(&f, "dl_vlan_pcp=", w & OFPFW10_DL_VLAN_PCP, verbosity,
                "%d", om->dl_vlan_pcp);
-    print_wild(&f, "dl_src=", w & OFPFW_DL_SRC, verbosity,
+    print_wild(&f, "dl_src=", w & OFPFW10_DL_SRC, verbosity,
                ETH_ADDR_FMT, ETH_ADDR_ARGS(om->dl_src));
-    print_wild(&f, "dl_dst=", w & OFPFW_DL_DST, verbosity,
+    print_wild(&f, "dl_dst=", w & OFPFW10_DL_DST, verbosity,
                ETH_ADDR_FMT, ETH_ADDR_ARGS(om->dl_dst));
     if (!skip_type) {
-        print_wild(&f, "dl_type=", w & OFPFW_DL_TYPE, verbosity,
+        print_wild(&f, "dl_type=", w & OFPFW10_DL_TYPE, verbosity,
                    "0x%04x", ntohs(om->dl_type));
     }
     print_ip_netmask(&f, "nw_src=", om->nw_src,
-                     (w & OFPFW_NW_SRC_MASK) >> OFPFW_NW_SRC_SHIFT, verbosity);
+                     (w & OFPFW10_NW_SRC_MASK) >> OFPFW10_NW_SRC_SHIFT,
+                     verbosity);
     print_ip_netmask(&f, "nw_dst=", om->nw_dst,
-                     (w & OFPFW_NW_DST_MASK) >> OFPFW_NW_DST_SHIFT, verbosity);
+                     (w & OFPFW10_NW_DST_MASK) >> OFPFW10_NW_DST_SHIFT,
+                     verbosity);
     if (!skip_proto) {
-        if (om->dl_type == htons(ETH_TYPE_ARP)) {
-            print_wild(&f, "arp_op=", w & OFPFW_NW_PROTO, verbosity,
+        if (om->dl_type == htons(ETH_TYPE_ARP) ||
+            om->dl_type == htons(ETH_TYPE_RARP)) {
+            print_wild(&f, "arp_op=", w & OFPFW10_NW_PROTO, verbosity,
                        "%u", om->nw_proto);
         } else {
-            print_wild(&f, "nw_proto=", w & OFPFW_NW_PROTO, verbosity,
+            print_wild(&f, "nw_proto=", w & OFPFW10_NW_PROTO, verbosity,
                        "%u", om->nw_proto);
         }
     }
-    print_wild(&f, "nw_tos=", w & OFPFW_NW_TOS, verbosity,
+    print_wild(&f, "nw_tos=", w & OFPFW10_NW_TOS, verbosity,
                "%u", om->nw_tos);
     if (om->nw_proto == IPPROTO_ICMP) {
-        print_wild(&f, "icmp_type=", w & OFPFW_ICMP_TYPE, verbosity,
+        print_wild(&f, "icmp_type=", w & OFPFW10_ICMP_TYPE, verbosity,
                    "%d", ntohs(om->tp_src));
-        print_wild(&f, "icmp_code=", w & OFPFW_ICMP_CODE, verbosity,
+        print_wild(&f, "icmp_code=", w & OFPFW10_ICMP_CODE, verbosity,
                    "%d", ntohs(om->tp_dst));
     } else {
-        print_wild(&f, "tp_src=", w & OFPFW_TP_SRC, verbosity,
+        print_wild(&f, "tp_src=", w & OFPFW10_TP_SRC, verbosity,
                    "%d", ntohs(om->tp_src));
-        print_wild(&f, "tp_dst=", w & OFPFW_TP_DST, verbosity,
+        print_wild(&f, "tp_dst=", w & OFPFW10_TP_DST, verbosity,
                    "%d", ntohs(om->tp_dst));
     }
     if (ds_last(&f) == ',') {
@@ -747,15 +673,22 @@ ofp_match_to_string(const struct ofp_match *om, int verbosity)
 }
 
 static void
-ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh,
-                   enum ofputil_msg_code code, int verbosity)
+ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
 {
     struct ofputil_flow_mod fm;
+    struct ofpbuf ofpacts;
     bool need_priority;
-    int error;
+    enum ofperr error;
+    enum ofpraw raw;
+    enum ofputil_protocol protocol;
 
-    error = ofputil_decode_flow_mod(&fm, oh, true);
+    protocol = ofputil_protocol_from_ofp_version(oh->version);
+    protocol = ofputil_protocol_set_tid(protocol, true);
+
+    ofpbuf_init(&ofpacts, 64);
+    error = ofputil_decode_flow_mod(&fm, oh, protocol, &ofpacts);
     if (error) {
+        ofpbuf_uninit(&ofpacts);
         ofp_print_error(s, error);
         return;
     }
@@ -785,14 +718,15 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh,
     }
 
     ds_put_char(s, ' ');
-    if (verbosity >= 3 && code == OFPUTIL_OFPT_FLOW_MOD) {
-        const struct ofp_flow_mod *ofm = (const struct ofp_flow_mod *) oh;
-        ofp_print_match(s, &ofm->match, verbosity);
+    ofpraw_decode(&raw, oh);
+    if (verbosity >= 3 && raw == OFPRAW_OFPT10_FLOW_MOD) {
+        const struct ofp10_flow_mod *ofm = ofpmsg_body(oh);
+        ofp10_match_print(s, &ofm->match, verbosity);
 
         /* ofp_print_match() doesn't print priority. */
         need_priority = true;
-    } else if (verbosity >= 3 && code == OFPUTIL_NXT_FLOW_MOD) {
-        const struct nx_flow_mod *nfm = (const struct nx_flow_mod *) oh;
+    } else if (verbosity >= 3 && raw == OFPRAW_NXT_FLOW_MOD) {
+        const struct nx_flow_mod *nfm = ofpmsg_body(oh);
         const void *nxm = nfm + 1;
         char *nxm_s;
 
@@ -803,17 +737,21 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh,
         /* nx_match_to_string() doesn't print priority. */
         need_priority = true;
     } else {
-        cls_rule_format(&fm.cr, s);
+        match_format(&fm.match, s, fm.priority);
 
-        /* cls_rule_format() does print priority. */
+        /* match_format() does print priority. */
         need_priority = false;
     }
 
     if (ds_last(s) != ' ') {
         ds_put_char(s, ' ');
     }
-    if (fm.cookie != htonll(0)) {
-        ds_put_format(s, "cookie:0x%"PRIx64" ", ntohll(fm.cookie));
+    if (fm.new_cookie != htonll(0) && fm.new_cookie != htonll(UINT64_MAX)) {
+        ds_put_format(s, "cookie:0x%"PRIx64" ", ntohll(fm.new_cookie));
+    }
+    if (fm.cookie_mask != htonll(0)) {
+        ds_put_format(s, "cookie:0x%"PRIx64"/0x%"PRIx64" ",
+                ntohll(fm.cookie), ntohll(fm.cookie_mask));
     }
     if (fm.idle_timeout != OFP_FLOW_PERMANENT) {
         ds_put_format(s, "idle:%"PRIu16" ", fm.idle_timeout);
@@ -821,17 +759,38 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh,
     if (fm.hard_timeout != OFP_FLOW_PERMANENT) {
         ds_put_format(s, "hard:%"PRIu16" ", fm.hard_timeout);
     }
-    if (fm.cr.priority != OFP_DEFAULT_PRIORITY && need_priority) {
-        ds_put_format(s, "pri:%"PRIu16" ", fm.cr.priority);
+    if (fm.priority != OFP_DEFAULT_PRIORITY && need_priority) {
+        ds_put_format(s, "pri:%"PRIu16" ", fm.priority);
     }
     if (fm.buffer_id != UINT32_MAX) {
         ds_put_format(s, "buf:0x%"PRIx32" ", fm.buffer_id);
     }
+    if (fm.out_port != OFPP_NONE) {
+        ds_put_format(s, "out_port:");
+        ofputil_format_port(fm.out_port, s);
+        ds_put_char(s, ' ');
+    }
     if (fm.flags != 0) {
-        ds_put_format(s, "flags:0x%"PRIx16" ", fm.flags);
+        uint16_t flags = fm.flags;
+
+        if (flags & OFPFF_SEND_FLOW_REM) {
+            ds_put_cstr(s, "send_flow_rem ");
+        }
+        if (flags & OFPFF_CHECK_OVERLAP) {
+            ds_put_cstr(s, "check_overlap ");
+        }
+        if (flags & OFPFF10_EMERG) {
+            ds_put_cstr(s, "emerg ");
+        }
+
+        flags &= ~(OFPFF_SEND_FLOW_REM | OFPFF_CHECK_OVERLAP | OFPFF10_EMERG);
+        if (flags) {
+            ds_put_format(s, "flags:0x%"PRIx16" ", flags);
+        }
     }
 
-    ofp_print_actions(s, fm.actions, fm.n_actions);
+    ofpacts_format(fm.ofpacts, fm.ofpacts_len, s);
+    ofpbuf_uninit(&ofpacts);
 }
 
 static void
@@ -847,11 +806,33 @@ ofp_print_duration(struct ds *string, unsigned int sec, unsigned int nsec)
     ds_put_char(string, 's');
 }
 
+static const char *
+ofp_flow_removed_reason_to_string(enum ofp_flow_removed_reason reason)
+{
+    static char s[32];
+
+    switch (reason) {
+    case OFPRR_IDLE_TIMEOUT:
+        return "idle";
+    case OFPRR_HARD_TIMEOUT:
+        return "hard";
+    case OFPRR_DELETE:
+        return "delete";
+    case OFPRR_GROUP_DELETE:
+        return "group_delete";
+    case OFPRR_EVICTION:
+        return "eviction";
+    default:
+        sprintf(s, "%d", (int) reason);
+        return s;
+    }
+}
+
 static void
 ofp_print_flow_removed(struct ds *string, const struct ofp_header *oh)
 {
     struct ofputil_flow_removed fr;
-    int error;
+    enum ofperr error;
 
     error = ofputil_decode_flow_removed(&fr, oh);
     if (error) {
@@ -860,22 +841,13 @@ ofp_print_flow_removed(struct ds *string, const struct ofp_header *oh)
     }
 
     ds_put_char(string, ' ');
-    cls_rule_format(&fr.rule, string);
+    match_format(&fr.match, string, fr.priority);
 
-    ds_put_cstr(string, " reason=");
-    switch (fr.reason) {
-    case OFPRR_IDLE_TIMEOUT:
-        ds_put_cstr(string, "idle");
-        break;
-    case OFPRR_HARD_TIMEOUT:
-        ds_put_cstr(string, "hard");
-        break;
-    case OFPRR_DELETE:
-        ds_put_cstr(string, "delete");
-        break;
-    default:
-        ds_put_format(string, "**%"PRIu8"**", fr.reason);
-        break;
+    ds_put_format(string, " reason=%s",
+                  ofp_flow_removed_reason_to_string(fr.reason));
+
+    if (fr.table_id != 255) {
+        ds_put_format(string, " table_id=%"PRIu8, fr.table_id);
     }
 
     if (fr.cookie != htonll(0)) {
@@ -883,87 +855,108 @@ ofp_print_flow_removed(struct ds *string, const struct ofp_header *oh)
     }
     ds_put_cstr(string, " duration");
     ofp_print_duration(string, fr.duration_sec, fr.duration_nsec);
-    ds_put_format(string, " idle%"PRIu16" pkts%"PRIu64" bytes%"PRIu64"\n",
-         fr.idle_timeout, fr.packet_count, fr.byte_count);
+    ds_put_format(string, " idle%"PRIu16, fr.idle_timeout);
+    if (fr.hard_timeout) {
+        /* The hard timeout was only added in OF1.2, so only print it if it is
+         * actually in use to avoid gratuitous change to the formatting. */
+        ds_put_format(string, " hard%"PRIu16, fr.hard_timeout);
+    }
+    ds_put_format(string, " pkts%"PRIu64" bytes%"PRIu64"\n",
+                  fr.packet_count, fr.byte_count);
 }
 
 static void
-ofp_print_port_mod(struct ds *string, const struct ofp_port_mod *opm)
+ofp_print_port_mod(struct ds *string, const struct ofp_header *oh)
 {
-    ds_put_format(string, "port: %d: addr:"ETH_ADDR_FMT", config: %#x, mask:%#x\n",
-            ntohs(opm->port_no), ETH_ADDR_ARGS(opm->hw_addr),
-            ntohl(opm->config), ntohl(opm->mask));
+    struct ofputil_port_mod pm;
+    enum ofperr error;
+
+    error = ofputil_decode_port_mod(oh, &pm);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
+
+    ds_put_format(string, "port: %"PRIu16": addr:"ETH_ADDR_FMT"\n",
+                  pm.port_no, ETH_ADDR_ARGS(pm.hw_addr));
+
+    ds_put_format(string, "     config: ");
+    ofp_print_port_config(string, pm.config);
+
+    ds_put_format(string, "     mask:   ");
+    ofp_print_port_config(string, pm.mask);
+
     ds_put_format(string, "     advertise: ");
-    if (opm->advertise) {
-        ofp_print_port_features(string, ntohl(opm->advertise));
+    if (pm.advertise) {
+        ofp_print_port_features(string, pm.advertise);
     } else {
         ds_put_format(string, "UNCHANGED\n");
     }
 }
 
 static void
-ofp_print_error(struct ds *string, int error)
+ofp_print_error(struct ds *string, enum ofperr error)
 {
     if (string->length) {
         ds_put_char(string, ' ');
     }
-    ds_put_cstr(string, "***decode error: ");
-    ofputil_format_error(string, error);
-    ds_put_cstr(string, "***\n");
+    ds_put_format(string, "***decode error: %s***\n", ofperr_get_name(error));
 }
 
 static void
-ofp_print_error_msg(struct ds *string, const struct ofp_error_msg *oem)
+ofp_print_error_msg(struct ds *string, const struct ofp_header *oh)
 {
-    size_t len = ntohs(oem->header.length);
-    size_t payload_ofs, payload_len;
-    const void *payload;
-    int error;
+    size_t len = ntohs(oh->length);
+    struct ofpbuf payload;
+    enum ofperr error;
     char *s;
 
-    error = ofputil_decode_error_msg(&oem->header, &payload_ofs);
-    if (!is_ofp_error(error)) {
-        ofp_print_error(string, error);
-        ds_put_hex_dump(string, oem->data, len - sizeof *oem, 0, true);
+    error = ofperr_decode_msg(oh, &payload);
+    if (!error) {
+        ds_put_cstr(string, "***decode error***");
+        ds_put_hex_dump(string, oh + 1, len - sizeof *oh, 0, true);
         return;
     }
 
-    ds_put_char(string, ' ');
-    ofputil_format_error(string, error);
-    ds_put_char(string, '\n');
+    ds_put_format(string, " %s\n", ofperr_get_name(error));
 
-    payload = (const uint8_t *) oem + payload_ofs;
-    payload_len = len - payload_ofs;
-    switch (get_ofp_err_type(error)) {
-    case OFPET_HELLO_FAILED:
-        ds_put_printable(string, payload, payload_len);
-        break;
-
-    default:
-        s = ofp_to_string(payload, payload_len, 1);
+    if (error == OFPERR_OFPHFC_INCOMPATIBLE || error == OFPERR_OFPHFC_EPERM) {
+        ds_put_printable(string, payload.data, payload.size);
+    } else {
+        s = ofp_to_string(payload.data, payload.size, 1);
         ds_put_cstr(string, s);
         free(s);
-        break;
     }
 }
 
 static void
-ofp_print_port_status(struct ds *string, const struct ofp_port_status *ops)
+ofp_print_port_status(struct ds *string, const struct ofp_header *oh)
 {
-    if (ops->reason == OFPPR_ADD) {
+    struct ofputil_port_status ps;
+    enum ofperr error;
+
+    error = ofputil_decode_port_status(oh, &ps);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
+
+    if (ps.reason == OFPPR_ADD) {
         ds_put_format(string, " ADD:");
-    } else if (ops->reason == OFPPR_DELETE) {
+    } else if (ps.reason == OFPPR_DELETE) {
         ds_put_format(string, " DEL:");
-    } else if (ops->reason == OFPPR_MODIFY) {
+    } else if (ps.reason == OFPPR_MODIFY) {
         ds_put_format(string, " MOD:");
     }
 
-    ofp_print_phy_port(string, &ops->desc);
+    ofp_print_phy_port(string, &ps.desc);
 }
 
 static void
-ofp_print_ofpst_desc_reply(struct ds *string, const struct ofp_desc_stats *ods)
+ofp_print_ofpst_desc_reply(struct ds *string, const struct ofp_header *oh)
 {
+    const struct ofp_desc_stats *ods = ofpmsg_body(oh);
+
     ds_put_char(string, '\n');
     ds_put_format(string, "Manufacturer: %.*s\n",
             (int) sizeof ods->mfr_desc, ods->mfr_desc);
@@ -978,13 +971,12 @@ ofp_print_ofpst_desc_reply(struct ds *string, const struct ofp_desc_stats *ods)
 }
 
 static void
-ofp_print_flow_stats_request(struct ds *string,
-                             const struct ofp_stats_msg *osm)
+ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh)
 {
     struct ofputil_flow_stats_request fsr;
-    int error;
+    enum ofperr error;
 
-    error = ofputil_decode_flow_stats_request(&fsr, &osm->header);
+    error = ofputil_decode_flow_stats_request(&fsr, oh);
     if (error) {
         ofp_print_error(string, error);
         return;
@@ -999,80 +991,86 @@ ofp_print_flow_stats_request(struct ds *string,
         ofputil_format_port(fsr.out_port, string);
     }
 
-    /* A flow stats request doesn't include a priority, but cls_rule_format()
-     * will print one unless it is OFP_DEFAULT_PRIORITY. */
-    fsr.match.priority = OFP_DEFAULT_PRIORITY;
-
     ds_put_char(string, ' ');
-    cls_rule_format(&fsr.match, string);
+    match_format(&fsr.match, string, OFP_DEFAULT_PRIORITY);
+}
+
+void
+ofp_print_flow_stats(struct ds *string, struct ofputil_flow_stats *fs)
+{
+    ds_put_format(string, " cookie=0x%"PRIx64", duration=",
+                  ntohll(fs->cookie));
+
+    ofp_print_duration(string, fs->duration_sec, fs->duration_nsec);
+    ds_put_format(string, ", table=%"PRIu8", ", fs->table_id);
+    ds_put_format(string, "n_packets=%"PRIu64", ", fs->packet_count);
+    ds_put_format(string, "n_bytes=%"PRIu64", ", fs->byte_count);
+    if (fs->idle_timeout != OFP_FLOW_PERMANENT) {
+        ds_put_format(string, "idle_timeout=%"PRIu16", ", fs->idle_timeout);
+    }
+    if (fs->hard_timeout != OFP_FLOW_PERMANENT) {
+        ds_put_format(string, "hard_timeout=%"PRIu16", ", fs->hard_timeout);
+    }
+    if (fs->idle_age >= 0) {
+        ds_put_format(string, "idle_age=%d, ", fs->idle_age);
+    }
+    if (fs->hard_age >= 0 && fs->hard_age != fs->duration_sec) {
+        ds_put_format(string, "hard_age=%d, ", fs->hard_age);
+    }
+
+    match_format(&fs->match, string, fs->priority);
+    if (string->string[string->length - 1] != ' ') {
+        ds_put_char(string, ' ');
+    }
+
+    ofpacts_format(fs->ofpacts, fs->ofpacts_len, string);
 }
 
 static void
 ofp_print_flow_stats_reply(struct ds *string, const struct ofp_header *oh)
 {
+    struct ofpbuf ofpacts;
     struct ofpbuf b;
 
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpbuf_init(&ofpacts, 64);
     for (;;) {
         struct ofputil_flow_stats fs;
         int retval;
 
-        retval = ofputil_decode_flow_stats_reply(&fs, &b);
+        retval = ofputil_decode_flow_stats_reply(&fs, &b, true, &ofpacts);
         if (retval) {
             if (retval != EOF) {
                 ds_put_cstr(string, " ***parse error***");
             }
             break;
         }
-
         ds_put_char(string, '\n');
-
-        ds_put_format(string, " cookie=0x%"PRIx64", duration=",
-                      ntohll(fs.cookie));
-        ofp_print_duration(string, fs.duration_sec, fs.duration_nsec);
-        ds_put_format(string, ", table=%"PRIu8", ", fs.table_id);
-        ds_put_format(string, "n_packets=%"PRIu64", ", fs.packet_count);
-        ds_put_format(string, "n_bytes=%"PRIu64", ", fs.byte_count);
-        if (fs.idle_timeout != OFP_FLOW_PERMANENT) {
-            ds_put_format(string, "idle_timeout=%"PRIu16",", fs.idle_timeout);
-        }
-        if (fs.hard_timeout != OFP_FLOW_PERMANENT) {
-            ds_put_format(string, "hard_timeout=%"PRIu16",", fs.hard_timeout);
-        }
-
-        cls_rule_format(&fs.rule, string);
-        if (string->string[string->length - 1] != ' ') {
-            ds_put_char(string, ' ');
-        }
-        ofp_print_actions(string, fs.actions, fs.n_actions);
+        ofp_print_flow_stats(string, &fs);
      }
+    ofpbuf_uninit(&ofpacts);
 }
 
 static void
-ofp_print_ofpst_aggregate_reply(struct ds *string,
-                                const struct ofp_aggregate_stats_reply *asr)
+ofp_print_aggregate_stats_reply(struct ds *string, const struct ofp_header *oh)
 {
-    ds_put_format(string, " packet_count=%"PRIu64,
-                  ntohll(get_32aligned_be64(&asr->packet_count)));
-    ds_put_format(string, " byte_count=%"PRIu64,
-                  ntohll(get_32aligned_be64(&asr->byte_count)));
-    ds_put_format(string, " flow_count=%"PRIu32, ntohl(asr->flow_count));
+    struct ofputil_aggregate_stats as;
+    enum ofperr error;
+
+    error = ofputil_decode_aggregate_stats_reply(&as, oh);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
+
+    ds_put_format(string, " packet_count=%"PRIu64, as.packet_count);
+    ds_put_format(string, " byte_count=%"PRIu64, as.byte_count);
+    ds_put_format(string, " flow_count=%"PRIu32, as.flow_count);
 }
 
 static void
-ofp_print_nxst_aggregate_reply(struct ds *string,
-                               const struct nx_aggregate_stats_reply *nasr)
+print_port_stat(struct ds *string, const char *leader, uint64_t stat, int more)
 {
-    ds_put_format(string, " packet_count=%"PRIu64, ntohll(nasr->packet_count));
-    ds_put_format(string, " byte_count=%"PRIu64, ntohll(nasr->byte_count));
-    ds_put_format(string, " flow_count=%"PRIu32, ntohl(nasr->flow_count));
-}
-
-static void print_port_stat(struct ds *string, const char *leader,
-                            const ovs_32aligned_be64 *statp, int more)
-{
-    uint64_t stat = ntohll(get_32aligned_be64(statp));
-
     ds_put_cstr(string, leader);
     if (stat != UINT64_MAX) {
         ds_put_format(string, "%"PRIu64, stat);
@@ -1087,69 +1085,235 @@ static void print_port_stat(struct ds *string, const char *leader,
 }
 
 static void
-ofp_print_ofpst_port_request(struct ds *string,
-                             const struct ofp_port_stats_request *psr)
+ofp_print_ofpst_port_request(struct ds *string, const struct ofp_header *oh)
 {
-    ds_put_format(string, " port_no=%"PRIu16, ntohs(psr->port_no));
+    uint16_t ofp10_port;
+    enum ofperr error;
+
+    error = ofputil_decode_port_stats_request(oh, &ofp10_port);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
+
+    ds_put_format(string, " port_no=%2"PRIu16, ofp10_port);
 }
 
 static void
 ofp_print_ofpst_port_reply(struct ds *string, const struct ofp_header *oh,
                            int verbosity)
 {
-    const struct ofp_port_stats *ps = ofputil_stats_body(oh);
-    size_t n = ofputil_stats_body_len(oh) / sizeof *ps;
-    ds_put_format(string, " %zu ports\n", n);
+    struct ofpbuf b;
+
+    ds_put_format(string, " %zu ports\n", ofputil_count_port_stats(oh));
     if (verbosity < 1) {
         return;
     }
 
-    for (; n--; ps++) {
-        ds_put_format(string, "  port %2"PRIu16": ", ntohs(ps->port_no));
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    for (;;) {
+        struct ofputil_port_stats ps;
+        int retval;
 
-        ds_put_cstr(string, "rx ");
-        print_port_stat(string, "pkts=", &ps->rx_packets, 1);
-        print_port_stat(string, "bytes=", &ps->rx_bytes, 1);
-        print_port_stat(string, "drop=", &ps->rx_dropped, 1);
-        print_port_stat(string, "errs=", &ps->rx_errors, 1);
-        print_port_stat(string, "frame=", &ps->rx_frame_err, 1);
-        print_port_stat(string, "over=", &ps->rx_over_err, 1);
-        print_port_stat(string, "crc=", &ps->rx_crc_err, 0);
+        retval = ofputil_decode_port_stats(&ps, &b);
+        if (retval) {
+            if (retval != EOF) {
+                ds_put_cstr(string, " ***parse error***");
+            }
+            return;
+        }
+
+        ds_put_format(string, "  port %2"PRIu16, ps.port_no);
+
+        ds_put_cstr(string, ": rx ");
+        print_port_stat(string, "pkts=", ps.stats.rx_packets, 1);
+        print_port_stat(string, "bytes=", ps.stats.rx_bytes, 1);
+        print_port_stat(string, "drop=", ps.stats.rx_dropped, 1);
+        print_port_stat(string, "errs=", ps.stats.rx_errors, 1);
+        print_port_stat(string, "frame=", ps.stats.rx_frame_errors, 1);
+        print_port_stat(string, "over=", ps.stats.rx_over_errors, 1);
+        print_port_stat(string, "crc=", ps.stats.rx_crc_errors, 0);
 
         ds_put_cstr(string, "           tx ");
-        print_port_stat(string, "pkts=", &ps->tx_packets, 1);
-        print_port_stat(string, "bytes=", &ps->tx_bytes, 1);
-        print_port_stat(string, "drop=", &ps->tx_dropped, 1);
-        print_port_stat(string, "errs=", &ps->tx_errors, 1);
-        print_port_stat(string, "coll=", &ps->collisions, 0);
+        print_port_stat(string, "pkts=", ps.stats.tx_packets, 1);
+        print_port_stat(string, "bytes=", ps.stats.tx_bytes, 1);
+        print_port_stat(string, "drop=", ps.stats.tx_dropped, 1);
+        print_port_stat(string, "errs=", ps.stats.tx_errors, 1);
+        print_port_stat(string, "coll=", ps.stats.collisions, 0);
     }
+}
+
+static void
+ofp_print_one_ofpst_table_reply(struct ds *string, enum ofp_version ofp_version,
+                                const char *name, struct ofp12_table_stats *ts)
+{
+    char name_[OFP_MAX_TABLE_NAME_LEN + 1];
+
+    ovs_strlcpy(name_, name, sizeof name_);
+
+    ds_put_format(string, "  %d: %-8s: ", ts->table_id, name_);
+    ds_put_format(string, "wild=0x%05"PRIx64", ", ntohll(ts->wildcards));
+    ds_put_format(string, "max=%6"PRIu32", ", ntohl(ts->max_entries));
+    ds_put_format(string, "active=%"PRIu32"\n", ntohl(ts->active_count));
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "lookup=%"PRIu64", ", ntohll(ts->lookup_count));
+    ds_put_format(string, "matched=%"PRIu64"\n", ntohll(ts->matched_count));
+
+    if (ofp_version < OFP11_VERSION) {
+        return;
+    }
+
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "match=0x%08"PRIx64", ", ntohll(ts->match));
+    ds_put_format(string, "instructions=0x%08"PRIx32", ",
+                  ntohl(ts->instructions));
+    ds_put_format(string, "config=0x%08"PRIx32"\n", ntohl(ts->config));
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "write_actions=0x%08"PRIx32", ",
+                  ntohl(ts->write_actions));
+    ds_put_format(string, "apply_actions=0x%08"PRIx32"\n",
+                  ntohl(ts->apply_actions));
+
+    if (ofp_version < OFP12_VERSION) {
+        return;
+    }
+
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "write_setfields=0x%016"PRIx64"\n",
+                  ntohll(ts->write_setfields));
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "apply_setfields=0x%016"PRIx64"\n",
+                  ntohll(ts->apply_setfields));
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "metadata_match=0x%016"PRIx64"\n",
+                  ntohll(ts->metadata_match));
+    ds_put_cstr(string, "               ");
+    ds_put_format(string, "metadata_write=0x%016"PRIx64"\n",
+                  ntohll(ts->metadata_write));
+}
+
+static void
+ofp_print_ofpst_table_reply12(struct ds *string, const struct ofp_header *oh,
+                              int verbosity)
+{
+    struct ofp12_table_stats *ts;
+    struct ofpbuf b;
+    size_t n;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+
+    n = b.size / sizeof *ts;
+    ds_put_format(string, " %zu tables\n", n);
+    if (verbosity < 1) {
+        return;
+    }
+
+    for (;;) {
+        ts = ofpbuf_try_pull(&b, sizeof *ts);
+        if (!ts) {
+            return;
+        }
+
+        ofp_print_one_ofpst_table_reply(string, OFP12_VERSION, ts->name, ts);
+     }
+}
+
+static void
+ofp_print_ofpst_table_reply11(struct ds *string, const struct ofp_header *oh,
+                              int verbosity)
+{
+    struct ofp11_table_stats *ts;
+    struct ofpbuf b;
+    size_t n;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+
+    n = b.size / sizeof *ts;
+    ds_put_format(string, " %zu tables\n", n);
+    if (verbosity < 1) {
+        return;
+    }
+
+    for (;;) {
+        struct ofp12_table_stats ts12;
+
+        ts = ofpbuf_try_pull(&b, sizeof *ts);
+        if (!ts) {
+            return;
+        }
+
+        ts12.table_id = ts->table_id;
+        ts12.wildcards = htonll(ntohl(ts->wildcards));
+        ts12.max_entries = ts->max_entries;
+        ts12.active_count = ts->active_count;
+        ts12.lookup_count = ts->lookup_count;
+        ts12.matched_count = ts->matched_count;
+        ts12.match = htonll(ntohl(ts->match));
+        ts12.instructions = ts->instructions;
+        ts12.config = ts->config;
+        ts12.write_actions = ts->write_actions;
+        ts12.apply_actions = ts->apply_actions;
+        ofp_print_one_ofpst_table_reply(string, OFP11_VERSION, ts->name, &ts12);
+     }
+}
+
+static void
+ofp_print_ofpst_table_reply10(struct ds *string, const struct ofp_header *oh,
+                              int verbosity)
+{
+    struct ofp10_table_stats *ts;
+    struct ofpbuf b;
+    size_t n;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+
+    n = b.size / sizeof *ts;
+    ds_put_format(string, " %zu tables\n", n);
+    if (verbosity < 1) {
+        return;
+    }
+
+    for (;;) {
+        struct ofp12_table_stats ts12;
+
+        ts = ofpbuf_try_pull(&b, sizeof *ts);
+        if (!ts) {
+            return;
+        }
+
+        ts12.table_id = ts->table_id;
+        ts12.wildcards = htonll(ntohl(ts->wildcards));
+        ts12.max_entries = ts->max_entries;
+        ts12.active_count = ts->active_count;
+        ts12.lookup_count = get_32aligned_be64(&ts->lookup_count);
+        ts12.matched_count = get_32aligned_be64(&ts->matched_count);
+        ofp_print_one_ofpst_table_reply(string, OFP10_VERSION, ts->name, &ts12);
+     }
 }
 
 static void
 ofp_print_ofpst_table_reply(struct ds *string, const struct ofp_header *oh,
                             int verbosity)
 {
-    const struct ofp_table_stats *ts = ofputil_stats_body(oh);
-    size_t n = ofputil_stats_body_len(oh) / sizeof *ts;
-    ds_put_format(string, " %zu tables\n", n);
-    if (verbosity < 1) {
-        return;
+    switch ((enum ofp_version)oh->version) {
+    case OFP12_VERSION:
+        ofp_print_ofpst_table_reply12(string, oh, verbosity);
+        break;
+
+    case OFP11_VERSION:
+        ofp_print_ofpst_table_reply11(string, oh, verbosity);
+        break;
+
+    case OFP10_VERSION:
+        ofp_print_ofpst_table_reply10(string, oh, verbosity);
+        break;
+
+    default:
+        NOT_REACHED();
     }
-
-    for (; n--; ts++) {
-        char name[OFP_MAX_TABLE_NAME_LEN + 1];
-        ovs_strlcpy(name, ts->name, sizeof name);
-
-        ds_put_format(string, "  %d: %-8s: ", ts->table_id, name);
-        ds_put_format(string, "wild=0x%05"PRIx32", ", ntohl(ts->wildcards));
-        ds_put_format(string, "max=%6"PRIu32", ", ntohl(ts->max_entries));
-        ds_put_format(string, "active=%"PRIu32"\n", ntohl(ts->active_count));
-        ds_put_cstr(string, "               ");
-        ds_put_format(string, "lookup=%"PRIu64", ",
-                      ntohll(get_32aligned_be64(&ts->lookup_count)));
-        ds_put_format(string, "matched=%"PRIu64"\n",
-                      ntohll(get_32aligned_be64(&ts->matched_count)));
-     }
 }
 
 static void
@@ -1163,59 +1327,88 @@ ofp_print_queue_name(struct ds *string, uint32_t queue_id)
 }
 
 static void
-ofp_print_ofpst_queue_request(struct ds *string,
-                              const struct ofp_queue_stats_request *qsr)
+ofp_print_ofpst_queue_request(struct ds *string, const struct ofp_header *oh)
 {
+    struct ofputil_queue_stats_request oqsr;
+    enum ofperr error;
+
+    error = ofputil_decode_queue_stats_request(oh, &oqsr);
+    if (error) {
+        ds_put_format(string, "***decode error: %s***\n", ofperr_get_name(error));
+        return;
+    }
+
     ds_put_cstr(string, "port=");
-    ofputil_format_port(ntohs(qsr->port_no), string);
+    ofputil_format_port(oqsr.port_no, string);
 
     ds_put_cstr(string, " queue=");
-    ofp_print_queue_name(string, ntohl(qsr->queue_id));
+    ofp_print_queue_name(string, oqsr.queue_id);
 }
 
 static void
 ofp_print_ofpst_queue_reply(struct ds *string, const struct ofp_header *oh,
                             int verbosity)
 {
-    const struct ofp_queue_stats *qs = ofputil_stats_body(oh);
-    size_t n = ofputil_stats_body_len(oh) / sizeof *qs;
-    ds_put_format(string, " %zu queues\n", n);
+    struct ofpbuf b;
+
+    ds_put_format(string, " %zu queues\n", ofputil_count_queue_stats(oh));
     if (verbosity < 1) {
         return;
     }
 
-    for (; n--; qs++) {
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    for (;;) {
+        struct ofputil_queue_stats qs;
+        int retval;
+
+        retval = ofputil_decode_queue_stats(&qs, &b);
+        if (retval) {
+            if (retval != EOF) {
+                ds_put_cstr(string, " ***parse error***");
+            }
+            return;
+        }
+
         ds_put_cstr(string, "  port ");
-        ofputil_format_port(ntohs(qs->port_no), string);
+        ofputil_format_port(qs.port_no, string);
         ds_put_cstr(string, " queue ");
-        ofp_print_queue_name(string, ntohl(qs->queue_id));
+        ofp_print_queue_name(string, qs.queue_id);
         ds_put_cstr(string, ": ");
 
-        print_port_stat(string, "bytes=", &qs->tx_bytes, 1);
-        print_port_stat(string, "pkts=", &qs->tx_packets, 1);
-        print_port_stat(string, "errors=", &qs->tx_errors, 0);
+        print_port_stat(string, "bytes=", qs.stats.tx_bytes, 1);
+        print_port_stat(string, "pkts=", qs.stats.tx_packets, 1);
+        print_port_stat(string, "errors=", qs.stats.tx_errors, 0);
     }
+}
+
+static void
+ofp_print_ofpst_port_desc_reply(struct ds *string,
+                                const struct ofp_header *oh)
+{
+    struct ofpbuf b;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&b);
+    ds_put_char(string, '\n');
+    ofp_print_phy_ports(string, oh->version, &b);
 }
 
 static void
 ofp_print_stats_request(struct ds *string, const struct ofp_header *oh)
 {
-    const struct ofp_stats_msg *srq = (const struct ofp_stats_msg *) oh;
+    uint16_t flags = ofpmp_flags(oh);
 
-    if (srq->flags) {
-        ds_put_format(string, " ***unknown flags 0x%04"PRIx16"***",
-                      ntohs(srq->flags));
+    if (flags) {
+        ds_put_format(string, " ***unknown flags 0x%04"PRIx16"***", flags);
     }
 }
 
 static void
 ofp_print_stats_reply(struct ds *string, const struct ofp_header *oh)
 {
-    const struct ofp_stats_msg *srp = (const struct ofp_stats_msg *) oh;
+    uint16_t flags = ofpmp_flags(oh);
 
-    if (srp->flags) {
-        uint16_t flags = ntohs(srp->flags);
-
+    if (flags) {
         ds_put_cstr(string, " flags=");
         if (flags & OFPSF_REPLY_MORE) {
             ds_put_cstr(string, "[more]");
@@ -1259,182 +1452,442 @@ ofp_print_nxt_role_message(struct ds *string,
 
 static void
 ofp_print_nxt_flow_mod_table_id(struct ds *string,
-                                const struct nxt_flow_mod_table_id *nfmti)
+                                const struct nx_flow_mod_table_id *nfmti)
 {
     ds_put_format(string, " %s", nfmti->set ? "enable" : "disable");
 }
 
 static void
 ofp_print_nxt_set_flow_format(struct ds *string,
-                              const struct nxt_set_flow_format *nsff)
+                              const struct nx_set_flow_format *nsff)
 {
     uint32_t format = ntohl(nsff->format);
 
     ds_put_cstr(string, " format=");
-    if (ofputil_flow_format_is_valid(format)) {
-        ds_put_cstr(string, ofputil_flow_format_to_string(format));
+    if (ofputil_nx_flow_format_is_valid(format)) {
+        ds_put_cstr(string, ofputil_nx_flow_format_to_string(format));
     } else {
         ds_put_format(string, "%"PRIu32, format);
     }
 }
 
 static void
-ofp_to_string__(const struct ofp_header *oh,
-                const struct ofputil_msg_type *type, struct ds *string,
-                int verbosity)
+ofp_print_nxt_set_packet_in_format(struct ds *string,
+                                   const struct nx_set_packet_in_format *nspf)
 {
-    enum ofputil_msg_code code;
+    uint32_t format = ntohl(nspf->format);
+
+    ds_put_cstr(string, " format=");
+    if (ofputil_packet_in_format_is_valid(format)) {
+        ds_put_cstr(string, ofputil_packet_in_format_to_string(format));
+    } else {
+        ds_put_format(string, "%"PRIu32, format);
+    }
+}
+
+static const char *
+ofp_port_reason_to_string(enum ofp_port_reason reason)
+{
+    static char s[32];
+
+    switch (reason) {
+    case OFPPR_ADD:
+        return "add";
+
+    case OFPPR_DELETE:
+        return "delete";
+
+    case OFPPR_MODIFY:
+        return "modify";
+
+    default:
+        sprintf(s, "%d", (int) reason);
+        return s;
+    }
+}
+
+static void
+ofp_print_nxt_set_async_config(struct ds *string,
+                               const struct nx_async_config *nac)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        int j;
+
+        ds_put_format(string, "\n %s:\n", i == 0 ? "master" : "slave");
+
+        ds_put_cstr(string, "       PACKET_IN:");
+        for (j = 0; j < 32; j++) {
+            if (nac->packet_in_mask[i] & htonl(1u << j)) {
+                ds_put_format(string, " %s",
+                              ofputil_packet_in_reason_to_string(j));
+            }
+        }
+        if (!nac->packet_in_mask[i]) {
+            ds_put_cstr(string, " (off)");
+        }
+        ds_put_char(string, '\n');
+
+        ds_put_cstr(string, "     PORT_STATUS:");
+        for (j = 0; j < 32; j++) {
+            if (nac->port_status_mask[i] & htonl(1u << j)) {
+                ds_put_format(string, " %s", ofp_port_reason_to_string(j));
+            }
+        }
+        if (!nac->port_status_mask[i]) {
+            ds_put_cstr(string, " (off)");
+        }
+        ds_put_char(string, '\n');
+
+        ds_put_cstr(string, "    FLOW_REMOVED:");
+        for (j = 0; j < 32; j++) {
+            if (nac->flow_removed_mask[i] & htonl(1u << j)) {
+                ds_put_format(string, " %s",
+                              ofp_flow_removed_reason_to_string(j));
+            }
+        }
+        if (!nac->flow_removed_mask[i]) {
+            ds_put_cstr(string, " (off)");
+        }
+        ds_put_char(string, '\n');
+    }
+}
+
+static void
+ofp_print_nxt_set_controller_id(struct ds *string,
+                                const struct nx_controller_id *nci)
+{
+    ds_put_format(string, " id=%"PRIu16, ntohs(nci->controller_id));
+}
+
+static void
+ofp_print_nxt_flow_monitor_cancel(struct ds *string,
+                                  const struct ofp_header *oh)
+{
+    ds_put_format(string, " id=%"PRIu32,
+                  ofputil_decode_flow_monitor_cancel(oh));
+}
+
+static const char *
+nx_flow_monitor_flags_to_name(uint32_t bit)
+{
+    enum nx_flow_monitor_flags fmf = bit;
+
+    switch (fmf) {
+    case NXFMF_INITIAL: return "initial";
+    case NXFMF_ADD: return "add";
+    case NXFMF_DELETE: return "delete";
+    case NXFMF_MODIFY: return "modify";
+    case NXFMF_ACTIONS: return "actions";
+    case NXFMF_OWN: return "own";
+    }
+
+    return NULL;
+}
+
+static void
+ofp_print_nxst_flow_monitor_request(struct ds *string,
+                                    const struct ofp_header *oh)
+{
+    struct ofpbuf b;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    for (;;) {
+        struct ofputil_flow_monitor_request request;
+        int retval;
+
+        retval = ofputil_decode_flow_monitor_request(&request, &b);
+        if (retval) {
+            if (retval != EOF) {
+                ofp_print_error(string, retval);
+            }
+            return;
+        }
+
+        ds_put_format(string, "\n id=%"PRIu32" flags=", request.id);
+        ofp_print_bit_names(string, request.flags,
+                            nx_flow_monitor_flags_to_name, ',');
+
+        if (request.out_port != OFPP_NONE) {
+            ds_put_cstr(string, " out_port=");
+            ofputil_format_port(request.out_port, string);
+        }
+
+        if (request.table_id != 0xff) {
+            ds_put_format(string, " table=%"PRIu8, request.table_id);
+        }
+
+        ds_put_char(string, ' ');
+        match_format(&request.match, string, OFP_DEFAULT_PRIORITY);
+        ds_chomp(string, ' ');
+    }
+}
+
+static void
+ofp_print_nxst_flow_monitor_reply(struct ds *string,
+                                  const struct ofp_header *oh)
+{
+    uint64_t ofpacts_stub[1024 / 8];
+    struct ofpbuf ofpacts;
+    struct ofpbuf b;
+
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
+    for (;;) {
+        struct ofputil_flow_update update;
+        struct match match;
+        int retval;
+
+        update.match = &match;
+        retval = ofputil_decode_flow_update(&update, &b, &ofpacts);
+        if (retval) {
+            if (retval != EOF) {
+                ofp_print_error(string, retval);
+            }
+            ofpbuf_uninit(&ofpacts);
+            return;
+        }
+
+        ds_put_cstr(string, "\n event=");
+        switch (update.event) {
+        case NXFME_ADDED:
+            ds_put_cstr(string, "ADDED");
+            break;
+
+        case NXFME_DELETED:
+            ds_put_format(string, "DELETED reason=%s",
+                          ofp_flow_removed_reason_to_string(update.reason));
+            break;
+
+        case NXFME_MODIFIED:
+            ds_put_cstr(string, "MODIFIED");
+            break;
+
+        case NXFME_ABBREV:
+            ds_put_format(string, "ABBREV xid=0x%"PRIx32, ntohl(update.xid));
+            continue;
+        }
+
+        ds_put_format(string, " table=%"PRIu8, update.table_id);
+        if (update.idle_timeout != OFP_FLOW_PERMANENT) {
+            ds_put_format(string, " idle_timeout=%"PRIu16,
+                          update.idle_timeout);
+        }
+        if (update.hard_timeout != OFP_FLOW_PERMANENT) {
+            ds_put_format(string, " hard_timeout=%"PRIu16,
+                          update.hard_timeout);
+        }
+        ds_put_format(string, " cookie=%#"PRIx64, ntohll(update.cookie));
+
+        ds_put_char(string, ' ');
+        match_format(update.match, string, OFP_DEFAULT_PRIORITY);
+
+        if (update.ofpacts_len) {
+            if (string->string[string->length - 1] != ' ') {
+                ds_put_char(string, ' ');
+            }
+            ofpacts_format(update.ofpacts, update.ofpacts_len, string);
+        }
+    }
+}
+
+void
+ofp_print_version(const struct ofp_header *oh,
+                  struct ds *string)
+{
+    switch (oh->version) {
+    case OFP10_VERSION:
+        break;
+    case OFP11_VERSION:
+        ds_put_cstr(string, " (OF1.1)");
+        break;
+    case OFP12_VERSION:
+        ds_put_cstr(string, " (OF1.2)");
+        break;
+    default:
+        ds_put_format(string, " (OF 0x%02"PRIx8")", oh->version);
+        break;
+    }
+    ds_put_format(string, " (xid=0x%"PRIx32"):", ntohl(oh->xid));
+}
+
+static void
+ofp_header_to_string__(const struct ofp_header *oh, enum ofpraw raw,
+                       struct ds *string)
+{
+    ds_put_cstr(string, ofpraw_get_name(raw));
+    ofp_print_version(oh, string);
+}
+
+static void
+ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
+                struct ds *string, int verbosity)
+{
     const void *msg = oh;
 
-    ds_put_format(string, "%s (xid=0x%"PRIx32"):",
-                  ofputil_msg_type_name(type), ntohl(oh->xid));
-
-    code = ofputil_msg_type_code(type);
-    switch (code) {
-    case OFPUTIL_MSG_INVALID:
-        break;
-
-    case OFPUTIL_OFPT_HELLO:
+    ofp_header_to_string__(oh, raw, string);
+    switch (ofptype_from_ofpraw(raw)) {
+    case OFPTYPE_HELLO:
         ds_put_char(string, '\n');
         ds_put_hex_dump(string, oh + 1, ntohs(oh->length) - sizeof *oh,
                         0, true);
         break;
 
-    case OFPUTIL_OFPT_ERROR:
-        ofp_print_error_msg(string, msg);
+    case OFPTYPE_ERROR:
+        ofp_print_error_msg(string, oh);
         break;
 
-    case OFPUTIL_OFPT_ECHO_REQUEST:
-    case OFPUTIL_OFPT_ECHO_REPLY:
+    case OFPTYPE_ECHO_REQUEST:
+    case OFPTYPE_ECHO_REPLY:
         ofp_print_echo(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPT_FEATURES_REQUEST:
+    case OFPTYPE_FEATURES_REQUEST:
         break;
 
-    case OFPUTIL_OFPT_FEATURES_REPLY:
-        ofp_print_switch_features(string, msg);
+    case OFPTYPE_FEATURES_REPLY:
+        ofp_print_switch_features(string, oh);
         break;
 
-    case OFPUTIL_OFPT_GET_CONFIG_REQUEST:
+    case OFPTYPE_GET_CONFIG_REQUEST:
         break;
 
-    case OFPUTIL_OFPT_GET_CONFIG_REPLY:
-    case OFPUTIL_OFPT_SET_CONFIG:
-        ofp_print_switch_config(string, msg);
+    case OFPTYPE_GET_CONFIG_REPLY:
+    case OFPTYPE_SET_CONFIG:
+        ofp_print_switch_config(string, ofpmsg_body(oh));
         break;
 
-    case OFPUTIL_OFPT_PACKET_IN:
-        ofp_print_packet_in(string, msg, verbosity);
+    case OFPTYPE_PACKET_IN:
+        ofp_print_packet_in(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPT_FLOW_REMOVED:
-    case OFPUTIL_NXT_FLOW_REMOVED:
-        ofp_print_flow_removed(string, msg);
+    case OFPTYPE_FLOW_REMOVED:
+        ofp_print_flow_removed(string, oh);
         break;
 
-    case OFPUTIL_OFPT_PORT_STATUS:
-        ofp_print_port_status(string, msg);
+    case OFPTYPE_PORT_STATUS:
+        ofp_print_port_status(string, oh);
         break;
 
-    case OFPUTIL_OFPT_PACKET_OUT:
-        ofp_print_packet_out(string, msg, verbosity);
+    case OFPTYPE_PACKET_OUT:
+        ofp_print_packet_out(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPT_FLOW_MOD:
-        ofp_print_flow_mod(string, msg, code, verbosity);
+    case OFPTYPE_FLOW_MOD:
+        ofp_print_flow_mod(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPT_PORT_MOD:
-        ofp_print_port_mod(string, msg);
+    case OFPTYPE_PORT_MOD:
+        ofp_print_port_mod(string, oh);
         break;
 
-    case OFPUTIL_OFPT_BARRIER_REQUEST:
-    case OFPUTIL_OFPT_BARRIER_REPLY:
+    case OFPTYPE_BARRIER_REQUEST:
+    case OFPTYPE_BARRIER_REPLY:
         break;
 
-    case OFPUTIL_OFPT_QUEUE_GET_CONFIG_REQUEST:
-    case OFPUTIL_OFPT_QUEUE_GET_CONFIG_REPLY:
-        /* XXX */
-        break;
-
-    case OFPUTIL_OFPST_DESC_REQUEST:
+    case OFPTYPE_DESC_STATS_REQUEST:
+    case OFPTYPE_PORT_DESC_STATS_REQUEST:
         ofp_print_stats_request(string, oh);
         break;
 
-    case OFPUTIL_OFPST_FLOW_REQUEST:
-    case OFPUTIL_NXST_FLOW_REQUEST:
-    case OFPUTIL_OFPST_AGGREGATE_REQUEST:
-    case OFPUTIL_NXST_AGGREGATE_REQUEST:
+    case OFPTYPE_FLOW_STATS_REQUEST:
+    case OFPTYPE_AGGREGATE_STATS_REQUEST:
         ofp_print_stats_request(string, oh);
-        ofp_print_flow_stats_request(string, msg);
+        ofp_print_flow_stats_request(string, oh);
         break;
 
-    case OFPUTIL_OFPST_TABLE_REQUEST:
+    case OFPTYPE_TABLE_STATS_REQUEST:
         ofp_print_stats_request(string, oh);
         break;
 
-    case OFPUTIL_OFPST_PORT_REQUEST:
+    case OFPTYPE_PORT_STATS_REQUEST:
         ofp_print_stats_request(string, oh);
-        ofp_print_ofpst_port_request(string, msg);
+        ofp_print_ofpst_port_request(string, oh);
         break;
 
-    case OFPUTIL_OFPST_QUEUE_REQUEST:
+    case OFPTYPE_QUEUE_STATS_REQUEST:
         ofp_print_stats_request(string, oh);
-        ofp_print_ofpst_queue_request(string, msg);
+        ofp_print_ofpst_queue_request(string, oh);
         break;
 
-    case OFPUTIL_OFPST_DESC_REPLY:
+    case OFPTYPE_DESC_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
-        ofp_print_ofpst_desc_reply(string, msg);
+        ofp_print_ofpst_desc_reply(string, oh);
         break;
 
-    case OFPUTIL_OFPST_FLOW_REPLY:
-    case OFPUTIL_NXST_FLOW_REPLY:
+    case OFPTYPE_FLOW_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
         ofp_print_flow_stats_reply(string, oh);
         break;
 
-    case OFPUTIL_OFPST_QUEUE_REPLY:
+    case OFPTYPE_QUEUE_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
         ofp_print_ofpst_queue_reply(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPST_PORT_REPLY:
+    case OFPTYPE_PORT_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
         ofp_print_ofpst_port_reply(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPST_TABLE_REPLY:
+    case OFPTYPE_TABLE_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
         ofp_print_ofpst_table_reply(string, oh, verbosity);
         break;
 
-    case OFPUTIL_OFPST_AGGREGATE_REPLY:
+    case OFPTYPE_AGGREGATE_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
-        ofp_print_ofpst_aggregate_reply(string, msg);
+        ofp_print_aggregate_stats_reply(string, oh);
         break;
 
-    case OFPUTIL_NXT_ROLE_REQUEST:
-    case OFPUTIL_NXT_ROLE_REPLY:
-        ofp_print_nxt_role_message(string, msg);
-        break;
-
-    case OFPUTIL_NXT_FLOW_MOD_TABLE_ID:
-        ofp_print_nxt_flow_mod_table_id(string, msg);
-        break;
-
-    case OFPUTIL_NXT_SET_FLOW_FORMAT:
-        ofp_print_nxt_set_flow_format(string, msg);
-        break;
-
-    case OFPUTIL_NXT_FLOW_MOD:
-        ofp_print_flow_mod(string, msg, code, verbosity);
-        break;
-
-    case OFPUTIL_NXST_AGGREGATE_REPLY:
+    case OFPTYPE_PORT_DESC_STATS_REPLY:
         ofp_print_stats_reply(string, oh);
-        ofp_print_nxst_aggregate_reply(string, msg);
+        ofp_print_ofpst_port_desc_reply(string, oh);
+        break;
+
+    case OFPTYPE_ROLE_REQUEST:
+    case OFPTYPE_ROLE_REPLY:
+        ofp_print_nxt_role_message(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_FLOW_MOD_TABLE_ID:
+        ofp_print_nxt_flow_mod_table_id(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_SET_FLOW_FORMAT:
+        ofp_print_nxt_set_flow_format(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_SET_PACKET_IN_FORMAT:
+        ofp_print_nxt_set_packet_in_format(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_FLOW_AGE:
+        break;
+
+    case OFPTYPE_SET_CONTROLLER_ID:
+        ofp_print_nxt_set_controller_id(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_SET_ASYNC_CONFIG:
+        ofp_print_nxt_set_async_config(string, ofpmsg_body(oh));
+        break;
+
+    case OFPTYPE_FLOW_MONITOR_CANCEL:
+        ofp_print_nxt_flow_monitor_cancel(string, msg);
+        break;
+
+    case OFPTYPE_FLOW_MONITOR_PAUSED:
+    case OFPTYPE_FLOW_MONITOR_RESUMED:
+        break;
+
+    case OFPTYPE_FLOW_MONITOR_STATS_REQUEST:
+        ofp_print_nxst_flow_monitor_request(string, msg);
+        break;
+
+    case OFPTYPE_FLOW_MONITOR_STATS_REPLY:
+        ofp_print_nxst_flow_monitor_reply(string, msg);
         break;
     }
 }
@@ -1454,10 +1907,16 @@ ofp_to_string(const void *oh_, size_t len, int verbosity)
     } else if (len < sizeof(struct ofp_header)) {
         ds_put_format(&string, "OpenFlow packet too short (only %zu bytes):\n",
                       len);
-    } else if (oh->version != OFP_VERSION) {
-        ds_put_format(&string, "Bad OpenFlow version %"PRIu8":\n",
-                      oh->version);
     } else if (ntohs(oh->length) > len) {
+        enum ofperr error;
+        enum ofpraw raw;
+
+        error = ofpraw_decode_partial(&raw, oh, len);
+        if (!error) {
+            ofp_header_to_string__(oh, raw, &string);
+            ds_put_char(&string, '\n');
+        }
+
         ds_put_format(&string,
                       "(***truncated to %zu bytes from %"PRIu16"***)\n",
                       len, ntohs(oh->length));
@@ -1466,12 +1925,12 @@ ofp_to_string(const void *oh_, size_t len, int verbosity)
                       "(***only uses %"PRIu16" bytes out of %zu***)\n",
                       ntohs(oh->length), len);
     } else {
-        const struct ofputil_msg_type *type;
-        int error;
+        enum ofperr error;
+        enum ofpraw raw;
 
-        error = ofputil_decode_msg_type(oh, &type);
+        error = ofpraw_decode(&raw, oh);
         if (!error) {
-            ofp_to_string__(oh, type, &string, verbosity);
+            ofp_to_string__(oh, raw, &string, verbosity);
             if (verbosity >= 5) {
                 if (ds_last(&string) != '\n') {
                     ds_put_char(&string, '\n');
@@ -1488,91 +1947,6 @@ ofp_to_string(const void *oh_, size_t len, int verbosity)
     }
     ds_put_hex_dump(&string, oh, len, 0, true);
     return ds_steal_cstr(&string);
-}
-
-/* Returns the name for the specified OpenFlow message type as a string,
- * e.g. "OFPT_FEATURES_REPLY".  If no name is known, the string returned is a
- * hex number, e.g. "0x55".
- *
- * The caller must free the returned string when it is no longer needed. */
-char *
-ofp_message_type_to_string(uint8_t type)
-{
-    const char *name;
-
-    switch (type) {
-    case OFPT_HELLO:
-        name = "HELLO";
-        break;
-    case OFPT_ERROR:
-        name = "ERROR";
-        break;
-    case OFPT_ECHO_REQUEST:
-        name = "ECHO_REQUEST";
-        break;
-    case OFPT_ECHO_REPLY:
-        name = "ECHO_REPLY";
-        break;
-    case OFPT_VENDOR:
-        name = "VENDOR";
-        break;
-    case OFPT_FEATURES_REQUEST:
-        name = "FEATURES_REQUEST";
-        break;
-    case OFPT_FEATURES_REPLY:
-        name = "FEATURES_REPLY";
-        break;
-    case OFPT_GET_CONFIG_REQUEST:
-        name = "GET_CONFIG_REQUEST";
-        break;
-    case OFPT_GET_CONFIG_REPLY:
-        name = "GET_CONFIG_REPLY";
-        break;
-    case OFPT_SET_CONFIG:
-        name = "SET_CONFIG";
-        break;
-    case OFPT_PACKET_IN:
-        name = "PACKET_IN";
-        break;
-    case OFPT_FLOW_REMOVED:
-        name = "FLOW_REMOVED";
-        break;
-    case OFPT_PORT_STATUS:
-        name = "PORT_STATUS";
-        break;
-    case OFPT_PACKET_OUT:
-        name = "PACKET_OUT";
-        break;
-    case OFPT_FLOW_MOD:
-        name = "FLOW_MOD";
-        break;
-    case OFPT_PORT_MOD:
-        name = "PORT_MOD";
-        break;
-    case OFPT_STATS_REQUEST:
-        name = "STATS_REQUEST";
-        break;
-    case OFPT_STATS_REPLY:
-        name = "STATS_REPLY";
-        break;
-    case OFPT_BARRIER_REQUEST:
-        name = "BARRIER_REQUEST";
-        break;
-    case OFPT_BARRIER_REPLY:
-        name = "BARRIER_REPLY";
-        break;
-    case OFPT_QUEUE_GET_CONFIG_REQUEST:
-        name = "QUEUE_GET_CONFIG_REQUEST";
-        break;
-    case OFPT_QUEUE_GET_CONFIG_REPLY:
-        name = "QUEUE_GET_CONFIG_REPLY";
-        break;
-    default:
-        name = NULL;
-        break;
-    }
-
-    return name ? xasprintf("OFPT_%s", name) : xasprintf("0x%02"PRIx8, type);
 }
 
 static void
@@ -1592,12 +1966,9 @@ ofp_print(FILE *stream, const void *oh, size_t len, int verbosity)
 }
 
 /* Dumps the contents of the Ethernet frame in the 'len' bytes starting at
- * 'data' to 'stream' using tcpdump.  'total_len' specifies the full length of
- * the Ethernet frame (of which 'len' bytes were captured).
- *
- * This starts and kills a tcpdump subprocess so it's quite expensive. */
+ * 'data' to 'stream'. */
 void
-ofp_print_packet(FILE *stream, const void *data, size_t len, size_t total_len)
+ofp_print_packet(FILE *stream, const void *data, size_t len)
 {
-    print_and_free(stream, ofp_packet_to_string(data, len, total_len));
+    print_and_free(stream, ofp_packet_to_string(data, len));
 }

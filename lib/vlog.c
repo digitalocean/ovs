@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,15 +28,20 @@
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
+#include "coverage.h"
 #include "dirs.h"
 #include "dynamic-string.h"
+#include "ofpbuf.h"
 #include "sat-math.h"
 #include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
+#include "worker.h"
 
 VLOG_DEFINE_THIS_MODULE(vlog);
+
+COVERAGE_DEFINE(vlog_recursive);
 
 /* Name for each logging level. */
 static const char *level_names[VLL_N_LEVELS] = {
@@ -82,12 +88,9 @@ static struct facility facilities[VLF_N_FACILITIES] = {
 #undef VLOG_FACILITY
 };
 
-/* Time at which vlog was initialized, in milliseconds. */
-static long long int boot_time;
-
 /* VLF_FILE configuration. */
 static char *log_file_name;
-static FILE *log_file;
+static int log_fd = -1;
 
 /* vlog initialized? */
 static bool vlog_inited;
@@ -96,6 +99,8 @@ static void format_log_message(const struct vlog_module *, enum vlog_level,
                                enum vlog_facility, unsigned int msg_num,
                                const char *message, va_list, struct ds *)
     PRINTF_FORMAT(5, 0);
+static void vlog_write_file(struct ds *);
+static void vlog_update_async_log_fd(void);
 
 /* Searches the 'n_names' in 'names'.  Returns the index of a match for
  * 'target', or 'n_names' if no name matches. */
@@ -189,7 +194,7 @@ update_min_level(struct vlog_module *module)
 
     module->min_level = VLL_OFF;
     for (facility = 0; facility < VLF_N_FACILITIES; facility++) {
-        if (log_file || facility != VLF_FILE) {
+        if (log_fd >= 0 || facility != VLF_FILE) {
             enum vlog_level level = module->levels[facility];
             if (level > module->min_level) {
                 module->min_level = level;
@@ -282,10 +287,10 @@ vlog_set_log_file(const char *file_name)
     int error;
 
     /* Close old log file. */
-    if (log_file) {
+    if (log_fd >= 0) {
         VLOG_INFO("closing log file");
-        fclose(log_file);
-        log_file = NULL;
+        close(log_fd);
+        log_fd = -1;
     }
 
     /* Update log file name and free old name.  The ordering is important
@@ -299,13 +304,16 @@ vlog_set_log_file(const char *file_name)
 
     /* Open new log file and update min_levels[] to reflect whether we actually
      * have a log_file. */
-    log_file = fopen(log_file_name, "a");
+    log_fd = open(log_file_name, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (log_fd >= 0) {
+        vlog_update_async_log_fd();
+    }
     for (mp = vlog_modules; mp < &vlog_modules[n_vlog_modules]; mp++) {
         update_min_level(*mp);
     }
 
     /* Log success or failure. */
-    if (!log_file) {
+    if (log_fd < 0) {
         VLOG_WARN("failed to open %s for logging: %s",
                   log_file_name, strerror(errno));
         error = errno;
@@ -333,8 +341,8 @@ vlog_reopen_log_file(void)
     /* Skip re-opening if it would be a no-op because the old and new files are
      * the same.  (This avoids writing "closing log file" followed immediately
      * by "opened log file".) */
-    if (log_file
-        && !fstat(fileno(log_file), &old)
+    if (log_fd >= 0
+        && !fstat(log_fd, &old)
         && !stat(log_file_name, &new)
         && old.st_dev == new.st_dev
         && old.st_ino == new.st_ino) {
@@ -344,69 +352,78 @@ vlog_reopen_log_file(void)
     return vlog_set_log_file(log_file_name);
 }
 
-/* Set debugging levels:
- *
- *  mod[:facility[:level]] mod2[:facility[:level]] ...
- *
- * Return null if successful, otherwise an error message that the caller must
- * free().
- */
+/* Set debugging levels.  Returns null if successful, otherwise an error
+ * message that the caller must free(). */
 char *
 vlog_set_levels_from_string(const char *s_)
 {
-    char *save_ptr = NULL;
     char *s = xstrdup(s_);
-    char *module, *facility;
+    char *save_ptr = NULL;
+    char *msg = NULL;
+    char *word;
 
-    for (module = strtok_r(s, ": \t", &save_ptr); module != NULL;
-         module = strtok_r(NULL, ": \t", &save_ptr)) {
-        struct vlog_module *e_module;
-        enum vlog_facility e_facility;
+    word = strtok_r(s, " ,:\t", &save_ptr);
+    if (word && !strcasecmp(word, "PATTERN")) {
+        enum vlog_facility facility;
 
-        facility = strtok_r(NULL, ":", &save_ptr);
-
-        if (!facility || !strcasecmp(facility, "ANY")) {
-            e_facility = VLF_ANY_FACILITY;
-        } else {
-            e_facility = vlog_get_facility_val(facility);
-            if (e_facility >= VLF_N_FACILITIES) {
-                char *msg = xasprintf("unknown facility \"%s\"", facility);
-                free(s);
-                return msg;
-            }
+        word = strtok_r(NULL, " ,:\t", &save_ptr);
+        if (!word) {
+            msg = xstrdup("missing facility");
+            goto exit;
         }
 
-        if (!strcasecmp(module, "PATTERN")) {
-            vlog_set_pattern(e_facility, save_ptr);
-            break;
-        } else {
-            char *level;
-            enum vlog_level e_level;
+        facility = (!strcasecmp(word, "ANY")
+                    ? VLF_ANY_FACILITY
+                    : vlog_get_facility_val(word));
+        if (facility == VLF_N_FACILITIES) {
+            msg = xasprintf("unknown facility \"%s\"", word);
+            goto exit;
+        }
+        vlog_set_pattern(facility, save_ptr);
+    } else {
+        struct vlog_module *module = NULL;
+        enum vlog_level level = VLL_N_LEVELS;
+        enum vlog_facility facility = VLF_N_FACILITIES;
 
-            if (!strcasecmp(module, "ANY")) {
-                e_module = NULL;
-            } else {
-                e_module = vlog_module_from_name(module);
-                if (!e_module) {
-                    char *msg = xasprintf("unknown module \"%s\"", module);
-                    free(s);
-                    return msg;
+        for (; word != NULL; word = strtok_r(NULL, " ,:\t", &save_ptr)) {
+            if (!strcasecmp(word, "ANY")) {
+                continue;
+            } else if (vlog_get_facility_val(word) != VLF_N_FACILITIES) {
+                if (facility != VLF_N_FACILITIES) {
+                    msg = xstrdup("cannot specify multiple facilities");
+                    goto exit;
                 }
+                facility = vlog_get_facility_val(word);
+            } else if (vlog_get_level_val(word) != VLL_N_LEVELS) {
+                if (level != VLL_N_LEVELS) {
+                    msg = xstrdup("cannot specify multiple levels");
+                    goto exit;
+                }
+                level = vlog_get_level_val(word);
+            } else if (vlog_module_from_name(word)) {
+                if (module) {
+                    msg = xstrdup("cannot specify multiple modules");
+                    goto exit;
+                }
+                module = vlog_module_from_name(word);
+            } else {
+                msg = xasprintf("no facility, level, or module \"%s\"", word);
+                goto exit;
             }
-
-            level = strtok_r(NULL, ":", &save_ptr);
-            e_level = level ? vlog_get_level_val(level) : VLL_DBG;
-            if (e_level >= VLL_N_LEVELS) {
-                char *msg = xasprintf("unknown level \"%s\"", level);
-                free(s);
-                return msg;
-            }
-
-            vlog_set_levels(e_module, e_facility, e_level);
         }
+
+        if (facility == VLF_N_FACILITIES) {
+            facility = VLF_ANY_FACILITY;
+        }
+        if (level == VLL_N_LEVELS) {
+            level = VLL_DBG;
+        }
+        vlog_set_levels(module, facility, level);
     }
+
+exit:
     free(s);
-    return NULL;
+    return msg;
 }
 
 /* If 'arg' is null, configure maximum verbosity.  Otherwise, sets
@@ -425,36 +442,44 @@ vlog_set_verbosity(const char *arg)
 }
 
 static void
-vlog_unixctl_set(struct unixctl_conn *conn,
-                 const char *args, void *aux OVS_UNUSED)
+vlog_unixctl_set(struct unixctl_conn *conn, int argc, const char *argv[],
+                 void *aux OVS_UNUSED)
 {
-    char *msg = vlog_set_levels_from_string(args);
-    unixctl_command_reply(conn, msg ? 501 : 202, msg);
-    free(msg);
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        char *msg = vlog_set_levels_from_string(argv[i]);
+        if (msg) {
+            unixctl_command_reply_error(conn, msg);
+            free(msg);
+            return;
+        }
+    }
+    unixctl_command_reply(conn, NULL);
 }
 
 static void
-vlog_unixctl_list(struct unixctl_conn *conn,
-                  const char *args OVS_UNUSED, void *aux OVS_UNUSED)
+vlog_unixctl_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                  const char *argv[] OVS_UNUSED, void *aux OVS_UNUSED)
 {
     char *msg = vlog_get_levels();
-    unixctl_command_reply(conn, 200, msg);
+    unixctl_command_reply(conn, msg);
     free(msg);
 }
 
 static void
-vlog_unixctl_reopen(struct unixctl_conn *conn,
-                    const char *args OVS_UNUSED, void *aux OVS_UNUSED)
+vlog_unixctl_reopen(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                    const char *argv[] OVS_UNUSED, void *aux OVS_UNUSED)
 {
     if (log_file_name) {
         int error = vlog_reopen_log_file();
         if (error) {
-            unixctl_command_reply(conn, 503, strerror(errno));
+            unixctl_command_reply_error(conn, strerror(errno));
         } else {
-            unixctl_command_reply(conn, 202, NULL);
+            unixctl_command_reply(conn, NULL);
         }
     } else {
-        unixctl_command_reply(conn, 403, "Logging to file not configured");
+        unixctl_command_reply_error(conn, "Logging to file not configured");
     }
 }
 
@@ -463,6 +488,7 @@ vlog_unixctl_reopen(struct unixctl_conn *conn,
 void
 vlog_init(void)
 {
+    static char *program_name_copy;
     time_t now;
 
     if (vlog_inited) {
@@ -470,24 +496,30 @@ vlog_init(void)
     }
     vlog_inited = true;
 
-    openlog(program_name, LOG_NDELAY, LOG_DAEMON);
+    /* openlog() is allowed to keep the pointer passed in, without making a
+     * copy.  The daemonize code sometimes frees and replaces 'program_name',
+     * so make a private copy just for openlog().  (We keep a pointer to the
+     * private copy to suppress memory leak warnings in case openlog() does
+     * make its own copy.) */
+    program_name_copy = program_name ? xstrdup(program_name) : NULL;
+    openlog(program_name_copy, LOG_NDELAY, LOG_DAEMON);
 
-    boot_time = time_msec();
     now = time_wall();
     if (now < 0) {
         struct tm tm;
         char s[128];
 
-        localtime_r(&now, &tm);
-        strftime(s, sizeof s, "%a, %d %b %Y %H:%M:%S %z", &tm);
+        gmtime_r(&now, &tm);
+        strftime(s, sizeof s, "%a, %d %b %Y %H:%M:%S", &tm);
         VLOG_ERR("current time is negative: %s (%ld)", s, (long int) now);
     }
 
-    unixctl_command_register("vlog/set",
-                   "{module[:facility[:level]] | PATTERN:facility:pattern}",
-                   vlog_unixctl_set, NULL);
-    unixctl_command_register("vlog/list", "", vlog_unixctl_list, NULL);
-    unixctl_command_register("vlog/reopen", "", vlog_unixctl_reopen, NULL);
+    unixctl_command_register(
+        "vlog/set", "{spec | PATTERN:facility:pattern}",
+        1, INT_MAX, vlog_unixctl_set, NULL);
+    unixctl_command_register("vlog/list", "", 0, 0, vlog_unixctl_list, NULL);
+    unixctl_command_register("vlog/reopen", "", 0, 0,
+                             vlog_unixctl_reopen, NULL);
 }
 
 /* Closes the logging subsystem. */
@@ -601,7 +633,11 @@ format_log_message(const struct vlog_module *module, enum vlog_level level,
             break;
         case 'd':
             p = fetch_braces(p, "%Y-%m-%d %H:%M:%S", tmp, sizeof tmp);
-            ds_put_strftime(s, tmp, NULL);
+            ds_put_strftime(s, tmp, false);
+            break;
+        case 'D':
+            p = fetch_braces(p, "%Y-%m-%d %H:%M:%S", tmp, sizeof tmp);
+            ds_put_strftime(s, tmp, true);
             break;
         case 'm':
             /* Format user-supplied log message and trim trailing new-lines. */
@@ -626,7 +662,15 @@ format_log_message(const struct vlog_module *module, enum vlog_level level,
             ds_put_format(s, "%ld", (long int) getpid());
             break;
         case 'r':
-            ds_put_format(s, "%lld", time_msec() - boot_time);
+            ds_put_format(s, "%lld", time_msec() - time_boot_msec());
+            break;
+        case 't':
+            ds_put_cstr(s, subprogram_name[0] ? subprogram_name : "main");
+            break;
+        case 'T':
+            if (subprogram_name[0]) {
+                ds_put_format(s, "(%s)", subprogram_name);
+            }
             break;
         default:
             ds_put_char(s, p[-1]);
@@ -656,7 +700,7 @@ vlog_valist(const struct vlog_module *module, enum vlog_level level,
 {
     bool log_to_console = module->levels[VLF_CONSOLE] >= level;
     bool log_to_syslog = module->levels[VLF_SYSLOG] >= level;
-    bool log_to_file = module->levels[VLF_FILE] >= level && log_file;
+    bool log_to_file = module->levels[VLF_FILE] >= level && log_fd >= 0;
     if (log_to_console || log_to_syslog || log_to_file) {
         int save_errno = errno;
         static unsigned int msg_num;
@@ -692,8 +736,7 @@ vlog_valist(const struct vlog_module *module, enum vlog_level level,
             format_log_message(module, level, VLF_FILE, msg_num,
                                message, args, &s);
             ds_put_char(&s, '\n');
-            fputs(ds_cstr(&s), log_file);
-            fflush(log_file);
+            vlog_write_file(&s);
         }
 
         ds_destroy(&s);
@@ -712,11 +755,17 @@ vlog(const struct vlog_module *module, enum vlog_level level,
     va_end(args);
 }
 
+/* Logs 'message' to 'module' at maximum verbosity, then exits with a failure
+ * exit code.  Always writes the message to stderr, even if the console
+ * facility is disabled.
+ *
+ * Choose this function instead of vlog_abort_valist() if the daemon monitoring
+ * facility shouldn't automatically restart the current daemon.  */
 void
 vlog_fatal_valist(const struct vlog_module *module_,
                   const char *message, va_list args)
 {
-    struct vlog_module *module = (struct vlog_module *) module_;
+    struct vlog_module *module = CONST_CAST(struct vlog_module *, module_);
 
     /* Don't log this message to the console to avoid redundancy with the
      * message written by the later ovs_fatal_valist(). */
@@ -726,6 +775,12 @@ vlog_fatal_valist(const struct vlog_module *module_,
     ovs_fatal_valist(0, message, args);
 }
 
+/* Logs 'message' to 'module' at maximum verbosity, then exits with a failure
+ * exit code.  Always writes the message to stderr, even if the console
+ * facility is disabled.
+ *
+ * Choose this function instead of vlog_abort() if the daemon monitoring
+ * facility shouldn't automatically restart the current daemon.  */
 void
 vlog_fatal(const struct vlog_module *module, const char *message, ...)
 {
@@ -733,6 +788,40 @@ vlog_fatal(const struct vlog_module *module, const char *message, ...)
 
     va_start(args, message);
     vlog_fatal_valist(module, message, args);
+    va_end(args);
+}
+
+/* Logs 'message' to 'module' at maximum verbosity, then calls abort().  Always
+ * writes the message to stderr, even if the console facility is disabled.
+ *
+ * Choose this function instead of vlog_fatal_valist() if the daemon monitoring
+ * facility should automatically restart the current daemon.  */
+void
+vlog_abort_valist(const struct vlog_module *module_,
+                  const char *message, va_list args)
+{
+    struct vlog_module *module = (struct vlog_module *) module_;
+
+    /* Don't log this message to the console to avoid redundancy with the
+     * message written by the later ovs_abort_valist(). */
+    module->levels[VLF_CONSOLE] = VLL_OFF;
+
+    vlog_valist(module, VLL_EMER, message, args);
+    ovs_abort_valist(0, message, args);
+}
+
+/* Logs 'message' to 'module' at maximum verbosity, then calls abort().  Always
+ * writes the message to stderr, even if the console facility is disabled.
+ *
+ * Choose this function instead of vlog_fatal() if the daemon monitoring
+ * facility should automatically restart the current daemon.  */
+void
+vlog_abort(const struct vlog_module *module, const char *message, ...)
+{
+    va_list args;
+
+    va_start(args, message);
+    vlog_abort_valist(module, message, args);
     va_end(args);
 }
 
@@ -744,28 +833,15 @@ vlog_should_drop(const struct vlog_module *module, enum vlog_level level,
         return true;
     }
 
-    if (rl->tokens < VLOG_MSG_TOKENS) {
+    if (!token_bucket_withdraw(&rl->token_bucket, VLOG_MSG_TOKENS)) {
         time_t now = time_now();
-        if (rl->last_fill > now) {
-            /* Last filled in the future?  Time must have gone backward, or
-             * 'rl' has not been used before. */
-            rl->tokens = rl->burst;
-        } else if (rl->last_fill < now) {
-            unsigned int add = sat_mul(rl->rate, now - rl->last_fill);
-            unsigned int tokens = sat_add(rl->tokens, add);
-            rl->tokens = MIN(tokens, rl->burst);
-            rl->last_fill = now;
+        if (!rl->n_dropped) {
+            rl->first_dropped = now;
         }
-        if (rl->tokens < VLOG_MSG_TOKENS) {
-            if (!rl->n_dropped) {
-                rl->first_dropped = now;
-            }
-            rl->last_dropped = now;
-            rl->n_dropped++;
-            return true;
-        }
+        rl->last_dropped = now;
+        rl->n_dropped++;
+        return true;
     }
-    rl->tokens -= VLOG_MSG_TOKENS;
 
     if (rl->n_dropped) {
         time_t now = time_now();
@@ -799,9 +875,65 @@ void
 vlog_usage(void)
 {
     printf("\nLogging options:\n"
-           "  -v, --verbose=MODULE[:FACILITY[:LEVEL]]  set logging levels\n"
+           "  -v, --verbose=[SPEC]    set logging levels\n"
            "  -v, --verbose           set maximum verbosity level\n"
            "  --log-file[=FILE]       enable logging to specified FILE\n"
            "                          (default: %s/%s.log)\n",
            ovs_logdir(), program_name);
+}
+
+static bool vlog_async_inited = false;
+
+static worker_request_func vlog_async_write_request_cb;
+
+static void
+vlog_write_file(struct ds *s)
+{
+    if (worker_is_running()) {
+        static bool in_worker_request = false;
+        if (!in_worker_request) {
+            in_worker_request = true;
+
+            worker_request(s->string, s->length,
+                           &log_fd, vlog_async_inited ? 0 : 1,
+                           vlog_async_write_request_cb, NULL, NULL);
+            vlog_async_inited = true;
+
+            in_worker_request = false;
+            return;
+        } else {
+            /* We've been entered recursively.  This can happen if
+             * worker_request(), or a function that it calls, tries to log
+             * something.  We can't call worker_request() recursively, so fall
+             * back to writing the log file directly. */
+            COVERAGE_INC(vlog_recursive);
+        }
+    }
+    ignore(write(log_fd, s->string, s->length));
+}
+
+static void
+vlog_update_async_log_fd(void)
+{
+    if (worker_is_running()) {
+        worker_request(NULL, 0, &log_fd, 1, vlog_async_write_request_cb,
+                       NULL, NULL);
+        vlog_async_inited = true;
+    }
+}
+
+static void
+vlog_async_write_request_cb(struct ofpbuf *request,
+                            const int *fd, size_t n_fds)
+{
+    if (n_fds > 0) {
+        if (log_fd >= 0) {
+            close(log_fd);
+        }
+        log_fd = *fd;
+    }
+
+    if (request->size > 0) {
+        ignore(write(log_fd, request->data, request->size));
+    }
 }

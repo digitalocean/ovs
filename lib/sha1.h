@@ -1,7 +1,7 @@
 /*
  * This file is from the Apache Portable Runtime Library.
  * The full upstream copyright and license statement is included below.
- * Modifications copyright (c) 2009 Nicira Networks.
+ * Modifications copyright (c) 2009 Nicira, Inc.
  */
 
 /* Licensed to the Apache Software Foundation (ASF) under one or more
@@ -20,10 +20,10 @@
  * limitations under the License.
  */
 /* NIST Secure Hash Algorithm
- * 	heavily modified by Uwe Hollerbach uh@alumni.caltech edu
- * 	from Peter C. Gutmann's implementation as found in
- * 	Applied Cryptography by Bruce Schneier
- * 	This code is hereby placed in the public domain
+ *  heavily modified by Uwe Hollerbach uh@alumni.caltech edu
+ *  from Peter C. Gutmann's implementation as found in
+ *  Applied Cryptography by Bruce Schneier
+ *  This code is hereby placed in the public domain
  */
 
 #ifndef SHA1_H

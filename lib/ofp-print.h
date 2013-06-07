@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,26 +22,27 @@
 #include <stdint.h>
 #include <stdio.h>
 
-struct ofp_flow_mod;
-struct ofp_match;
 struct ds;
-union ofp_action;
+struct ofp10_match;
+struct ofp_flow_mod;
+struct ofp_header;
+struct ofputil_flow_stats;
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
 
 void ofp_print(FILE *, const void *, size_t, int verbosity);
-void ofp_print_packet(FILE *stream, const void *data, size_t len, size_t total_len);
+void ofp_print_packet(FILE *stream, const void *data, size_t len);
 
-void ofp_print_actions(struct ds *, const union ofp_action *, size_t);
-void ofp_print_match(struct ds *, const struct ofp_match *, int verbosity);
+void ofp10_match_print(struct ds *, const struct ofp10_match *, int verbosity);
 
 char *ofp_to_string(const void *, size_t, int verbosity);
-char *ofp_match_to_string(const struct ofp_match *, int verbosity);
-char *ofp_packet_to_string(const void *data, size_t len, size_t total_len);
-char *ofp_message_type_to_string(uint8_t type);
+char *ofp10_match_to_string(const struct ofp10_match *, int verbosity);
+char *ofp_packet_to_string(const void *data, size_t len);
 
+void ofp_print_flow_stats(struct ds *, struct ofputil_flow_stats *);
+void ofp_print_version(const struct ofp_header *, struct ds *);
 
 #ifdef  __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 
 #include <assert.h>
 #include "vconn.h"
+#include "openflow/openflow-common.h"
 
 /* Active virtual connection to an OpenFlow device. */
 
@@ -32,8 +33,8 @@ struct vconn {
     struct vconn_class *class;
     int state;
     int error;
-    int min_version;
-    int version;
+    enum ofp_version min_version;
+    enum ofp_version version;
     ovs_be32 remote_ip;
     ovs_be16 remote_port;
     ovs_be32 local_ip;
@@ -62,6 +63,8 @@ struct vconn_class {
      * useful for error messages but must not be modified.
      *
      * 'suffix' is a copy of 'name' following the colon and may be modified.
+     * 'dscp' is the DSCP value that the new connection should use in the IP
+     * packets it sends.
      *
      * Returns 0 if successful, otherwise a positive errno value.  If
      * successful, stores a pointer to the new connection in '*vconnp'.
@@ -70,7 +73,8 @@ struct vconn_class {
      * If the connection cannot be completed immediately, it should return
      * EAGAIN (not EINPROGRESS, as returned by the connect system call) and
      * continue the connection in the background. */
-    int (*open)(const char *name, char *suffix, struct vconn **vconnp);
+    int (*open)(const char *name, char *suffix, struct vconn **vconnp,
+                uint8_t dscp);
 
     /* Closes 'vconn' and frees associated memory. */
     void (*close)(struct vconn *vconn);
@@ -149,6 +153,8 @@ struct pvconn_class {
      * is useful for error messages but must not be modified.
      *
      * 'suffix' is a copy of 'name' following the colon and may be modified.
+     * 'dscp' is the DSCP value that the new connection should use in the IP
+     * packets it sends.
      *
      * Returns 0 if successful, otherwise a positive errno value.  If
      * successful, stores a pointer to the new connection in '*pvconnp'.
@@ -157,7 +163,8 @@ struct pvconn_class {
      * completed immediately, it should return EAGAIN (not EINPROGRESS, as
      * returned by the connect system call) and continue the connection in the
      * background. */
-    int (*listen)(const char *name, char *suffix, struct pvconn **pvconnp);
+    int (*listen)(const char *name, char *suffix, struct pvconn **pvconnp,
+                  uint8_t dscp);
 
     /* Closes 'pvconn' and frees associated memory. */
     void (*close)(struct pvconn *pvconn);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011 Nicira Networks
+/* Copyright (c) 2011 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,11 +98,9 @@ struct lacp {
     struct hmap slaves;      /* Slaves this LACP object controls. */
     struct slave *key_slave; /* Slave whose ID will be the aggregation key. */
 
-    enum lacp_time lacp_time;  /* Fast, Slow or Custom LACP time. */
-    long long int custom_time; /* LACP_TIME_CUSTOM transmission rate. */
+    bool fast;               /* True if using fast probe interval. */
     bool negotiated;         /* True if LACP negotiations were successful. */
     bool update;             /* True if lacp_update() needs to be called. */
-    bool heartbeat;          /* LACP heartbeat mode. */
 };
 
 struct slave {
@@ -136,8 +134,7 @@ static bool slave_may_tx(const struct slave *);
 static struct slave *slave_lookup(const struct lacp *, const void *slave);
 static bool info_tx_equal(struct lacp_info *, struct lacp_info *);
 
-static void lacp_unixctl_show(struct unixctl_conn *, const char *args,
-                              void *aux);
+static unixctl_cb_func lacp_unixctl_show;
 
 /* Populates 'pdu' with a LACP PDU comprised of 'actor' and 'partner'. */
 static void
@@ -188,7 +185,8 @@ parse_lacp_packet(const struct ofpbuf *b)
 void
 lacp_init(void)
 {
-    unixctl_command_register("lacp/show", "[port]", lacp_unixctl_show, NULL);
+    unixctl_command_register("lacp/show", "[port]", 0, 1,
+                             lacp_unixctl_show, NULL);
 }
 
 /* Creates a LACP object. */
@@ -233,17 +231,14 @@ lacp_configure(struct lacp *lacp, const struct lacp_settings *s)
     }
 
     if (!eth_addr_equals(lacp->sys_id, s->id)
-        || lacp->sys_priority != s->priority
-        || lacp->heartbeat != s->heartbeat) {
+        || lacp->sys_priority != s->priority) {
         memcpy(lacp->sys_id, s->id, ETH_ADDR_LEN);
         lacp->sys_priority = s->priority;
-        lacp->heartbeat = s->heartbeat;
         lacp->update = true;
     }
 
     lacp->active = s->active;
-    lacp->lacp_time = s->lacp_time;
-    lacp->custom_time = MAX(TIME_UPDATE_INTERVAL, s->custom_time);
+    lacp->fast = s->fast;
 }
 
 /* Returns true if 'lacp' is configured in active mode, false if 'lacp' is
@@ -272,20 +267,8 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
         return;
     }
 
-    switch (lacp->lacp_time) {
-    case LACP_TIME_FAST:
-        tx_rate = LACP_FAST_TIME_TX;
-        break;
-    case LACP_TIME_SLOW:
-        tx_rate = LACP_SLOW_TIME_TX;
-        break;
-    case LACP_TIME_CUSTOM:
-        tx_rate = lacp->custom_time;
-        break;
-    default: NOT_REACHED();
-    }
-
     slave->status = LACP_CURRENT;
+    tx_rate = lacp->fast ? LACP_FAST_TIME_TX : LACP_SLOW_TIME_TX;
     timer_set_duration(&slave->rx, LACP_RX_MULTIPLIER * tx_rate);
 
     slave->ntt_actor = pdu->partner;
@@ -299,12 +282,17 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
     }
 }
 
-/* Returns true if 'lacp' has successfully negotiated with its partner.  False
- * if 'lacp' is NULL. */
-bool
-lacp_negotiated(const struct lacp *lacp)
+/* Returns the lacp_status of the given 'lacp' object (which may be NULL). */
+enum lacp_status
+lacp_status(const struct lacp *lacp)
 {
-    return lacp ? lacp->negotiated : false;
+    if (!lacp) {
+        return LACP_DISABLED;
+    } else if (lacp->negotiated) {
+        return LACP_NEGOTIATED;
+    } else {
+        return LACP_CONFIGURED;
+    }
 }
 
 /* Registers 'slave_' as subordinate to 'lacp'.  This should be called at least
@@ -361,15 +349,25 @@ lacp_slave_unregister(struct lacp *lacp, const void *slave_)
 }
 
 /* This function should be called whenever the carrier status of 'slave_' has
- * changed. */
+ * changed.  If 'lacp' is null, this function has no effect.*/
 void
 lacp_slave_carrier_changed(const struct lacp *lacp, const void *slave_)
 {
-    struct slave *slave = slave_lookup(lacp, slave_);
+    if (lacp) {
+        struct slave *slave = slave_lookup(lacp, slave_);
 
-    if (slave->status == LACP_CURRENT || slave->lacp->active) {
-        slave_set_expired(slave);
+        if (slave->status == LACP_CURRENT || slave->lacp->active) {
+            slave_set_expired(slave);
+        }
     }
+}
+
+static bool
+slave_may_enable__(struct slave *slave)
+{
+    /* The slave may be enabled if it's attached to an aggregator and its
+     * partner is synchronized.*/
+    return slave->attached && (slave->partner.state & LACP_STATE_SYNC);
 }
 
 /* This function should be called before enabling 'slave_' to send or receive
@@ -379,15 +377,7 @@ bool
 lacp_slave_may_enable(const struct lacp *lacp, const void *slave_)
 {
     if (lacp) {
-        struct slave *slave = slave_lookup(lacp, slave_);
-
-        /* The slave may be enabled if it's attached to an aggregator and its
-         * partner is synchronized.  The only exception is defaulted slaves.
-         * They are not required to have synchronized partners because they
-         * have no partners at all.  They will only be attached if negotiations
-         * failed on all slaves in the bond. */
-        return slave->attached && (slave->partner.state & LACP_STATE_SYNC
-                                   || slave->status == LACP_DEFAULTED);
+        return slave_may_enable__(slave_lookup(lacp, slave_));
     } else {
         return true;
     }
@@ -448,13 +438,9 @@ lacp_run(struct lacp *lacp, lacp_send_pdu *send_pdu)
             compose_lacp_pdu(&actor, &slave->partner, &pdu);
             send_pdu(slave->aux, &pdu, sizeof pdu);
 
-            if (lacp->lacp_time == LACP_TIME_CUSTOM) {
-                duration = lacp->custom_time;
-            } else {
-                duration = (slave->partner.state & LACP_STATE_TIME
-                            ? LACP_FAST_TIME_TX
-                            : LACP_SLOW_TIME_TX);
-            }
+            duration = (slave->partner.state & LACP_STATE_TIME
+                        ? LACP_FAST_TIME_TX
+                        : LACP_SLOW_TIME_TX);
 
             timer_set_duration(&slave->tx, duration);
         }
@@ -489,27 +475,19 @@ lacp_update_attached(struct lacp *lacp)
     struct lacp_info lead_pri;
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 10);
 
-    if (lacp->heartbeat) {
-        HMAP_FOR_EACH (slave, node, &lacp->slaves) {
-            slave->attached = slave->status != LACP_DEFAULTED;
-        }
-        return;
-    }
-
     lacp->update = false;
 
     lead = NULL;
     HMAP_FOR_EACH (slave, node, &lacp->slaves) {
         struct lacp_info pri;
 
-        slave->attached = true;
+        slave->attached = false;
 
         /* XXX: In the future allow users to configure the expected system ID.
          * For now just special case loopback. */
         if (eth_addr_equals(slave->partner.sys_id, slave->lacp->sys_id)) {
             VLOG_WARN_RL(&rl, "slave %s: Loopback detected. Slave is "
                          "connected to its own bond", slave->name);
-            slave->attached = false;
             continue;
         }
 
@@ -517,6 +495,7 @@ lacp_update_attached(struct lacp *lacp)
             continue;
         }
 
+        slave->attached = true;
         slave_get_priority(slave, &pri);
 
         if (!lead || memcmp(&pri, &lead_pri, sizeof pri) < 0) {
@@ -529,8 +508,7 @@ lacp_update_attached(struct lacp *lacp)
 
     if (lead) {
         HMAP_FOR_EACH (slave, node, &lacp->slaves) {
-            if (slave->status == LACP_DEFAULTED
-                || lead->partner.key != slave->partner.key
+            if (lead->partner.key != slave->partner.key
                 || !eth_addr_equals(lead->partner.sys_id,
                                     slave->partner.sys_id)) {
                 slave->attached = false;
@@ -575,18 +553,11 @@ slave_set_defaulted(struct slave *slave)
 static void
 slave_set_expired(struct slave *slave)
 {
-    struct lacp *lacp = slave->lacp;
-
     slave->status = LACP_EXPIRED;
     slave->partner.state |= LACP_STATE_TIME;
     slave->partner.state &= ~LACP_STATE_SYNC;
 
-    /* The spec says we should wait LACP_RX_MULTIPLIER * LACP_FAST_TIME_TX.
-     * This doesn't make sense when using custom times which can be much
-     * smaller than LACP_FAST_TIME. */
-    timer_set_duration(&slave->rx, (lacp->lacp_time == LACP_TIME_CUSTOM
-                                    ? lacp->custom_time
-                                    : LACP_RX_MULTIPLIER * LACP_FAST_TIME_TX));
+    timer_set_duration(&slave->rx, LACP_RX_MULTIPLIER * LACP_FAST_TIME_TX);
 }
 
 static void
@@ -600,7 +571,7 @@ slave_get_actor(struct slave *slave, struct lacp_info *actor)
         state |= LACP_STATE_ACT;
     }
 
-    if (lacp->lacp_time != LACP_TIME_SLOW) {
+    if (lacp->fast) {
         state |= LACP_STATE_TIME;
     }
 
@@ -616,7 +587,7 @@ slave_get_actor(struct slave *slave, struct lacp_info *actor)
         state |= LACP_STATE_EXP;
     }
 
-    if (lacp->heartbeat || hmap_count(&lacp->slaves) > 1) {
+    if (hmap_count(&lacp->slaves) > 1) {
         state |= LACP_STATE_AGG;
     }
 
@@ -770,9 +741,6 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
 
     ds_put_format(ds, "---- %s ----\n", lacp->name);
     ds_put_format(ds, "\tstatus: %s", lacp->active ? "active" : "passive");
-    if (lacp->heartbeat) {
-        ds_put_cstr(ds, " heartbeat");
-    }
     if (lacp->negotiated) {
         ds_put_cstr(ds, " negotiated");
     }
@@ -789,18 +757,10 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
     ds_put_cstr(ds, "\n");
 
     ds_put_cstr(ds, "\tlacp_time: ");
-    switch (lacp->lacp_time) {
-    case LACP_TIME_FAST:
+    if (lacp->fast) {
         ds_put_cstr(ds, "fast\n");
-        break;
-    case LACP_TIME_SLOW:
+    } else {
         ds_put_cstr(ds, "slow\n");
-        break;
-    case LACP_TIME_CUSTOM:
-        ds_put_format(ds, "custom (%lld)\n", lacp->custom_time);
-        break;
-    default:
-        ds_put_cstr(ds, "unknown\n");
     }
 
     HMAP_FOR_EACH (slave, node, &lacp->slaves) {
@@ -832,6 +792,8 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
                       slave->attached ? "attached" : "detached");
         ds_put_format(ds, "\tport_id: %u\n", slave->port_id);
         ds_put_format(ds, "\tport_priority: %u\n", slave->port_priority);
+        ds_put_format(ds, "\tmay_enable: %s\n", (slave_may_enable__(slave)
+                                                 ? "true" : "false"));
 
         ds_put_format(ds, "\n\tactor sys_id: " ETH_ADDR_FMT "\n",
                       ETH_ADDR_ARGS(actor.sys_id));
@@ -867,16 +829,16 @@ lacp_print_details(struct ds *ds, struct lacp *lacp)
 }
 
 static void
-lacp_unixctl_show(struct unixctl_conn *conn,
-                  const char *args, void *aux OVS_UNUSED)
+lacp_unixctl_show(struct unixctl_conn *conn, int argc, const char *argv[],
+                  void *aux OVS_UNUSED)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct lacp *lacp;
 
-    if (strlen(args)) {
-        lacp = lacp_find(args);
+    if (argc > 1) {
+        lacp = lacp_find(argv[1]);
         if (!lacp) {
-            unixctl_command_reply(conn, 501, "no such lacp object");
+            unixctl_command_reply_error(conn, "no such lacp object");
             return;
         }
         lacp_print_details(&ds, lacp);
@@ -886,6 +848,6 @@ lacp_unixctl_show(struct unixctl_conn *conn,
         }
     }
 
-    unixctl_command_reply(conn, 200, ds_cstr(&ds));
+    unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #include <config.h>
 #include "daemon.h"
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -38,7 +39,8 @@
 VLOG_DEFINE_THIS_MODULE(daemon);
 
 /* --detach: Should we run in the background? */
-static bool detach;
+static bool detach;             /* Was --detach specified? */
+static bool detached;           /* Have we already detached? */
 
 /* --pidfile: Name of pidfile (null if none). */
 static char *pidfile;
@@ -60,6 +62,10 @@ static int daemonize_fd = -1;
 /* --monitor: Should a supervisory process monitor the daemon and restart it if
  * it dies due to an error signal? */
 static bool monitor;
+
+/* For each of the standard file descriptors, whether to replace it by
+ * /dev/null (if false) or keep it for the daemon to use (if true). */
+static bool save_fds[3];
 
 static void check_already_running(void);
 static int lock_pidfile(FILE *, int command);
@@ -140,6 +146,20 @@ void
 daemon_set_monitor(void)
 {
     monitor = true;
+}
+
+/* A daemon doesn't normally have any use for the file descriptors for stdin,
+ * stdout, and stderr after it detaches.  To keep these file descriptors from
+ * e.g. holding an SSH session open, by default detaching replaces each of
+ * these file descriptors by /dev/null.  But a few daemons expect the user to
+ * redirect stdout or stderr to a file, in which case it is desirable to keep
+ * these file descriptors.  This function, therefore, disables replacing 'fd'
+ * by /dev/null when the daemon detaches. */
+void
+daemon_save_fd(int fd)
+{
+    assert(fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO);
+    save_fds[fd] = true;
 }
 
 /* If a pidfile has been configured, creates it and stores the running
@@ -226,6 +246,43 @@ daemonize(void)
     daemonize_complete();
 }
 
+/* Calls fork() and on success returns its return value.  On failure, logs an
+ * error and exits unsuccessfully.
+ *
+ * Post-fork, but before returning, this function calls a few other functions
+ * that are generally useful if the child isn't planning to exec a new
+ * process. */
+pid_t
+fork_and_clean_up(void)
+{
+    pid_t pid;
+
+    pid = fork();
+    if (pid > 0) {
+        /* Running in parent process. */
+        fatal_signal_fork();
+    } else if (!pid) {
+        /* Running in child process. */
+        time_postfork();
+        lockfile_postfork();
+    } else {
+        VLOG_FATAL("fork failed (%s)", strerror(errno));
+    }
+
+    return pid;
+}
+
+/* Forks, then:
+ *
+ *   - In the parent, waits for the child to signal that it has completed its
+ *     startup sequence.  Then stores -1 in '*fdp' and returns the child's pid.
+ *
+ *   - In the child, stores a fd in '*fdp' and returns 0.  The caller should
+ *     pass the fd to fork_notify_startup() after it finishes its startup
+ *     sequence.
+ *
+ * If something goes wrong with the fork, logs a critical error and aborts the
+ * process. */
 static pid_t
 fork_and_wait_for_startup(int *fdp)
 {
@@ -234,14 +291,13 @@ fork_and_wait_for_startup(int *fdp)
 
     xpipe(fds);
 
-    pid = fork();
+    pid = fork_and_clean_up();
     if (pid > 0) {
         /* Running in parent process. */
         size_t bytes_read;
         char c;
 
         close(fds[1]);
-        fatal_signal_fork();
         if (read_fully(fds[0], &c, 1, &bytes_read) != 0) {
             int retval;
             int status;
@@ -271,11 +327,7 @@ fork_and_wait_for_startup(int *fdp)
     } else if (!pid) {
         /* Running in child process. */
         close(fds[0]);
-        time_postfork();
-        lockfile_postfork();
         *fdp = fds[1];
-    } else {
-        VLOG_FATAL("fork failed (%s)", strerror(errno));
     }
 
     return pid;
@@ -321,13 +373,11 @@ static void
 monitor_daemon(pid_t daemon_pid)
 {
     /* XXX Should log daemon's stderr output at startup time. */
-    const char *saved_program_name;
     time_t last_restart;
     char *status_msg;
     int crashes;
 
-    saved_program_name = program_name;
-    program_name = xasprintf("monitor(%s)", program_name);
+    subprogram_name = "monitor";
     status_msg = xstrdup("healthy");
     last_restart = TIME_MIN;
     crashes = 0;
@@ -335,9 +385,8 @@ monitor_daemon(pid_t daemon_pid)
         int retval;
         int status;
 
-        proctitle_set("%s: monitoring pid %lu (%s)",
-                      saved_program_name, (unsigned long int) daemon_pid,
-                      status_msg);
+        proctitle_set("monitoring pid %lu (%s)",
+                      (unsigned long int) daemon_pid, status_msg);
 
         do {
             retval = waitpid(daemon_pid, &status, 0);
@@ -398,20 +447,24 @@ monitor_daemon(pid_t daemon_pid)
 
     /* Running in new daemon process. */
     proctitle_restore();
-    free((char *) program_name);
-    program_name = saved_program_name;
+    subprogram_name = "";
 }
 
-/* Close stdin, stdout, stderr.  If we're started from e.g. an SSH session,
- * then this keeps us from holding that session open artificially. */
+/* Close standard file descriptors (except any that the client has requested we
+ * leave open by calling daemon_save_fd()).  If we're started from e.g. an SSH
+ * session, then this keeps us from holding that session open artificially. */
 static void
 close_standard_fds(void)
 {
     int null_fd = get_null_fd();
     if (null_fd >= 0) {
-        dup2(null_fd, STDIN_FILENO);
-        dup2(null_fd, STDOUT_FILENO);
-        dup2(null_fd, STDERR_FILENO);
+        int fd;
+
+        for (fd = 0; fd < 3; fd++) {
+            if (!save_fds[fd]) {
+                dup2(null_fd, fd);
+            }
+        }
     }
 
     /* Disable logging to stderr to avoid wasting CPU time. */
@@ -433,7 +486,9 @@ daemonize_start(void)
             /* Running in parent process. */
             exit(0);
         }
+
         /* Running in daemon or monitor process. */
+        setsid();
     }
 
     if (monitor) {
@@ -460,22 +515,37 @@ daemonize_start(void)
 }
 
 /* If daemonization is configured, then this function notifies the parent
- * process that the child process has completed startup successfully.
+ * process that the child process has completed startup successfully.  It also
+ * call daemonize_post_detach().
  *
  * Calling this function more than once has no additional effect. */
 void
 daemonize_complete(void)
 {
-    fork_notify_startup(daemonize_fd);
-    daemonize_fd = -1;
+    if (!detached) {
+        detached = true;
 
+        fork_notify_startup(daemonize_fd);
+        daemonize_fd = -1;
+        daemonize_post_detach();
+    }
+}
+
+/* If daemonization is configured, then this function does traditional Unix
+ * daemonization behavior: join a new session, chdir to the root (if not
+ * disabled), and close the standard file descriptors.
+ *
+ * It only makes sense to call this function as part of an implementation of a
+ * special daemon subprocess.  A normal daemon should just call
+ * daemonize_complete(). */
+void
+daemonize_post_detach(void)
+{
     if (detach) {
-        setsid();
         if (chdir_) {
             ignore(chdir("/"));
         }
         close_standard_fds();
-        detach = false;
     }
 }
 

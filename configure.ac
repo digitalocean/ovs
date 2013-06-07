@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks
+# Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 1.4.2, ovs-bugs@openvswitch.org)
-NX_BUILDNR
+AC_INIT(openvswitch, 1.9.2, ovs-bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -35,6 +34,8 @@ if test "$PERL" = no; then
    AC_MSG_ERROR([Perl interpreter not found in $PATH or $PERL.])
 fi
 
+AM_MISSING_PROG([AUTOM4TE], [autom4te])
+
 AC_USE_SYSTEM_EXTENSIONS
 AC_C_BIGENDIAN
 AC_SYS_LARGEFILE
@@ -42,7 +43,9 @@ AC_SYS_LARGEFILE
 AC_SEARCH_LIBS([pow], [m])
 AC_SEARCH_LIBS([clock_gettime], [rt])
 AC_SEARCH_LIBS([timer_create], [rt])
+AC_SEARCH_LIBS([pcap_open_live], [pcap])
 
+OVS_CHECK_ESX
 OVS_CHECK_COVERAGE
 OVS_CHECK_NDEBUG
 OVS_CHECK_NETLINK
@@ -53,14 +56,16 @@ OVS_CHECK_PYUIC4
 OVS_CHECK_OVSDBMONITOR
 OVS_CHECK_DOT
 OVS_CHECK_IF_PACKET
+OVS_CHECK_IF_DL
 OVS_CHECK_STRTOK_R
 AC_CHECK_MEMBERS([struct stat.st_mtim.tv_nsec, struct stat.st_mtimensec],
   [], [], [[#include <sys/stat.h>]])
 AC_CHECK_FUNCS([mlockall strnlen strsignal getloadavg statvfs setmntent])
-AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h])
+AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h execinfo.h])
 
 OVS_CHECK_PKIDIR
 OVS_CHECK_RUNDIR
+OVS_CHECK_DBDIR
 OVS_CHECK_BACKTRACE
 OVS_CHECK_MALLOC_HOOKS
 OVS_CHECK_VALGRIND
@@ -68,6 +73,9 @@ OVS_CHECK_SOCKET_LIBS
 OVS_CHECK_LINKER_SECTIONS
 OVS_CHECK_XENSERVER_VERSION
 OVS_CHECK_GROFF
+OVS_CHECK_BRCOMPAT
+OVS_CHECK_GNU_MAKE
+OVS_CHECK_CACHE_TIME
 
 OVS_ENABLE_OPTION([-Wall])
 OVS_ENABLE_OPTION([-Wno-sign-compare])
@@ -105,5 +113,10 @@ AC_CONFIG_COMMANDS([include/openflow/openflow.h.stamp])
 
 AC_CONFIG_COMMANDS([ovsdb/ovsdbmonitor/dummy], [:])
 AC_CONFIG_COMMANDS([utilities/bugtool/dummy], [:])
+
+AM_CONDITIONAL([LINUX_DATAPATH], [test "$HAVE_NETLINK" = yes && test "$ESX" = no])
+if test "$HAVE_NETLINK" = yes && test "$ESX" = no; then
+    AC_DEFINE([LINUX_DATAPATH], [1], [System uses the linux datapath module.])
+fi
 
 AC_OUTPUT

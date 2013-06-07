@@ -87,14 +87,6 @@
         configuration changes.
       </column>
 
-      <column name="capabilities">
-        Describes functionality supported by the hardware and software platform
-        on which this Open vSwitch is based.  Clients should not modify this
-        column.  See the <ref table="Capability"/> description for defined
-        capability categories and the meaning of associated
-        <ref table="Capability"/> records.
-      </column>
-
       <group title="Statistics">
         <p>
           The <code>statistics</code> column contains key-value pairs that
@@ -241,8 +233,6 @@
 
       <column name="ovs_version">
         The Open vSwitch version number, e.g. <code>1.1.0</code>.
-        If Open vSwitch was configured with a build number, then it is
-        also included, e.g. <code>1.1.0+build6579</code>.
       </column>
 
       <column name="db_version">
@@ -372,8 +362,25 @@
 
     <group title="OpenFlow Configuration">
       <column name="controller">
-        OpenFlow controller set.  If unset, then no OpenFlow controllers
-        will be used.
+        <p>
+          OpenFlow controller set.  If unset, then no OpenFlow controllers
+          will be used.
+        </p>
+
+        <p>
+          If there are primary controllers, removing all of them clears the
+          flow table.  If there are no primary controllers, adding one also
+          clears the flow table.  Other changes to the set of controllers, such
+          as adding or removing a service controller, adding another primary
+          controller to supplement an existing primary controller, or removing
+          only one of two primary controllers, have no effect on the flow
+          table.
+        </p>
+      </column>
+
+      <column name="flow_tables">
+        Configuration for OpenFlow tables.  Each pair maps from an OpenFlow
+        table ID to configuration for that table.
       </column>
 
       <column name="fail_mode">
@@ -402,10 +409,23 @@
           any defined controllers forever.</dd>
         </dl>
         </p>
-        <p>If this value is unset, the default is implementation-specific.</p>
+        <p>
+          The default is <code>standalone</code> if the value is unset, but
+          future versions of Open vSwitch may change the default.
+        </p>
+        <p>
+          The <code>standalone</code> mode can create forwarding loops on a
+          bridge that has more than one uplink port unless STP is enabled.  To
+          avoid loops on such a bridge, configure <code>secure</code> mode or
+          enable STP (see <ref column="stp_enable"/>).
+        </p>
         <p>When more than one controller is configured,
         <ref column="fail_mode"/> is considered only when none of the
         configured controllers can be contacted.</p>
+        <p>
+          Changing <ref column="fail_mode"/> when no primary controllers are
+          configured clears the flow table.
+        </p>
       </column>
 
       <column name="datapath_id">
@@ -446,7 +466,7 @@
         on bridges.  Bond, internal, and mirror ports are not supported
         and will not participate in the spanning tree.
       </column>
- 
+
       <column name="other_config" key="stp-system-id">
         The bridge's STP identifier (the lower 48 bits of the bridge-id)
         in the form
@@ -536,6 +556,46 @@
         and if Open vSwitch node does not run STP, then this option
         should be enabled.  Default is disabled, set to
         <code>true</code> to enable.
+
+        The following destination MAC addresss will not be forwarded when this
+        option is enabled.
+        <dl>
+          <dt><code>01:80:c2:00:00:00</code></dt>
+          <dd>IEEE 802.1D Spanning Tree Protocol (STP).</dd>
+
+          <dt><code>01:80:c2:00:00:01</code></dt>
+          <dd>IEEE Pause frame.</dd>
+
+          <dt><code>01:80:c2:00:00:0<var>x</var></code></dt>
+          <dd>Other reserved protocols.</dd>
+
+          <dt><code>00:e0:2b:00:00:00</code></dt>
+          <dd>Extreme Discovery Protocol (EDP).</dd>
+
+          <dt>
+	    <code>00:e0:2b:00:00:04</code> and <code>00:e0:2b:00:00:06</code>
+	  </dt>
+          <dd>Ethernet Automatic Protection Switching (EAPS).</dd>
+
+          <dt><code>01:00:0c:cc:cc:cc</code></dt>
+          <dd>
+            Cisco Discovery Protocol (CDP), VLAN Trunking Protocol (VTP),
+            Dynamic Trunking Protocol (DTP), Port Aggregation Protocol (PAgP),
+            and others.
+          </dd>
+
+          <dt><code>01:00:0c:cc:cc:cd</code></dt>
+          <dd>Cisco Shared Spanning Tree Protocol PVSTP+.</dd>
+
+          <dt><code>01:00:0c:cd:cd:cd</code></dt>
+          <dd>Cisco STP Uplink Fast.</dd>
+
+          <dt><code>01:00:0c:00:00:00</code></dt>
+          <dd>Cisco Inter Switch Link.</dd>
+
+          <dt><code>01:00:0c:cc:cc:c<var>x</var></code></dt>
+          <dd>Cisco CFM.</dd>
+        </dl>
       </column>
 
       <column name="other_config" key="mac-aging-time"
@@ -742,8 +802,13 @@
 
     <group title="Bonding Configuration">
       <p>A port that has more than one interface is a ``bonded port.'' Bonding
-      allows for load balancing and fail-over.  Some kinds of bonding will
-      work with any kind of upstream switch:</p>
+      allows for load balancing and fail-over.</p>
+
+      <p>
+        The following types of bonding will work with any kind of upstream
+        switch.  On the upstream switch, do not configure the interfaces as a
+        bond:
+      </p>
 
       <dl>
         <dt><code>balance-slb</code></dt>
@@ -755,14 +820,14 @@
         <dt><code>active-backup</code></dt>
         <dd>
           Assigns all flows to one slave, failing over to a backup slave when
-          the active slave is disabled.
+          the active slave is disabled.  This is the only bonding mode in which
+          interfaces may be plugged into different upstream switches.
         </dd>
       </dl>
 
       <p>
         The following modes require the upstream switch to support 802.3ad with
-        successful LACP negotiation.  If LACP negotiation fails then
-        <code>balance-slb</code> style flow hashing is used as a fallback:
+        successful LACP negotiation:
       </p>
 
       <dl>
@@ -775,6 +840,7 @@
 
         <dt><code>stable</code></dt>
         <dd>
+          <p>Deprecated and slated for removal in February 2013.</p>
           <p>Attempts to always assign a given flow to the same slave
           consistently.  In an effort to maintain stability, no load
           balancing is done.  Uses a similar hashing strategy to
@@ -794,8 +860,17 @@
 
       <column name="bond_mode">
         <p>The type of bonding used for a bonded port.  Defaults to
-        <code>balance-slb</code> if unset.
+        <code>active-backup</code> if unset.
         </p>
+      </column>
+
+      <column name="other_config" key="bond-hash-basis"
+              type='{"type": "integer"}'>
+        An integer hashed along with flows when choosing output slaves in load
+        balanced bonds.  When changed, all flows will be assigned different
+        hash values possibly causing slave selection decisions to change.  Does
+        not affect bonding modes which do not employ load balancing such as
+        <code>active-backup</code>.
       </column>
 
       <group title="Link Failure Detection">
@@ -822,7 +897,7 @@
 
         <column name="bond_updelay">
           <p>
-            The number of milliseconds for which carrier must stay up on an
+            The number of milliseconds for which the link must stay up on an
             interface before the interface is considered to be up.  Specify
             <code>0</code> to enable the interface immediately.
           </p>
@@ -835,7 +910,7 @@
         </column>
 
         <column name="bond_downdelay">
-          The number of milliseconds for which carrier must stay down on an
+          The number of milliseconds for which the link must stay down on an
           interface before the interface is considered to be down.  Specify
           <code>0</code> to disable the interface immediately.
         </column>
@@ -856,14 +931,16 @@
           connected to.  <code>active</code> ports are allowed to initiate LACP
           negotiations.  <code>passive</code> ports are allowed to participate
           in LACP negotiations initiated by a remote switch, but not allowed to
-          initiate such negotiations themselves.  Defaults to <code>off</code>
-          if unset.
+          initiate such negotiations themselves.  If LACP is enabled on a port
+          whose partner switch does not support LACP, the bond will be
+          disabled.  Defaults to <code>off</code> if unset.
         </column>
 
         <column name="other_config" key="lacp-system-id">
           The LACP system ID of this <ref table="Port"/>.  The system ID of a
           LACP bond is used to identify itself to its partners.  Must be a
-          nonzero MAC address.
+          nonzero MAC address. Defaults to the bridge Ethernet address if
+          unset.
         </column>
 
         <column name="other_config" key="lacp-system-priority"
@@ -873,57 +950,33 @@
           numerically lower priority.
         </column>
 
-        <column name="other_config" key="lacp-time">
+        <column name="other_config" key="lacp-time"
+          type='{"type": "string", "enum": ["set", ["fast", "slow"]]}'>
           <p>
             The LACP timing which should be used on this <ref table="Port"/>.
-            Possible values are <code>fast</code>, <code>slow</code> and a
-            positive number of milliseconds.  By default <code>slow</code> is
-            used.  When configured to be <code>fast</code> LACP heartbeats are
-            requested at a rate of once per second causing connectivity
-            problems to be detected more quickly.  In <code>slow</code> mode,
-            heartbeats are requested at a rate of once every 30 seconds.
+            By default <code>slow</code> is used.  When configured to be
+            <code>fast</code> LACP heartbeats are requested at a rate of once
+            per second causing connectivity problems to be detected more
+            quickly.  In <code>slow</code> mode, heartbeats are requested at a
+            rate of once every 30 seconds.
           </p>
-
-          <p>
-            Users may manually set a heartbeat transmission rate to increase
-            the fault detection speed further.  When manually set, OVS expects
-            the partner switch to be configured with the same transmission
-            rate.  Manually setting <code>lacp-time</code> to something other
-            than <code>fast</code> or <code>slow</code> is not supported by the
-            LACP specification.
-          </p>
-        </column>
-
-        <column name="other_config" key="lacp-heartbeat"
-                type='{"type": "boolean"}'>
-          Treat LACP like a simple heartbeat protocol for link state
-          monitoring.  Most features of the LACP protocol are disabled
-          when this mode is in use.  The default if not specified is
-          <code>false</code>.
-        </column>
-
-        <column name="other_config" key="bond-hash-basis"
-                type='{"type": "integer"}'>
-          An integer hashed along with flows when choosing output slaves.  When
-          changed, all flows will be assigned different hash values possibly
-          causing slave selection decisions to change.
         </column>
       </group>
 
-      <group title="SLB Configuration">
+      <group title="Rebalancing Configuration">
         <p>
           These settings control behavior when a bond is in
-          <code>balance-slb</code> mode, regardless of whether the bond was
-          intentionally configured in SLB mode or it fell back to SLB mode
-          because LACP negotiation failed.
+          <code>balance-slb</code> or <code>balance-tcp</code> mode.
         </p>
 
         <column name="other_config" key="bond-rebalance-interval"
-                type='{"type": "integer", "minInteger": 1000, "maxInteger": 10000}'>
-          For an SLB bonded port, the number of milliseconds between successive
-          attempts to rebalance the bond, that is, to move source MACs and
-          their flows from one interface on the bond to another in an attempt
-          to keep usage of each interface roughly equal.
+                type='{"type": "integer", "minInteger": 0, "maxInteger": 10000}'>
+          For a load balanced bonded port, the number of milliseconds between
+          successive attempts to rebalance the bond, that is, to move flows
+          from one interface on the bond to another in an attempt to keep usage
+          of each interface roughly equal.  If zero, load balancing is disabled
+          on the bond (link failure still cause flows to move).  If
+          less than 1000ms, the rebalance interval will be 1000ms.
         </column>
       </group>
 
@@ -1143,7 +1196,22 @@
           <dt><code>ipsec_gre</code></dt>
           <dd>
             An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
-            IPsec tunnel.  
+            IPsec tunnel.
+          </dd>
+
+          <dt><code>gre64</code></dt>
+          <dd>
+            It is same as GRE, but it allows 64 bit key. To store higher 32-bits
+            of key, it uses GRE protocol sequence number field. This is non
+            standard use of GRE protocol since OVS does not increment
+            sequence number for every packet at time of encap as expected by
+            standard GRE implementation. See <ref group="Tunnel Options"/>
+            for information on configuring GRE tunnels.
+          </dd>
+
+          <dt><code>ipsec_gre64</code></dt>
+          <dd>
+            Same as IPSEC_GRE except 64 bit key.
           </dd>
 
           <dt><code>capwap</code></dt>
@@ -1154,6 +1222,9 @@
             implemented.  UDP ports 58881 and 58882 are used as the source and
             destination ports respectively.  CAPWAP is currently supported only
             with the Linux kernel datapath with kernel version 2.6.26 or later.
+
+            CAPWAP support is deprecated and will be removed no earlier than
+            February 2013.
           </dd>
 
           <dt><code>patch</code></dt>
@@ -1162,7 +1233,8 @@
           </dd>
 
           <dt><code>null</code></dt>
-          <dd>An ignored interface.</dd>
+          <dd>An ignored interface. Deprecated and slated for removal in
+              February 2013.</dd>
         </dl>
       </column>
     </group>
@@ -1170,7 +1242,8 @@
     <group title="Tunnel Options">
       <p>
         These options apply to interfaces with <ref column="type"/> of
-        <code>gre</code>, <code>ipsec_gre</code>, and <code>capwap</code>.
+        <code>gre</code>, <code>ipsec_gre</code>, <code>gre64</code>,
+        <code>ipsec_gre64</code>, and <code>capwap</code>.
       </p>
 
       <p>
@@ -1259,7 +1332,8 @@
 
       <column name="options" key="tos">
         Optional.  The value of the ToS bits to be set on the encapsulating
-        packet.  It may also be the word <code>inherit</code>, in which case
+        packet.  ToS is interpreted as DSCP and ECN bits, ECN part must be
+        zero.  It may also be the word <code>inherit</code>, in which case
         the ToS will be copied from the inner packet if it is IPv4 or IPv6
         (otherwise it will be 0).  The ECN fields are always inherited.
         Default is 0.
@@ -1271,7 +1345,7 @@
         from the inner packet if it is IPv4 or IPv6 (otherwise it will be the
         system default, typically 64).  Default is the system default TTL.
       </column>
-      
+
       <column name="options" key="df_inherit" type='{"type": "boolean"}'>
         Optional.  If enabled, the Don't Fragment bit will be copied from the
         inner IP headers (those of the encapsulated traffic) to the outer
@@ -1295,23 +1369,14 @@
         of the tunnel headers.  Note that this option causes behavior that is
         typically reserved for routers and therefore is not entirely in
         compliance with the IEEE 802.1D specification for bridges.  Default is
-        enabled; set to <code>false</code> to disable.
+        disabled; set to <code>true</code> to enable.  This feature is
+        deprecated and will be removed soon.
       </column>
 
       <group title="Tunnel Options: gre only">
         <p>
           Only <code>gre</code> interfaces support these options.
         </p>
-
-        <column name="options" key="header_cache" type='{"type": "boolean"}'>
-          Enable caching of tunnel headers and the output path.  This can lead
-          to a significant performance increase without changing behavior.  In
-          general it should not be necessary to adjust this setting.  However,
-          the caching can bypass certain components of the IP stack (such as
-          <code>iptables</code>) and it may be useful to disable it if these
-          features are required or as a debugging measure.  Default is enabled,
-          set to <code>false</code> to disable.
-        </column>
       </group>
 
       <group title="Tunnel Options: gre and ipsec_gre only">
@@ -1537,7 +1602,7 @@
           Total number of receive errors, greater than or equal to the sum of
           the above.
         </column>
-      </group>              
+      </group>
       <group title="Statistics: Transmit errors">
         <column name="statistics" key="tx_dropped">
           Number of packets dropped by TX.
@@ -1647,6 +1712,12 @@
         faulted otherwise.
       </p>
 
+      <p>
+          When operating over tunnels which have no <code>in_key</code>, or an
+          <code>in_key</code> of <code>flow</code>.  CFM will only accept CCMs
+          with a tunnel key of zero.
+      </p>
+
       <column name="cfm_mpid">
         A Maintenance Point ID (MPID) uniquely identifies each endpoint within
         a Maintenance Association.  The MPID is used to identify this endpoint
@@ -1673,6 +1744,76 @@
         </p>
       </column>
 
+      <column name="cfm_fault_status" key="recv">
+        Indicates a CFM fault was triggered due to a lack of CCMs received on
+        the <ref table="Interface"/>.
+      </column>
+
+      <column name="cfm_fault_status" key="rdi">
+        Indicates a CFM fault was triggered due to the reception of a CCM with
+        the RDI bit flagged.  Endpoints set the RDI bit in their CCMs when they
+        are not receiving CCMs themselves.  This typically indicates a
+        unidirectional connectivity failure.
+      </column>
+
+      <column name="cfm_fault_status" key="maid">
+        Indicates a CFM fault was triggered due to the reception of a CCM with
+        a MAID other than the one Open vSwitch uses.  CFM broadcasts are tagged
+        with an identification number in addition to the MPID called the MAID.
+        Open vSwitch only supports receiving CCM broadcasts tagged with the
+        MAID it uses internally.
+      </column>
+
+      <column name="cfm_fault_status" key="loopback">
+        Indicates a CFM fault was triggered due to the reception of a CCM
+        advertising the same MPID configured in the <ref column="cfm_mpid"/>
+        column of this <ref table="Interface"/>.  This may indicate a loop in
+        the network.
+      </column>
+
+      <column name="cfm_fault_status" key="overflow">
+        Indicates a CFM fault was triggered because the CFM module received
+        CCMs from more remote endpoints than it can keep track of.
+      </column>
+
+      <column name="cfm_fault_status" key="override">
+        Indicates a CFM fault was manually triggered by an administrator using
+        an <code>ovs-appctl</code> command.
+      </column>
+
+      <column name="cfm_fault_status" key="interval">
+        Indicates a CFM fault was triggered due to the reception of a CCM
+        frame having an invalid interval.
+      </column>
+
+      <column name="cfm_remote_opstate">
+        <p>When in extended mode, indicates the operational state of the
+          remote endpoint as either <code>up</code> or <code>down</code>.  See
+          <ref column="other_config" key="cfm_opstate"/>.
+        </p>
+      </column>
+
+      <column name="cfm_health">
+        <p>
+          Indicates the health of the interface as a percentage of CCM frames
+          received over 21 <ref column="other_config" key="cfm_interval"/>s.
+          The health of an interface is undefined if it is communicating with
+          more than one <ref column="cfm_remote_mpids"/>.  It reduces if
+          healthy heartbeats are not received at the expected rate, and
+          gradually improves as healthy heartbeats are received at the desired
+          rate. Every 21 <ref column="other_config" key="cfm_interval"/>s, the
+          health of the interface is refreshed.
+        </p>
+        <p>
+          As mentioned above, the faults can be triggered for several reasons.
+          The link health will deteriorate even if heartbeats are received but
+          they are reported to be unhealthy.  An unhealthy heartbeat in this
+          context is a heartbeat for which either some fault is set or is out
+          of sequence.  The interface health can be 100 only on receiving
+          healthy heartbeats at the desired rate.
+        </p>
+      </column>
+
       <column name="cfm_remote_mpids">
         When CFM is properly configured, Open vSwitch will occasionally
         receive CCM broadcasts.  These broadcasts contain the MPID of the
@@ -1683,9 +1824,21 @@
 
       <column name="other_config" key="cfm_interval"
               type='{"type": "integer"}'>
-        The interval, in milliseconds, between transmissions of CFM heartbeats.
-        Three missed heartbeat receptions indicate a connectivity fault.
-        Defaults to 1000.
+        <p>
+          The interval, in milliseconds, between transmissions of CFM
+          heartbeats.  Three missed heartbeat receptions indicate a
+          connectivity fault.
+        </p>
+
+        <p>
+          In standard operation only intervals of 3, 10, 100, 1,000, 10,000,
+          60,000, or 600,000 ms are supported.  Other values will be rounded
+          down to the nearest value on the list.  Extended mode (see <ref
+          column="other_config" key="cfm_extended"/>) supports any interval up
+          to 65,535 ms.  In either mode, the default is 1000 ms.
+        </p>
+
+        <p>We do not recommend using intervals less than 100 ms.</p>
       </column>
 
       <column name="other_config" key="cfm_extended"
@@ -1713,7 +1866,17 @@
       <column name="other_config" key="cfm_ccm_vlan"
         type='{"type": "integer", "minInteger": 1, "maxInteger": 4095}'>
         When set, the CFM module will apply a VLAN tag to all CCMs it generates
-        with the given value.
+        with the given value.  May be the string <code>random</code> in which
+        case each CCM will be tagged with a different randomly generated VLAN.
+      </column>
+
+      <column name="other_config" key="cfm_ccm_pcp"
+        type='{"type": "integer", "minInteger": 1, "maxInteger": 7}'>
+        When set, the CFM module will apply a VLAN tag to all CCMs it generates
+        with the given PCP value, the VLAN ID of the tag is governed by the
+        value of <ref column="other_config" key="cfm_ccm_vlan"/>. If
+        <ref column="other_config" key="cfm_ccm_vlan"/> is unset, a VLAN ID of
+        zero is used.
       </column>
 
     </group>
@@ -1775,12 +1938,43 @@
         commonly be the same as <ref column="external_ids" key="xs-vif-uuid"/>.
       </column>
 
+      <column name="external_ids" key="iface-status"
+              type='{"type": "string",
+                    "enum": ["set", ["active", "inactive"]]}'>
+        <p>
+          Hypervisors may sometimes have more than one interface associated
+          with a given <ref column="external_ids" key="iface-id"/>, only one of
+          which is actually in use at a given time.  For example, in some
+          circumstances XenServer has both a ``tap'' and a ``vif'' interface
+          for a single <ref column="external_ids" key="iface-id"/>, but only
+          uses one of them at a time.  A hypervisor that behaves this way must
+          mark the currently in use interface <code>active</code> and the
+          others <code>inactive</code>.  A hypervisor that never has more than
+          one interface for a given <ref column="external_ids" key="iface-id"/>
+          may mark that interface <code>active</code> or omit <ref
+          column="external_ids" key="iface-status"/> entirely.
+        </p>
+
+        <p>
+          During VM migration, a given <ref column="external_ids"
+          key="iface-id"/> might transiently be marked <code>active</code> on
+          two different hypervisors.  That is, <code>active</code> means that
+          this <ref column="external_ids" key="iface-id"/> is the active
+          instance within a single hypervisor, not in a broader scope.
+        </p>
+      </column>
+
       <column name="external_ids" key="xs-vif-uuid">
         The virtual interface associated with this interface.
       </column>
 
       <column name="external_ids" key="xs-network-uuid">
         The virtual network to which this interface is attached.
+      </column>
+
+      <column name="external_ids" key="vm-id">
+        The VM to which this interface belongs. On XenServer, this will be the
+        same as <ref column="external_ids" key="xs-vm-uuid"/>.
       </column>
 
       <column name="external_ids" key="xs-vm-uuid">
@@ -1875,15 +2069,106 @@
     </group>
   </table>
 
+  <table name="Flow_Table" title="OpenFlow table configuration">
+    <p>Configuration for a particular OpenFlow table.</p>
+
+    <column name="name">
+      The table's name.  Set this column to change the name that controllers
+      will receive when they request table statistics, e.g. <code>ovs-ofctl
+      dump-tables</code>.  The name does not affect switch behavior.
+    </column>
+
+    <column name="flow_limit">
+      If set, limits the number of flows that may be added to the table.  Open
+      vSwitch may limit the number of flows in a table for other reasons,
+      e.g. due to hardware limitations or for resource availability or
+      performance reasons.
+    </column>
+
+    <column name="overflow_policy">
+      <p>
+        Controls the switch's behavior when an OpenFlow flow table modification
+        request would add flows in excess of <ref column="flow_limit"/>.  The
+        supported values are:
+      </p>
+
+      <dl>
+        <dt><code>refuse</code></dt>
+        <dd>
+          Refuse to add the flow or flows.  This is also the default policy
+          when <ref column="overflow_policy"/> is unset.
+        </dd>
+
+        <dt><code>evict</code></dt>
+        <dd>
+          Delete the flow that will expire soonest.  See <ref column="groups"/>
+          for details.
+        </dd>
+      </dl>
+    </column>
+
+    <column name="groups">
+      <p>
+        When <ref column="overflow_policy"/> is <code>evict</code>, this
+        controls how flows are chosen for eviction when the flow table would
+        otherwise exceed <ref column="flow_limit"/> flows.  Its value is a set
+        of NXM fields or sub-fields, each of which takes one of the forms
+        <code><var>field</var>[]</code> or
+        <code><var>field</var>[<var>start</var>..<var>end</var>]</code>,
+        e.g. <code>NXM_OF_IN_PORT[]</code>.  Please see
+        <code>nicira-ext.h</code> for a complete list of NXM field names.
+      </p>
+
+      <p>
+        When a flow must be evicted due to overflow, the flow to evict is
+        chosen through an approximation of the following algorithm:
+      </p>
+
+      <ol>
+        <li>
+          Divide the flows in the table into groups based on the values of the
+          specified fields or subfields, so that all of the flows in a given
+          group have the same values for those fields.  If a flow does not
+          specify a given field, that field's value is treated as 0.
+        </li>
+
+        <li>
+          Consider the flows in the largest group, that is, the group that
+          contains the greatest number of flows.  If two or more groups all
+          have the same largest number of flows, consider the flows in all of
+          those groups.
+        </li>
+
+        <li>
+          Among the flows under consideration, choose the flow that expires
+          soonest for eviction.
+        </li>
+      </ol>
+
+      <p>
+        The eviction process only considers flows that have an idle timeout or
+        a hard timeout.  That is, eviction never deletes permanent flows.
+        (Permanent flows do count against <ref column="flow_limit"/>.)
+      </p>
+
+      <p>
+        Open vSwitch ignores any invalid or unknown field specifications.
+      </p>
+
+      <p>
+        When <ref column="overflow_policy"/> is not <code>evict</code>, this
+        column has no effect.
+      </p>
+    </column>
+  </table>
+
   <table name="QoS" title="Quality of Service configuration">
     <p>Quality of Service (QoS) configuration for each Port that
     references it.</p>
 
     <column name="type">
-      <p>The type of QoS to implement.  The <ref table="Open_vSwitch"
-      column="capabilities"/> column in the <ref table="Open_vSwitch"/> table
-      identifies the types that a switch actually supports.  The currently
-      defined types are listed below:</p>
+      <p>The type of QoS to implement. The currently defined types are
+      listed below:</p>
       <dl>
         <dt><code>linux-htb</code></dt>
         <dd>
@@ -1912,9 +2197,11 @@
 
       <p>
         Queue 0 is the ``default queue.''  It is used by OpenFlow output
-        actions when no specific queue has been set.  Ordinarily <ref
-        column="queues"/> should include a configuration for queue 0.  When no
-        configuration for queue 0 is present, a default configuration is used.
+        actions when no specific queue has been set.  When no configuration for
+        queue 0 is present, it is automatically configured as if a <ref
+        table="Queue"/> record with empty <ref table="Queue" column="dscp"/>
+        and <ref table="Queue" column="other_config"/> columns had been
+        specified.
         (Before version 1.6, Open vSwitch would leave queue 0 unconfigured in
         this case.  With some queuing disciplines, this dropped all packets
         destined for the default queue.)
@@ -1926,7 +2213,7 @@
         The <code>linux-htb</code> and <code>linux-hfsc</code> classes support
         the following key-value pair:
       </p>
-      
+
       <column name="other_config" key="max-rate" type='{"type": "integer"}'>
         Maximum rate shared by all queued traffic, in bit/s.  Optional.  If not
         specified, for physical interfaces, the default is the link rate.  For
@@ -1958,25 +2245,13 @@
       unchanged.
     </column>
 
-    <group title="Configuration for min-rate QoS">
-      <p>
-        These key-value pairs are defined for <ref table="QoS"/> <ref
-        table="QoS" column="type"/> of <code>min-rate</code>.
-      </p>
-      
-      <column name="other_config" key="min-rate"
-              type='{"type": "integer", "minInteger": 12000}'>
-        Minimum guaranteed bandwidth, in bit/s.  Required.  The floor value is
-        1500 bytes/s (12,000 bit/s).
-      </column>
-    </group>
-
     <group title="Configuration for linux-htb QoS">
       <p>
-        These key-value pairs are defined for <ref table="QoS"/> <ref
-        table="QoS" column="type"/> of <code>linux-htb</code>.
+        <ref table="QoS"/> <ref table="QoS" column="type"/>
+        <code>linux-htb</code> may use <code>queue_id</code>s less than 61440.
+        It has the following key-value pairs defined.
       </p>
-      
+
       <column name="other_config" key="min-rate"
               type='{"type": "integer", "minInteger": 1}'>
         Minimum guaranteed bandwidth, in bit/s.
@@ -2009,15 +2284,16 @@
 
     <group title="Configuration for linux-hfsc QoS">
       <p>
-        These key-value pairs are defined for <ref table="QoS"/> <ref
-        table="QoS" column="type"/> of <code>linux-hfsc</code>.
+        <ref table="QoS"/> <ref table="QoS" column="type"/>
+        <code>linux-hfsc</code> may use <code>queue_id</code>s less than 61440.
+        It has the following key-value pairs defined.
       </p>
-      
+
       <column name="other_config" key="min-rate"
               type='{"type": "integer", "minInteger": 1}'>
         Minimum guaranteed bandwidth, in bit/s.
       </column>
-      
+
       <column name="other_config" key="max-rate"
               type='{"type": "integer", "minInteger": 1}'>
         Maximum allowed bandwidth, in bit/s.  Optional.  If specified, the
@@ -2103,36 +2379,12 @@
         sent out an implicit VLAN port, the frame will not be tagged.  This
         type of mirroring is sometimes called RSPAN.</p>
         <p>
-          The following destination MAC addresses will not be mirrored to a
-          VLAN to avoid confusing switches that interpret the protocols that
-          they represent:
+          See the documentation for
+          <ref column="other_config" key="forward-bpdu"/> in the
+          <ref table="Interface"/> table for a list of destination MAC
+          addresses which will not be mirrored to a VLAN to avoid confusing
+          switches that interpret the protocols that they represent.
         </p>
-        <dl>
-          <dt><code>01:80:c2:00:00:00</code></dt>
-          <dd>IEEE 802.1D Spanning Tree Protocol (STP).</dd>
-
-          <dt><code>01:80:c2:00:00:01</code></dt>
-          <dd>IEEE Pause frame.</dd>
-
-          <dt><code>01:80:c2:00:00:0<var>x</var></code></dt>
-          <dd>Other reserved protocols.</dd>
-
-          <dt><code>01:00:0c:cc:cc:cc</code></dt>
-          <dd>
-            Cisco Discovery Protocol (CDP), VLAN Trunking Protocol (VTP),
-            Dynamic Trunking Protocol (DTP), Port Aggregation Protocol (PAgP),
-            and others.
-          </dd>
-
-          <dt><code>01:00:0c:cc:cc:cd</code></dt>
-          <dd>Cisco Shared Spanning Tree Protocol PVSTP+.</dd>
-
-          <dt><code>01:00:0c:cd:cd:cd</code></dt>
-          <dd>Cisco STP Uplink Fast.</dd>
-
-          <dt><code>01:00:0c:00:00:00</code></dt>
-          <dd>Cisco Inter Switch Link.</dd>
-        </dl>
         <p><em>Please note:</em> Mirroring to a VLAN can disrupt a network that
         contains unmanaged switches.  Consider an unmanaged physical switch
         with two ports: port 1, connected to an end host, and port 2,
@@ -2350,25 +2602,50 @@
       </column>
     </group>
 
-    <group title="OpenFlow Rate Limiting">
+    <group title="Asynchronous Message Configuration">
+      <p>
+        OpenFlow switches send certain messages to controllers spontanenously,
+        that is, not in response to any request from the controller.  These
+        messages are called ``asynchronous messages.''  These columns allow
+        asynchronous messages to be limited or disabled to ensure the best use
+        of network resources.
+      </p>
+
+      <column name="enable_async_messages">
+        The OpenFlow protocol enables asynchronous messages at time of
+        connection establishment, which means that a controller can receive
+        asynchronous messages, potentially many of them, even if it turns them
+        off immediately after connecting.  Set this column to
+        <code>false</code> to change Open vSwitch behavior to disable, by
+        default, all asynchronous messages.  The controller can use the
+        <code>NXT_SET_ASYNC_CONFIG</code> Nicira extension to OpenFlow to turn
+        on any messages that it does want to receive, if any.
+      </column>
+
       <column name="controller_rate_limit">
-        <p>The maximum rate at which packets in unknown flows will be
-        forwarded to the OpenFlow controller, in packets per second.  This
-        feature prevents a single bridge from overwhelming the controller.
-        If not specified, the default is implementation-specific.</p>
-        <p>In addition, when a high rate triggers rate-limiting, Open
-        vSwitch queues controller packets for each port and transmits
-        them to the controller at the configured rate.  The number of
-        queued packets is limited by
-        the <ref column="controller_burst_limit"/> value.  The packet
-        queue is shared fairly among the ports on a bridge.</p><p>Open
-        vSwitch maintains two such packet rate-limiters per bridge.
-        One of these applies to packets sent up to the controller
-        because they do not correspond to any flow.  The other applies
-        to packets sent up to the controller by request through flow
-        actions. When both rate-limiters are filled with packets, the
-        actual rate that packets are sent to the controller is up to
-        twice the specified rate.</p>
+        <p>
+          The maximum rate at which the switch will forward packets to the
+          OpenFlow controller, in packets per second.  This feature prevents a
+          single bridge from overwhelming the controller.  If not specified,
+          the default is implementation-specific.
+        </p>
+
+        <p>
+          In addition, when a high rate triggers rate-limiting, Open vSwitch
+          queues controller packets for each port and transmits them to the
+          controller at the configured rate.  The <ref
+          column="controller_burst_limit"/> value limits the number of queued
+          packets.  Ports on a bridge share the packet queue fairly.
+        </p>
+
+        <p>
+          Open vSwitch maintains two such packet rate-limiters per bridge: one
+          for packets sent up to the controller because they do not correspond
+          to any flow, and the other for packets sent up to the controller by
+          request through flow actions. When both rate-limiters are filled with
+          packets, the actual rate that packets are sent to the controller is
+          up to twice the specified rate.
+        </p>
       </column>
 
       <column name="controller_burst_limit">
@@ -2468,14 +2745,14 @@
           human consumption.
         </p>
       </column>
-      
+
       <column name="status" key="sec_since_connect"
               type='{"type": "integer", "minInteger": 0}'>
         The amount of time since this controller last successfully connected to
         the switch (in seconds).  Value is empty if controller has never
         successfully connected.
       </column>
-      
+
       <column name="status" key="sec_since_disconnect"
               type='{"type": "integer", "minInteger": 1}'>
         The amount of time since this controller last disconnected from
@@ -2484,11 +2761,33 @@
       </column>
     </group>
 
+    <group title="Connection Parameters">
+      <p>
+        Additional configuration for a connection between the controller
+        and the Open vSwitch.
+      </p>
+
+      <column name="other_config" key="dscp"
+                type='{"type": "integer"}'>
+        The Differentiated Service Code Point (DSCP) is specified using 6 bits
+        in the Type of Service (TOS) field in the IP header. DSCP provides a
+        mechanism to classify the network traffic and provide Quality of
+        Service (QoS) on IP networks.
+
+        The DSCP value specified here is used when establishing the connection
+        between the controller and the Open vSwitch.  If no value is specified,
+        a default value of 48 is chosen.  Valid DSCP values must be in the
+        range 0 to 63.
+      </column>
+    </group>
+
+
     <group title="Common Columns">
       The overall purpose of these columns is described under <code>Common
       Columns</code> at the beginning of this document.
 
       <column name="external_ids"/>
+      <column name="other_config"/>
     </group>
   </table>
 
@@ -2708,11 +3007,32 @@
       </column>
     </group>
 
+    <group title="Connection Parameters">
+      <p>
+        Additional configuration for a connection between the manager
+        and the Open vSwitch Database.
+      </p>
+
+      <column name="other_config" key="dscp"
+                type='{"type": "integer"}'>
+        The Differentiated Service Code Point (DSCP) is specified using 6 bits
+        in the Type of Service (TOS) field in the IP header. DSCP provides a
+        mechanism to classify the network traffic and provide Quality of
+        Service (QoS) on IP networks.
+
+        The DSCP value specified here is used when establishing the connection
+        between the manager and the Open vSwitch.  If no value is specified, a
+        default value of 48 is chosen.  Valid DSCP values must be in the range
+        0 to 63.
+      </column>
+    </group>
+
     <group title="Common Columns">
       The overall purpose of these columns is described under <code>Common
       Columns</code> at the beginning of this document.
 
       <column name="external_ids"/>
+      <column name="other_config"/>
     </group>
   </table>
 
@@ -2809,10 +3129,12 @@
 
     <column name="agent">
       Name of the network device whose IP address should be reported as the
-      ``agent address'' to collectors.  If not specified, the IP address
+      ``agent address'' to collectors.  If not specified, the agent device is
+      figured from the first target address and the routing table.  If the
+      routing table does not contain a route to the target, the IP address
       defaults to the <ref table="Controller" column="local_ip"/> in the
       collector's <ref table="Controller"/>.  If an agent IP address cannot be
-      determined either way, sFlow is disabled.
+      determined any of these ways, sFlow is disabled.
     </column>
 
     <column name="header">
@@ -2842,48 +3164,6 @@
 
       <column name="external_ids"/>
     </group>
-  </table>
-
-  <table name="Capability">
-    <p>Records in this table describe functionality supported by the hardware
-    and software platform on which this Open vSwitch is based.  Clients
-    should not modify this table.</p>
-
-    <p>A record in this table is meaningful only if it is referenced by the
-    <ref table="Open_vSwitch" column="capabilities"/> column in the
-    <ref table="Open_vSwitch"/> table.  The key used to reference it, called
-    the record's ``category,'' determines the meanings of the
-    <ref column="details"/> column.  The following general forms of
-    categories are currently defined:</p>
-
-    <dl>
-      <dt><code>qos-<var>type</var></code></dt>
-      <dd><var>type</var> is supported as the value for
-      <ref column="type" table="QoS"/> in the <ref table="QoS"/> table.
-      </dd>
-    </dl>
-
-    <column name="details">
-      <p>Key-value pairs that describe capabilities.  The meaning of the pairs
-      depends on the category key that the <ref table="Open_vSwitch"
-      column="capabilities"/> column in the <ref table="Open_vSwitch"/> table
-      uses to reference this record, as described above.</p>
-
-      <p>The presence of a record for category <code>qos-<var>type</var></code>
-      indicates that the switch supports <var>type</var> as the value of
-      the <ref table="QoS" column="type"/> column in the <ref table="QoS"/>
-      table.  The following key-value pairs are defined to further describe
-      QoS capabilities:</p>
-
-      <dl>
-        <dt><code>n-queues</code></dt>
-        <dd>Number of supported queues, as a positive integer.  Keys in the
-        <ref table="QoS" column="queues"/> column for <ref table="QoS"/>
-        records whose <ref table="QoS" column="type"/> value
-        equals <var>type</var> must range between 0 and this value minus one,
-        inclusive.</dd>
-      </dl>
-    </column>
   </table>
 
 </database>

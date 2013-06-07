@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,12 +26,14 @@
 #include "dynamic-string.h"
 #include "flow.h"
 #include "hmap.h"
+#include "lacp.h"
 #include "list.h"
 #include "netdev.h"
 #include "odp-util.h"
 #include "ofpbuf.h"
 #include "packets.h"
 #include "poll-loop.h"
+#include "shash.h"
 #include "tag.h"
 #include "timeval.h"
 #include "unixctl.h"
@@ -91,7 +93,7 @@ struct bond {
     struct bond_slave *active_slave;
     tag_type no_slaves_tag;     /* Tag for flows when all slaves disabled. */
     int updelay, downdelay;     /* Delay before slave goes up/down, in ms. */
-    bool lacp_negotiated;       /* LACP negotiations were successful. */
+    enum lacp_status lacp_status; /* Status of LACP negotiations. */
     bool bond_revalidate;       /* True if flows need revalidation. */
     uint32_t basis;             /* Basis for flow hash function. */
 
@@ -121,7 +123,6 @@ static void bond_enable_slave(struct bond_slave *, bool enable,
                               struct tag_set *);
 static void bond_link_status_update(struct bond_slave *, struct tag_set *);
 static void bond_choose_active_slave(struct bond *, struct tag_set *);
-static bool bond_is_tcp_hash(const struct bond *);
 static unsigned int bond_hash_src(const uint8_t mac[ETH_ADDR_LEN],
                                   uint16_t vlan, uint32_t basis);
 static unsigned int bond_hash_tcp(const struct flow *, uint16_t vlan,
@@ -132,7 +133,7 @@ static struct bond_entry *lookup_bond_entry(const struct bond *,
 static tag_type bond_get_active_slave_tag(const struct bond *);
 static struct bond_slave *choose_output_slave(const struct bond *,
                                               const struct flow *,
-                                              uint16_t vlan);
+                                              uint16_t vlan, tag_type *tags);
 static void bond_update_fake_slave_stats(struct bond *);
 
 /* Attempts to parse 's' as the name of a bond balancing mode.  If successful,
@@ -245,11 +246,21 @@ bond_reconfigure(struct bond *bond, const struct bond_settings *s)
 
     bond->updelay = s->up_delay;
     bond->downdelay = s->down_delay;
-    bond->rebalance_interval = s->rebalance_interval;
+
+    if (bond->rebalance_interval != s->rebalance_interval) {
+        bond->rebalance_interval = s->rebalance_interval;
+        revalidate = true;
+    }
 
     if (bond->balance != s->balance) {
         bond->balance = s->balance;
         revalidate = true;
+
+        if (bond->balance == BM_STABLE) {
+            VLOG_WARN_ONCE("Stable bond mode is deprecated and may be removed"
+                           " in February 2013. Please email"
+                           " dev@openvswitch.org with concerns.");
+        }
     }
 
     if (bond->basis != s->basis) {
@@ -401,12 +412,14 @@ bond_slave_set_may_enable(struct bond *bond, void *slave_, bool may_enable)
  *
  * The caller should check bond_should_send_learning_packets() afterward. */
 void
-bond_run(struct bond *bond, struct tag_set *tags, bool lacp_negotiated)
+bond_run(struct bond *bond, struct tag_set *tags, enum lacp_status lacp_status)
 {
     struct bond_slave *slave;
-    bool is_tcp_hash = bond_is_tcp_hash(bond);
 
-    bond->lacp_negotiated = lacp_negotiated;
+    if (bond->lacp_status != lacp_status) {
+        bond->lacp_status = lacp_status;
+        bond->bond_revalidate = true;
+    }
 
     /* Enable slaves based on link status and LACP feedback. */
     HMAP_FOR_EACH (slave, hmap_node, &bond->slaves) {
@@ -421,10 +434,6 @@ bond_run(struct bond *bond, struct tag_set *tags, bool lacp_negotiated)
     if (time_msec() >= bond->next_fake_iface_update) {
         bond_update_fake_slave_stats(bond);
         bond->next_fake_iface_update = time_msec() + 1000;
-    }
-
-    if (is_tcp_hash != bond_is_tcp_hash(bond)) {
-        bond->bond_revalidate = true;
     }
 
     if (bond->bond_revalidate) {
@@ -484,8 +493,9 @@ bond_wait(struct bond *bond)
 static bool
 may_send_learning_packets(const struct bond *bond)
 {
-    return !bond->lacp_negotiated && bond->balance != BM_AB &&
-           bond->active_slave;
+    return bond->lacp_status == LACP_DISABLED
+        && (bond->balance == BM_SLB || bond->balance == BM_AB)
+        && bond->active_slave;
 }
 
 /* Returns true if 'bond' needs the client to send out packets to assist with
@@ -494,8 +504,9 @@ may_send_learning_packets(const struct bond *bond)
  * is located.  For each MAC that has been learned on a port other than 'bond',
  * it should call bond_compose_learning_packet().
  *
- * This function will only return true if 'bond' is in SLB mode and LACP is not
- * negotiated.  Otherwise sending learning packets isn't necessary.
+ * This function will only return true if 'bond' is in SLB or active-backup
+ * mode and LACP is not negotiated.  Otherwise sending learning packets isn't
+ * necessary.
  *
  * Calling this function resets the state that it checks. */
 bool
@@ -518,17 +529,17 @@ bond_compose_learning_packet(struct bond *bond,
 {
     struct bond_slave *slave;
     struct ofpbuf *packet;
+    tag_type tags = 0;
     struct flow flow;
 
     assert(may_send_learning_packets(bond));
 
     memset(&flow, 0, sizeof flow);
     memcpy(flow.dl_src, eth_src, ETH_ADDR_LEN);
-    slave = choose_output_slave(bond, &flow, vlan);
+    slave = choose_output_slave(bond, &flow, vlan, &tags);
 
     packet = ofpbuf_new(0);
-    compose_benign_packet(packet, "Open vSwitch Bond Failover", 0xf177,
-                          eth_src);
+    compose_rarp(packet, eth_src);
     if (vlan) {
         eth_push_vlan(packet, htons(vlan));
     }
@@ -562,9 +573,14 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
      * assume the remote switch is aware of the bond and will "do the right
      * thing".  However, as a precaution we drop packets on disabled slaves
      * because no correctly implemented partner switch should be sending
-     * packets to them. */
-    if (bond->lacp_negotiated) {
-        return slave->enabled ? BV_ACCEPT : BV_DROP;
+     * packets to them.
+     *
+     * If LACP is configured, but LACP negotiations have been unsuccessful, we
+     * drop all incoming traffic. */
+    switch (bond->lacp_status) {
+    case LACP_NEGOTIATED: return slave->enabled ? BV_ACCEPT : BV_DROP;
+    case LACP_CONFIGURED: return BV_DROP;
+    case LACP_DISABLED: break;
     }
 
     /* Drop all multicast packets on inactive slaves. */
@@ -591,10 +607,11 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
         return BV_ACCEPT;
 
     case BM_TCP:
-        /* TCP balancing has degraded to SLB (otherwise the
-         * bond->lacp_negotiated check above would have processed this).
-         *
-         * Fall through. */
+        /* TCP balanced bonds require successful LACP negotiated. Based on the
+         * above check, LACP is off on this bond.  Therfore, we drop all
+         * incoming traffic. */
+        return BV_DROP;
+
     case BM_SLB:
         /* Drop all packets for which we have learned a different input port,
          * because we probably sent the packet on one slave and got it back on
@@ -627,7 +644,7 @@ void *
 bond_choose_output_slave(struct bond *bond, const struct flow *flow,
                          uint16_t vlan, tag_type *tags)
 {
-    struct bond_slave *slave = choose_output_slave(bond, flow, vlan);
+    struct bond_slave *slave = choose_output_slave(bond, flow, vlan, tags);
     if (slave) {
         *tags |= bond->balance == BM_STABLE ? bond->stb_tag : slave->tag;
         return slave->aux;
@@ -642,7 +659,8 @@ bond_choose_output_slave(struct bond *bond, const struct flow *flow,
 static bool
 bond_is_balanced(const struct bond *bond)
 {
-    return bond->balance == BM_SLB || bond->balance == BM_TCP;
+    return bond->rebalance_interval
+        && (bond->balance == BM_SLB || bond->balance == BM_TCP);
 }
 
 /* Notifies 'bond' that 'n_bytes' bytes were sent in 'flow' within 'vlan'. */
@@ -906,7 +924,8 @@ bond_lookup_slave(struct bond *bond, const char *slave_name)
 
 static void
 bond_unixctl_list(struct unixctl_conn *conn,
-                  const char *args OVS_UNUSED, void *aux OVS_UNUSED)
+                  int argc OVS_UNUSED, const char *argv[] OVS_UNUSED,
+                  void *aux OVS_UNUSED)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     const struct bond *bond;
@@ -929,61 +948,71 @@ bond_unixctl_list(struct unixctl_conn *conn,
         }
         ds_put_char(&ds, '\n');
     }
-    unixctl_command_reply(conn, 200, ds_cstr(&ds));
+    unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
 }
 
 static void
-bond_unixctl_show(struct unixctl_conn *conn,
-                  const char *args, void *aux OVS_UNUSED)
+bond_print_details(struct ds *ds, const struct bond *bond)
 {
-    struct ds ds = DS_EMPTY_INITIALIZER;
+    struct shash slave_shash = SHASH_INITIALIZER(&slave_shash);
+    const struct shash_node **sorted_slaves = NULL;
     const struct bond_slave *slave;
-    const struct bond *bond;
+    int i;
 
-    bond = bond_find(args);
-    if (!bond) {
-        unixctl_command_reply(conn, 501, "no such bond");
-        return;
-    }
-
-    ds_put_format(&ds, "bond_mode: %s\n",
+    ds_put_format(ds, "---- %s ----\n", bond->name);
+    ds_put_format(ds, "bond_mode: %s\n",
                   bond_mode_to_string(bond->balance));
 
-    if (bond->balance != BM_AB) {
-        ds_put_format(&ds, "bond-hash-algorithm: %s\n",
-                      bond_is_tcp_hash(bond) ? "balance-tcp" : "balance-slb");
-    }
+    ds_put_format(ds, "bond-hash-basis: %"PRIu32"\n", bond->basis);
 
-    ds_put_format(&ds, "bond-hash-basis: %"PRIu32"\n", bond->basis);
-
-    ds_put_format(&ds, "updelay: %d ms\n", bond->updelay);
-    ds_put_format(&ds, "downdelay: %d ms\n", bond->downdelay);
+    ds_put_format(ds, "updelay: %d ms\n", bond->updelay);
+    ds_put_format(ds, "downdelay: %d ms\n", bond->downdelay);
 
     if (bond_is_balanced(bond)) {
-        ds_put_format(&ds, "next rebalance: %lld ms\n",
+        ds_put_format(ds, "next rebalance: %lld ms\n",
                       bond->next_rebalance - time_msec());
     }
 
-    ds_put_format(&ds, "lacp_negotiated: %s\n",
-                  bond->lacp_negotiated ? "true" : "false");
+    ds_put_cstr(ds, "lacp_status: ");
+    switch (bond->lacp_status) {
+    case LACP_NEGOTIATED:
+        ds_put_cstr(ds, "negotiated\n");
+        break;
+    case LACP_CONFIGURED:
+        ds_put_cstr(ds, "configured\n");
+        break;
+    case LACP_DISABLED:
+        ds_put_cstr(ds, "off\n");
+        break;
+    default:
+        ds_put_cstr(ds, "<unknown>\n");
+        break;
+    }
 
     HMAP_FOR_EACH (slave, hmap_node, &bond->slaves) {
+        shash_add(&slave_shash, slave->name, slave);
+    }
+    sorted_slaves = shash_sort(&slave_shash);
+
+    for (i = 0; i < shash_count(&slave_shash); i++) {
         struct bond_entry *be;
 
+        slave = sorted_slaves[i]->data;
+
         /* Basic info. */
-        ds_put_format(&ds, "\nslave %s: %s\n",
+        ds_put_format(ds, "\nslave %s: %s\n",
                       slave->name, slave->enabled ? "enabled" : "disabled");
         if (slave == bond->active_slave) {
-            ds_put_cstr(&ds, "\tactive slave\n");
+            ds_put_cstr(ds, "\tactive slave\n");
         }
         if (slave->delay_expires != LLONG_MAX) {
-            ds_put_format(&ds, "\t%s expires in %lld ms\n",
+            ds_put_format(ds, "\t%s expires in %lld ms\n",
                           slave->enabled ? "downdelay" : "updelay",
                           slave->delay_expires - time_msec());
         }
 
-        ds_put_format(&ds, "\tmay_enable: %s\n",
+        ds_put_format(ds, "\tmay_enable: %s\n",
                       slave->may_enable ? "true" : "false");
 
         if (!bond_is_balanced(bond)) {
@@ -998,63 +1027,83 @@ bond_unixctl_show(struct unixctl_conn *conn,
                 continue;
             }
 
-            ds_put_format(&ds, "\thash %d: %"PRIu64" kB load\n",
+            ds_put_format(ds, "\thash %d: %"PRIu64" kB load\n",
                           hash, be->tx_bytes / 1024);
 
             /* XXX How can we list the MACs assigned to hashes of SLB bonds? */
         }
     }
-    unixctl_command_reply(conn, 200, ds_cstr(&ds));
+    shash_destroy(&slave_shash);
+    free(sorted_slaves);
+    ds_put_cstr(ds, "\n");
+}
+
+static void
+bond_unixctl_show(struct unixctl_conn *conn,
+                  int argc, const char *argv[],
+                  void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    if (argc > 1) {
+        const struct bond *bond = bond_find(argv[1]);
+
+        if (!bond) {
+            unixctl_command_reply_error(conn, "no such bond");
+            return;
+        }
+        bond_print_details(&ds, bond);
+    } else {
+        const struct bond *bond;
+
+        HMAP_FOR_EACH (bond, hmap_node, &all_bonds) {
+            bond_print_details(&ds, bond);
+        }
+    }
+
+    unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
 }
 
 static void
-bond_unixctl_migrate(struct unixctl_conn *conn, const char *args_,
+bond_unixctl_migrate(struct unixctl_conn *conn,
+                     int argc OVS_UNUSED, const char *argv[],
                      void *aux OVS_UNUSED)
 {
-    char *args = (char *) args_;
-    char *save_ptr = NULL;
-    char *bond_s, *hash_s, *slave_s;
+    const char *bond_s = argv[1];
+    const char *hash_s = argv[2];
+    const char *slave_s = argv[3];
     struct bond *bond;
     struct bond_slave *slave;
     struct bond_entry *entry;
     int hash;
 
-    bond_s = strtok_r(args, " ", &save_ptr);
-    hash_s = strtok_r(NULL, " ", &save_ptr);
-    slave_s = strtok_r(NULL, " ", &save_ptr);
-    if (!slave_s) {
-        unixctl_command_reply(conn, 501,
-                              "usage: bond/migrate BOND HASH SLAVE");
-        return;
-    }
-
     bond = bond_find(bond_s);
     if (!bond) {
-        unixctl_command_reply(conn, 501, "no such bond");
+        unixctl_command_reply_error(conn, "no such bond");
         return;
     }
 
     if (bond->balance != BM_SLB) {
-        unixctl_command_reply(conn, 501, "not an SLB bond");
+        unixctl_command_reply_error(conn, "not an SLB bond");
         return;
     }
 
     if (strspn(hash_s, "0123456789") == strlen(hash_s)) {
         hash = atoi(hash_s) & BOND_MASK;
     } else {
-        unixctl_command_reply(conn, 501, "bad hash");
+        unixctl_command_reply_error(conn, "bad hash");
         return;
     }
 
     slave = bond_lookup_slave(bond, slave_s);
     if (!slave) {
-        unixctl_command_reply(conn, 501, "no such slave");
+        unixctl_command_reply_error(conn, "no such slave");
         return;
     }
 
     if (!slave->enabled) {
-        unixctl_command_reply(conn, 501, "cannot migrate to disabled slave");
+        unixctl_command_reply_error(conn, "cannot migrate to disabled slave");
         return;
     }
 
@@ -1062,41 +1111,33 @@ bond_unixctl_migrate(struct unixctl_conn *conn, const char *args_,
     tag_set_add(&bond->unixctl_tags, entry->tag);
     entry->slave = slave;
     entry->tag = tag_create_random();
-    unixctl_command_reply(conn, 200, "migrated");
+    unixctl_command_reply(conn, "migrated");
 }
 
 static void
-bond_unixctl_set_active_slave(struct unixctl_conn *conn, const char *args_,
+bond_unixctl_set_active_slave(struct unixctl_conn *conn,
+                              int argc OVS_UNUSED, const char *argv[],
                               void *aux OVS_UNUSED)
 {
-    char *args = (char *) args_;
-    char *save_ptr = NULL;
-    char *bond_s, *slave_s;
+    const char *bond_s = argv[1];
+    const char *slave_s = argv[2];
     struct bond *bond;
     struct bond_slave *slave;
 
-    bond_s = strtok_r(args, " ", &save_ptr);
-    slave_s = strtok_r(NULL, " ", &save_ptr);
-    if (!slave_s) {
-        unixctl_command_reply(conn, 501,
-                              "usage: bond/set-active-slave BOND SLAVE");
-        return;
-    }
-
     bond = bond_find(bond_s);
     if (!bond) {
-        unixctl_command_reply(conn, 501, "no such bond");
+        unixctl_command_reply_error(conn, "no such bond");
         return;
     }
 
     slave = bond_lookup_slave(bond, slave_s);
     if (!slave) {
-        unixctl_command_reply(conn, 501, "no such slave");
+        unixctl_command_reply_error(conn, "no such slave");
         return;
     }
 
     if (!slave->enabled) {
-        unixctl_command_reply(conn, 501, "cannot make disabled slave active");
+        unixctl_command_reply_error(conn, "cannot make disabled slave active");
         return;
     }
 
@@ -1107,81 +1148,68 @@ bond_unixctl_set_active_slave(struct unixctl_conn *conn, const char *args_,
         VLOG_INFO("bond %s: active interface is now %s",
                   bond->name, slave->name);
         bond->send_learning_packets = true;
-        unixctl_command_reply(conn, 200, "done");
+        unixctl_command_reply(conn, "done");
     } else {
-        unixctl_command_reply(conn, 200, "no change");
+        unixctl_command_reply(conn, "no change");
     }
 }
 
 static void
-enable_slave(struct unixctl_conn *conn, const char *args_, bool enable)
+enable_slave(struct unixctl_conn *conn, const char *argv[], bool enable)
 {
-    char *args = (char *) args_;
-    char *save_ptr = NULL;
-    char *bond_s, *slave_s;
+    const char *bond_s = argv[1];
+    const char *slave_s = argv[2];
     struct bond *bond;
     struct bond_slave *slave;
 
-    bond_s = strtok_r(args, " ", &save_ptr);
-    slave_s = strtok_r(NULL, " ", &save_ptr);
-    if (!slave_s) {
-        char *usage = xasprintf("usage: bond/%s-slave BOND SLAVE",
-                                enable ? "enable" : "disable");
-        unixctl_command_reply(conn, 501, usage);
-        free(usage);
-        return;
-    }
-
     bond = bond_find(bond_s);
     if (!bond) {
-        unixctl_command_reply(conn, 501, "no such bond");
+        unixctl_command_reply_error(conn, "no such bond");
         return;
     }
 
     slave = bond_lookup_slave(bond, slave_s);
     if (!slave) {
-        unixctl_command_reply(conn, 501, "no such slave");
+        unixctl_command_reply_error(conn, "no such slave");
         return;
     }
 
     bond_enable_slave(slave, enable, &bond->unixctl_tags);
-    unixctl_command_reply(conn, 200, enable ? "enabled" : "disabled");
+    unixctl_command_reply(conn, enable ? "enabled" : "disabled");
 }
 
 static void
-bond_unixctl_enable_slave(struct unixctl_conn *conn, const char *args,
+bond_unixctl_enable_slave(struct unixctl_conn *conn,
+                          int argc OVS_UNUSED, const char *argv[],
                           void *aux OVS_UNUSED)
 {
-    enable_slave(conn, args, true);
+    enable_slave(conn, argv, true);
 }
 
 static void
-bond_unixctl_disable_slave(struct unixctl_conn *conn, const char *args,
+bond_unixctl_disable_slave(struct unixctl_conn *conn,
+                           int argc OVS_UNUSED, const char *argv[],
                            void *aux OVS_UNUSED)
 {
-    enable_slave(conn, args, false);
+    enable_slave(conn, argv, false);
 }
 
 static void
-bond_unixctl_hash(struct unixctl_conn *conn, const char *args_,
+bond_unixctl_hash(struct unixctl_conn *conn, int argc, const char *argv[],
                   void *aux OVS_UNUSED)
 {
-    char *args = (char *) args_;
+    const char *mac_s = argv[1];
+    const char *vlan_s = argc > 2 ? argv[2] : NULL;
+    const char *basis_s = argc > 3 ? argv[3] : NULL;
     uint8_t mac[ETH_ADDR_LEN];
     uint8_t hash;
     char *hash_cstr;
     unsigned int vlan;
     uint32_t basis;
-    char *mac_s, *vlan_s, *basis_s;
-    char *save_ptr = NULL;
-
-    mac_s  = strtok_r(args, " ", &save_ptr);
-    vlan_s = strtok_r(NULL, " ", &save_ptr);
-    basis_s = strtok_r(NULL, " ", &save_ptr);
 
     if (vlan_s) {
         if (sscanf(vlan_s, "%u", &vlan) != 1) {
-            unixctl_command_reply(conn, 501, "invalid vlan");
+            unixctl_command_reply_error(conn, "invalid vlan");
             return;
         }
     } else {
@@ -1190,7 +1218,7 @@ bond_unixctl_hash(struct unixctl_conn *conn, const char *args_,
 
     if (basis_s) {
         if (sscanf(basis_s, "%"PRIu32, &basis) != 1) {
-            unixctl_command_reply(conn, 501, "invalid basis");
+            unixctl_command_reply_error(conn, "invalid basis");
             return;
         }
     } else {
@@ -1202,27 +1230,28 @@ bond_unixctl_hash(struct unixctl_conn *conn, const char *args_,
         hash = bond_hash_src(mac, vlan, basis) & BOND_MASK;
 
         hash_cstr = xasprintf("%u", hash);
-        unixctl_command_reply(conn, 200, hash_cstr);
+        unixctl_command_reply(conn, hash_cstr);
         free(hash_cstr);
     } else {
-        unixctl_command_reply(conn, 501, "invalid mac");
+        unixctl_command_reply_error(conn, "invalid mac");
     }
 }
 
 void
 bond_init(void)
 {
-    unixctl_command_register("bond/list", "", bond_unixctl_list, NULL);
-    unixctl_command_register("bond/show", "port", bond_unixctl_show, NULL);
-    unixctl_command_register("bond/migrate", "port hash slave",
+    unixctl_command_register("bond/list", "", 0, 0, bond_unixctl_list, NULL);
+    unixctl_command_register("bond/show", "[port]", 0, 1, bond_unixctl_show,
+                             NULL);
+    unixctl_command_register("bond/migrate", "port hash slave", 3, 3,
                              bond_unixctl_migrate, NULL);
-    unixctl_command_register("bond/set-active-slave", "port slave",
+    unixctl_command_register("bond/set-active-slave", "port slave", 2, 2,
                              bond_unixctl_set_active_slave, NULL);
-    unixctl_command_register("bond/enable-slave", "port slave",
+    unixctl_command_register("bond/enable-slave", "port slave", 2, 2,
                              bond_unixctl_enable_slave, NULL);
-    unixctl_command_register("bond/disable-slave", "port slave",
+    unixctl_command_register("bond/disable-slave", "port slave", 2, 2,
                              bond_unixctl_disable_slave, NULL);
-    unixctl_command_register("bond/hash", "mac [vlan] [basis]",
+    unixctl_command_register("bond/hash", "mac [vlan] [basis]", 1, 3,
                              bond_unixctl_hash, NULL);
 }
 
@@ -1298,7 +1327,7 @@ bond_link_status_update(struct bond_slave *slave, struct tag_set *tags)
             VLOG_INFO_RL(&rl, "interface %s: will not be %s",
                          slave->name, up ? "disabled" : "enabled");
         } else {
-            int delay = (bond->lacp_negotiated ? 0
+            int delay = (bond->lacp_status != LACP_DISABLED ? 0
                          : up ? bond->updelay : bond->downdelay);
             slave->delay_expires = time_msec() + delay;
             if (delay) {
@@ -1315,13 +1344,6 @@ bond_link_status_update(struct bond_slave *slave, struct tag_set *tags)
     if (time_msec() >= slave->delay_expires) {
         bond_enable_slave(slave, up, tags);
     }
-}
-
-static bool
-bond_is_tcp_hash(const struct bond *bond)
-{
-    return (bond->balance == BM_TCP && bond->lacp_negotiated)
-        || bond->balance == BM_STABLE;
 }
 
 static unsigned int
@@ -1345,9 +1367,9 @@ bond_hash_tcp(const struct flow *flow, uint16_t vlan, uint32_t basis)
 static unsigned int
 bond_hash(const struct bond *bond, const struct flow *flow, uint16_t vlan)
 {
-    assert(bond->balance != BM_AB);
+    assert(bond->balance == BM_TCP || bond->balance == BM_SLB);
 
-    return (bond_is_tcp_hash(bond)
+    return (bond->balance == BM_TCP
             ? bond_hash_tcp(flow, vlan, bond->basis)
             : bond_hash_src(flow->dl_src, vlan, bond->basis));
 }
@@ -1366,15 +1388,13 @@ lookup_bond_entry(const struct bond *bond, const struct flow *flow,
  * more complex implementations and require the use of memory.  This may need
  * to be reimplemented if it becomes a performance bottleneck. */
 static struct bond_slave *
-choose_stb_slave(const struct bond *bond, const struct flow *flow,
-                 uint16_t vlan)
+choose_stb_slave(const struct bond *bond, uint32_t flow_hash)
 {
     struct bond_slave *best, *slave;
-    uint32_t best_hash, flow_hash;
+    uint32_t best_hash;
 
     best = NULL;
     best_hash = 0;
-    flow_hash = bond_hash(bond, flow, vlan);
     HMAP_FOR_EACH (slave, hmap_node, &bond->slaves) {
         if (slave->enabled) {
             uint32_t hash;
@@ -1392,18 +1412,33 @@ choose_stb_slave(const struct bond *bond, const struct flow *flow,
 
 static struct bond_slave *
 choose_output_slave(const struct bond *bond, const struct flow *flow,
-                    uint16_t vlan)
+                    uint16_t vlan, tag_type *tags)
 {
     struct bond_entry *e;
+
+    if (bond->lacp_status == LACP_CONFIGURED) {
+        /* LACP has been configured on this bond but negotiations were
+         * unsuccussful.  Drop all traffic. */
+        return NULL;
+    }
 
     switch (bond->balance) {
     case BM_AB:
         return bond->active_slave;
 
     case BM_STABLE:
-        return choose_stb_slave(bond, flow, vlan);
-    case BM_SLB:
+        return choose_stb_slave(bond, bond_hash_tcp(flow, vlan, bond->basis));
+
     case BM_TCP:
+        if (bond->lacp_status != LACP_NEGOTIATED) {
+            /* Must have LACP negotiations for TCP balanced bonds. */
+            return NULL;
+        }
+        /* Fall Through. */
+    case BM_SLB:
+        if (!bond_is_balanced(bond)) {
+            return choose_stb_slave(bond, bond_hash(bond, flow, vlan));
+        }
         e = lookup_bond_entry(bond, flow, vlan);
         if (!e->slave || !e->slave->enabled) {
             e->slave = CONTAINER_OF(hmap_random_node(&bond->slaves),
@@ -1413,6 +1448,7 @@ choose_output_slave(const struct bond *bond, const struct flow *flow,
             }
             e->tag = tag_create_random();
         }
+        *tags |= e->tag;
         return e->slave;
 
     default:

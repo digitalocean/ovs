@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010, 2011 Nicira Networks
+# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -180,7 +180,7 @@ def print_idl(idl, step):
     for row in l2.itervalues():
         s = ["%03d: i=%s l1=" % (step, row.i)]
         if row.l1:
-            s.append(str(row.l1.i))
+            s.append(str(row.l1[0].i))
         s.append(" uuid=%s" % row.uuid)
         print(''.join(s))
         n += 1
@@ -292,11 +292,17 @@ def idl_set(idl, commands, step):
                                  '"%s"\n' % args[1])
                 sys.exit(1)
         elif name == "increment":
-            if len(args) != 2:
-                sys.stderr.write('"increment" command requires 2 arguments\n')
+            if len(args) != 1:
+                sys.stderr.write('"increment" command requires 1 argument\n')
                 sys.exit(1)
 
-            txn.increment(args[0], args[1], [])
+            s = idltest_find_simple(idl, int(args[0]))
+            if not s:
+                sys.stderr.write('"set" command asks for nonexistent i=%d\n'
+                                 % int(args[0]))
+                sys.exit(1)
+
+            s.increment("i")
             increment = True
         elif name == "abort":
             txn.abort()
@@ -306,6 +312,23 @@ def idl_set(idl, commands, step):
             sys.stdout.flush()
             txn.abort()
             return
+        elif name == "linktest":
+            l1_0 = txn.insert(idl.tables["link1"])
+            l1_0.i = 1
+            l1_0.k = [l1_0]
+            l1_0.ka = [l1_0]
+            l1_1 = txn.insert(idl.tables["link1"])
+            l1_1.i = 2
+            l1_1.k = [l1_0]
+            l1_1.ka = [l1_0, l1_1]
+        elif name == 'getattrtest':
+            l1 = txn.insert(idl.tables["link1"])
+            i = getattr(l1, 'i', 1)
+            assert i == 1
+            l1.i = 2
+            i = getattr(l1, 'i', 1)
+            assert i == 2
+            l1.k = [l1]
         else:
             sys.stderr.write("unknown command %s\n" % name)
             sys.exit(1)
@@ -320,8 +343,9 @@ def idl_set(idl, commands, step):
 
 
 def do_idl(schema_file, remote, *commands):
-    schema = ovs.db.schema.DbSchema.from_json(ovs.json.from_file(schema_file))
-    idl = ovs.db.idl.Idl(remote, schema)
+    schema_helper = ovs.db.idl.SchemaHelper(schema_file)
+    schema_helper.register_all()
+    idl = ovs.db.idl.Idl(remote, schema_helper)
 
     if commands:
         error, stream = ovs.stream.Stream.open_block(
@@ -375,6 +399,11 @@ def do_idl(schema_file, remote, *commands):
                 sys.stderr.write("jsonrpc transaction failed: %s"
                                  % os.strerror(error))
                 sys.exit(1)
+            elif reply.error is not None:
+                sys.stderr.write("jsonrpc transaction failed: %s"
+                                 % reply.error)
+                sys.exit(1)
+
             sys.stdout.write("%03d: " % step)
             sys.stdout.flush()
             step += 1

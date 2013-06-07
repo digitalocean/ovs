@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -209,13 +209,21 @@ struct sysfs_ops ovs_brport_sysfs_ops = {
 int ovs_dp_sysfs_add_if(struct vport *p)
 {
 	struct datapath *dp = p->dp;
-	struct vport *local_port = rtnl_dereference(dp->ports[OVSP_LOCAL]);
+	struct vport *local_port = ovs_vport_rtnl(dp, OVSP_LOCAL);
 	struct brport_attribute **a;
 	int err;
 
 	/* Create /sys/class/net/<devname>/brport directory. */
 	if (!p->ops->get_kobj)
 		return -ENOENT;
+
+#ifdef CONFIG_NET_NS
+	/* Due to bug in 2.6.32 kernel, sysfs_create_group() could panic
+	 * in other namespace than init_net. Following check is to avoid it. */
+
+	if (!p->kobj.sd)
+		return -ENOENT;
+#endif
 
 	err = kobject_add(&p->kobj, p->ops->get_kobj(p),
 			  SYSFS_BRIDGE_PORT_ATTR);

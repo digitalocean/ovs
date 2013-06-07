@@ -8,12 +8,15 @@ TESTSUITE_AT = \
 	tests/testsuite.at \
 	tests/ovsdb-macros.at \
 	tests/library.at \
+	tests/heap.at \
 	tests/bundle.at \
 	tests/classifier.at \
 	tests/check-structs.at \
 	tests/daemon.at \
 	tests/daemon-py.at \
+	tests/ofp-actions.at \
 	tests/ofp-print.at \
+	tests/ofp-errors.at \
 	tests/ovs-ofctl.at \
 	tests/odp.at \
 	tests/multipath.at \
@@ -23,6 +26,7 @@ TESTSUITE_AT = \
 	tests/vconn.at \
 	tests/file_name.at \
 	tests/aes128.at \
+	tests/unixctl-py.at \
 	tests/uuid.at \
 	tests/json.at \
 	tests/jsonrpc.at \
@@ -65,66 +69,26 @@ AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
 check-local: tests/atconfig tests/atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
 
-# lcov support
+# Python Coverage support.
+# Requires coverage.py http://nedbatchelder.com/code/coverage/.
 
-lcov_wrappers = \
-	tests/lcov/ovs-appctl \
-	tests/lcov/ovs-vsctl \
-	tests/lcov/ovs-vswitchd \
-	tests/lcov/ovsdb-client \
-	tests/lcov/ovsdb-server \
-	tests/lcov/ovsdb-tool \
-	tests/lcov/test-aes128 \
-	tests/lcov/test-bundle \
-	tests/lcov/test-byte-order \
-	tests/lcov/test-classifier \
-	tests/lcov/test-csum \
-	tests/lcov/test-file_name \
-	tests/lcov/test-flows \
-	tests/lcov/test-hash \
-	tests/lcov/test-hmap \
-	tests/lcov/test-json \
-	tests/lcov/test-jsonrpc \
-	tests/lcov/test-list \
-	tests/lcov/test-lockfile \
-	tests/lcov/test-multipath \
-	tests/lcov/test-odp \
-	tests/lcov/test-ovsdb \
-	tests/lcov/test-packets \
-	tests/lcov/test-random \
-	tests/lcov/test-reconnect \
-	tests/lcov/test-sha1 \
-	tests/lcov/test-stp \
-	tests/lcov/test-timeval \
-	tests/lcov/test-type-props \
-	tests/lcov/test-unix-socket \
-	tests/lcov/test-uuid \
-	tests/lcov/test-vconn
-
-$(lcov_wrappers): tests/lcov-wrapper.in
-	@test -d tests/lcov || mkdir tests/lcov
-	sed -e 's,[@]abs_top_builddir[@],$(abs_top_builddir),' \
-	    -e 's,[@]wrap_program[@],$@,' \
-		$(top_srcdir)/tests/lcov-wrapper.in > $@.tmp
-	chmod +x $@.tmp
-	mv $@.tmp $@
-CLEANFILES += $(lcov_wrappers)
-EXTRA_DIST += tests/lcov-wrapper.in
-
-LCOV = lcov -b $(abs_top_builddir) -d $(abs_top_builddir) -q
-check-lcov: all tests/atconfig tests/atlocal $(TESTSUITE) $(lcov_wrappers)
-	rm -fr tests/coverage.html tests/coverage.info
-	$(LCOV) -c -i -o - > tests/coverage.info
-	$(SHELL) '$(TESTSUITE)' -C tests CHECK_LCOV=true DISABLE_LCOV=false AUTOTEST_PATH='tests/lcov:$(AUTOTEST_PATH)' $(TESTSUITEFLAGS); \
-		rc=$$?; \
-		echo "Producing coverage.html..."; \
-		cd tests && genhtml -q -o coverage.html coverage.info; \
-		exit $$rc
+COVERAGE = coverage
+COVERAGE_FILE='$(abs_srcdir)/.coverage'
+check-pycov: all tests/atconfig tests/atlocal $(TESTSUITE) clean-pycov
+	PYTHONDONTWRITEBYTECODE=yes COVERAGE_FILE=$(COVERAGE_FILE) PYTHON='$(COVERAGE) run -p' $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
+	@cd $(srcdir) && $(COVERAGE) combine && COVERAGE_FILE=$(COVERAGE_FILE) $(COVERAGE) annotate
+	@echo
+	@echo '----------------------------------------------------------------------'
+	@echo 'Annotated coverage source has the ",cover" extension.'
+	@echo '----------------------------------------------------------------------'
+	@echo
+	@COVERAGE_FILE=$(COVERAGE_FILE) $(COVERAGE) report
 
 # valgrind support
 
 valgrind_wrappers = \
 	tests/valgrind/ovs-appctl \
+	tests/valgrind/ovs-ofctl \
 	tests/valgrind/ovs-vsctl \
 	tests/valgrind/ovs-vswitchd \
 	tests/valgrind/ovsdb-client \
@@ -138,6 +102,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-file_name \
 	tests/valgrind/test-flows \
 	tests/valgrind/test-hash \
+	tests/valgrind/test-heap \
 	tests/valgrind/test-hmap \
 	tests/valgrind/test-json \
 	tests/valgrind/test-jsonrpc \
@@ -167,9 +132,11 @@ CLEANFILES += $(valgrind_wrappers)
 EXTRA_DIST += tests/valgrind-wrapper.in
 
 VALGRIND = valgrind --log-file=valgrind.%p --leak-check=full \
+	--suppressions=$(abs_top_srcdir)/tests/glibc.supp \
 	--suppressions=$(abs_top_srcdir)/tests/openssl.supp --num-callers=20
-EXTRA_DIST += tests/openssl.supp
-check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) $(valgrind_wrappers)
+EXTRA_DIST += tests/glibc.supp tests/openssl.supp
+check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
+                $(valgrind_wrappers) $(check_DATA)
 	$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(VALGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
 	@echo
 	@echo '----------------------------------------------------------------------'
@@ -179,7 +146,6 @@ check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) $(valgrind_wrapper
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean
 
-AUTOM4TE = autom4te
 AUTOTEST = $(AUTOM4TE) --language=autotest
 $(TESTSUITE): package.m4 $(TESTSUITE_AT)
 	$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
@@ -198,40 +164,44 @@ $(srcdir)/package.m4: $(top_srcdir)/configure.ac
 
 noinst_PROGRAMS += tests/test-aes128
 tests_test_aes128_SOURCES = tests/test-aes128.c
-tests_test_aes128_LDADD = lib/libopenvswitch.a
+tests_test_aes128_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-bundle
 tests_test_bundle_SOURCES = tests/test-bundle.c
-tests_test_bundle_LDADD = lib/libopenvswitch.a
+tests_test_bundle_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-classifier
 tests_test_classifier_SOURCES = tests/test-classifier.c
-tests_test_classifier_LDADD = lib/libopenvswitch.a
+tests_test_classifier_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-csum
 tests_test_csum_SOURCES = tests/test-csum.c
-tests_test_csum_LDADD = lib/libopenvswitch.a
+tests_test_csum_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-file_name
 tests_test_file_name_SOURCES = tests/test-file_name.c
-tests_test_file_name_LDADD = lib/libopenvswitch.a
+tests_test_file_name_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-flows
 tests_test_flows_SOURCES = tests/test-flows.c
-tests_test_flows_LDADD = lib/libopenvswitch.a
+tests_test_flows_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 dist_check_SCRIPTS = tests/flowgen.pl
 
 noinst_PROGRAMS += tests/test-hash
 tests_test_hash_SOURCES = tests/test-hash.c
 tests_test_hash_LDADD = lib/libopenvswitch.a
 
+noinst_PROGRAMS += tests/test-heap
+tests_test_heap_SOURCES = tests/test-heap.c
+tests_test_heap_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+
 noinst_PROGRAMS += tests/test-hmap
 tests_test_hmap_SOURCES = tests/test-hmap.c
-tests_test_hmap_LDADD = lib/libopenvswitch.a
+tests_test_hmap_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-json
 tests_test_json_SOURCES = tests/test-json.c
-tests_test_json_LDADD = lib/libopenvswitch.a
+tests_test_json_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-jsonrpc
 tests_test_jsonrpc_SOURCES = tests/test-jsonrpc.c
@@ -243,31 +213,35 @@ tests_test_list_LDADD = lib/libopenvswitch.a
 
 noinst_PROGRAMS += tests/test-lockfile
 tests_test_lockfile_SOURCES = tests/test-lockfile.c
-tests_test_lockfile_LDADD = lib/libopenvswitch.a
+tests_test_lockfile_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-multipath
 tests_test_multipath_SOURCES = tests/test-multipath.c
-tests_test_multipath_LDADD = lib/libopenvswitch.a
+tests_test_multipath_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-packets
 tests_test_packets_SOURCES = tests/test-packets.c
-tests_test_packets_LDADD = lib/libopenvswitch.a
+tests_test_packets_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-random
 tests_test_random_SOURCES = tests/test-random.c
-tests_test_random_LDADD = lib/libopenvswitch.a
+tests_test_random_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-stp
 tests_test_stp_SOURCES = tests/test-stp.c
-tests_test_stp_LDADD = lib/libopenvswitch.a
+tests_test_stp_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+
+noinst_PROGRAMS += tests/test-netflow
+tests_test_netflow_SOURCES = tests/test-netflow.c
+tests_test_netflow_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-unix-socket
 tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
-tests_test_unix_socket_LDADD = lib/libopenvswitch.a
+tests_test_unix_socket_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-odp
 tests_test_odp_SOURCES = tests/test-odp.c
-tests_test_odp_LDADD = lib/libopenvswitch.a
+tests_test_odp_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-ovsdb
 tests_test_ovsdb_SOURCES = \
@@ -289,15 +263,15 @@ tests/idltest.c: tests/idltest.h
 
 noinst_PROGRAMS += tests/test-reconnect
 tests_test_reconnect_SOURCES = tests/test-reconnect.c
-tests_test_reconnect_LDADD = lib/libopenvswitch.a
+tests_test_reconnect_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-sha1
 tests_test_sha1_SOURCES = tests/test-sha1.c
-tests_test_sha1_LDADD = lib/libopenvswitch.a
+tests_test_sha1_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-timeval
 tests_test_timeval_SOURCES = tests/test-timeval.c
-tests_test_timeval_LDADD = lib/libopenvswitch.a
+tests_test_timeval_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-strtok_r
 tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
@@ -307,11 +281,11 @@ tests_test_type_props_SOURCES = tests/test-type-props.c
 
 noinst_PROGRAMS += tests/test-util
 tests_test_util_SOURCES = tests/test-util.c
-tests_test_util_LDADD = lib/libopenvswitch.a
+tests_test_util_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-uuid
 tests_test_uuid_SOURCES = tests/test-uuid.c
-tests_test_uuid_LDADD = lib/libopenvswitch.a
+tests_test_uuid_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-vconn
 tests_test_vconn_SOURCES = tests/test-vconn.c
@@ -321,15 +295,21 @@ noinst_PROGRAMS += tests/test-byte-order
 tests_test_byte_order_SOURCES = tests/test-byte-order.c
 tests_test_byte_order_LDADD = lib/libopenvswitch.a
 
+EXTRA_DIST += tests/choose-port.pl
+
 # Python tests.
-EXTRA_DIST += \
+CHECK_PYFILES = \
+	tests/appctl.py \
 	tests/test-daemon.py \
 	tests/test-json.py \
 	tests/test-jsonrpc.py \
 	tests/test-ovsdb.py \
 	tests/test-reconnect.py \
 	tests/MockXenAPI.py \
+	tests/test-unixctl.py \
 	tests/test-vlog.py
+EXTRA_DIST += $(CHECK_PYFILES)
+PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
 
 if HAVE_OPENSSL
 TESTPKI_FILES = \

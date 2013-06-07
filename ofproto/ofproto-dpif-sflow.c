@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011 Nicira Networks.
+ * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
  * Copyright (c) 2009 InMon Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,8 @@
 #include <config.h>
 #include "ofproto-dpif-sflow.h"
 #include <inttypes.h>
+#include <sys/socket.h>
+#include <net/if.h>
 #include <stdlib.h>
 #include "collectors.h"
 #include "compiler.h"
@@ -30,19 +32,20 @@
 #include "ofproto.h"
 #include "packets.h"
 #include "poll-loop.h"
+#include "route-table.h"
 #include "sflow_api.h"
 #include "socket-util.h"
 #include "timeval.h"
 #include "vlog.h"
 #include "lib/odp-util.h"
+#include "ofproto-provider.h"
 
 VLOG_DEFINE_THIS_MODULE(sflow);
 
 struct dpif_sflow_port {
     struct hmap_node hmap_node; /* In struct dpif_sflow's "ports" hmap. */
-    struct netdev *netdev;      /* Underlying network device, for stats. */
     SFLDataSource_instance dsi; /* sFlow library's notion of port number. */
-    uint16_t odp_port;          /* Datapath port number. */
+    struct ofport *ofport;      /* To retrive port stats. */
 };
 
 struct dpif_sflow {
@@ -145,7 +148,7 @@ dpif_sflow_find_port(const struct dpif_sflow *ds, uint16_t odp_port)
 
     HMAP_FOR_EACH_IN_BUCKET (dsp, hmap_node,
                              hash_int(odp_port, 0), &ds->ports) {
-        if (dsp->odp_port == odp_port) {
+        if (ofp_port_to_odp_port(dsp->ofport->ofp_port) == odp_port) {
             return dsp;
         }
     }
@@ -158,11 +161,11 @@ sflow_agent_get_counters(void *ds_, SFLPoller *poller,
 {
     struct dpif_sflow *ds = ds_;
     SFLCounters_sample_element elem;
+    enum netdev_features current;
     struct dpif_sflow_port *dsp;
     SFLIf_counters *counters;
     struct netdev_stats stats;
     enum netdev_flags flags;
-    uint32_t current;
 
     dsp = dpif_sflow_find_port(ds, poller->bridgePort);
     if (!dsp) {
@@ -173,7 +176,7 @@ sflow_agent_get_counters(void *ds_, SFLPoller *poller,
     counters = &elem.counterBlock.generic;
     counters->ifIndex = SFL_DS_INDEX(poller->dsi);
     counters->ifType = 6;
-    if (!netdev_get_features(dsp->netdev, &current, NULL, NULL, NULL)) {
+    if (!netdev_get_features(dsp->ofport->netdev, &current, NULL, NULL, NULL)) {
         /* The values of ifDirection come from MAU MIB (RFC 2668): 0 = unknown,
            1 = full-duplex, 2 = half-duplex, 3 = in, 4=out */
         counters->ifSpeed = netdev_features_to_bps(current);
@@ -183,9 +186,9 @@ sflow_agent_get_counters(void *ds_, SFLPoller *poller,
         counters->ifSpeed = 100000000;
         counters->ifDirection = 0;
     }
-    if (!netdev_get_flags(dsp->netdev, &flags) && flags & NETDEV_UP) {
+    if (!netdev_get_flags(dsp->ofport->netdev, &flags) && flags & NETDEV_UP) {
         counters->ifStatus = 1; /* ifAdminStatus up. */
-        if (netdev_get_carrier(dsp->netdev)) {
+        if (netdev_get_carrier(dsp->ofport->netdev)) {
             counters->ifStatus |= 2; /* ifOperStatus us. */
         }
     } else {
@@ -197,7 +200,7 @@ sflow_agent_get_counters(void *ds_, SFLPoller *poller,
        2. Does the multicast counter include broadcasts?
        3. Does the rx_packets counter include multicasts/broadcasts?
     */
-    netdev_get_stats(dsp->netdev, &stats);
+    ofproto_port_get_stats(dsp->ofport, &stats);
     counters->ifInOctets = stats.rx_bytes;
     counters->ifInUcastPkts = stats.rx_packets;
     counters->ifInMulticastPkts = stats.multicast;
@@ -223,25 +226,35 @@ sflow_agent_get_counters(void *ds_, SFLPoller *poller,
  * The sFlow agent address should be a local IP address that is persistent and
  * reachable over the network, if possible.  The IP address associated with
  * 'agent_device' is used if it has one, and otherwise 'control_ip', the IP
- * address used to talk to the controller. */
+ * address used to talk to the controller.  If the agent device is not
+ * specified then it is figured out by taking a look at the routing table based
+ * on 'targets'. */
 static bool
-sflow_choose_agent_address(const char *agent_device, const char *control_ip,
+sflow_choose_agent_address(const char *agent_device,
+                           const struct sset *targets,
+                           const char *control_ip,
                            SFLAddress *agent_addr)
 {
+    const char *target;
     struct in_addr in4;
 
     memset(agent_addr, 0, sizeof *agent_addr);
     agent_addr->type = SFLADDRESSTYPE_IP_V4;
 
     if (agent_device) {
-        struct netdev *netdev;
+        if (!netdev_get_in4_by_name(agent_device, &in4)) {
+            goto success;
+        }
+    }
 
-        if (!netdev_open(agent_device, "system", &netdev)) {
-            int error = netdev_get_in4(netdev, &in4, NULL);
-            netdev_close(netdev);
-            if (!error) {
-                goto success;
-            }
+    SSET_FOR_EACH (target, targets) {
+        struct sockaddr_in sin;
+        char name[IFNAMSIZ];
+
+        if (inet_parse_active(target, SFL_DEFAULT_COLLECTOR_PORT, &sin)
+            && route_table_get_name(sin.sin_addr.s_addr, name)
+            && !netdev_get_in4_by_name(name, &in4)) {
+            goto success;
         }
     }
 
@@ -289,6 +302,8 @@ dpif_sflow_create(struct dpif *dpif)
     ds->next_tick = time_now() + 1;
     hmap_init(&ds->ports);
     ds->probability = 0;
+    route_table_register();
+
     return ds;
 }
 
@@ -307,6 +322,7 @@ dpif_sflow_destroy(struct dpif_sflow *ds)
     if (ds) {
         struct dpif_sflow_port *dsp, *next;
 
+        route_table_unregister();
         dpif_sflow_clear(ds);
         HMAP_FOR_EACH_SAFE (dsp, next, hmap_node, &ds->ports) {
             dpif_sflow_del_port__(ds, dsp);
@@ -317,14 +333,14 @@ dpif_sflow_destroy(struct dpif_sflow *ds)
 }
 
 static void
-dpif_sflow_add_poller(struct dpif_sflow *ds,
-                      struct dpif_sflow_port *dsp, uint16_t odp_port)
+dpif_sflow_add_poller(struct dpif_sflow *ds, struct dpif_sflow_port *dsp)
 {
     SFLPoller *poller = sfl_agent_addPoller(ds->sflow_agent, &dsp->dsi, ds,
                                             sflow_agent_get_counters);
     sfl_poller_set_sFlowCpInterval(poller, ds->options->polling_interval);
     sfl_poller_set_sFlowCpReceiver(poller, RECEIVER_INDEX);
-    sfl_poller_set_bridgePort(poller, odp_port);
+    sfl_poller_set_bridgePort(poller,
+                              ofp_port_to_odp_port(dsp->ofport->ofp_port));
 }
 
 static void
@@ -337,38 +353,27 @@ dpif_sflow_add_sampler(struct dpif_sflow *ds, struct dpif_sflow_port *dsp)
 }
 
 void
-dpif_sflow_add_port(struct dpif_sflow *ds, uint16_t odp_port,
-                    const char *netdev_name)
+dpif_sflow_add_port(struct dpif_sflow *ds, struct ofport *ofport)
 {
     struct dpif_sflow_port *dsp;
-    struct netdev *netdev;
+    uint16_t odp_port = ofp_port_to_odp_port(ofport->ofp_port);
     uint32_t ifindex;
-    int error;
 
     dpif_sflow_del_port(ds, odp_port);
 
-    /* Open network device. */
-    error = netdev_open(netdev_name, "system", &netdev);
-    if (error) {
-        VLOG_WARN_RL(&rl, "failed to open network device \"%s\": %s",
-                     netdev_name, strerror(error));
-        return;
-    }
-
     /* Add to table of ports. */
     dsp = xmalloc(sizeof *dsp);
-    dsp->netdev = netdev;
-    ifindex = netdev_get_ifindex(netdev);
+    ifindex = netdev_get_ifindex(ofport->netdev);
     if (ifindex <= 0) {
         ifindex = (ds->sflow_agent->subId << 16) + odp_port;
     }
+    dsp->ofport = ofport;
     SFL_DS_SET(dsp->dsi, 0, ifindex, 0);
-    dsp->odp_port = odp_port;
     hmap_insert(&ds->ports, &dsp->hmap_node, hash_int(odp_port, 0));
 
     /* Add poller and sampler. */
     if (ds->sflow_agent) {
-        dpif_sflow_add_poller(ds, dsp, odp_port);
+        dpif_sflow_add_poller(ds, dsp);
         dpif_sflow_add_sampler(ds, dsp);
     }
 }
@@ -380,7 +385,6 @@ dpif_sflow_del_port__(struct dpif_sflow *ds, struct dpif_sflow_port *dsp)
         sfl_agent_removePoller(ds->sflow_agent, &dsp->dsi);
         sfl_agent_removeSampler(ds->sflow_agent, &dsp->dsi);
     }
-    netdev_close(dsp->netdev);
     hmap_remove(&ds->ports, &dsp->hmap_node);
     free(dsp);
 }
@@ -430,19 +434,20 @@ dpif_sflow_set_options(struct dpif_sflow *ds,
         }
     }
 
+    /* Choose agent IP address and agent device (if not yet setup) */
+    if (!sflow_choose_agent_address(options->agent_device,
+                                    &options->targets,
+                                    options->control_ip, &agentIP)) {
+        dpif_sflow_clear(ds);
+        return;
+    }
+
     /* Avoid reconfiguring if options didn't change. */
     if (!options_changed) {
         return;
     }
     ofproto_sflow_options_destroy(ds->options);
     ds->options = ofproto_sflow_options_clone(options);
-
-    /* Choose agent IP address. */
-    if (!sflow_choose_agent_address(options->agent_device,
-                                    options->control_ip, &agentIP)) {
-        dpif_sflow_clear(ds);
-        return;
-    }
 
     /* Create agent. */
     VLOG_INFO("creating sFlow agent %d", options->sub_id);
@@ -471,7 +476,7 @@ dpif_sflow_set_options(struct dpif_sflow *ds,
 
     /* Add samplers and pollers for the currently known ports. */
     HMAP_FOR_EACH (dsp, hmap_node, &ds->ports) {
-        dpif_sflow_add_poller(ds, dsp, dsp->odp_port);
+        dpif_sflow_add_poller(ds, dsp);
         dpif_sflow_add_sampler(ds, dsp);
     }
 }
@@ -487,7 +492,7 @@ dpif_sflow_odp_port_to_ifindex(const struct dpif_sflow *ds,
 void
 dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
                     const struct flow *flow,
-                    const struct user_action_cookie *cookie)
+                    const union user_action_cookie *cookie)
 {
     SFL_FLOW_SAMPLE_TYPE fs;
     SFLFlow_sample_element hdrElem;
@@ -496,6 +501,7 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     SFLSampler *sampler;
     struct dpif_sflow_port *in_dsp;
     struct netdev_stats stats;
+    ovs_be16 vlan_tci;
     int error;
 
     /* Build a flow sample */
@@ -507,7 +513,7 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     }
     fs.input = SFL_DS_INDEX(in_dsp->dsi);
 
-    error = netdev_get_stats(in_dsp->netdev, &stats);
+    error = ofproto_port_get_stats(in_dsp->ofport, &stats);
     if (error) {
         VLOG_WARN_RL(&rl, "netdev get-stats error %s", strerror(error));
         return;
@@ -545,21 +551,11 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     switchElem.flowType.sw.src_priority = vlan_tci_to_pcp(flow->vlan_tci);
 
     /* Retrieve data from user_action_cookie. */
-    switchElem.flowType.sw.dst_vlan = vlan_tci_to_vid(cookie->vlan_tci);
-    switchElem.flowType.sw.dst_priority = vlan_tci_to_pcp(cookie->vlan_tci);
+    vlan_tci = cookie->sflow.vlan_tci;
+    switchElem.flowType.sw.dst_vlan = vlan_tci_to_vid(vlan_tci);
+    switchElem.flowType.sw.dst_priority = vlan_tci_to_pcp(vlan_tci);
 
-    /* Set output port, as defined by http://www.sflow.org/sflow_version_5.txt
-       (search for "Input/output port information"). */
-    if (!cookie->n_output) {
-        /* This value indicates that the packet was dropped for an unknown
-         * reason. */
-        fs.output = 0x40000000 | 256;
-    } else if (cookie->n_output > 1 || !cookie->data) {
-        /* Setting the high bit means "multiple output ports". */
-        fs.output = 0x80000000 | cookie->n_output;
-    } else {
-        fs.output = cookie->data;
-    }
+    fs.output = cookie->sflow.output;
 
     /* Submit the flow sample to be encoded into the next datagram. */
     SFLADD_ELEMENT(&fs, &hdrElem);
@@ -572,6 +568,7 @@ dpif_sflow_run(struct dpif_sflow *ds)
 {
     if (dpif_sflow_is_enabled(ds)) {
         time_t now = time_now();
+        route_table_run();
         if (now >= ds->next_tick) {
             sfl_agent_tick(ds->sflow_agent, time_wall());
             ds->next_tick = now + 1;

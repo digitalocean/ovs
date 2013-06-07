@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -362,10 +362,16 @@ static struct attribute_group bridge_group = {
  */
 int ovs_dp_sysfs_add_dp(struct datapath *dp)
 {
-	struct vport *vport = rtnl_dereference(dp->ports[OVSP_LOCAL]);
+	struct vport *vport = ovs_vport_rtnl(dp, OVSP_LOCAL);
 	struct kobject *kobj = vport->ops->get_kobj(vport);
 	int err;
 
+#ifdef CONFIG_NET_NS
+	/* Due to bug in 2.6.32 kernel, sysfs_create_group() could panic
+	 * in other namespace than init_net. Following check is to avoid it. */
+	if (!kobj->sd)
+		return -ENOENT;
+#endif
 	/* Create /sys/class/net/<devname>/bridge directory. */
 	err = sysfs_create_group(kobj, &bridge_group);
 	if (err) {
@@ -392,8 +398,13 @@ int ovs_dp_sysfs_add_dp(struct datapath *dp)
 
 int ovs_dp_sysfs_del_dp(struct datapath *dp)
 {
-	struct vport *vport = rtnl_dereference(dp->ports[OVSP_LOCAL]);
+	struct vport *vport = ovs_vport_rtnl(dp, OVSP_LOCAL);
 	struct kobject *kobj = vport->ops->get_kobj(vport);
+
+#ifdef CONFIG_NET_NS
+	if (!kobj->sd)
+		return 0;
+#endif
 
 	kobject_del(&dp->ifobj);
 	sysfs_remove_group(kobj, &bridge_group);
