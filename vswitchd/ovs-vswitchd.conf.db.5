@@ -1,5 +1,5 @@
 '\" p
-.TH Open_vSwitch 5 "August 2013" "Open vSwitch" "Open vSwitch Manual"
+.TH "ovs-vswitchd.conf.db" 5 "2.0.90" "Open vSwitch" "Open vSwitch Manual"
 .\" -*- nroff -*-
 .de TQ
 .  br
@@ -14,6 +14,7 @@
 ..
 .SH NAME
 Open_vSwitch \- Open_vSwitch database schema
+.PP
 A database with this schema holds the configuration for one Open
 vSwitch daemon.  The top-level configuration for the daemon is the
 \fBOpen_vSwitch\fR table, which must have exactly one
@@ -93,6 +94,12 @@ SSL configuration.
 .TQ 1in
 \fBsFlow\fR
 sFlow configuration.
+.TQ 1in
+\fBIPFIX\fR
+IPFIX configuration.
+.TQ 1in
+\fBFlow_Sample_Collector_Set\fR
+Flow_Sample_Collector_Set configuration.
 .\" check if in troff mode (TTY)
 .if t \{
 .bp
@@ -107,83 +114,98 @@ constraint on the number of allowed values: \fB?\fR for zero or one,
 \fB*\fR for zero or more, \fB+\fR for one or more.  Thick lines
 represent strong references; thin lines represent weak references.
 .RS -1in
-.\" Generated from vswitch.gv with cksum "2197927206 1028"
+.ps -3
 .PS
 linethick = 1;
 linethick = 1;
-box at 3.269320992,2.78572 wid 0.5900294246 height 0.348215 "Bridge"
+box at 2.421242138,1.420752459 wid 0.3611105806 height 0.213115 "Bridge"
 linethick = 1;
-box at 0.2708346627,1.9151825 wid 0.5416693254 height 0.348215 "sFlow"
+box at 3.907122541,0.970866694 wid 0.3315131694 height 0.213115 "sFlow"
 linethick = 1;
-box at 0.996312758,1.9151825 wid 0.5706825992 height 0.348215 "Mirror"
+box at 3.907122541,0.651194194 wid 0.3492699112 height 0.213115 "Mirror"
 linethick = 1;
-box at 2.795400377,1.9151825 wid 0.5223225 height 0.348215 "Port"
+box at 3.907122541,1.929884194 wid 0.3196725 height 0.213115 "IPFIX"
 linethick = 1;
-box at 3.646577123,1.9151825 wid 0.831815992 height 0.348215 "Controller"
+box at 3.907122541,0.2249556694 wid 0.3196725 height 0.213115 "Port"
 linethick = 1;
-box at 4.681541746,1.9151825 wid 0.889898254 height 0.348215 "Flow_Table"
+box at 3.907122541,1.610211694 wid 0.509089112 height 0.213115 "Controller"
 linethick = 1;
-box at 6.103442877,1.9151825 wid 0.715790754 height 0.348215 "NetFlow"
+box at 3.907122541,1.290539194 wid 0.544636694 height 0.213115 "Flow_Table"
+linethick = 1;
+box at 3.907122541,2.249556694 wid 0.438079194 height 0.213115 "NetFlow"
 linethick = 0.5;
-box at 2.244036746,1.044645 wid 0.5223225 height 0.348215 "QoS"
-box at 2.244036746,1.044645 wid 0.466766944444444 height 0.292659444444444
+box at 5.09685834,0.42623 wid 0.3196725 height 0.213115 "QoS"
+box at 5.09685834,0.42623 wid 0.264116944444444 height 0.157559444444444
 linethick = 0.5;
-box at 2.244036746,0.1741075 wid 0.5997028373 height 0.348215 "Queue"
-box at 2.244036746,0.1741075 wid 0.544147281744444 height 0.292659444444444
+box at 6.31630237,0.42623 wid 0.3670309153 height 0.213115 "Queue"
+box at 6.31630237,0.42623 wid 0.311475359744445 height 0.157559444444444
 linethick = 0.5;
-box at 4.052804742,3.6562575 wid 1.122018373 height 0.348215 "Open_vSwitch"
-box at 4.052804742,3.6562575 wid 1.06646281744444 height 0.292659444444444
-linethick = 1;
-box at 4.052804742,2.78572 wid 0.5223225 height 0.348215 "SSL"
-linethick = 1;
-box at 4.855649246,2.78572 wid 0.744762242 height 0.348215 "Manager"
-linethick = 1;
-box at 3.056561627,1.044645 wid 0.754442619 height 0.348215 "Interface"
-linethick = 1;
-spline -> from 2.976332891,2.75298779 to 2.976332891,2.75298779 to 2.604160699,2.706535909 to 1.945268276,2.607573206 to 1.402540377,2.437505 to 1.042625353,2.324752983 to 0.970266276,2.249190328 to 0.6287230754,2.08929 to 0.6011862332,2.076406045 to 0.5725420673,2.06282566 to 0.5439884373,2.049105989
-"sflow?" at 1.620174752,2.35045125
-linethick = 1;
-spline -> from 2.97514896,2.6812555 to 2.97514896,2.6812555 to 2.785302142,2.613214289 to 2.533333768,2.52177303 to 2.311729742,2.437505 to 1.95348615,2.301283292 to 1.543358523,2.137134741 to 1.277600835,2.029675592
-"mirrors*" at 2.592251746,2.35045125
-linethick = 1;
-spline -> from 3.102665293,2.610428569 to 3.102665293,2.610428569 to 3.058372345,2.557708818 to 3.013382967,2.497746195 to 2.979188254,2.437505 to 2.917484556,2.32886192 to 2.871032675,2.19584379 to 2.840250469,2.091240004
-"ports*" at 3.187142252,2.35045125
-linethick = 1;
-spline -> from 3.345719363,2.60952321 to 3.345719363,2.60952321 to 3.41111414,2.458537186 to 3.504923261,2.242017099 to 3.570387681,2.091100718
-"controller*" at 3.849725754,2.35045125
-linethick = 1;
-spline -> from 3.563284095,2.664959038 to 3.563284095,2.664959038 to 3.610362763,2.646503643 to 3.658695005,2.628187534 to 3.704589742,2.6116125 to 3.942559873,2.525881967 to 4.036647566,2.578949933 to 4.246272996,2.437505 to 4.380335771,2.347038743 to 4.495594936,2.203852735 to 4.573734382,2.090195359
-"flow_tables value*" at 5.063603244,2.35045125
-linethick = 1;
-spline -> from 3.560568018,2.655696519 to 3.560568018,2.655696519 to 3.607925258,2.638425055 to 3.657093216,2.622894666 to 3.704589742,2.6116125 to 4.143340642,2.507426572 to 5.333887727,2.659805456 to 5.726186746,2.437505 to 5.863383456,2.359713769 to 5.963947948,2.209215246 to 6.026557005,2.089638215
-"netflow?" at 6.204982371,2.35045125
+box at 0.609764638,2.095645041 wid 1.219486653 height 0.213115 "Flow_Sample_Collector_Set"
+box at 0.609764638,2.095645041 wid 1.16393109744444 height 0.157559444444444
 linethick = 0.5;
-spline -> from 1.285331208,1.9151825 to 1.285331208,1.9151825 to 1.629994415,1.9151825 to 2.201067015,1.9151825 to 2.533403411,1.9151825
-"select_src_port*" at 1.905502123,2.00223625
+box at 0.609764638,1.101079959 wid 0.686699153 height 0.213115 "Open_vSwitch"
+box at 0.609764638,1.101079959 wid 0.631143597444444 height 0.157559444444444
+linethick = 1;
+box at 2.421242138,0.781407459 wid 0.3196725 height 0.213115 "SSL"
+linethick = 1;
+box at 2.421242138,1.101079959 wid 0.455810362 height 0.213115 "Manager"
+linethick = 1;
+box at 5.09685834,0.1065575 wid 0.461734959 height 0.213115 "Interface"
+linethick = 1;
+spline -> from 2.582016094,1.313172007 to 2.582016094,1.313172007 to 2.605842351,1.29616543 to 2.629881723,1.278391639 to 2.652088306,1.260916209 to 2.701914593,1.221788295 to 2.701530986,1.193614492 to 2.758645806,1.166207903 to 3.082282245,1.010847068 to 3.509236836,0.977004406 to 3.740679726,0.970866694
+"sflow?" at 3.14344625,1.216545666
+linethick = 1;
+spline -> from 2.601835789,1.315558895 to 2.601835789,1.315558895 to 2.620675155,1.299106417 to 2.638065339,1.280863773 to 2.652088306,1.260916209 to 2.757239247,1.111735709 to 2.624596471,0.988171632 to 2.758645806,0.864309194 to 3.026019885,0.617266286 to 3.483066314,0.611895788 to 3.732368241,0.630735154
+"mirrors*" at 3.14344625,0.914604334
+linethick = 1;
+spline -> from 2.534320957,1.52760832 to 2.534320957,1.52760832 to 2.596081684,1.580077233 to 2.676553908,1.639578941 to 2.758645806,1.675339638 to 3.077124862,1.813992257 to 3.19075778,1.729257733 to 3.528246694,1.8114775 to 3.600535302,1.829080799 to 3.679259983,1.852907056 to 3.74613547,1.87455954
+"ipfix?" at 3.14344625,1.861815263
+linethick = 1;
+spline -> from 2.602048904,1.319139227 to 2.602048904,1.319139227 to 2.621357123,1.301919535 to 2.63878993,1.28252607 to 2.652088306,1.260916209 to 2.83059343,0.971420793 to 2.530229149,0.755151691 to 2.758645806,0.503207138 to 3.01216741,0.2235192743 to 3.494574524,0.2021395775 to 3.745837109,0.2122327039
+"ports*" at 3.14344625,0.553502278
+linethick = 1;
+spline -> from 2.60341284,1.443981994 to 2.60341284,1.443981994 to 2.866141012,1.477483672 to 3.352469442,1.539500137 to 3.651128803,1.577562476
+"controller*" at 3.14344625,1.613152681
+linethick = 1;
+spline -> from 2.602048904,1.369306498 to 2.602048904,1.369306498 to 2.652344044,1.356945828 to 2.707285091,1.34518188 to 2.758645806,1.337893347 to 3.055983854,1.295653954 to 3.400676055,1.286745747 to 3.634207472,1.286532632
+"flow_tables value*" at 3.14344625,1.388188487
+linethick = 1;
+spline -> from 2.468383176,1.528972256 to 2.468383176,1.528972256 to 2.522642255,1.6409855 to 2.622081714,1.813097174 to 2.758645806,1.912110403 to 3.038764162,2.115251621 to 3.440315445,2.196874666 to 3.686846877,2.229140277
+"netflow?" at 3.14344625,2.258422278
 linethick = 0.5;
-spline -> from 1.262209732,1.740239284 to 1.262209732,1.740239284 to 1.2953598,1.724778538 to 1.329693799,1.711546368 to 1.363818869,1.702353492 to 1.82882518,1.577483593 to 1.983711212,1.571981796 to 2.447185377,1.702353492 to 2.479917587,1.711616011 to 2.512649797,1.724848181 to 2.544128433,1.740239284
-"output_port?" at 1.905502123,1.789407242
+spline -> from 3.907122541,0.3339597296 to 3.907122541,0.3339597296 to 3.907122541,0.3983332465 to 3.907122541,0.47950875 to 3.907122541,0.543613742
+"select_src_port*" at 4.235660625,0.438079194
 linethick = 0.5;
-spline -> from 1.066861117,1.739821426 to 1.066861117,1.739821426 to 1.126266596,1.618155105 to 1.224115011,1.465428006 to 1.363818869,1.39286 to 1.791148317,1.171047045 to 2.022641649,1.165684534 to 2.447185377,1.39286 to 2.583616014,1.465915507 to 2.675823346,1.618572963 to 2.730910959,1.740169641
-"select_dst_port*" at 1.905502123,1.47991375
+spline -> from 3.74485678,0.2306373153 to 3.74485678,0.2306373153 to 3.380984229,0.2450481516 to 2.525029143,0.2888859071 to 2.438973306,0.3847919194 to 2.40734704,0.4200454027 to 2.40734704,0.456108723 to 2.438973306,0.491357944 to 2.524176683,0.586279365 to 3.364062898,0.630223678 to 3.733817423,0.645056482
+"output_port?" at 2.708350666,0.438079194
+linethick = 0.5;
+spline -> from 3.746007601,0.232167481 to 3.746007601,0.232167481 to 3.499731907,0.2491570088 to 3.072905185,0.3055728116 to 3.220423388,0.491357944 to 3.283377559,0.570679347 to 3.551945082,0.614240053 to 3.733945292,0.635125323
+"select_dst_port*" at 3.551902459,0.438079194
 linethick = 1;
-spline -> from 2.682021573,1.738149994 to 2.682021573,1.738149994 to 2.646921501,1.683340953 to 2.608269636,1.6226819 to 2.572890992,1.5669675 to 2.49948727,1.451151191 to 2.417238887,1.320570566 to 2.353376256,1.218961429
-"qos?" at 2.722832371,1.47991375
+spline -> from 4.067598136,0.2520979958 to 4.067598136,0.2520979958 to 4.29469348,0.2905141057 to 4.70728412,0.3603433666 to 4.93531717,0.3988702963
+"qos?" at 4.52272653,0.4173516291
 linethick = 1;
-spline -> from 2.848259414,1.73898571 to 2.848259414,1.73898571 to 2.893527364,1.587999686 to 2.958504283,1.371479599 to 3.003772233,1.220563218
-"interfaces+" at 3.337083631,1.47991375
+spline -> from 4.068663711,0.1899877602 to 4.068663711,0.1899877602 to 4.135581821,0.176714958 to 4.214221256,0.1627005156 to 4.28616888,0.1539159153 to 4.48052976,0.1300896583 to 4.70302182,0.1181765298 to 4.86541545,0.1122604574
+"interfaces+" at 4.52272653,0.2042366291
 linethick = 1;
-spline -> from 2.244036746,0.86844821 to 2.244036746,0.86844821 to 2.244036746,0.717462186 to 2.244036746,0.5009699562 to 2.244036746,0.3500117894
-"queues value*" at 2.727707381,0.60937625
+spline -> from 5.25882574,0.42623 to 5.25882574,0.42623 to 5.48515387,0.42623 to 5.89433467,0.42623 to 6.13174478,0.42623
+"queues value*" at 5.73023612,0.476567763
 linethick = 1;
-spline -> from 3.657511074,3.480617854 to 3.657511074,3.480617854 to 3.582018062,3.433121328 to 3.509171484,3.375735496 to 3.453108869,3.3080425 to 3.370999772,3.208801225 to 3.324478248,3.070350941 to 3.298849624,2.960941788
-"bridges*" at 3.733630873,3.22098875
+spline -> from 0.89678792,1.988703934 to 0.89678792,1.988703934 to 1.273873601,1.848218526 to 1.925067795,1.60560841 to 2.240094388,1.488224668
+"bridge" at 1.70492,1.873621834
 linethick = 1;
-spline -> from 4.052804742,3.48006071 to 4.052804742,3.48006071 to 4.052804742,3.329074686 to 4.052804742,3.112554599 to 4.052804742,2.961638218
-"ssl?" at 4.173774633,3.22098875
+spline -> from 1.211217791,2.202287787 to 1.211217791,2.202287787 to 1.809687334,2.286340343 to 2.74875727,2.357989606 to 3.528246694,2.148923791 to 3.534597521,2.147218871 to 3.645758305,2.082772895 to 3.746007601,2.024251516
+"ipfix?" at 2.421242138,2.341324013
 linethick = 1;
-spline -> from 4.215281861,3.48006071 to 4.215281861,3.48006071 to 4.354567861,3.329074686 to 4.554234342,3.112554599 to 4.693450699,2.961638218
-"manager_options*" at 5.140976617,3.22098875
+spline -> from 0.9547552,1.161988226 to 0.9547552,1.161988226 to 1.337637609,1.229545681 to 1.940966174,1.336017935 to 2.240307503,1.388827832
+"bridges*" at 1.70492,1.411886875
+linethick = 1;
+spline -> from 0.9547552,1.040214315 to 0.9547552,1.040214315 to 1.345863848,0.971207678 to 1.966923581,0.861581322 to 2.259146869,0.810007492
+"ssl?" at 1.70492,1.021161834
+linethick = 1;
+spline -> from 0.9547552,1.101079959 to 0.9547552,1.101079959 to 1.318116275,1.101079959 to 1.880057907,1.101079959 to 2.192271382,1.101079959
+"manager_options*" at 1.70492,1.151417722
+.ps +3
 .PE
 .RE\}
 .bp
@@ -206,6 +228,18 @@ optional string
 .TQ 2.75in
 \fBexternal_ids : xs-system-uuid\fR
 optional string
+.TQ 2.75in
+\fBother_config : flow-restore-wait\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBother_config : flow-eviction-threshold\fR
+optional string, containing an integer, at least 0
+.TQ 2.75in
+\fBother_config : force-miss-model\fR
+optional string
+.TQ 2.75in
+\fBother_config : n-handler-threads\fR
+optional string, containing an integer, at least 1
 .RE
 .TQ .25in
 \fIStatus:\fR
@@ -286,6 +320,82 @@ On a Citrix XenServer, this will likely be the same as
 .IP "\fBexternal_ids : xs-system-uuid\fR: optional string"
 The Citrix XenServer universally unique identifier for the physical
 host as displayed by \fBxe host\-list\fR\.
+.IP "\fBother_config : flow-restore-wait\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+When \fBovs\-vswitchd\fR starts up, it has an empty flow table
+and therefore it handles all arriving packets in its default fashion
+according to its configuration, by dropping them or sending them to
+an OpenFlow controller or switching them as a standalone switch.
+This behavior is ordinarily desirable.  However, if
+\fBovs\-vswitchd\fR is restarting as part of a ``hot-upgrade,\(cq\(cq
+then this leads to a relatively long period during which packets are
+mishandled.
+.IP
+This option allows for improvement.  When \fBovs\-vswitchd\fR
+starts with this value set as \fBtrue\fR, it will neither
+flush or expire previously set datapath flows nor will it send and
+receive any packets to or from the datapath.  When this value is
+later set to \fBfalse\fR, \fBovs\-vswitchd\fR will
+start receiving packets from the datapath and re-setup the flows.
+.IP
+Thus, with this option, the procedure for a hot-upgrade of
+\fBovs\-vswitchd\fR becomes roughly the following:
+.RS
+.IP 1. .25in
+Stop \fBovs\-vswitchd\fR\.
+.IP 2. .25in
+Set \fBother_config:flow-restore-wait\fR
+to \fBtrue\fR\.
+.IP 3. .25in
+Start \fBovs\-vswitchd\fR\.
+.IP 4. .25in
+Use \fBovs\-ofctl\fR (or some other program, such as an
+OpenFlow controller) to restore the OpenFlow flow table
+to the desired state.
+.IP 5. .25in
+Set \fBother_config:flow-restore-wait\fR
+to \fBfalse\fR (or remove it entirely from the database).
+.RE
+.IP
+The \fBovs\-ctl\fR\(cqs ``restart\(cq\(cq and ``force-reload-kmod\(cq\(cq
+functions use the above config option during hot upgrades.
+.IP "\fBother_config : flow-eviction-threshold\fR: optional string, containing an integer, at least 0"
+A number of flows as a nonnegative integer.  This sets number of
+flows at which eviction from the datapath flow table will be
+triggered.  If there are a large number of flows then increasing this
+value to around the number of flows present can result in reduced CPU
+usage and packet loss.
+.IP
+The default is 2500.  Values below 100 will be rounded up to 100.
+.IP "\fBother_config : force-miss-model\fR: optional string"
+Specifies userspace behaviour for handling flow misses. This takes
+precedence over flow-eviction-threshold.
+.IP
+.RS
+.TP
+\fBauto\fR
+Handle automatically based on the flow-eviction-threshold and
+the flow setup governer (default, recommended).
+.TP
+\fBwith\-facets\fR
+Always create facets. Expensive kernel flow creation and
+statistics tracking is always performed, even on flows with only
+a small number of packets.
+.TP
+\fBwithout\-facets\fR
+Always handle without facets. Forces flow misses to be handled
+in userspace. May cause an increase in CPU usage and packet loss
+on high throughput.
+.RE
+.IP "\fBother_config : n-handler-threads\fR: optional string, containing an integer, at least 1"
+Specifies the number of threads for software datapaths to use for
+handling new flows.  The default is two less than the number of
+online CPU cores (but at least 1).
+.IP
+This configuration is per datapath.  If you have more than one
+software datapath (e.g. some \fBsystem\fR bridges and some
+\fBnetdev\fR bridges), then the total number of threads is
+\fBn\-handler\-threads\fR times the number of software
+datapaths.
 .ST "Status:"
 .IP "\fBnext_cfg\fR: integer"
 Sequence number for client to increment.  When a client modifies
@@ -469,7 +579,7 @@ the \fBBridge\fR\(cqs \fBports\fR column.
 .RS .25in
 .TQ 2.75in
 \fBname\fR
-string (must be unique within table)
+immutable string (must be unique within table)
 .TQ 2.75in
 \fBports\fR
 set of \fBPort\fRs
@@ -482,6 +592,9 @@ optional \fBNetFlow\fR
 .TQ 2.75in
 \fBsflow\fR
 optional \fBsFlow\fR
+.TQ 2.75in
+\fBipfix\fR
+optional \fBIPFIX\fR
 .TQ 2.75in
 \fBflood_vlans\fR
 set of up to 4,096 integers, in range 0 to 4,095
@@ -505,11 +618,17 @@ optional string
 \fBother_config : datapath-id\fR
 optional string
 .TQ 2.75in
+\fBother_config : dp-desc\fR
+optional string
+.TQ 2.75in
 \fBother_config : disable-in-band\fR
 optional string, either \fBtrue\fR or \fBfalse\fR
 .TQ 2.75in
 \fBother_config : in-band-queue\fR
 optional string, containing an integer, in range 0 to 4,294,967,295
+.TQ 2.75in
+\fBprotocols\fR
+set of strings, one of \fBOpenFlow11\fR, \fBOpenFlow10\fR, \fBOpenFlow13\fR, or \fBOpenFlow12\fR
 .RE
 .TQ .25in
 \fISpanning Tree Configuration:\fR
@@ -549,13 +668,13 @@ optional string
 \fBother_config : hwaddr\fR
 optional string
 .TQ 2.75in
-\fBother_config : flow-eviction-threshold\fR
-optional string, containing an integer, at least 0
-.TQ 2.75in
 \fBother_config : forward-bpdu\fR
 optional string, either \fBtrue\fR or \fBfalse\fR
 .TQ 2.75in
 \fBother_config : mac-aging-time\fR
+optional string, containing an integer, at least 1
+.TQ 2.75in
+\fBother_config : mac-table-size\fR
 optional string, containing an integer, at least 1
 .RE
 .TQ .25in
@@ -586,7 +705,7 @@ map of string-string pairs
 .RE
 .SS "Details:
 .ST "Core Features:"
-.IP "\fBname\fR: string (must be unique within table)"
+.IP "\fBname\fR: immutable string (must be unique within table)"
 Bridge identifier.  Should be alphanumeric and no more than about 8
 bytes long.  Must be unique among the names of ports, interfaces, and
 bridges on a host.
@@ -597,7 +716,9 @@ Port mirroring configuration.
 .IP "\fBnetflow\fR: optional \fBNetFlow\fR"
 NetFlow configuration.
 .IP "\fBsflow\fR: optional \fBsFlow\fR"
-sFlow configuration.
+sFlow(R) configuration.
+.IP "\fBipfix\fR: optional \fBIPFIX\fR"
+IPFIX configuration.
 .IP "\fBflood_vlans\fR: set of up to 4,096 integers, in range 0 to 4,095"
 VLAN IDs of VLANs on which MAC address learning should be disabled,
 so that packets are flooded instead of being sent to specific ports
@@ -672,6 +793,10 @@ Reports the OpenFlow datapath ID in use.  Exactly 16 hex digits.
 .IP "\fBother_config : datapath-id\fR: optional string"
 Exactly 16 hex digits to set the OpenFlow datapath ID to a specific
 value.  May not be all-zero.
+.IP "\fBother_config : dp-desc\fR: optional string"
+Human readable description of datapath.  It it a maximum 256
+byte-long free-form string to describe the datapath for
+debugging purposes, e.g. \fBswitch3 in room 3120\fR\.
 .IP "\fBother_config : disable-in-band\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
 If set to \fBtrue\fR, disable in-band control on the bridge
 regardless of controller and manager settings.
@@ -681,6 +806,10 @@ that will be used by flows set up by in-band control on this bridge.
 If unset, or if the port used by an in-band control flow does not have
 QoS configured, or if the port does not have a queue with the specified
 ID, the default queue is used instead.
+.IP "\fBprotocols\fR: set of strings, one of \fBOpenFlow11\fR, \fBOpenFlow10\fR, \fBOpenFlow13\fR, or \fBOpenFlow12\fR"
+List of OpenFlow protocols that may be used when negotiating a
+connection with a controller.  A default value of
+\fBOpenFlow10\fR will be used if this column is empty.
 .ST "Spanning Tree Configuration:"
 The IEEE 802.1D Spanning Tree Protocol (STP) is a network protocol
 that ensures loop-free topologies.  It allows redundant links to
@@ -731,14 +860,6 @@ An Ethernet address in the form
 \fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR
 to set the hardware address of the local port and influence the
 datapath ID.
-.IP "\fBother_config : flow-eviction-threshold\fR: optional string, containing an integer, at least 0"
-A number of flows as a nonnegative integer.  This sets number of
-flows at which eviction from the kernel flow table will be triggered.
-If there are a large number of flows then increasing this value to
-around the number of flows present can result in reduced CPU usage
-and packet loss.
-.IP
-The default is 1000.  Values below 100 will be rounded up to 100.
 .IP "\fBother_config : forward-bpdu\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
 Option to allow forwarding of BPDU frames when NORMAL action is
 invoked.  Frames with reserved Ethernet addresses (e.g. STP
@@ -798,6 +919,10 @@ are addressed to a connected host that rarely transmits packets.  To
 reduce the incidence of unnecessary flooding, use a MAC aging time
 longer than the maximum interval at which a host will ordinarily
 transmit packets.
+.IP "\fBother_config : mac-table-size\fR: optional string, containing an integer, at least 1"
+The maximum number of MAC addresses to learn.  The default is
+currently 2048.  The value, if specified, is forced into a reasonable
+range, currently 10 to 1,000,000.
 .ST "Bridge Status:"
 Status information about bridges.
 .IP "\fBstatus\fR: map of string-string pairs"
@@ -832,7 +957,7 @@ part of the port\(cqs \fBInterface\fR members.
 .SS "Summary:
 .TQ 3.00in
 \fBname\fR
-string (must be unique within table)
+immutable string (must be unique within table)
 .TQ 3.00in
 \fBinterfaces\fR
 set of 1 or more \fBInterface\fRs
@@ -857,7 +982,7 @@ optional string, either \fBtrue\fR or \fBfalse\fR
 .RS .25in
 .TQ 2.75in
 \fBbond_mode\fR
-optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, \fBbalance\-slb\fR, or \fBstable\fR
+optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR
 .TQ 2.75in
 \fBother_config : bond-hash-basis\fR
 optional string, containing an integer
@@ -983,7 +1108,7 @@ map of string-string pairs
 map of string-string pairs
 .RE
 .SS "Details:
-.IP "\fBname\fR: string (must be unique within table)"
+.IP "\fBname\fR: immutable string (must be unique within table)"
 Port name.  Should be alphanumeric and no more than about 8
 bytes long.  May be the same as the interface name, for
 non-bonded ports.  Must otherwise be unique among the names of
@@ -1096,26 +1221,11 @@ successful LACP negotiation:
 Balances flows among slaves based on L2, L3, and L4 protocol
 information such as destination MAC address, IP address, and TCP
 port.
-.TP
-\fBstable\fR
-Deprecated and slated for removal in February 2013.
-.IP
-Attempts to always assign a given flow to the same slave
-consistently.  In an effort to maintain stability, no load
-balancing is done.  Uses a similar hashing strategy to
-\fBbalance\-tcp\fR, always taking into account L3 and L4
-fields even if LACP negotiations are unsuccessful.
-.IP
-Slave selection decisions are made based on \fBother_config:bond-stable-id\fR if set.  Otherwise,
-OpenFlow port number is used.  Decisions are consistent across all
-\fBovs\-vswitchd\fR instances with equivalent
-\fBother_config:bond-stable-id\fR
-values.
 .RE
 .PP
 These columns apply only to bonded ports.  Their values are
 otherwise ignored.
-.IP "\fBbond_mode\fR: optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, \fBbalance\-slb\fR, or \fBstable\fR"
+.IP "\fBbond_mode\fR: optional string, one of \fBactive\-backup\fR, \fBbalance\-tcp\fR, or \fBbalance\-slb\fR"
 The type of bonding used for a bonded port.  Defaults to
 \fBactive\-backup\fR if unset.
 .IP "\fBother_config : bond-hash-basis\fR: optional string, containing an integer"
@@ -1272,13 +1382,22 @@ An interface within a \fBPort\fR\.
 .RS .25in
 .TQ 2.75in
 \fBname\fR
-string (must be unique within table)
+immutable string (must be unique within table)
+.TQ 2.75in
+\fBifindex\fR
+optional integer, in range 0 to 4,294,967,295
+.TQ 2.75in
+\fBmac_in_use\fR
+optional string
 .TQ 2.75in
 \fBmac\fR
 optional string
 .TQ 2.75in
 \fBofport\fR
 optional integer
+.TQ 2.75in
+\fBofport_request\fR
+optional integer, in range 1 to 65,279
 .RE
 .TQ .25in
 \fISystem-Specific Details:\fR
@@ -1312,18 +1431,8 @@ optional string
 \fBoptions : ttl\fR
 optional string
 .TQ 2.75in
-\fBoptions : df_inherit\fR
-optional string, either \fBtrue\fR or \fBfalse\fR
-.TQ 2.75in
 \fBoptions : df_default\fR
 optional string, either \fBtrue\fR or \fBfalse\fR
-.TQ 2.75in
-\fBoptions : pmtud\fR
-optional string, either \fBtrue\fR or \fBfalse\fR
-.TQ .25in
-\fITunnel Options: gre only:\fR
-.RS .25in
-.RE
 .TQ .25in
 \fITunnel Options: gre and ipsec_gre only:\fR
 .RS .25in
@@ -1464,6 +1573,49 @@ integer, at least 0
 integer, at least 0
 .RE
 .TQ .25in
+\fIBidirectional Forwarding Detection (BFD):\fR
+.RS .25in
+.TQ 2.75in
+\fBbfd : enable\fR
+optional string
+.TQ 2.75in
+\fBbfd : min_rx\fR
+optional string, containing an integer, at least 1
+.TQ 2.75in
+\fBbfd : min_tx\fR
+optional string, containing an integer, at least 1
+.TQ 2.75in
+\fBbfd : decay_min_rx\fR
+optional string, containing an integer
+.TQ 2.75in
+\fBbfd : forwarding_if_rx\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBbfd : cpath_down\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBbfd : check_tnl_key\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBbfd : bfd_dst_mac\fR
+optional string
+.TQ 2.75in
+\fBbfd_status : state\fR
+optional string, one of \fBdown\fR, \fBinit\fR, \fBup\fR, or \fBadmin_down\fR
+.TQ 2.75in
+\fBbfd_status : forwarding\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
+\fBbfd_status : diagnostic\fR
+optional string
+.TQ 2.75in
+\fBbfd_status : remote_state\fR
+optional string, one of \fBdown\fR, \fBinit\fR, \fBup\fR, or \fBadmin_down\fR
+.TQ 2.75in
+\fBbfd_status : remote_diagnostic\fR
+optional string
+.RE
+.TQ .25in
 \fIConnectivity Fault Management:\fR
 .RS .25in
 .TQ 2.75in
@@ -1509,6 +1661,9 @@ optional string, containing an integer
 \fBother_config : cfm_extended\fR
 optional string, either \fBtrue\fR or \fBfalse\fR
 .TQ 2.75in
+\fBother_config : cfm_demand\fR
+optional string, either \fBtrue\fR or \fBfalse\fR
+.TQ 2.75in
 \fBother_config : cfm_opstate\fR
 optional string, either \fBdown\fR or \fBup\fR
 .TQ 2.75in
@@ -1521,9 +1676,6 @@ optional string, containing an integer, in range 1 to 7
 .TQ .25in
 \fIBonding Configuration:\fR
 .RS .25in
-.TQ 2.75in
-\fBother_config : bond-stable-id\fR
-optional string, containing an integer, at least 1
 .TQ 2.75in
 \fBother_config : lacp-port-id\fR
 optional string, containing an integer, in range 1 to 65,535
@@ -1578,11 +1730,17 @@ map of string-string pairs
 .RE
 .SS "Details:
 .ST "Core Features:"
-.IP "\fBname\fR: string (must be unique within table)"
+.IP "\fBname\fR: immutable string (must be unique within table)"
 Interface name.  Should be alphanumeric and no more than about 8 bytes
 long.  May be the same as the port name, for non-bonded ports.  Must
 otherwise be unique among the names of ports, interfaces, and bridges
 on a host.
+.IP "\fBifindex\fR: optional integer, in range 0 to 4,294,967,295"
+A positive interface index as defined for SNMP MIB-II in RFCs 1213 and
+2863, if the interface has one, otherwise 0.  The ifindex is useful for
+seamless integration with protocols such as SNMP and sFlow.
+.IP "\fBmac_in_use\fR: optional string"
+The MAC address in use by this interface.
 .IP "\fBmac\fR: optional string"
 Ethernet address to set for this interface.  If unset then the
 default MAC address is used:
@@ -1618,6 +1776,20 @@ known.  If the interface is successfully added,
 port number for the OpenFlow ``local port\(cq\(cq).  If the interface
 cannot be added then Open vSwitch sets this column
 to \-1.
+.IP
+When \fBofport_request\fR is not set, Open vSwitch picks
+an appropriate value for this column and then tries to keep the value
+constant across restarts.
+.IP "\fBofport_request\fR: optional integer, in range 1 to 65,279"
+Requested OpenFlow port number for this interface.  The port
+number must be between 1 and 65279, inclusive.  Some datapaths
+cannot satisfy all requests for particular port numbers.  When
+this column is empty or the request cannot be fulfilled, the
+system will choose a free port.  The \fBofport\fR
+column reports the assigned OpenFlow port number.
+.IP
+The port number must be requested in the same transaction
+that creates the port.
 .ST "System-Specific Details:"
 .IP "\fBtype\fR: string"
 The interface type, one of:
@@ -1643,8 +1815,7 @@ A TUN/TAP device managed by Open vSwitch.
 .TP
 \fBgre\fR
 An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
-tunnel.  See \fBTunnel Options\fR for information on
-configuring GRE tunnels.
+tunnel.
 .TP
 \fBipsec_gre\fR
 An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4
@@ -1661,15 +1832,18 @@ for information on configuring GRE tunnels.
 \fBipsec_gre64\fR
 Same as IPSEC_GRE except 64 bit key.
 .TP
-\fBcapwap\fR
-An Ethernet tunnel over the UDP transport portion of CAPWAP (RFC
-5415).  This allows interoperability with certain switches that do
-not support GRE.  Only the tunneling component of the protocol is
-implemented.  UDP ports 58881 and 58882 are used as the source and
-destination ports respectively.  CAPWAP is currently supported only
-with the Linux kernel datapath with kernel version 2.6.26 or later.
-CAPWAP support is deprecated and will be removed no earlier than
-February 2013.
+\fBvxlan\fR
+An Ethernet tunnel over the experimental, UDP-based VXLAN
+protocol described at
+\fBhttp://tools.ietf.org/html/draft\-mahalingam\-dutt\-dcops\-vxlan\-03\fR\.
+.IP
+Open vSwitch uses UDP destination port 4789.  The source port used for
+VXLAN traffic varies on a per-flow basis and is in the ephemeral port
+range.
+.TP
+\fBlisp\fR
+A layer 3 tunnel over the experimental, UDP-based Locator/ID
+Separation Protocol (RFC 6830).
 .TP
 \fBpatch\fR
 A pair of virtual devices that act as a patch cable.
@@ -1681,7 +1855,7 @@ February 2013.
 .ST "Tunnel Options:"
 These options apply to interfaces with \fBtype\fR of
 \fBgre\fR, \fBipsec_gre\fR, \fBgre64\fR,
-\fBipsec_gre64\fR, and \fBcapwap\fR\.
+\fBipsec_gre64\fR, \fBvxlan\fR, and \fBlisp\fR\.
 .PP
 Each tunnel must be uniquely identified by the combination of \fBtype\fR, \fBoptions:remote_ip\fR, \fBoptions:local_ip\fR, and \fBoptions:in_key\fR\.  If two ports are defined that are the same except one
 has an optional identifier and the other does not, the more specific
@@ -1689,15 +1863,51 @@ one is matched first.  \fBoptions:in_key\fR is
 considered more specific than \fBoptions:local_ip\fR if
 a port defines one and another port defines the other.
 .IP "\fBoptions : remote_ip\fR: optional string"
-Required.  The tunnel endpoint.  Unicast and multicast endpoints are
-both supported.
+Required.  The remote tunnel endpoint, one of:
+.RS
+.IP \(bu
+An IPv4 address (not a DNS name), e.g. \fB192.168.0.123\fR\.
+Only unicast endpoints are supported.
+.IP \(bu
+The word \fBflow\fR\.  The tunnel accepts packets from any
+remote tunnel endpoint.  To process only packets from a specific
+remote tunnel endpoint, the flow entries may match on the
+\fBtun_src\fR field.  When sending packets to a
+\fBremote_ip=flow\fR tunnel, the flow actions must
+explicitly set the \fBtun_dst\fR field to the IP address of
+the desired remote tunnel endpoint, e.g. with a
+\fBset_field\fR action.
+.RE
 .IP
-When a multicast endpoint is specified, a routing table lookup occurs
-only when the tunnel is created.  Following a routing change, delete
-and then re-create the tunnel to force a new routing table lookup.
+The remote tunnel endpoint for any packet received from a tunnel
+is available in the \fBtun_src\fR field for matching in the
+flow table.
 .IP "\fBoptions : local_ip\fR: optional string"
-Optional.  The destination IP that received packets must match.
-Default is to match all addresses.  Must be omitted when \fBoptions:remote_ip\fR is a multicast address.
+Optional.  The tunnel destination IP that received packets must
+match.  Default is to match all addresses.  If specified, may be one
+of:
+.RS
+.IP \(bu
+An IPv4 address (not a DNS name), e.g. \fB192.168.12.3\fR\.
+.IP \(bu
+The word \fBflow\fR\.  The tunnel accepts packets sent to any
+of the local IP addresses of the system running OVS.  To process
+only packets sent to a specific IP address, the flow entries may
+match on the \fBtun_dst\fR field.  When sending packets to a
+\fBlocal_ip=flow\fR tunnel, the flow actions may
+explicitly set the \fBtun_src\fR field to the desired IP
+address, e.g. with a \fBset_field\fR action.  However, while
+routing the tunneled packet out, the local system may override the
+specified address with the local IP address configured for the
+outgoing system interface.
+.IP
+This option is valid only for tunnels also configured with the
+\fBremote_ip=flow\fR option.
+.RE
+.IP
+The tunnel destination IP address for any packet received from a
+tunnel is available in the \fBtun_dst\fR field for matching in
+the flow table.
 .IP "\fBoptions : in_key\fR: optional string"
 Optional.  The key that received packets must contain, one of:
 .RS
@@ -1705,8 +1915,9 @@ Optional.  The key that received packets must contain, one of:
 \fB0\fR\.  The tunnel receives packets with no key or with a
 key of 0.  This is equivalent to specifying no \fBoptions:in_key\fR at all.
 .IP \(bu
-A positive 32-bit (for GRE) or 64-bit (for CAPWAP) number.  The
-tunnel receives only packets with the specified key.
+A positive 24-bit (for VXLAN and LISP), 32-bit (for GRE) or 64-bit
+(for GRE64) number.  The tunnel receives only packets with the
+specified key.
 .IP \(bu
 The word \fBflow\fR\.  The tunnel accepts packets with any
 key.  The key will be placed in the \fBtun_id\fR field for
@@ -1722,8 +1933,9 @@ Optional.  The key to be set on outgoing packets, one of:
 \fB0\fR\.  Packets sent through the tunnel will have no key.
 This is equivalent to specifying no \fBoptions:out_key\fR at all.
 .IP \(bu
-A positive 32-bit (for GRE) or 64-bit (for CAPWAP) number.  Packets
-sent through the tunnel will have the specified key.
+A positive 24-bit (for VXLAN and LISP), 32-bit (for GRE) or 64-bit
+(for GRE64) number.  Packets sent through the tunnel will have the
+specified key.
 .IP \(bu
 The word \fBflow\fR\.  Packets sent through the tunnel will
 have the key set using the \fBset_tunnel\fR Nicira OpenFlow
@@ -1746,28 +1958,10 @@ Optional.  The TTL to be set on the encapsulating packet.  It may also
 be the word \fBinherit\fR, in which case the TTL will be copied
 from the inner packet if it is IPv4 or IPv6 (otherwise it will be the
 system default, typically 64).  Default is the system default TTL.
-.IP "\fBoptions : df_inherit\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
-Optional.  If enabled, the Don\(cqt Fragment bit will be copied from the
-inner IP headers (those of the encapsulated traffic) to the outer
-(tunnel) headers.  Default is disabled; set to \fBtrue\fR to
-enable.
 .IP "\fBoptions : df_default\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
-Optional.  If enabled, the Don\(cqt Fragment bit will be set by default on
-tunnel headers if the \fBdf_inherit\fR option is not set, or if
-the encapsulated packet is not IP.  Default is enabled; set to
-\fBfalse\fR to disable.
-.IP "\fBoptions : pmtud\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
-Optional.  Enable tunnel path MTU discovery.  If enabled ``ICMP
-Destination Unreachable - Fragmentation Needed\(cq\(cq messages will be
-generated for IPv4 packets with the DF bit set and IPv6 packets above
-the minimum MTU if the packet size exceeds the path MTU minus the size
-of the tunnel headers.  Note that this option causes behavior that is
-typically reserved for routers and therefore is not entirely in
-compliance with the IEEE 802.1D specification for bridges.  Default is
-disabled; set to \fBtrue\fR to enable.  This feature is
-deprecated and will be removed soon.
-.ST "Tunnel Options: gre only:"
-Only \fBgre\fR interfaces support these options.
+Optional.  If enabled, the Don\(cqt Fragment bit will be set on tunnel
+outer headers to allow path MTU discovery. Default is enabled; set
+to \fBfalse\fR to disable.
 .ST "Tunnel Options: gre and ipsec_gre only:"
 Only \fBgre\fR and \fBipsec_gre\fR interfaces support
 these options.
@@ -1858,13 +2052,13 @@ adapter.
 The version string of the network adapter\(cqs firmware, if available.
 .IP "\fBstatus : source_ip\fR: optional string"
 The source IP address used for an IPv4 tunnel end-point, such as
-\fBgre\fR or \fBcapwap\fR\.
+\fBgre\fR\.
 .IP "\fBstatus : tunnel_egress_iface\fR: optional string"
-Egress interface for tunnels.  Currently only relevant for GRE and
-CAPWAP tunnels.  On Linux systems, this column will show the name of
-the interface which is responsible for routing traffic destined for the
-configured \fBoptions:remote_ip\fR\.  This could be an
-internal interface such as a bridge port.
+Egress interface for tunnels.  Currently only relevant for GRE tunnels
+On Linux systems, this column will show the name of the interface
+which is responsible for routing traffic destined for the configured
+\fBoptions:remote_ip\fR\.  This could be an internal
+interface such as a bridge port.
 .IP "\fBstatus : tunnel_egress_iface_carrier\fR: optional string, either \fBdown\fR or \fBup\fR"
 Whether carrier is detected on \fBstatus:tunnel_egress_iface\fR\.
 .ST "Statistics:"
@@ -1966,6 +2160,91 @@ dropped packets.  The burst size should be at least the size of the
 interface\(cqs MTU.  Specifying a value that is numerically at least as
 large as 10% of \fBingress_policing_rate\fR helps TCP come
 closer to achieving the full rate.
+.ST "Bidirectional Forwarding Detection (BFD):"
+BFD, defined in RFC 5880 and RFC 5881, allows point to point
+detection of connectivity failures by occasional transmission of
+BFD control messages.  It is implemented in Open vSwitch to serve
+as a more popular and standards compliant alternative to CFM.
+.PP
+BFD operates by regularly transmitting BFD control messages at a
+rate negotiated independently in each direction.  Each endpoint
+specifies the rate at which it expects to receive control messages,
+and the rate at which it\(cqs willing to transmit them.  Open vSwitch
+uses a detection multiplier of three, meaning that an endpoint
+which fails to receive BFD control messages for a period of three
+times the expected reception rate, will signal a connectivity
+fault.  In the case of a unidirectional connectivity issue, the
+system not receiving BFD control messages will signal the problem
+to its peer in the messages it transmits.
+.PP
+The Open vSwitch implementation of BFD aims to comply faithfully
+with the requirements put forth in RFC 5880.  Currently, the only
+known omission is ``Demand Mode\(cq\(cq, which we hope to include in
+future.  Open vSwitch does not implement the optional
+Authentication or ``Echo Mode\(cq\(cq features.
+.IP "\fBbfd : enable\fR: optional string"
+When \fBtrue\fR BFD is enabled on this
+\fBInterface\fR, otherwise it\(cqs disabled.  Defaults to
+\fBfalse\fR\.
+.IP "\fBbfd : min_rx\fR: optional string, containing an integer, at least 1"
+The fastest rate, in milliseconds, at which this BFD session is
+willing to receive BFD control messages.  The actual rate may be
+slower if the remote endpoint isn\(cqt willing to transmit as quickly as
+specified.  Defaults to \fB1000\fR\.
+.IP "\fBbfd : min_tx\fR: optional string, containing an integer, at least 1"
+The fastest rate, in milliseconds, at which this BFD session is
+willing to transmit BFD control messages.  The actual rate may be
+slower if the remote endpoint isn\(cqt willing to receive as quickly as
+specified.  Defaults to \fB100\fR\.
+.IP "\fBbfd : decay_min_rx\fR: optional string, containing an integer"
+\fBdecay_min_rx\fR is used to set the \fBmin_rx\fR,
+when there is no obvious incoming data traffic at the interface.
+It cannot be set less than the \fBmin_rx\fR\. The decay feature
+is disabled by setting the \fBdecay_min_rx\fR to 0. And the
+feature is reset everytime itself or \fBmin_rx\fR is
+reconfigured.
+.IP "\fBbfd : forwarding_if_rx\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+When \fBforwarding_if_rx\fR is true the interface will be
+considered capable of packet I/O as long as there is packet
+received at interface.  This is important in that when link becomes
+temporarily conjested, consecutive BFD control packets can be lost.
+And the \fBforwarding_if_rx\fR can prevent link failover by
+detecting non-control packets received at interface.
+.IP "\fBbfd : cpath_down\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+Concatenated path down may be used when the local system should not
+have traffic forwarded to it for some reason other than a connectivty
+failure on the interface being monitored.  When a controller thinks
+this may be the case, it may set \fBcpath_down\fR to
+\fBtrue\fR which may cause the remote BFD session not to
+forward traffic to this \fBInterface\fR\. Defaults to
+\fBfalse\fR\.
+.IP "\fBbfd : check_tnl_key\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+When set to true, Check Tunnel Key will make BFD only accept control
+messages with an \fBin_key\fR of zero. Defaults to
+\fBfalse\fR\.
+.IP "\fBbfd : bfd_dst_mac\fR: optional string"
+An Ethernet address in the form
+\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR:\fIxx\fR
+to set the destination mac address of the bfd packet. If this
+field is set, it is assumed that all the bfd packets destined to this
+interface also has the same destination mac address. If not set, a
+default value of \fB00:23:20:00:00:01\fR is used.
+.IP "\fBbfd_status : state\fR: optional string, one of \fBdown\fR, \fBinit\fR, \fBup\fR, or \fBadmin_down\fR"
+State of the BFD session.  The BFD session is fully healthy and
+negotiated if \fBUP\fR\.
+.IP "\fBbfd_status : forwarding\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+True if the BFD session believes this \fBInterface\fR may be
+used to forward traffic.  Typically this means the local session is
+signaling \fBUP\fR, and the remote system isn\(cqt signaling a
+problem such as concatenated path down.
+.IP "\fBbfd_status : diagnostic\fR: optional string"
+A short message indicating what the BFD session thinks is wrong in
+case of a problem.
+.IP "\fBbfd_status : remote_state\fR: optional string, one of \fBdown\fR, \fBinit\fR, \fBup\fR, or \fBadmin_down\fR"
+State of the remote endpoint\(cqs BFD session.
+.IP "\fBbfd_status : remote_diagnostic\fR: optional string"
+A short message indicating what the remote endpoint\(cqs BFD session
+thinks is wrong in case of a problem.
 .ST "Connectivity Fault Management:"
 802.1ag Connectivity Fault Management (CFM) allows a group of
 Maintenance Points (MPs) called a Maintenance Association (MA) to
@@ -2076,6 +2355,32 @@ network. Furthermore, extended mode increases the accuracy of the
 \fBcfm_interval\fR configuration parameter by breaking wire
 compatibility with 802.1ag compliant implementations.  Defaults to
 \fBfalse\fR\.
+.IP "\fBother_config : cfm_demand\fR: optional string, either \fBtrue\fR or \fBfalse\fR"
+When \fBtrue\fR, and
+\fBother_config:cfm_extended\fR is true, the CFM
+module operates in demand mode.  When in demand mode, traffic
+received on the \fBInterface\fR is used to indicate
+liveness.  CCMs are still transmitted and received, but if the
+\fBInterface\fR is receiving traffic, their absence does not
+cause a connectivity fault.
+.IP
+Demand mode has a couple of caveats:
+.RS
+.IP \(bu
+To ensure that ovs-vswitchd has enough time to pull statistics
+from the datapath, the fault detection interval is set to
+3.5 * MAX(\fBother_config:cfm_interval\fR, 500)
+ms.
+.IP \(bu
+To avoid ambiguity, demand mode disables itself when there are
+multiple remote maintenance points.
+.IP \(bu
+If the \fBInterface\fR is heavily congested, CCMs
+containing the \fBother_config:cfm_opstate\fR
+status may be dropped causing changes in the operational state to
+be delayed.  Similarly, if CCMs containing the RDI bit are not
+received, unidirectional link failures may not be detected.
+.RE
 .IP "\fBother_config : cfm_opstate\fR: optional string, either \fBdown\fR or \fBup\fR"
 When \fBdown\fR, the CFM module marks all CCMs it generates as
 operationally down without triggering a fault.  This allows remote
@@ -2096,12 +2401,6 @@ value of \fBother_config:cfm_ccm_vlan\fR\. If
 \fBother_config:cfm_ccm_vlan\fR is unset, a VLAN ID of
 zero is used.
 .ST "Bonding Configuration:"
-.IP "\fBother_config : bond-stable-id\fR: optional string, containing an integer, at least 1"
-Used in \fBstable\fR bond mode to make slave
-selection decisions.  Allocating \fBother_config:bond-stable-id\fR values consistently across interfaces
-participating in a bond will guarantee consistent slave selection
-decisions across \fBovs\-vswitchd\fR instances when using
-\fBstable\fR bonding mode.
 .IP "\fBother_config : lacp-port-id\fR: optional string, containing an integer, in range 1 to 65,535"
 The LACP port ID of this \fBInterface\fR\.  Port IDs are
 used in LACP negotiations to identify individual ports
@@ -2146,6 +2445,10 @@ During VM migration, a given \fBexternal_ids:iface-id\fR might transiently be ma
 two different hypervisors.  That is, \fBactive\fR means that
 this \fBexternal_ids:iface-id\fR is the active
 instance within a single hypervisor, not in a broader scope.
+There is one exception: some hypervisors support ``migration\(cq\(cq from a
+given hypervisor to itself (most often for test purposes).  During
+such a ``migration,\(cq\(cq two instances of a single \fBexternal_ids:iface-id\fR might both be briefly marked
+\fBactive\fR on a single hypervisor.
 .IP "\fBexternal_ids : xs-vif-uuid\fR: optional string"
 The virtual interface associated with this interface.
 .IP "\fBexternal_ids : xs-network-uuid\fR: optional string"
@@ -2727,19 +3030,27 @@ controllers:
 .RS
 .TP
 \fBssl:\fIip\fB\fR[\fB:\fIport\fB\fR]
-The specified SSL \fIport\fR (default: 6633) on the host at
-the given \fIip\fR, which must be expressed as an IP address
-(not a DNS name).  The \fBssl\fR
-column in the \fBOpen_vSwitch\fR table must point to a
-valid SSL configuration when this form is used.
+The specified SSL \fIport\fR on the host at the
+given \fIip\fR, which must be expressed as an IP
+address (not a DNS name).  The \fBssl\fR column in the \fBOpen_vSwitch\fR
+table must point to a valid SSL configuration when this form
+is used.
+.IP
+If \fIport\fR is not specified, it currently
+defaults to 6633.  In the future, the default will change to
+6653, which is the IANA-defined value.
 .IP
 SSL support is an optional feature that is not always built as
 part of Open vSwitch.
 .TP
 \fBtcp:\fIip\fB\fR[\fB:\fIport\fB\fR]
-The specified TCP \fIport\fR (default: 6633) on the host at
-the given \fIip\fR, which must be expressed as an IP address
-(not a DNS name).
+The specified TCP \fIport\fR on the host at the
+given \fIip\fR, which must be expressed as an IP
+address (not a DNS name).
+.IP
+If \fIport\fR is not specified, it currently
+defaults to 6633.  In the future, the default will change to
+6653, which is the IANA-defined value.
 .RE
 .IP
 The following connection methods are currently supported for service
@@ -2747,22 +3058,31 @@ controllers:
 .RS
 .TP
 \fBpssl:\fR[\fIport\fR][\fB:\fIip\fB\fR]
-Listens for SSL connections on the specified TCP \fIport\fR
-(default: 6633).  If \fIip\fR, which must be expressed as an
-IP address (not a DNS name), is specified, then connections are
-restricted to the specified local IP address.
+Listens for SSL connections on the specified TCP
+\fIport\fR\.  If \fIip\fR, which must be expressed
+as an IP address (not a DNS name), is specified, then
+connections are restricted to the specified local IP
+address.  The \fBssl\fR
+column in the \fBOpen_vSwitch\fR table must point
+to a valid SSL configuration when this form is used.
 .IP
-The \fBssl\fR column in the \fBOpen_vSwitch\fR table must point to a valid SSL
-configuration when this form is used.
+If \fIport\fR is not specified, it currently
+defaults to 6633.  In the future, the default will change to
+6653, which is the IANA-defined value.
 .IP
 SSL support is an optional feature that is not always built as
 part of Open vSwitch.
 .TP
 \fBptcp:\fR[\fIport\fR][\fB:\fIip\fB\fR]
-Listens for connections on the specified TCP \fIport\fR
-(default: 6633).  If \fIip\fR, which must be expressed as an
-IP address (not a DNS name), is specified, then connections are
-restricted to the specified local IP address.
+Listens for connections on the specified TCP
+\fIport\fR\.  If \fIip\fR, which must be expressed
+as an IP address (not a DNS name), is specified, then
+connections are restricted to the specified local IP
+address.
+.IP
+If \fIport\fR is not specified, it currently
+defaults to 6633.  In the future, the default will change to
+6653, which is the IANA-defined value.
 .RE
 .IP
 When multiple controllers are configured for a single bridge, the
@@ -3005,6 +3325,9 @@ optional string
 .TQ 2.75in
 \fBstatus : n_connections\fR
 optional string, containing an integer, at least 2
+.TQ 2.75in
+\fBstatus : bound_port\fR
+optional string, containing an integer
 .RE
 .TQ .25in
 \fIConnection Parameters:\fR
@@ -3032,37 +3355,55 @@ The following connection methods are currently supported:
 .RS
 .TP
 \fBssl:\fIip\fB\fR[\fB:\fIport\fB\fR]
-The specified SSL \fIport\fR (default: 6632) on the host at
-the given \fIip\fR, which must be expressed as an IP address
-(not a DNS name).  The \fBssl\fR
-column in the \fBOpen_vSwitch\fR table must point to a
-valid SSL configuration when this form is used.
+The specified SSL \fIport\fR on the host at the given
+\fIip\fR, which must be expressed as an IP address
+(not a DNS name).  The \fBssl\fR column in the \fBOpen_vSwitch\fR
+table must point to a valid SSL configuration when this
+form is used.
 .IP
-SSL support is an optional feature that is not always built as
-part of Open vSwitch.
+If \fIport\fR is not specified, it currently defaults
+to 6632.  In the future, the default will change to 6640,
+which is the IANA-defined value.
+.IP
+SSL support is an optional feature that is not always
+built as part of Open vSwitch.
 .TP
 \fBtcp:\fIip\fB\fR[\fB:\fIport\fB\fR]
-The specified TCP \fIport\fR (default: 6632) on the host at
-the given \fIip\fR, which must be expressed as an IP address
+The specified TCP \fIport\fR on the host at the given
+\fIip\fR, which must be expressed as an IP address
 (not a DNS name).
+.IP
+If \fIport\fR is not specified, it currently defaults
+to 6632.  In the future, the default will change to 6640,
+which is the IANA-defined value.
 .TP
 \fBpssl:\fR[\fIport\fR][\fB:\fIip\fB\fR]
-Listens for SSL connections on the specified TCP \fIport\fR
-(default: 6632).  If \fIip\fR, which must be expressed as an
-IP address (not a DNS name), is specified, then connections are
-restricted to the specified local IP address.
-.IP
-The \fBssl\fR column in the \fBOpen_vSwitch\fR table must point to a valid SSL
+Listens for SSL connections on the specified TCP
+\fIport\fR\.  Specify 0 for \fIport\fR to have
+the kernel automatically choose an available port.  If
+\fIip\fR, which must be expressed as an IP address
+(not a DNS name), is specified, then connections are
+restricted to the specified local IP address.  The \fBssl\fR column in the \fBOpen_vSwitch\fR table must point to a valid SSL
 configuration when this form is used.
+.IP
+If \fIport\fR is not specified, it currently defaults
+to 6632.  In the future, the default will change to 6640,
+which is the IANA-defined value.
 .IP
 SSL support is an optional feature that is not always built as
 part of Open vSwitch.
 .TP
 \fBptcp:\fR[\fIport\fR][\fB:\fIip\fB\fR]
-Listens for connections on the specified TCP \fIport\fR
-(default: 6632).  If \fIip\fR, which must be expressed as an
-IP address (not a DNS name), is specified, then connections are
+Listens for connections on the specified TCP
+\fIport\fR\.  Specify 0 for \fIport\fR to have
+the kernel automatically choose an available port.  If
+\fIip\fR, which must be expressed as an IP address
+(not a DNS name), is specified, then connections are
 restricted to the specified local IP address.
+.IP
+If \fIport\fR is not specified, it currently defaults
+to 6632.  In the future, the default will change to 6640,
+which is the IANA-defined value.
 .RE
 .IP
 When multiple managers are configured, the \fBtarget\fR
@@ -3163,6 +3504,11 @@ key-value pair is omitted.
 When multiple connections are active, status columns and key-value
 pairs (other than this one) report the status of one arbitrarily
 chosen connection.
+.IP "\fBstatus : bound_port\fR: optional string, containing an integer"
+When \fBtarget\fR is \fBptcp:\fR or
+\fBpssl:\fR, this is the TCP port on which the OVSDB server is
+listening.  (This is is particularly useful when \fBtarget\fR specifies a port of 0, allowing the kernel to
+choose any available port.)
 .ST "Connection Parameters:"
 Additional configuration for a connection between the manager
 and the Open vSwitch Database.
@@ -3289,8 +3635,8 @@ Columns\fR at the beginning of this document.
 .IP "\fBexternal_ids\fR: map of string-string pairs"
 .bp
 .SH "sFlow TABLE"
-An sFlow(R) target.  sFlow is a protocol for remote monitoring
-of switches.
+A set of sFlow(R) targets.  sFlow is a protocol for remote
+monitoring of switches.
 .SS "Summary:
 .TQ 3.00in
 \fBagent\fR
@@ -3336,6 +3682,107 @@ packets, on average, will be sent to the collector.
 .IP "\fBtargets\fR: set of 1 or more strings"
 sFlow targets in the form
 \fB\fIip\fB:\fIport\fB\fR\.
+.ST "Common Columns:"
+The overall purpose of these columns is described under \fBCommon
+Columns\fR at the beginning of this document.
+.IP "\fBexternal_ids\fR: map of string-string pairs"
+.bp
+.SH "IPFIX TABLE"
+A set of IPFIX collectors.  IPFIX is a protocol that exports a
+number of details about flows.
+.SS "Summary:
+.TQ 3.00in
+\fBtargets\fR
+set of 1 or more strings
+.TQ 3.00in
+\fBsampling\fR
+optional integer, in range 1 to 4,294,967,295
+.TQ 3.00in
+\fBobs_domain_id\fR
+optional integer, in range 0 to 4,294,967,295
+.TQ 3.00in
+\fBobs_point_id\fR
+optional integer, in range 0 to 4,294,967,295
+.TQ 3.00in
+\fBcache_active_timeout\fR
+optional integer, in range 0 to 4,200
+.TQ 3.00in
+\fBcache_max_flows\fR
+optional integer, in range 0 to 4,294,967,295
+.TQ .25in
+\fICommon Columns:\fR
+.RS .25in
+.TQ 2.75in
+\fBexternal_ids\fR
+map of string-string pairs
+.RE
+.SS "Details:
+.IP "\fBtargets\fR: set of 1 or more strings"
+IPFIX target collectors in the form
+\fB\fIip\fB:\fIport\fB\fR\.
+.IP "\fBsampling\fR: optional integer, in range 1 to 4,294,967,295"
+For per-bridge packet sampling, i.e. when this row is referenced
+from a \fBBridge\fR, the rate at which packets should
+be sampled and sent to each target collector.  If not specified,
+defaults to 400, which means one out of 400 packets, on average,
+will be sent to each target collector.  Ignored for per-flow
+sampling, i.e. when this row is referenced from a \fBFlow_Sample_Collector_Set\fR\.
+.IP "\fBobs_domain_id\fR: optional integer, in range 0 to 4,294,967,295"
+For per-bridge packet sampling, i.e. when this row is referenced
+from a \fBBridge\fR, the IPFIX Observation Domain ID
+sent in each IPFIX packet.  If not specified, defaults to 0.
+Ignored for per-flow sampling, i.e. when this row is referenced
+from a \fBFlow_Sample_Collector_Set\fR\.
+.IP "\fBobs_point_id\fR: optional integer, in range 0 to 4,294,967,295"
+For per-bridge packet sampling, i.e. when this row is referenced
+from a \fBBridge\fR, the IPFIX Observation Point ID
+sent in each IPFIX flow record.  If not specified, defaults to
+0.  Ignored for per-flow sampling, i.e. when this row is
+referenced from a \fBFlow_Sample_Collector_Set\fR\.
+.IP "\fBcache_active_timeout\fR: optional integer, in range 0 to 4,200"
+The maximum period in seconds for which an IPFIX flow record is
+cached and aggregated before being sent.  If not specified,
+defaults to 0.  If 0, caching is disabled.
+.IP "\fBcache_max_flows\fR: optional integer, in range 0 to 4,294,967,295"
+The maximum number of IPFIX flow records that can be cached at a
+time.  If not specified, defaults to 0.  If 0, caching is
+disabled.
+.ST "Common Columns:"
+The overall purpose of these columns is described under \fBCommon
+Columns\fR at the beginning of this document.
+.IP "\fBexternal_ids\fR: map of string-string pairs"
+.bp
+.SH "Flow_Sample_Collector_Set TABLE"
+A set of IPFIX collectors of packet samples generated by
+OpenFlow \fBsample\fR actions.
+.SS "Summary:
+.TQ 3.00in
+\fBid\fR
+integer, in range 0 to 4,294,967,295
+.TQ 3.00in
+\fBbridge\fR
+\fBBridge\fR
+.TQ 3.00in
+\fBipfix\fR
+optional \fBIPFIX\fR
+.TQ .25in
+\fICommon Columns:\fR
+.RS .25in
+.TQ 2.75in
+\fBexternal_ids\fR
+map of string-string pairs
+.RE
+.SS "Details:
+.IP "\fBid\fR: integer, in range 0 to 4,294,967,295"
+The ID of this collector set, unique among the bridge\(cqs
+collector sets, to be used as the \fBcollector_set_id\fR
+in OpenFlow \fBsample\fR actions.
+.IP "\fBbridge\fR: \fBBridge\fR"
+The bridge into which OpenFlow \fBsample\fR actions can
+be added to send packet samples to this set of IPFIX collectors.
+.IP "\fBipfix\fR: optional \fBIPFIX\fR"
+Configuration of the set of IPFIX collectors to send one flow
+record per sampled packet to.
 .ST "Common Columns:"
 The overall purpose of these columns is described under \fBCommon
 Columns\fR at the beginning of this document.

@@ -12,7 +12,7 @@
 %define oname openvswitch
 
 Name:           %{oname}-kmod
-Version:        1.9.2
+Version:        1.9.3
 Release:        1%{?dist}
 Summary:        Open vSwitch kernel module
 

@@ -1,3 +1,21 @@
+openvswitch (1.9.3+git20131021-1) unstable; urgency=low
+
+  * New upstream version:
+    - Fixes unaligned access issues in bug #719736.
+    - Other bug fixes.
+  * Other half of bug #719736 has probably not been addressed.  I don't
+    understand it and want to see if it recurs in the autobuilders with
+    the unaligned accesses fixed.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 21 Oct 2013 08:53:11 -0700
+
+openvswitch (1.9.3-1) unstable; urgency=low
+   [ Open vSwitch team ]
+   * New upstream version
+    - Bug fixes
+
+ -- Open vSwitch team <dev@openvswitch.org>  Thu, 29 Aug 2013 17:02:33 -0700
+
 openvswitch (1.9.2+git20130813-1) unstable; urgency=low
 
   * New upstream version.  Closes: #701758.

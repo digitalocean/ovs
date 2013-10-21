@@ -1812,7 +1812,7 @@ bundle_add_port(struct ofbundle *bundle, uint32_t ofp_port,
     if (port->bundle != bundle) {
         bundle->ofproto->need_revalidate = REV_RECONFIGURE;
         if (port->bundle) {
-            bundle_del_port(port);
+            bundle_remove(&port->up);
         }
 
         port->bundle = bundle;
@@ -2547,6 +2547,11 @@ port_add(struct ofproto *ofproto_, struct netdev *netdev, uint16_t *ofp_portp)
     error = dpif_port_add(ofproto->dpif, netdev, &odp_port);
     if (!error) {
         *ofp_portp = odp_port_to_ofp_port(odp_port);
+        if (*ofp_portp >= OFPP_MAX) {
+            /* Out of ports in the OpenFlow range. */
+            dpif_port_del(ofproto->dpif, odp_port);
+            error = EFBIG;
+        }
     }
     return error;
 }

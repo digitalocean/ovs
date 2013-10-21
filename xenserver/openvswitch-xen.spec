@@ -20,7 +20,7 @@
 #      -bb /usr/src/redhat/SPECS/openvswitch-xen.spec
 
 %if %{?openvswitch_version:0}%{!?openvswitch_version:1}
-%define openvswitch_version 1.9.2
+%define openvswitch_version 1.9.3
 %endif
 
 %if %{?kernel_name:0}%{!?kernel_name:1}

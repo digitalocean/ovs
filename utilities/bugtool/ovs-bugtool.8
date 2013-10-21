@@ -4,7 +4,7 @@
 .  ns
 .  IP "\\$1"
 ..
-.TH ovs\-bugtool 8 "1.11.90" "Open vSwitch" "Open vSwitch Manual"
+.TH ovs\-bugtool 8 "2.0.90" "Open vSwitch" "Open vSwitch Manual"
 .\" This program's name:
 .ds PN ovs\-bugtool
 .
@@ -33,9 +33,9 @@ Print verbose debugging output.
 Use the capabilities specified in a comma-separated list.
 .
 .IP "\fB\-\-log\-days=\fIdays\fR"
-Include the logs rotated in the previous \fIdays\fR days in the debug bundle.
-The number of log files included has a big impact on the eventual bundle size.
-The default value is 20 days.
+Include the logs with last modification time in the previous \fIdays\fR days
+in the debug bundle. The number of log files included has a big impact on the
+eventual bundle size. The default value is 20 days.
 .
 .IP "\fB\-\-output=\fIfiletype\fR"
 Generate a debug bundle with the specified file type.  Options include
@@ -48,7 +48,8 @@ Use only Open vSwitch relevant capabilities.
 Suppress output.
 .
 .IP "\fB\-\-unlimited\fR"
-Do not exclude files which are too large.
+Do not exclude files which are too large. Also skip checking free disk space.
+By default up to 90 percent of the free disk space can be used.
 .
 .IP "\fB\-\-yestoall\fR"
 Answer yes to all prompts.

@@ -138,7 +138,7 @@ parse_ethertype(struct ofpbuf *b)
 static int
 parse_ipv6(struct ofpbuf *packet, struct flow *flow)
 {
-    const struct ip6_hdr *nh;
+    const struct ovs_16aligned_ip6_hdr *nh;
     ovs_be32 tc_flow;
     int nexthdr;
 
@@ -149,10 +149,10 @@ parse_ipv6(struct ofpbuf *packet, struct flow *flow)
 
     nexthdr = nh->ip6_nxt;
 
-    flow->ipv6_src = nh->ip6_src;
-    flow->ipv6_dst = nh->ip6_dst;
+    memcpy(&flow->ipv6_src, &nh->ip6_src, sizeof flow->ipv6_src);
+    memcpy(&flow->ipv6_dst, &nh->ip6_dst, sizeof flow->ipv6_dst);
 
-    tc_flow = get_unaligned_be32(&nh->ip6_flow);
+    tc_flow = get_16aligned_be32(&nh->ip6_flow);
     flow->nw_tos = ntohl(tc_flow) >> 20;
     flow->ipv6_label = tc_flow & htonl(IPV6_LABEL_MASK);
     flow->nw_ttl = nh->ip6_hlim;
@@ -200,7 +200,7 @@ parse_ipv6(struct ofpbuf *packet, struct flow *flow)
                return EINVAL;
             }
         } else if (nexthdr == IPPROTO_FRAGMENT) {
-            const struct ip6_frag *frag_hdr = packet->data;
+            const struct ovs_16aligned_ip6_frag *frag_hdr = packet->data;
 
             nexthdr = frag_hdr->ip6f_nxt;
             if (!ofpbuf_try_pull(packet, sizeof *frag_hdr)) {
@@ -381,8 +381,8 @@ flow_extract(struct ofpbuf *packet, uint32_t skb_priority, uint32_t skb_mark,
         if (nh) {
             packet->l4 = b.data;
 
-            flow->nw_src = get_unaligned_be32(&nh->ip_src);
-            flow->nw_dst = get_unaligned_be32(&nh->ip_dst);
+            flow->nw_src = get_16aligned_be32(&nh->ip_src);
+            flow->nw_dst = get_16aligned_be32(&nh->ip_dst);
             flow->nw_proto = nh->ip_proto;
 
             flow->nw_tos = nh->ip_tos;
@@ -436,8 +436,8 @@ flow_extract(struct ofpbuf *packet, uint32_t skb_priority, uint32_t skb_mark,
                 flow->nw_proto = ntohs(arp->ar_op);
             }
 
-            flow->nw_src = arp->ar_spa;
-            flow->nw_dst = arp->ar_tpa;
+            flow->nw_src = get_16aligned_be32(&arp->ar_spa);
+            flow->nw_dst = get_16aligned_be32(&arp->ar_tpa);
             memcpy(flow->arp_sha, arp->ar_sha, ETH_ADDR_LEN);
             memcpy(flow->arp_tha, arp->ar_tha, ETH_ADDR_LEN);
         }
@@ -813,8 +813,8 @@ flow_compose(struct ofpbuf *b, const struct flow *flow)
         ip->ip_ihl_ver = IP_IHL_VER(5, 4);
         ip->ip_tos = flow->nw_tos;
         ip->ip_proto = flow->nw_proto;
-        ip->ip_src = flow->nw_src;
-        ip->ip_dst = flow->nw_dst;
+        put_16aligned_be32(&ip->ip_src, flow->nw_src);
+        put_16aligned_be32(&ip->ip_dst, flow->nw_dst);
 
         if (flow->nw_frag & FLOW_NW_FRAG_ANY) {
             ip->ip_frag_off |= htons(IP_MORE_FRAGMENTS);
@@ -866,8 +866,8 @@ flow_compose(struct ofpbuf *b, const struct flow *flow)
 
         if (flow->nw_proto == ARP_OP_REQUEST ||
             flow->nw_proto == ARP_OP_REPLY) {
-            arp->ar_spa = flow->nw_src;
-            arp->ar_tpa = flow->nw_dst;
+            put_16aligned_be32(&arp->ar_spa, flow->nw_src);
+            put_16aligned_be32(&arp->ar_tpa, flow->nw_dst);
             memcpy(arp->ar_sha, flow->arp_sha, ETH_ADDR_LEN);
             memcpy(arp->ar_tha, flow->arp_tha, ETH_ADDR_LEN);
         }

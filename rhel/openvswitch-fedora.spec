@@ -14,7 +14,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 1.9.2
+Version: 1.9.3
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: ASL 2.0

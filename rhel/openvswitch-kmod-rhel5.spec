@@ -13,7 +13,7 @@
 %{!?kversion: %define kversion 2.6.18-238.12.1.el5}
 
 Name:    %{kmod_name}-kmod
-Version: 1.9.2
+Version: 1.9.3
 Release: 1%{?dist}
 Group:   System Environment/Kernel
 License: GPLv2
