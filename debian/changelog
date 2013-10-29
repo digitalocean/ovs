@@ -1,3 +1,10 @@
+openvswitch (1.9.3+git20131029-1) unstable; urgency=low
+
+  * New upstream release.
+    - Fixes opening Unix sockets with very long names from Python.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Tue, 29 Oct 2013 08:31:55 -0700
+
 openvswitch (1.9.3+git20131028-1) unstable; urgency=low
 
   * New upstream release.
