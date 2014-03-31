@@ -17,8 +17,6 @@
 
 #include "server.h"
 
-#include <assert.h>
-
 #include "hash.h"
 #include "ovsdb.h"
 
@@ -35,7 +33,7 @@ ovsdb_session_init(struct ovsdb_session *session, struct ovsdb_server *server)
 void
 ovsdb_session_destroy(struct ovsdb_session *session)
 {
-    assert(hmap_is_empty(&session->waiters));
+    ovs_assert(hmap_is_empty(&session->waiters));
     hmap_destroy(&session->waiters);
 }
 
@@ -101,7 +99,7 @@ ovsdb_lock_waiter_remove(struct ovsdb_lock_waiter *waiter)
 void
 ovsdb_lock_waiter_destroy(struct ovsdb_lock_waiter *waiter)
 {
-    assert(!waiter->lock);
+    ovs_assert(!waiter->lock);
     hmap_remove(&waiter->session->waiters, &waiter->session_node);
     free(waiter->lock_name);
     free(waiter);
@@ -132,6 +130,19 @@ bool
 ovsdb_server_add_db(struct ovsdb_server *server, struct ovsdb *db)
 {
     return shash_add_once(&server->dbs, db->schema->name, db);
+}
+
+/* Removes 'db' from the set of databases served out by 'server'.  Returns
+ * true if successful, false if there is no db associated with
+ * db->schema->name. */
+bool
+ovsdb_server_remove_db(struct ovsdb_server *server, struct ovsdb *db)
+{
+    void *data = shash_find_and_delete(&server->dbs, db->schema->name);
+    if (data) {
+        return true;
+    }
+    return false;
 }
 
 /* Destroys 'server'. */

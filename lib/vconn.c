@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <config.h>
 #include "vconn-provider.h"
-#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
@@ -60,7 +59,7 @@ enum vconn_state {
     VCS_DISCONNECTED            /* Connection failed or connection closed. */
 };
 
-static struct vconn_class *vconn_classes[] = {
+static const struct vconn_class *vconn_classes[] = {
     &tcp_vconn_class,
     &unix_vconn_class,
 #ifdef HAVE_OPENSSL
@@ -68,7 +67,7 @@ static struct vconn_class *vconn_classes[] = {
 #endif
 };
 
-static struct pvconn_class *pvconn_classes[] = {
+static const struct pvconn_class *pvconn_classes[] = {
     &ptcp_pvconn_class,
     &punix_pvconn_class,
 #ifdef HAVE_OPENSSL
@@ -96,28 +95,28 @@ check_vconn_classes(void)
     size_t i;
 
     for (i = 0; i < ARRAY_SIZE(vconn_classes); i++) {
-        struct vconn_class *class = vconn_classes[i];
-        assert(class->name != NULL);
-        assert(class->open != NULL);
+        const struct vconn_class *class = vconn_classes[i];
+        ovs_assert(class->name != NULL);
+        ovs_assert(class->open != NULL);
         if (class->close || class->recv || class->send
             || class->run || class->run_wait || class->wait) {
-            assert(class->close != NULL);
-            assert(class->recv != NULL);
-            assert(class->send != NULL);
-            assert(class->wait != NULL);
+            ovs_assert(class->close != NULL);
+            ovs_assert(class->recv != NULL);
+            ovs_assert(class->send != NULL);
+            ovs_assert(class->wait != NULL);
         } else {
             /* This class delegates to another one. */
         }
     }
 
     for (i = 0; i < ARRAY_SIZE(pvconn_classes); i++) {
-        struct pvconn_class *class = pvconn_classes[i];
-        assert(class->name != NULL);
-        assert(class->listen != NULL);
+        const struct pvconn_class *class = pvconn_classes[i];
+        ovs_assert(class->name != NULL);
+        ovs_assert(class->listen != NULL);
         if (class->close || class->accept || class->wait) {
-            assert(class->close != NULL);
-            assert(class->accept != NULL);
-            assert(class->wait != NULL);
+            ovs_assert(class->close != NULL);
+            ovs_assert(class->accept != NULL);
+            ovs_assert(class->wait != NULL);
         } else {
             /* This class delegates to another one. */
         }
@@ -139,10 +138,10 @@ vconn_usage(bool active, bool passive, bool bootstrap OVS_UNUSED)
     if (active) {
         printf("Active OpenFlow connection methods:\n");
         printf("  tcp:IP[:PORT]           "
-               "PORT (default: %d) at remote IP\n", OFP_TCP_PORT);
+               "PORT (default: %d) at remote IP\n", OFP_OLD_PORT);
 #ifdef HAVE_OPENSSL
         printf("  ssl:IP[:PORT]           "
-               "SSL PORT (default: %d) at remote IP\n", OFP_SSL_PORT);
+               "SSL PORT (default: %d) at remote IP\n", OFP_OLD_PORT);
 #endif
         printf("  unix:FILE               Unix domain socket named FILE\n");
     }
@@ -151,11 +150,11 @@ vconn_usage(bool active, bool passive, bool bootstrap OVS_UNUSED)
         printf("Passive OpenFlow connection methods:\n");
         printf("  ptcp:[PORT][:IP]        "
                "listen to TCP PORT (default: %d) on IP\n",
-               OFP_TCP_PORT);
+               OFP_OLD_PORT);
 #ifdef HAVE_OPENSSL
         printf("  pssl:[PORT][:IP]        "
                "listen for SSL on PORT (default: %d) on IP\n",
-               OFP_SSL_PORT);
+               OFP_OLD_PORT);
 #endif
         printf("  punix:FILE              "
                "listen on Unix domain socket FILE\n");
@@ -178,7 +177,7 @@ vconn_usage(bool active, bool passive, bool bootstrap OVS_UNUSED)
  * a null pointer into '*classp' if 'name' is in the wrong form or if no such
  * class exists. */
 static int
-vconn_lookup_class(const char *name, struct vconn_class **classp)
+vconn_lookup_class(const char *name, const struct vconn_class **classp)
 {
     size_t prefix_len;
 
@@ -187,7 +186,7 @@ vconn_lookup_class(const char *name, struct vconn_class **classp)
         size_t i;
 
         for (i = 0; i < ARRAY_SIZE(vconn_classes); i++) {
-            struct vconn_class *class = vconn_classes[i];
+            const struct vconn_class *class = vconn_classes[i];
             if (strlen(class->name) == prefix_len
                 && !memcmp(class->name, name, prefix_len)) {
                 *classp = class;
@@ -205,7 +204,7 @@ vconn_lookup_class(const char *name, struct vconn_class **classp)
 int
 vconn_verify_name(const char *name)
 {
-    struct vconn_class *class;
+    const struct vconn_class *class;
     return vconn_lookup_class(name, &class);
 }
 
@@ -215,22 +214,28 @@ vconn_verify_name(const char *name)
  *
  * The vconn will automatically negotiate an OpenFlow protocol version
  * acceptable to both peers on the connection.  The version negotiated will be
- * no lower than 'min_version' and no higher than OFP10_VERSION.
+ * one of those in the 'allowed_versions' bitmap: version 'x' is allowed if
+ * allowed_versions & (1 << x) is nonzero.  If 'allowed_versions' is zero, then
+ * OFPUTIL_DEFAULT_VERSIONS are allowed.
  *
  * Returns 0 if successful, otherwise a positive errno value.  If successful,
  * stores a pointer to the new connection in '*vconnp', otherwise a null
  * pointer.  */
 int
-vconn_open(const char *name, int min_version, struct vconn **vconnp,
-           uint8_t dscp)
+vconn_open(const char *name, uint32_t allowed_versions, uint8_t dscp,
+           struct vconn **vconnp)
 {
-    struct vconn_class *class;
+    const struct vconn_class *class;
     struct vconn *vconn;
     char *suffix_copy;
     int error;
 
     COVERAGE_INC(vconn_open);
     check_vconn_classes();
+
+    if (!allowed_versions) {
+        allowed_versions = OFPUTIL_DEFAULT_VERSIONS;
+    }
 
     /* Look up the class. */
     error = vconn_lookup_class(name, &class);
@@ -240,15 +245,14 @@ vconn_open(const char *name, int min_version, struct vconn **vconnp,
 
     /* Call class's "open" function. */
     suffix_copy = xstrdup(strchr(name, ':') + 1);
-    error = class->open(name, suffix_copy, &vconn, dscp);
+    error = class->open(name, allowed_versions, suffix_copy, &vconn, dscp);
     free(suffix_copy);
     if (error) {
         goto error;
     }
 
     /* Success. */
-    assert(vconn->state != VCS_CONNECTING || vconn->class->connect);
-    vconn->min_version = min_version;
+    ovs_assert(vconn->state != VCS_CONNECTING || vconn->class->connect);
     *vconnp = vconn;
     return 0;
 
@@ -290,7 +294,7 @@ vconn_run_wait(struct vconn *vconn)
 }
 
 int
-vconn_open_block(const char *name, enum ofp_version min_version,
+vconn_open_block(const char *name, uint32_t allowed_versions, uint8_t dscp,
                  struct vconn **vconnp)
 {
     struct vconn *vconn;
@@ -298,7 +302,7 @@ vconn_open_block(const char *name, enum ofp_version min_version,
 
     fatal_signal_run();
 
-    error = vconn_open(name, min_version, &vconn, DSCP_DEFAULT);
+    error = vconn_open(name, allowed_versions, dscp, &vconn);
     if (!error) {
         error = vconn_connect_block(vconn);
     }
@@ -330,37 +334,20 @@ vconn_get_name(const struct vconn *vconn)
     return vconn->name;
 }
 
-/* Returns the IP address of the peer, or 0 if the peer is not connected over
- * an IP-based protocol or if its IP address is not yet known. */
-ovs_be32
-vconn_get_remote_ip(const struct vconn *vconn)
+/* Returns the allowed_versions of 'vconn', that is,
+ * the allowed_versions passed to vconn_open(). */
+uint32_t
+vconn_get_allowed_versions(const struct vconn *vconn)
 {
-    return vconn->remote_ip;
+    return vconn->allowed_versions;
 }
 
-/* Returns the transport port of the peer, or 0 if the connection does not
- * contain a port or if the port is not yet known. */
-ovs_be16
-vconn_get_remote_port(const struct vconn *vconn)
+/* Sets the allowed_versions of 'vconn', overriding
+ * the allowed_versions passed to vconn_open(). */
+void
+vconn_set_allowed_versions(struct vconn *vconn, uint32_t allowed_versions)
 {
-    return vconn->remote_port;
-}
-
-/* Returns the IP address used to connect to the peer, or 0 if the
- * connection is not an IP-based protocol or if its IP address is not
- * yet known. */
-ovs_be32
-vconn_get_local_ip(const struct vconn *vconn)
-{
-    return vconn->local_ip;
-}
-
-/* Returns the transport port used to connect to the peer, or 0 if the
- * connection does not contain a port or if the port is not yet known. */
-ovs_be16
-vconn_get_local_port(const struct vconn *vconn)
-{
-    return vconn->local_port;
+    vconn->allowed_versions = allowed_versions;
 }
 
 /* Returns the OpenFlow version negotiated with the peer, or -1 if version
@@ -374,11 +361,32 @@ vconn_get_version(const struct vconn *vconn)
     return vconn->version ? vconn->version : -1;
 }
 
+/* By default, a vconn accepts only OpenFlow messages whose version matches the
+ * one negotiated for the connection.  A message received with a different
+ * version is an error that causes the vconn to drop the connection.
+ *
+ * This functions allows 'vconn' to accept messages with any OpenFlow version.
+ * This is useful in the special case where 'vconn' is used as an rconn
+ * "monitor" connection (see rconn_add_monitor()), that is, where 'vconn' is
+ * used as a target for mirroring OpenFlow messages for debugging and
+ * troubleshooting.
+ *
+ * This function should be called after a successful vconn_open() or
+ * pvconn_accept() but before the connection completes, that is, before
+ * vconn_connect() returns success.  Otherwise, messages that arrive on 'vconn'
+ * beforehand with an unexpected version will the vconn to drop the
+ * connection. */
+void
+vconn_set_recv_any_version(struct vconn *vconn)
+{
+    vconn->recv_any_version = true;
+}
+
 static void
 vcs_connecting(struct vconn *vconn)
 {
     int retval = (vconn->class->connect)(vconn);
-    assert(retval != EINPROGRESS);
+    ovs_assert(retval != EINPROGRESS);
     if (!retval) {
         vconn->state = VCS_SEND_HELLO;
     } else if (retval != EAGAIN) {
@@ -393,7 +401,7 @@ vcs_send_hello(struct vconn *vconn)
     struct ofpbuf *b;
     int retval;
 
-    b = ofpraw_alloc(OFPRAW_OFPT_HELLO, OFP10_VERSION, 0);
+    b = ofputil_encode_hello(vconn->allowed_versions);
     retval = do_send(vconn, b);
     if (!retval) {
         vconn->state = VCS_RECV_HELLO;
@@ -406,6 +414,28 @@ vcs_send_hello(struct vconn *vconn)
     }
 }
 
+static char *
+version_bitmap_to_string(uint32_t bitmap)
+{
+    struct ds s;
+
+    ds_init(&s);
+    if (!bitmap) {
+        ds_put_cstr(&s, "no versions");
+    } else if (is_pow2(bitmap)) {
+        ds_put_cstr(&s, "version ");
+        ofputil_format_version(&s, leftmost_1bit_idx(bitmap));
+    } else if (is_pow2((bitmap >> 1) + 1)) {
+        ds_put_cstr(&s, "version ");
+        ofputil_format_version(&s, leftmost_1bit_idx(bitmap));
+        ds_put_cstr(&s, " and earlier");
+    } else {
+        ds_put_cstr(&s, "versions ");
+        ofputil_format_version_bitmap(&s, bitmap);
+    }
+    return ds_steal_cstr(&s);
+}
+
 static void
 vcs_recv_hello(struct vconn *vconn)
 {
@@ -414,37 +444,45 @@ vcs_recv_hello(struct vconn *vconn)
 
     retval = do_recv(vconn, &b);
     if (!retval) {
-        const struct ofp_header *oh = b->data;
         enum ofptype type;
         enum ofperr error;
 
         error = ofptype_decode(&type, b->data);
         if (!error && type == OFPTYPE_HELLO) {
-            if (b->size > sizeof *oh) {
+            char *peer_s, *local_s;
+            uint32_t common_versions;
+
+            if (!ofputil_decode_hello(b->data, &vconn->peer_versions)) {
                 struct ds msg = DS_EMPTY_INITIALIZER;
-                ds_put_format(&msg, "%s: extra-long hello:\n", vconn->name);
+                ds_put_format(&msg, "%s: unknown data in hello:\n",
+                              vconn->name);
                 ds_put_hex_dump(&msg, b->data, b->size, 0, true);
                 VLOG_WARN_RL(&bad_ofmsg_rl, "%s", ds_cstr(&msg));
                 ds_destroy(&msg);
             }
 
-            vconn->version = MIN(OFP10_VERSION, oh->version);
-            if (vconn->version < vconn->min_version) {
+            local_s = version_bitmap_to_string(vconn->allowed_versions);
+            peer_s = version_bitmap_to_string(vconn->peer_versions);
+
+            common_versions = vconn->peer_versions & vconn->allowed_versions;
+            if (!common_versions) {
+                vconn->version = leftmost_1bit_idx(vconn->peer_versions);
                 VLOG_WARN_RL(&bad_ofmsg_rl,
-                             "%s: version negotiation failed: we support "
-                             "versions 0x%02x to 0x%02x inclusive but peer "
-                             "supports no later than version 0x%02"PRIx8,
-                             vconn->name, vconn->min_version, OFP10_VERSION,
-                             oh->version);
+                             "%s: version negotiation failed (we support "
+                             "%s, peer supports %s)",
+                             vconn->name, local_s, peer_s);
                 vconn->state = VCS_SEND_ERROR;
             } else {
+                vconn->version = leftmost_1bit_idx(common_versions);
                 VLOG_DBG("%s: negotiated OpenFlow version 0x%02x "
-                         "(we support versions 0x%02x to 0x%02x inclusive, "
-                         "peer no later than version 0x%02"PRIx8")",
-                         vconn->name, vconn->version, vconn->min_version,
-                         OFP10_VERSION, oh->version);
+                         "(we support %s, peer supports %s)", vconn->name,
+                         vconn->version, local_s, peer_s);
                 vconn->state = VCS_CONNECTED;
             }
+
+            free(local_s);
+            free(peer_s);
+
             ofpbuf_delete(b);
             return;
         } else {
@@ -470,10 +508,15 @@ vcs_send_error(struct vconn *vconn)
     struct ofpbuf *b;
     char s[128];
     int retval;
+    char *local_s, *peer_s;
 
-    snprintf(s, sizeof s, "We support versions 0x%02x to 0x%02x inclusive but "
-             "you support no later than version 0x%02"PRIx8".",
-             vconn->min_version, OFP12_VERSION, vconn->version);
+    local_s = version_bitmap_to_string(vconn->allowed_versions);
+    peer_s = version_bitmap_to_string(vconn->peer_versions);
+    snprintf(s, sizeof s, "We support %s, you support %s, no common versions.",
+             local_s, peer_s);
+    free(peer_s);
+    free(local_s);
+
     b = ofperr_encode_hello(OFPERR_OFPHFC_INCOMPATIBLE, vconn->version, s);
     retval = do_send(vconn, b);
     if (retval) {
@@ -494,7 +537,6 @@ vconn_connect(struct vconn *vconn)
 {
     enum vconn_state last_state;
 
-    assert(vconn->min_version > 0);
     do {
         last_state = vconn->state;
         switch (vconn->state) {
@@ -521,7 +563,7 @@ vconn_connect(struct vconn *vconn)
             return vconn->error;
 
         default:
-            NOT_REACHED();
+            OVS_NOT_REACHED();
         }
     } while (vconn->state != last_state);
 
@@ -546,7 +588,7 @@ vconn_recv(struct vconn *vconn, struct ofpbuf **msgp)
     if (!retval) {
         retval = do_recv(vconn, &msg);
     }
-    if (!retval) {
+    if (!retval && !vconn->recv_any_version) {
         const struct ofp_header *oh = msg->data;
         if (oh->version != vconn->version) {
             enum ofptype type;
@@ -556,11 +598,25 @@ vconn_recv(struct vconn *vconn, struct ofpbuf **msgp)
                     type != OFPTYPE_ERROR &&
                     type != OFPTYPE_ECHO_REQUEST &&
                     type != OFPTYPE_ECHO_REPLY)) {
+                struct ofpbuf *reply;
+
                 VLOG_ERR_RL(&bad_ofmsg_rl, "%s: received OpenFlow version "
                             "0x%02"PRIx8" != expected %02x",
                             vconn->name, oh->version, vconn->version);
+
+                /* Send a "bad version" reply, if we can. */
+                reply = ofperr_encode_reply(OFPERR_OFPBRC_BAD_VERSION, oh);
+                retval = vconn_send(vconn, reply);
+                if (retval) {
+                    VLOG_INFO_RL(&bad_ofmsg_rl,
+                                 "%s: failed to queue error reply (%s)",
+                                 vconn->name, ovs_strerror(retval));
+                    ofpbuf_delete(reply);
+                }
+
+                /* Suppress the received message, as if it had not arrived. */
+                retval = EAGAIN;
                 ofpbuf_delete(msg);
-                retval = EPROTO;
             }
         }
     }
@@ -609,7 +665,7 @@ do_send(struct vconn *vconn, struct ofpbuf *msg)
 {
     int retval;
 
-    assert(msg->size >= sizeof(struct ofp_header));
+    ovs_assert(msg->size >= sizeof(struct ofp_header));
 
     ofpmsg_update_length(msg);
     if (!VLOG_IS_DBG_ENABLED()) {
@@ -620,7 +676,7 @@ do_send(struct vconn *vconn, struct ofpbuf *msg)
         retval = (vconn->class->send)(vconn, msg);
         if (retval != EAGAIN) {
             VLOG_DBG_RL(&ofmsg_rl, "%s: sent (%s): %s",
-                        vconn->name, strerror(retval), s);
+                        vconn->name, ovs_strerror(retval), s);
         }
         free(s);
     }
@@ -640,7 +696,7 @@ vconn_connect_block(struct vconn *vconn)
         vconn_connect_wait(vconn);
         poll_block();
     }
-    assert(error != EINPROGRESS);
+    ovs_assert(error != EINPROGRESS);
 
     return error;
 }
@@ -679,7 +735,7 @@ vconn_recv_block(struct vconn *vconn, struct ofpbuf **msgp)
     return retval;
 }
 
-/* Waits until a message with a transaction ID matching 'xid' is recived on
+/* Waits until a message with a transaction ID matching 'xid' is received on
  * 'vconn'.  Returns 0 if successful, in which case the reply is stored in
  * '*replyp' for the caller to examine and free.  Otherwise returns a positive
  * errno value, or EOF, and sets '*replyp' to null.
@@ -837,7 +893,7 @@ vconn_transact_multiple_noreply(struct vconn *vconn, struct list *requests,
 void
 vconn_wait(struct vconn *vconn, enum vconn_wait_type wait)
 {
-    assert(wait == WAIT_CONNECT || wait == WAIT_RECV || wait == WAIT_SEND);
+    ovs_assert(wait == WAIT_CONNECT || wait == WAIT_RECV || wait == WAIT_SEND);
 
     switch (vconn->state) {
     case VCS_CONNECTING:
@@ -886,7 +942,7 @@ vconn_send_wait(struct vconn *vconn)
  * a null pointer into '*classp' if 'name' is in the wrong form or if no such
  * class exists. */
 static int
-pvconn_lookup_class(const char *name, struct pvconn_class **classp)
+pvconn_lookup_class(const char *name, const struct pvconn_class **classp)
 {
     size_t prefix_len;
 
@@ -895,7 +951,7 @@ pvconn_lookup_class(const char *name, struct pvconn_class **classp)
         size_t i;
 
         for (i = 0; i < ARRAY_SIZE(pvconn_classes); i++) {
-            struct pvconn_class *class = pvconn_classes[i];
+            const struct pvconn_class *class = pvconn_classes[i];
             if (strlen(class->name) == prefix_len
                 && !memcmp(class->name, name, prefix_len)) {
                 *classp = class;
@@ -913,7 +969,7 @@ pvconn_lookup_class(const char *name, struct pvconn_class **classp)
 int
 pvconn_verify_name(const char *name)
 {
-    struct pvconn_class *class;
+    const struct pvconn_class *class;
     return pvconn_lookup_class(name, &class);
 }
 
@@ -921,18 +977,29 @@ pvconn_verify_name(const char *name)
  * connection name in the form "TYPE:ARGS", where TYPE is an passive vconn
  * class's name and ARGS are vconn class-specific.
  *
+ * vconns accepted by the pvconn will automatically negotiate an OpenFlow
+ * protocol version acceptable to both peers on the connection.  The version
+ * negotiated will be one of those in the 'allowed_versions' bitmap: version
+ * 'x' is allowed if allowed_versions & (1 << x) is nonzero.  If
+ * 'allowed_versions' is zero, then OFPUTIL_DEFAULT_VERSIONS are allowed.
+ *
  * Returns 0 if successful, otherwise a positive errno value.  If successful,
  * stores a pointer to the new connection in '*pvconnp', otherwise a null
  * pointer.  */
 int
-pvconn_open(const char *name, struct pvconn **pvconnp, uint8_t dscp)
+pvconn_open(const char *name, uint32_t allowed_versions, uint8_t dscp,
+            struct pvconn **pvconnp)
 {
-    struct pvconn_class *class;
+    const struct pvconn_class *class;
     struct pvconn *pvconn;
     char *suffix_copy;
     int error;
 
     check_vconn_classes();
+
+    if (!allowed_versions) {
+        allowed_versions = OFPUTIL_DEFAULT_VERSIONS;
+    }
 
     /* Look up the class. */
     error = pvconn_lookup_class(name, &class);
@@ -942,7 +1009,7 @@ pvconn_open(const char *name, struct pvconn **pvconnp, uint8_t dscp)
 
     /* Call class's "open" function. */
     suffix_copy = xstrdup(strchr(name, ':') + 1);
-    error = class->listen(name, suffix_copy, &pvconn, dscp);
+    error = class->listen(name, allowed_versions, suffix_copy, &pvconn, dscp);
     free(suffix_copy);
     if (error) {
         goto error;
@@ -982,20 +1049,19 @@ pvconn_close(struct pvconn *pvconn)
  *
  * The new vconn will automatically negotiate an OpenFlow protocol version
  * acceptable to both peers on the connection.  The version negotiated will be
- * no lower than 'min_version' and no higher than OFP10_VERSION.
+ * no lower than 'min_version' and no higher than 'max_version'.
  *
  * pvconn_accept() will not block waiting for a connection.  If no connection
  * is ready to be accepted, it returns EAGAIN immediately. */
 int
-pvconn_accept(struct pvconn *pvconn, int min_version, struct vconn **new_vconn)
+pvconn_accept(struct pvconn *pvconn, struct vconn **new_vconn)
 {
     int retval = (pvconn->class->accept)(pvconn, new_vconn);
     if (retval) {
         *new_vconn = NULL;
     } else {
-        assert((*new_vconn)->state != VCS_CONNECTING
-               || (*new_vconn)->class->connect);
-        (*new_vconn)->min_version = min_version;
+        ovs_assert((*new_vconn)->state != VCS_CONNECTING
+                   || (*new_vconn)->class->connect);
     }
     return retval;
 }
@@ -1024,52 +1090,25 @@ pvconn_wait(struct pvconn *pvconn)
  *
  * The caller retains ownership of 'name'. */
 void
-vconn_init(struct vconn *vconn, struct vconn_class *class, int connect_status,
-           const char *name)
+vconn_init(struct vconn *vconn, const struct vconn_class *class,
+           int connect_status, const char *name, uint32_t allowed_versions)
 {
+    memset(vconn, 0, sizeof *vconn);
     vconn->class = class;
     vconn->state = (connect_status == EAGAIN ? VCS_CONNECTING
                     : !connect_status ? VCS_SEND_HELLO
                     : VCS_DISCONNECTED);
     vconn->error = connect_status;
-    vconn->version = 0;
-    vconn->min_version = 0;
-    vconn->remote_ip = 0;
-    vconn->remote_port = 0;
-    vconn->local_ip = 0;
-    vconn->local_port = 0;
+    vconn->allowed_versions = allowed_versions;
     vconn->name = xstrdup(name);
-    assert(vconn->state != VCS_CONNECTING || class->connect);
+    ovs_assert(vconn->state != VCS_CONNECTING || class->connect);
 }
 
 void
-vconn_set_remote_ip(struct vconn *vconn, ovs_be32 ip)
-{
-    vconn->remote_ip = ip;
-}
-
-void
-vconn_set_remote_port(struct vconn *vconn, ovs_be16 port)
-{
-    vconn->remote_port = port;
-}
-
-void
-vconn_set_local_ip(struct vconn *vconn, ovs_be32 ip)
-{
-    vconn->local_ip = ip;
-}
-
-void
-vconn_set_local_port(struct vconn *vconn, ovs_be16 port)
-{
-    vconn->local_port = port;
-}
-
-void
-pvconn_init(struct pvconn *pvconn, struct pvconn_class *class,
-            const char *name)
+pvconn_init(struct pvconn *pvconn, const struct pvconn_class *class,
+            const char *name, uint32_t allowed_versions)
 {
     pvconn->class = class;
     pvconn->name = xstrdup(name);
+    pvconn->allowed_versions = allowed_versions;
 }

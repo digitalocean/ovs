@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 
 #include "dynamic-string.h"
 #include "json.h"
+#include "ovs-thread.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
@@ -146,10 +147,10 @@ ovsdb_base_type_init(struct ovsdb_base_type *base, enum ovsdb_atomic_type type)
         break;
 
     case OVSDB_N_TYPES:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 }
 
@@ -158,16 +159,23 @@ ovsdb_base_type_init(struct ovsdb_base_type *base, enum ovsdb_atomic_type type)
 const struct ovsdb_type *
 ovsdb_base_type_get_enum_type(enum ovsdb_atomic_type atomic_type)
 {
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
     static struct ovsdb_type *types[OVSDB_N_TYPES];
 
-    if (!types[atomic_type]) {
-        struct ovsdb_type *type;
+    if (ovsthread_once_start(&once)) {
+        enum ovsdb_atomic_type i;
 
-        types[atomic_type] = type = xmalloc(sizeof *type);
-        ovsdb_base_type_init(&type->key, atomic_type);
-        ovsdb_base_type_init(&type->value, OVSDB_TYPE_VOID);
-        type->n_min = 1;
-        type->n_max = UINT_MAX;
+        for (i = 0; i < OVSDB_N_TYPES; i++) {
+            struct ovsdb_type *type;
+
+            types[i] = type = xmalloc(sizeof *type);
+            ovsdb_base_type_init(&type->key, i);
+            ovsdb_base_type_init(&type->value, OVSDB_TYPE_VOID);
+            type->n_min = 1;
+            type->n_max = UINT_MAX;
+        }
+
+        ovsthread_once_done(&once);
     }
     return types[atomic_type];
 }
@@ -202,7 +210,7 @@ ovsdb_base_type_clone(struct ovsdb_base_type *dst,
 
     case OVSDB_N_TYPES:
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 }
 
@@ -231,10 +239,10 @@ ovsdb_base_type_destroy(struct ovsdb_base_type *base)
             break;
 
         case OVSDB_N_TYPES:
-            NOT_REACHED();
+            OVS_NOT_REACHED();
 
         default:
-            NOT_REACHED();
+            OVS_NOT_REACHED();
         }
     }
 }
@@ -276,7 +284,7 @@ ovsdb_base_type_has_constraints(const struct ovsdb_base_type *base)
 
     switch (base->type) {
     case OVSDB_TYPE_VOID:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
 
     case OVSDB_TYPE_INTEGER:
         return (base->u.integer.min != INT64_MIN
@@ -296,10 +304,10 @@ ovsdb_base_type_has_constraints(const struct ovsdb_base_type *base)
         return base->u.uuid.refTableName != NULL;
 
     case OVSDB_N_TYPES:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 }
 
@@ -473,7 +481,7 @@ ovsdb_base_type_to_json(const struct ovsdb_base_type *base)
 
     switch (base->type) {
     case OVSDB_TYPE_VOID:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
 
     case OVSDB_TYPE_INTEGER:
         if (base->u.integer.min != INT64_MIN) {
@@ -522,10 +530,10 @@ ovsdb_base_type_to_json(const struct ovsdb_base_type *base)
         break;
 
     case OVSDB_N_TYPES:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 
     return json;

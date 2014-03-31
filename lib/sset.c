@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,6 @@
 #include <config.h>
 
 #include "sset.h"
-
-#include <assert.h>
 
 #include "hash.h"
 
@@ -147,7 +145,7 @@ void
 sset_add_assert(struct sset *set, const char *name)
 {
     bool added OVS_UNUSED = sset_add(set, name);
-    assert(added);
+    ovs_assert(added);
 }
 
 /* Adds a copy of each of the 'n' names in 'names' to 'set'. */
@@ -198,7 +196,7 @@ void
 sset_find_and_delete_assert(struct sset *set, const char *name)
 {
     bool deleted OVS_UNUSED = sset_find_and_delete(set, name);
-    assert(deleted);
+    ovs_assert(deleted);
 }
 
 /* Removes a string from 'set' and returns a copy of it.  The caller must free
@@ -250,4 +248,57 @@ sset_equals(const struct sset *a, const struct sset *b)
     }
 
     return true;
+}
+
+/* Returns the next node in 'set' in hash order, or NULL if no nodes remain in
+ * 'set'.  Uses '*bucketp' and '*offsetp' to determine where to begin
+ * iteration, and stores new values to pass on the next iteration into them
+ * before returning.
+ *
+ * It's better to use plain SSET_FOR_EACH and related functions, since they are
+ * faster and better at dealing with ssets that change during iteration.
+ *
+ * Before beginning iteration, store 0 into '*bucketp' and '*offsetp'.
+ */
+struct sset_node *
+sset_at_position(const struct sset *set, uint32_t *bucketp, uint32_t *offsetp)
+{
+    struct hmap_node *hmap_node;
+
+    hmap_node = hmap_at_position(&set->map, bucketp, offsetp);
+    return SSET_NODE_FROM_HMAP_NODE(hmap_node);
+}
+
+static int
+compare_string_pointers(const void *a_, const void *b_)
+{
+    const char *const *a = a_;
+    const char *const *b = b_;
+
+    return strcmp(*a, *b);
+}
+
+/* Returns a null-terminated array of pointers to the strings in 'set', sorted
+ * alphabetically.  The caller must free the returned array when it is no
+ * longer needed, but the strings in the array belong to 'set' and thus must
+ * not be modified or freed. */
+const char **
+sset_sort(const struct sset *set)
+{
+    size_t n = sset_count(set);
+    const char **array;
+    const char *s;
+    size_t i;
+
+    array = xmalloc(sizeof *array * (n + 1));
+    i = 0;
+    SSET_FOR_EACH (s, set) {
+        array[i++] = s;
+    }
+    ovs_assert(i == n);
+    array[n] = NULL;
+
+    qsort(array, n, sizeof *array, compare_string_pointers);
+
+    return array;
 }

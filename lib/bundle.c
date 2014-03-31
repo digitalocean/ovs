@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,14 +35,14 @@
 
 VLOG_DEFINE_THIS_MODULE(bundle);
 
-static uint16_t
+static ofp_port_t
 execute_ab(const struct ofpact_bundle *bundle,
-           bool (*slave_enabled)(uint16_t ofp_port, void *aux), void *aux)
+           bool (*slave_enabled)(ofp_port_t ofp_port, void *aux), void *aux)
 {
     size_t i;
 
     for (i = 0; i < bundle->n_slaves; i++) {
-        uint16_t slave = bundle->slaves[i];
+        ofp_port_t slave = bundle->slaves[i];
         if (slave_enabled(slave, aux)) {
             return slave;
         }
@@ -51,12 +51,17 @@ execute_ab(const struct ofpact_bundle *bundle,
     return OFPP_NONE;
 }
 
-static uint16_t
-execute_hrw(const struct ofpact_bundle *bundle, const struct flow *flow,
-            bool (*slave_enabled)(uint16_t ofp_port, void *aux), void *aux)
+static ofp_port_t
+execute_hrw(const struct ofpact_bundle *bundle,
+            const struct flow *flow, struct flow_wildcards *wc,
+            bool (*slave_enabled)(ofp_port_t ofp_port, void *aux), void *aux)
 {
     uint32_t flow_hash, best_hash;
     int best, i;
+
+    if (bundle->n_slaves > 1) {
+        flow_mask_hash_fields(flow, wc, bundle->fields);
+    }
 
     flow_hash = flow_hash_fields(flow, bundle->fields, bundle->basis);
     best = -1;
@@ -76,22 +81,25 @@ execute_hrw(const struct ofpact_bundle *bundle, const struct flow *flow,
     return best >= 0 ? bundle->slaves[best] : OFPP_NONE;
 }
 
-/* Executes 'bundle' on 'flow'.  Uses 'slave_enabled' to determine if the slave
- * designated by 'ofp_port' is up.  Returns the chosen slave, or OFPP_NONE if
- * none of the slaves are acceptable. */
-uint16_t
-bundle_execute(const struct ofpact_bundle *bundle, const struct flow *flow,
-               bool (*slave_enabled)(uint16_t ofp_port, void *aux), void *aux)
+/* Executes 'bundle' on 'flow'.  Sets fields in 'wc' that were used to
+ * calculate the result.  Uses 'slave_enabled' to determine if the slave
+ * designated by 'ofp_port' is up.  Returns the chosen slave, or
+ * OFPP_NONE if none of the slaves are acceptable. */
+ofp_port_t
+bundle_execute(const struct ofpact_bundle *bundle,
+               const struct flow *flow, struct flow_wildcards *wc,
+               bool (*slave_enabled)(ofp_port_t ofp_port, void *aux),
+               void *aux)
 {
     switch (bundle->algorithm) {
     case NX_BD_ALG_HRW:
-        return execute_hrw(bundle, flow, slave_enabled, aux);
+        return execute_hrw(bundle, flow, wc, slave_enabled, aux);
 
     case NX_BD_ALG_ACTIVE_BACKUP:
         return execute_ab(bundle, slave_enabled, aux);
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 }
 
@@ -157,8 +165,8 @@ bundle_from_openflow(const struct nx_action_bundle *nab,
     }
 
     if (slaves_size < bundle->n_slaves * sizeof(ovs_be16)) {
-        VLOG_WARN_RL(&rl, "Nicira action %"PRIu16" only has %zu bytes "
-                     "allocated for slaves.  %zu bytes are required for "
+        VLOG_WARN_RL(&rl, "Nicira action %"PRIu16" only has %"PRIuSIZE" bytes "
+                     "allocated for slaves.  %"PRIuSIZE" bytes are required for "
                      "%"PRIu16" slaves.", subtype, slaves_size,
                      bundle->n_slaves * sizeof(ovs_be16), bundle->n_slaves);
         error = OFPERR_OFPBAC_BAD_LEN;
@@ -179,7 +187,7 @@ bundle_from_openflow(const struct nx_action_bundle *nab,
 }
 
 enum ofperr
-bundle_check(const struct ofpact_bundle *bundle, int max_ports,
+bundle_check(const struct ofpact_bundle *bundle, ofp_port_t max_ports,
              const struct flow *flow)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
@@ -193,10 +201,10 @@ bundle_check(const struct ofpact_bundle *bundle, int max_ports,
     }
 
     for (i = 0; i < bundle->n_slaves; i++) {
-        uint16_t ofp_port = bundle->slaves[i];
+        ofp_port_t ofp_port = bundle->slaves[i];
         enum ofperr error;
 
-        error = ofputil_check_output_port(ofp_port, max_ports);
+        error = ofpact_check_output_port(ofp_port, max_ports);
         if (error) {
             VLOG_WARN_RL(&rl, "invalid slave %"PRIu16, ofp_port);
             return error;
@@ -239,12 +247,15 @@ bundle_to_nxast(const struct ofpact_bundle *bundle, struct ofpbuf *openflow)
 
     slaves = ofpbuf_put_zeros(openflow, slaves_len);
     for (i = 0; i < bundle->n_slaves; i++) {
-        slaves[i] = htons(bundle->slaves[i]);
+        slaves[i] = htons(ofp_to_u16(bundle->slaves[i]));
     }
 }
 
-/* Helper for bundle_parse and bundle_parse_load. */
-static void
+/* Helper for bundle_parse and bundle_parse_load.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string.*/
+static char * WARN_UNUSED_RESULT
 bundle_parse__(const char *s, char **save_ptr,
                const char *fields, const char *basis, const char *algorithm,
                const char *slave_type, const char *dst,
@@ -253,18 +264,18 @@ bundle_parse__(const char *s, char **save_ptr,
     struct ofpact_bundle *bundle;
 
     if (!slave_delim) {
-        ovs_fatal(0, "%s: not enough arguments to bundle action", s);
+        return xasprintf("%s: not enough arguments to bundle action", s);
     }
 
     if (strcasecmp(slave_delim, "slaves")) {
-        ovs_fatal(0, "%s: missing slave delimiter, expected `slaves' got `%s'",
-                   s, slave_delim);
+        return xasprintf("%s: missing slave delimiter, expected `slaves' "
+                         "got `%s'", s, slave_delim);
     }
 
     bundle = ofpact_put_BUNDLE(ofpacts);
 
     for (;;) {
-        uint16_t slave_port;
+        ofp_port_t slave_port;
         char *slave;
 
         slave = strtok_r(NULL, ", []", save_ptr);
@@ -273,7 +284,7 @@ bundle_parse__(const char *s, char **save_ptr,
         }
 
         if (!ofputil_port_from_string(slave, &slave_port)) {
-            ovs_fatal(0, "%s: bad port number", slave);
+            return xasprintf("%s: bad port number", slave);
         }
         ofpbuf_put(ofpacts, &slave_port, sizeof slave_port);
 
@@ -289,7 +300,7 @@ bundle_parse__(const char *s, char **save_ptr,
     } else if (!strcasecmp(fields, "symmetric_l4")) {
         bundle->fields = NX_HASH_FIELDS_SYMMETRIC_L4;
     } else {
-        ovs_fatal(0, "%s: unknown fields `%s'", s, fields);
+        return xasprintf("%s: unknown fields `%s'", s, fields);
     }
 
     if (!strcasecmp(algorithm, "active_backup")) {
@@ -297,25 +308,34 @@ bundle_parse__(const char *s, char **save_ptr,
     } else if (!strcasecmp(algorithm, "hrw")) {
         bundle->algorithm = NX_BD_ALG_HRW;
     } else {
-        ovs_fatal(0, "%s: unknown algorithm `%s'", s, algorithm);
+        return xasprintf("%s: unknown algorithm `%s'", s, algorithm);
     }
 
     if (strcasecmp(slave_type, "ofport")) {
-        ovs_fatal(0, "%s: unknown slave_type `%s'", s, slave_type);
+        return xasprintf("%s: unknown slave_type `%s'", s, slave_type);
     }
 
     if (dst) {
-        mf_parse_subfield(&bundle->dst, dst);
+        char *error = mf_parse_subfield(&bundle->dst, dst);
+        if (error) {
+            return error;
+        }
     }
+
+    return NULL;
 }
 
 /* Converts a bundle action string contained in 's' to an nx_action_bundle and
- * stores it in 'b'.  Sets 'b''s l2 pointer to NULL. */
-void
+ * stores it in 'b'.  Sets 'b''s l2 pointer to NULL.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string. */
+char * WARN_UNUSED_RESULT
 bundle_parse(const char *s, struct ofpbuf *ofpacts)
 {
     char *fields, *basis, *algorithm, *slave_type, *slave_delim;
     char *tokstr, *save_ptr;
+    char *error;
 
     save_ptr = NULL;
     tokstr = xstrdup(s);
@@ -325,18 +345,24 @@ bundle_parse(const char *s, struct ofpbuf *ofpacts)
     slave_type = strtok_r(NULL, ", ", &save_ptr);
     slave_delim = strtok_r(NULL, ": ", &save_ptr);
 
-    bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type, NULL,
-                   slave_delim, ofpacts);
+    error = bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type,
+                           NULL, slave_delim, ofpacts);
     free(tokstr);
+
+    return error;
 }
 
 /* Converts a bundle_load action string contained in 's' to an nx_action_bundle
- * and stores it in 'b'.  Sets 'b''s l2 pointer to NULL. */
-void
+ * and stores it in 'b'.  Sets 'b''s l2 pointer to NULL.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string.*/
+char * WARN_UNUSED_RESULT
 bundle_parse_load(const char *s, struct ofpbuf *ofpacts)
 {
     char *fields, *basis, *algorithm, *slave_type, *dst, *slave_delim;
     char *tokstr, *save_ptr;
+    char *error;
 
     save_ptr = NULL;
     tokstr = xstrdup(s);
@@ -347,10 +373,12 @@ bundle_parse_load(const char *s, struct ofpbuf *ofpacts)
     dst = strtok_r(NULL, ", ", &save_ptr);
     slave_delim = strtok_r(NULL, ": ", &save_ptr);
 
-    bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type, dst,
-                   slave_delim, ofpacts);
+    error = bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type,
+                           dst, slave_delim, ofpacts);
 
     free(tokstr);
+
+    return error;
 }
 
 /* Appends a human-readable representation of 'nab' to 's'. */

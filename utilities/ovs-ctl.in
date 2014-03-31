@@ -1,5 +1,5 @@
 #! /bin/sh
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,21 +30,13 @@ done
 ## start ##
 ## ----- ##
 
-restore_datapaths () {
-    [ -n "${script_datapaths}" ] && \
-        action "Restoring datapath configuration" "${script_datapaths}"
-}
-
-insert_openvswitch_mod_if_required () {
+insert_mod_if_required () {
     # If openvswitch is already loaded then we're done.
     test -e /sys/module/openvswitch -o -e /sys/module/openvswitch_mod && \
      return 0
 
     # Load openvswitch.  If that's successful then we're done.
-    if action "Inserting openvswitch module" modprobe openvswitch; then
-        restore_datapaths
-        return 0
-    fi
+    action "Inserting openvswitch module" modprobe openvswitch && return 0
 
     # If the bridge module is loaded, then that might be blocking
     # openvswitch.  Try to unload it, if there are no bridges.
@@ -58,32 +50,10 @@ insert_openvswitch_mod_if_required () {
 
     # Try loading openvswitch again.
     action "Inserting openvswitch module" modprobe openvswitch
-    restore_datapaths
-}
-
-insert_brcompat_mod_if_required () {
-    if test -e /sys/module/bridge; then
-        log_warning_msg "bridge module is loaded, not loading brcompat"
-        return 1
-    fi
-    test -e /sys/module/brcompat -o -e /sys/module/brcompat_mod && return 0
-    action "Inserting brcompat module" modprobe brcompat
-}
-
-insert_mod_if_required () {
-    insert_openvswitch_mod_if_required || return 1
-    if test X"$BRCOMPAT" = Xyes; then
-        if insert_brcompat_mod_if_required; then
-            :
-        else
-            log_warning_msg "could not load brcompat module, disabling bridge compatibility"
-            BRCOMPAT=no
-        fi
-    fi
 }
 
 ovs_vsctl () {
-    ovs-vsctl --no-wait --timeout=5 "$@"
+    ovs-vsctl --no-wait "$@"
 }
 
 ovsdb_tool () {
@@ -183,7 +153,7 @@ set_system_ids () {
 
 check_force_cores () {
     if test X"$FORCE_COREFILES" = Xyes; then
-        ulimit -Sc 67108864
+        ulimit -c 67108864
     fi
 }
 
@@ -214,7 +184,6 @@ start_ovsdb () {
         done
         set "$@" -vconsole:emer -vsyslog:err -vfile:info
         set "$@" --remote=punix:"$DB_SOCK"
-        set "$@" --remote=db:Open_vSwitch,Open_vSwitch,manager_options
         set "$@" --private-key=db:Open_vSwitch,SSL,private_key
         set "$@" --certificate=db:Open_vSwitch,SSL,certificate
         set "$@" --bootstrap-ca-cert=db:Open_vSwitch,SSL,ca_cert
@@ -233,6 +202,19 @@ start_ovsdb () {
     fi
 }
 
+add_managers () {
+    # Now that ovs-vswitchd has started and completed its initial
+    # configuration, tell ovsdb-server to conenct to the remote managers.  We
+    # used to do this at ovsdb-server startup time, but waiting for
+    # ovs-vswitchd to finish configuring means that remote managers see less
+    # churn in the database at startup or restart.  (For example, managers
+    # won't briefly see empty datapath-id or ofport columns for records that
+    # exist at startup.)
+    action "Enabling remote OVSDB managers" \
+	ovs-appctl -t ovsdb-server ovsdb-server/add-remote \
+	    db:Open_vSwitch,Open_vSwitch,manager_options
+}
+
 start_forwarding () {
     check_force_cores
 
@@ -242,9 +224,10 @@ start_forwarding () {
         log_success_msg "ovs-vswitchd is already running"
     else
         # Increase the limit on the number of open file descriptors.
-        # ovs-vswitchd needs 16 per datapath, plus a few extra, so this
-        # should allow for 256 (or more) bridges.
-        ulimit -n 6000
+        # On Linux, ovs-vswitchd needs about three file descriptors
+        # per bridge and one file descriptor per bridge port, so this
+        # allows a very large number of bridges and ports.
+        ulimit -n 7500
 
 	    # Start ovs-vswitchd.
 	    set ovs-vswitchd unix:"$DB_SOCK"
@@ -253,14 +236,6 @@ start_forwarding () {
 	        set "$@" --mlockall
 	    fi
 	    start_daemon "$OVS_VSWITCHD_PRIORITY" "$OVS_VSWITCHD_WRAPPER" "$@"
-    fi
-
-    if daemon_is_running ovs-brcompatd; then
-	    log_success_msg "ovs-brcompatd is already running"
-    elif test X"$BRCOMPAT" = Xyes; then
-        set ovs-brcompatd
-	    set "$@" -vconsole:emer -vsyslog:err -vfile:info
-	    start_daemon "$OVS_BRCOMPATD_PRIORITY" "$OVS_BRCOMPATD_WRAPPER" "$@"
     fi
 }
 
@@ -273,7 +248,6 @@ stop_ovsdb () {
 }
 
 stop_forwarding () {
-    stop_daemon ovs-brcompatd
     stop_daemon ovs-vswitchd
 }
 
@@ -302,16 +276,24 @@ internal_interfaces () {
     done
 }
 
-save_flows () {
-   if set X `ovs_vsctl -- --real list-br`; then
-        shift
-        if "$datadir/scripts/ovs-save" save-flows "$@" > "$script_flows"; then
-            chmod +x "$script_flows"
-            return 0
-        fi
+ovs_save () {
+    bridges=`ovs_vsctl -- --real list-br`
+    if [ -n "${bridges}" ] && \
+        "$datadir/scripts/ovs-save" "$1" ${bridges} > "$2"; then
+        chmod +x "$2"
+        return 0
     fi
-    script_flows=
-    return 1
+    [ -z "${bridges}" ] && return 0
+}
+
+save_ofports_if_required () {
+    # Save ofports if we are upgrading from a pre-1.10 branch.
+    case `ovs-appctl version | sed 1q` in
+        "ovs-vswitchd (Open vSwitch) 1."[0-9].*)
+            action "Saving ofport values" ovs_save save-ofports \
+                "${script_ofports}"
+            ;;
+    esac
 }
 
 save_interfaces () {
@@ -319,32 +301,63 @@ save_interfaces () {
         > "${script_interfaces}"
 }
 
-save_datapaths () {
-    "$datadir/scripts/ovs-save" save-datapaths ${datapaths} \
-        > "${script_datapaths}"
+restore_ofports () {
+    [ -x "${script_ofports}" ] && \
+        action "Restoring ofport values" "${script_ofports}"
+}
+
+flow_restore_wait () {
+    ovs_vsctl set open_vswitch . other_config:flow-restore-wait="true"
+}
+
+flow_restore_complete () {
+    ovs_vsctl --if-exists remove open_vswitch . other_config \
+        flow-restore-wait="true"
 }
 
 restore_flows () {
-    [ -n "${script_flows}" ] && \
+    [ -x "${script_flows}" ] && \
         action "Restoring saved flows" "${script_flows}"
+}
+
+restore_interfaces () {
+    [ ! -x "${script_interfaces}" ] && return 0
+    action "Restoring interface configuration" "${script_interfaces}"
+    rc=$?
+    if test $rc = 0; then
+        level=debug
+    else
+        level=err
+    fi
+    log="logger -p daemon.$level -t ovs-save"
+    $log "interface restore script exited with status $rc:"
+    $log -f "$script_interfaces"
+}
+
+init_restore_scripts () {
+    script_interfaces=`mktemp`
+    script_flows=`mktemp`
+    script_ofports=`mktemp`
+    trap 'rm -f "${script_interfaces}" "${script_flows}" "${script_ofports}"' 0
 }
 
 force_reload_kmod () {
     ifaces=`internal_interfaces`
     action "Detected internal interfaces: $ifaces" true
 
-    script_interfaces=`mktemp`
-    script_datapaths=`mktemp`
-    script_flows=`mktemp`
-    trap 'rm -f "${script_interfaces}" "${script_flows}" \
-        "${script_datapaths}"' 0
+    init_restore_scripts
 
-    action "Saving flows" save_flows
+    action "Saving flows" ovs_save save-flows "${script_flows}"
+
+    save_ofports_if_required
 
     # Restart the database first, since a large database may take a
     # while to load, and we want to minimize forwarding disruption.
     stop_ovsdb
     start_ovsdb
+
+    # Restore of ofports should happen before vswitchd is restarted.
+    restore_ofports
 
     stop_forwarding
 
@@ -353,49 +366,32 @@ force_reload_kmod () {
     else
         log_warning_msg "Failed to save configuration, not replacing kernel module"
         start_forwarding
+        add_managers
         exit 1
     fi
     chmod +x "$script_interfaces"
 
-    datapaths=`ovs-dpctl dump-dps`
-    if action "Saving datapath configuration" save_datapaths; then
-        chmod +x "${script_datapaths}"
-    else
-        log_warning_msg "Failed to save datapath configuration. The port\
-                         numbers may change after the restart"
-        script_datapaths=""
-    fi
-
-    for dp in ${datapaths}; do
+    for dp in `ovs-dpctl dump-dps`; do
         action "Removing datapath: $dp" ovs-dpctl del-dp "$dp"
     done
 
     # try both old and new names in case this is post upgrade
-    if test -e /sys/module/brcompat_mod; then
-        action "Removing brcompat module" rmmod brcompat_mod
-    elif test -e /sys/module/brcompat; then
-        action "Removing brcompat module" rmmod brcompat
-    fi
     if test -e /sys/module/openvswitch_mod; then
         action "Removing openvswitch module" rmmod openvswitch_mod
     elif test -e /sys/module/openvswitch; then
         action "Removing openvswitch module" rmmod openvswitch
     fi
 
+    # Start vswitchd by asking it to wait till flow restore is finished.
+    flow_restore_wait
     start_forwarding
 
+    # Restore saved flows and inform vswitchd that we are done.
     restore_flows
+    flow_restore_complete
+    add_managers
 
-    action "Restoring interface configuration" "$script_interfaces"
-    rc=$?
-    if test $rc = 0; then
-        level=debug
-    else
-        level=err
-    fi
-    log="logger -p daemon.$level -t ovs-save"
-    $log "force-reload-kmod interface restore script exited with status $rc:"
-    $log -f "$script_interfaces"
+    restore_interfaces
 
     "$datadir/scripts/ovs-check-dead-ifs"
 }
@@ -404,21 +400,49 @@ force_reload_kmod () {
 ## restart ##
 ## ------- ##
 
-restart () {
-    script_flows=`mktemp`
-    trap 'rm -f "${script_flows}"' 0
+save_interfaces_if_required () {
+    # Save interfaces if we are upgrading from a pre-1.10 branch.
+    case `ovs-appctl version | sed 1q` in
+        "ovs-vswitchd (Open vSwitch) 1."[0-9].*)
+            ifaces=`internal_interfaces`
+            action "Detected internal interfaces: $ifaces" true
+            if action "Saving interface configuration" save_interfaces; then
+                chmod +x "$script_interfaces"
+            fi
+            ;;
+    esac
+}
 
-    action "Saving flows" save_flows
+restart () {
+    if daemon_is_running ovsdb-server && daemon_is_running ovs-vswitchd; then
+        init_restore_scripts
+        save_interfaces_if_required
+        action "Saving flows" ovs_save save-flows "${script_flows}"
+        save_ofports_if_required
+    fi
 
     # Restart the database first, since a large database may take a
     # while to load, and we want to minimize forwarding disruption.
     stop_ovsdb
     start_ovsdb
 
+    # Restore of ofports, if required, should happen before vswitchd is
+    # restarted.
+    restore_ofports
+
     stop_forwarding
+
+    # Start vswitchd by asking it to wait till flow restore is finished.
+    flow_restore_wait
     start_forwarding
 
+    # Restore saved flows and inform vswitchd that we are done.
     restore_flows
+    flow_restore_complete
+    add_managers
+
+    # Restore the interfaces if required. Return true even if restore fails.
+    restore_interfaces || true
 }
 
 ## --------------- ##
@@ -475,17 +499,14 @@ set_defaults () {
     SYSTEM_ID=
 
     DELETE_BRIDGES=no
-    BRCOMPAT=no
 
     DAEMON_CWD=/
     FORCE_COREFILES=yes
     MLOCKALL=yes
     OVSDB_SERVER_PRIORITY=-10
     OVS_VSWITCHD_PRIORITY=-10
-    OVS_BRCOMPATD_PRIORITY=-10
     OVSDB_SERVER_WRAPPER=
     OVS_VSWITCHD_WRAPPER=
-    OVS_BRCOMPATD_WRAPPER=
 
     DB_FILE=$dbdir/conf.db
     DB_SOCK=$rundir/db.sock
@@ -551,16 +572,12 @@ Less important options for "start", "restart" and "force-reload-kmod":
   --no-mlockall                  do not lock all of ovs-vswitchd into memory
   --ovsdb-server-priority=NICE   set ovsdb-server's niceness (default: $OVSDB_SERVER_PRIORITY)
   --ovs-vswitchd-priority=NICE   set ovs-vswitchd's niceness (default: $OVS_VSWITCHD_PRIORITY)
-  --ovs-brcompatd-priority=NICE  set ovs-brcompatd's niceness (default: $OVS_BRCOMPATD_PRIORITY)
 
 Debugging options for "start", "restart" and "force-reload-kmod":
   --ovsdb-server-wrapper=WRAPPER
   --ovs-vswitchd-wrapper=WRAPPER
   --ovs-vswitchd-wrapper=WRAPPER
      run specified daemon under WRAPPER (either 'valgrind' or 'strace')
-
-Options for "start", "restart", "force-reload-kmod", "load-kmod", "status", and "version":
-  --brcompat         enable Linux bridge compatibility module and daemon
 
 File location options:
   --db-file=FILE     database file name (default: $DB_FILE)
@@ -606,9 +623,6 @@ set_option () {
 
 daemons () {
     echo ovsdb-server ovs-vswitchd
-    if test X"$BRCOMPAT" = Xyes; then
-        echo ovs-brcompatd
-    fi
 }
 
 set_defaults
@@ -672,6 +686,7 @@ case $command in
     start)
         start_ovsdb
         start_forwarding
+        add_managers
         ;;
     stop)
         stop_forwarding

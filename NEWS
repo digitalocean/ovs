@@ -1,14 +1,205 @@
-v1.9.3 - 29 Aug 2013
-------------------------
-    - Bug fixes
+v2.1.0 - 19 Mar 2014
+---------------------
+   - Address prefix tracking support for flow tables.  New columns
+     "prefixes" in OVS-DB table "Flow_Table" controls which packet
+     header fields are used for address prefix tracking.  Prefix
+     tracking allows the classifier to skip rules with longer than
+     necessary prefixes, resulting in better wildcarding for datapath
+     flows.  Default configuration is to not use any fields for prefix
+     tracking.  However, if any flow tables contain both exact matches
+     and masked matches for IP address fields, OVS performance may be
+     increased by using this feature.
+     * As of now, the fields for which prefix lookup can be enabled
+       are: 'tun_id', 'tun_src', 'tun_dst', 'nw_src', 'nw_dst' (or
+       aliases 'ip_src' and 'ip_dst'), 'ipv6_src', and 'ipv6_dst'.
+       (Using this feature for 'tun_id' would only make sense if the
+       tunnel IDs have prefix structure similar to IP addresses.)
+     * There is a maximum number of fields that can be enabled for any
+       one flow table.  Currently this limit is 3.
+     * Examples:
+       $ ovs-vsctl set Bridge br0 flow_tables:0=@N1 -- \
+         --id=@N1 create Flow_Table name=table0
+       $ ovs-vsctl set Bridge br0 flow_tables:1=@N1 -- \
+         --id=@N1 create Flow_Table name=table1
+       $ ovs-vsctl set Flow_Table table0 prefixes=ip_dst,ip_src
+       $ ovs-vsctl set Flow_Table table1 prefixes=[]
+   - TCP flags matching: OVS now supports matching of TCP flags.  This
+     has an adverse performance impact when using OVS userspace 1.10
+     or older (no megaflows support) together with the new OVS kernel
+     module.  It is recommended that the kernel and userspace modules
+     both are upgraded at the same time.
+   - The default OpenFlow and OVSDB ports will change to
+     IANA-assigned numbers in a future release.  Consider updating
+     your installations to specify port numbers instead of using the
+     defaults.
+   - OpenFlow:
+     * The OpenFlow 1.1+ "Write-Actions" instruction is now supported.
+     * OVS limits the OpenFlow port numbers it assigns to port 32767 and
+       below, leaving port numbers above that range free for assignment
+       by the controller.
+     * ovs-vswitchd now honors changes to the "ofport_request" column
+       in the Interface table by changing the port's OpenFlow port
+       number.
+   - ovs-vswitchd.conf.db.5 man page will contain graphviz/dot
+     diagram only if graphviz package was installed at the build time.
+   - Support for Linux kernels up to 3.11
+   - ovs-dpctl:
+     The "show" command also displays mega flow mask stats.
+   - ovs-ofctl:
+     * New command "ofp-parse-pcap" to dump OpenFlow from PCAP files.
+   - ovs-controller has been renamed test-controller.  It is no longer
+     packaged or installed by default, because too many users assumed
+     incorrectly that ovs-controller was a necessary or desirable part
+     of an Open vSwitch deployment.
+   - Added vlog option to export to a UDP syslog sink.
+   - ovsdb-client:
+     * The "monitor" command can now monitor all tables in a database,
+       instead of being limited to a single table.
+   - The flow-eviction-threshold has been replaced by the flow-limit which is a
+     hard limit on the number of flows in the datapath.  It defaults to 200,000
+     flows.  OVS automatically adjusts this number depending on network
+     conditions.
 
-v1.9.2 - 05 Apr 2013
-------------------------
-    - Bug fixes
 
-v1.9.1 - 14 Mar 2013
-------------------------
-    - Bug fixes
+v2.0.0 - 15 Oct 2013
+---------------------
+    - The ovs-vswitchd process is no longer single-threaded.  Multiple
+      threads are now used to handle flow set up and asynchronous
+      logging.
+    - OpenFlow:
+      * Experimental support for OpenFlow 1.1 (in addition to 1.2 and
+        1.3, which had experimental support in 1.10).
+      * Experimental protocol support for OpenFlow 1.1+ groups.  This
+        does not yet include an implementation in the Open vSwitch
+        software switch.
+      * Experimental protocol support for OpenFlow 1.2+ meters.  This
+        does not yet include an implementation in the Open vSwitch
+        software switch.
+      * New support for matching outer source and destination IP address
+        of tunneled packets, for tunnel ports configured with the newly
+        added "remote_ip=flow" and "local_ip=flow" options.
+      * Support for matching on metadata 'pkt_mark' for interacting with
+        other system components. On Linux this corresponds to the skb
+        mark.
+      * Support matching, rewriting SCTP ports
+    - The Interface table in the database has a new "ifindex" column to
+      report the interface's OS-assigned ifindex.
+    - New "check-oftest" Makefile target for running OFTest against Open
+      vSwitch.  See README-OFTest for details.
+    - The flow eviction threshold has been moved to the Open_vSwitch table.
+    - Database names are now mandatory when specifying ovsdb-server options
+      through database paths (e.g. Private key option with the database name
+      should look like "--private-key=db:Open_vSwitch,SSL,private_key").
+    - Added ovs-dev.py, a utility script helpful for Open vSwitch developers.
+    - Support for Linux kernels up to 3.10
+    - ovs-ofctl:
+      * New "ofp-parse" for printing OpenFlow messages read from a file.
+      * New commands for OpenFlow 1.1+ groups.
+    - Added configurable flow caching support to IPFIX exporter.
+    - Dropped support for Linux pre-2.6.32.
+    - Log file timestamps and ovsdb commit timestamps are now reported
+      with millisecond resolution.  (Previous versions only reported
+      whole seconds.)
+
+
+v1.11.0 - 28 Aug 2013
+---------------------
+    - Support for megaflows, which allows wildcarding in the kernel (and
+      any dpif implementation that supports wildcards).  Depending on
+      the flow table and switch configuration, flow set up rates are
+      close to the Linux bridge.
+    - The "tutorial" directory contains a new tutorial for some advanced
+      Open vSwitch features.
+    - Stable bond mode has been removed.
+    - The autopath action has been removed.
+    - New support for the data encapsulation format of the LISP tunnel
+      protocol (RFC 6830).  An external control plane or manual flow
+      setup is required for EID-to-RLOC mapping.
+    - OpenFlow:
+      * The "dec_mpls_ttl" and "set_mpls_ttl" actions from OpenFlow
+        1.1 and later are now implemented.
+      * New "stack" extension for use in actions, to push and pop from
+        NXM fields.
+      * The "load" and "set_field" actions can now modify the "in_port".  (This
+        allows one to enable output to a flow's input port by setting the
+        in_port to some unused value, such as OFPP_NONE.)
+    - ovs-dpctl:
+      * New debugging commands "add-flow", "mod-flow", "del-flow".
+      * "dump-flows" now has a -m option to increase output verbosity.
+    - In dpif-based bridges, cache action translations, which can improve
+      flow set up performance by 80% with a complicated flow table.
+    - New syslog format, prefixed with "ovs|", to be easier to filter.
+    - RHEL: Removes the default firewall rule that allowed GRE traffic to
+      pass through. Any users that relied on this automatic firewall hole
+      will have to manually configure it. The ovs-ctl(8) manpage documents
+      the "enable-protocol" command that can be used as an alternative.
+    - New CFM demand mode which uses data traffic to indicate interface
+      liveness.
+
+v1.10.0 - 01 May 2013
+---------------------
+    - Bridge compatibility support has been removed.  Any uses that
+      rely on ovs-brcompatd will have to stick with Open vSwitch 1.9.x
+      or adapt to native Open vSwitch support (e.g. use ovs-vsctl instead
+      of brctl).
+    - The maximum size of the MAC learning table is now configurable.
+    - With the Linux datapath, packets for new flows are now queued
+      separately on a per-port basis, so it should no longer be
+      possible for a large number of new flows arriving on one port to
+      prevent new flows from being processed on other ports.
+    - ovs-vsctl:
+      * Previously ovs-vsctl would retry connecting to the database forever,
+        causing it to hang if ovsdb-server was not running.  Now, ovs-vsctl
+        only tries once by default (use --retry to try forever).  This change
+        means that you may want to remove uses of --timeout to avoid hangs
+        in ovs-vsctl calls.
+      * Many "ovs-vsctl" database commands now accept an --if-exists option.
+        Please refer to the ovs-vsctl manpage for details.
+    - OpenFlow:
+      - Experimental support for newer versions of OpenFlow.  See
+        the "What versions of OpenFlow does Open vSwitch support?"
+        question in the FAQ for more details.
+      - The OpenFlow "dp_desc" may now be configured by setting the
+        value of other-config:dp-desc in the Bridge table.
+      - It is possible to request the OpenFlow port number with the
+        "ofport_request" column in the Interface table.
+      - The NXM flow_removed message now reports the OpenFlow table ID
+        from which the flow was removed.
+    - Tunneling:
+      - New support for the VXLAN tunnel protocol (see the IETF draft here:
+        http://tools.ietf.org/html/draft-mahalingam-dutt-dcops-vxlan-03).
+      - Tunneling requires the version of the kernel module paired with
+        Open vSwitch 1.9.0 or later.
+      - Inheritance of the Don't Fragment bit in IP tunnels (df_inherit)
+        is no longer supported.
+      - Path MTU discovery is no longer supported.
+      - CAPWAP tunneling support removed.
+      - Tunnels with multicast destination ports are no longer supported.
+    - ovs-dpctl:
+      - The "dump-flows" and "del-flows" no longer require an argument
+        if only one datapath exists.
+    - ovs-appctl:
+      - New "vlog/disable-rate-limit" and "vlog/enable-rate-limit"
+        commands available allow control over logging rate limits.
+      - New "dpif/dump-dps", "dpif/show", and "dpif/dump-flows" command
+        that mimic the equivalent ovs-dpctl commands.
+    - The ofproto library is now responsible for assigning OpenFlow port
+      numbers.  An ofproto implementation should assign them when
+      port_construct() is called.
+    - All dpif-based bridges of a particular type share a common
+      datapath called "ovs-<type>", e.g. "ovs-system".  The ovs-dpctl
+      commands will now return information on that shared datapath.  To
+      get the equivalent bridge-specific information, use the new
+      "ovs-appctl dpif/*" commands.
+    - Backward-incompatible changes:
+      - Earlier Open vSwitch versions treated ANY as a wildcard in flow
+        syntax.  OpenFlow 1.1 adds a port named ANY, which introduces a
+        conflict.  ANY was rarely used in flow syntax, so we chose to
+        retire that meaning of ANY in favor of the OpenFlow 1.1 meaning.
+    - Patch ports no longer require kernel support, so they now work
+      with FreeBSD and the kernel module built into Linux 3.3 and later.
+    - New "sample" action.
+
 
 v1.9.0 - 26 Feb 2013
 ------------------------

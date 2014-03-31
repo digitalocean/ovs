@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
 
 #include "flow.h"
 #include "ofp-actions.h"
-#include "random.h"
 #include "util.h"
 
 int
@@ -35,16 +34,20 @@ main(int argc, char *argv[])
     enum { MP_MAX_LINKS = 63 };
     struct ofpact_multipath mp;
     bool ok = true;
+    char *error;
     int n;
 
     set_program_name(argv[0]);
-    random_init();
 
     if (argc != 2) {
         ovs_fatal(0, "usage: %s multipath_action", program_name);
     }
 
-    multipath_parse(&mp, argv[1]);
+    error = multipath_parse(&mp, argv[1]);
+    if (error) {
+        ovs_fatal(0, "%s", error);
+    }
+
     for (n = 1; n <= MP_MAX_LINKS; n++) {
         enum { N_FLOWS = 65536 };
         double disruption, perfect, distribution;
@@ -57,17 +60,17 @@ main(int argc, char *argv[])
         memset(histogram, 0, sizeof histogram);
         for (i = 0; i < N_FLOWS; i++) {
             int old_link, new_link;
+            struct flow_wildcards wc;
             struct flow flow;
 
-            random_bytes(&flow, sizeof flow);
-            memset(flow.zeros, 0, sizeof flow.zeros);
+            flow_random_hash_fields(&flow);
 
             mp.max_link = n - 1;
-            multipath_execute(&mp, &flow);
+            multipath_execute(&mp, &flow, &wc);
             old_link = flow.regs[0];
 
             mp.max_link = n;
-            multipath_execute(&mp, &flow);
+            multipath_execute(&mp, &flow, &wc);
             new_link = flow.regs[0];
 
             assert(old_link >= 0 && old_link < n);
@@ -125,7 +128,7 @@ main(int argc, char *argv[])
             break;
 
         default:
-            NOT_REACHED();
+            OVS_NOT_REACHED();
         }
     }
 

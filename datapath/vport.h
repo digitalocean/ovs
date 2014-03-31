@@ -19,6 +19,7 @@
 #ifndef VPORT_H
 #define VPORT_H 1
 
+#include <linux/if_tunnel.h>
 #include <linux/list.h>
 #include <linux/netlink.h>
 #include <linux/openvswitch.h>
@@ -26,16 +27,14 @@
 #include <linux/spinlock.h>
 #include <linux/u64_stats_sync.h>
 
-#include "vport-capwap.h"
-
 struct vport;
 struct vport_parms;
 
-struct vport_net {
-	struct capwap_net capwap;
-};
-
 /* The following definitions are for users of the vport subsytem: */
+struct vport_net {
+	struct vport __rcu *gre_vport;
+	struct vport __rcu *gre64_vport;
+};
 
 int ovs_vport_init(void);
 void ovs_vport_exit(void);
@@ -45,7 +44,6 @@ void ovs_vport_del(struct vport *);
 
 struct vport *ovs_vport_locate(struct net *net, const char *name);
 
-int ovs_vport_set_addr(struct vport *, const unsigned char *);
 void ovs_vport_set_stats(struct vport *, struct ovs_vport_stats *);
 void ovs_vport_get_stats(struct vport *, struct ovs_vport_stats *);
 
@@ -55,14 +53,6 @@ int ovs_vport_get_options(const struct vport *, struct sk_buff *);
 int ovs_vport_send(struct vport *, struct sk_buff *);
 
 /* The following definitions are for implementers of vport devices: */
-
-struct vport_percpu_stats {
-	u64 rx_bytes;
-	u64 rx_packets;
-	u64 tx_bytes;
-	u64 tx_packets;
-	struct u64_stats_sync sync;
-};
 
 struct vport_err_stats {
 	u64 rx_dropped;
@@ -74,14 +64,10 @@ struct vport_err_stats {
 /**
  * struct vport - one port within a datapath
  * @rcu: RCU callback head for deferred destruction.
- * @port_no: Index into @dp's @ports array.
  * @dp: Datapath to which this port belongs.
- * @kobj: Represents /sys/class/net/<devname>/brport.
- * @linkname: The name of the link from /sys/class/net/<datapath>/brif to this
- * &struct vport.  (We keep this around so that we can delete it if the
- * device gets renamed.)  Set to the null string when no link exists.
  * @upcall_portid: The Netlink port to use for packets received on this port that
  * miss the flow table.
+ * @port_no: Index into @dp's @ports array.
  * @hash_node: Element in @dev_table hash table in vport.c.
  * @dp_hash_node: Element in @datapath->ports hash table in datapath.c.
  * @ops: Class structure.
@@ -93,26 +79,20 @@ struct vport_err_stats {
  */
 struct vport {
 	struct rcu_head rcu;
-	u16 port_no;
 	struct datapath	*dp;
-	struct kobject kobj;
-	char linkname[IFNAMSIZ];
 	u32 upcall_portid;
+	u16 port_no;
 
 	struct hlist_node hash_node;
 	struct hlist_node dp_hash_node;
 	const struct vport_ops *ops;
 
-	struct vport_percpu_stats __percpu *percpu_stats;
+	struct pcpu_tstats __percpu *percpu_stats;
 
 	spinlock_t stats_lock;
 	struct vport_err_stats err_stats;
 	struct ovs_vport_stats offset_stats;
 };
-
-#define VPORT_F_REQUIRED	(1 << 0) /* If init fails, module loading fails. */
-#define VPORT_F_FLOW		(1 << 1) /* Sets OVS_CB(skb)->flow. */
-#define VPORT_F_TUN_ID		(1 << 2) /* Sets OVS_CB(skb)->tun_id. */
 
 /**
  * struct vport_parms - parameters for creating a new vport
@@ -139,12 +119,6 @@ struct vport_parms {
  * struct vport_ops - definition of a type of virtual port
  *
  * @type: %OVS_VPORT_TYPE_* value for this type of virtual port.
- * @flags: Flags of type VPORT_F_* that influence how the generic vport layer
- * handles this vport.
- * @init: Called at module initialization.  If VPORT_F_REQUIRED is set then the
- * failure of this function will cause the module to not load.  If the flag is
- * not set and initialzation fails then no vports of this type can be created.
- * @exit: Called at module unload.
  * @create: Create a new vport configured as specified.  On success returns
  * a new vport allocated with ovs_vport_alloc(), otherwise an ERR_PTR() value.
  * @destroy: Destroys a vport.  Must call vport_free() on the vport but not
@@ -154,51 +128,22 @@ struct vport_parms {
  * @get_options: Appends vport-specific attributes for the configuration of an
  * existing vport to a &struct sk_buff.  May be %NULL for a vport that does not
  * have any configuration.
- * @set_addr: Set the device's MAC address.  May be null if not supported.
  * @get_name: Get the device's name.
- * @get_addr: Get the device's MAC address.
- * @get_config: Get the device's configuration.
- * @get_kobj: Get the kobj associated with the device (may return null).
- * @get_dev_flags: Get the device's flags.
- * @is_running: Checks whether the device is running.
- * @get_operstate: Get the device's operating state.
- * @get_ifindex: Get the system interface index associated with the device.
- * May be null if the device does not have an ifindex.
- * @get_mtu: Get the device's MTU.  May be %NULL if the device does not have an
- * MTU (as e.g. some tunnels do not).  Must be implemented if @get_ifindex is
- * implemented.
- * @send: Send a packet on the device.  Returns the length of the packet sent.
+ * @send: Send a packet on the device.  Returns the length of the packet sent,
+ * zero for dropped packets or negative for error.
  */
 struct vport_ops {
 	enum ovs_vport_type type;
-	u32 flags;
 
-	/* Called at module init and exit respectively. */
-	int (*init)(void);
-	void (*exit)(void);
-
-	/* Called with RTNL lock. */
+	/* Called with ovs_mutex. */
 	struct vport *(*create)(const struct vport_parms *);
 	void (*destroy)(struct vport *);
 
 	int (*set_options)(struct vport *, struct nlattr *);
 	int (*get_options)(const struct vport *, struct sk_buff *);
 
-	int (*set_addr)(struct vport *, const unsigned char *);
-
-	/* Called with rcu_read_lock or RTNL lock. */
+	/* Called with rcu_read_lock or ovs_mutex. */
 	const char *(*get_name)(const struct vport *);
-	const unsigned char *(*get_addr)(const struct vport *);
-	void (*get_config)(const struct vport *, void *);
-	struct kobject *(*get_kobj)(const struct vport *);
-
-	unsigned (*get_dev_flags)(const struct vport *);
-	int (*is_running)(const struct vport *);
-	unsigned char (*get_operstate)(const struct vport *);
-
-	int (*get_ifindex)(const struct vport *);
-
-	int (*get_mtu)(const struct vport *);
 
 	int (*send)(struct vport *, struct sk_buff *);
 };
@@ -213,6 +158,7 @@ enum vport_err_type {
 struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *,
 			      const struct vport_parms *);
 void ovs_vport_free(struct vport *);
+void ovs_vport_deferred_free(struct vport *vport);
 
 #define VPORT_ALIGN 8
 
@@ -245,17 +191,22 @@ static inline struct vport *vport_from_priv(const void *priv)
 	return (struct vport *)(priv - ALIGN(sizeof(struct vport), VPORT_ALIGN));
 }
 
-void ovs_vport_receive(struct vport *, struct sk_buff *);
-void ovs_vport_record_error(struct vport *, enum vport_err_type err_type);
+void ovs_vport_receive(struct vport *, struct sk_buff *,
+		       struct ovs_key_ipv4_tunnel *);
 
 /* List of statically compiled vport implementations.  Don't forget to also
  * add yours to the list at the top of vport.c. */
 extern const struct vport_ops ovs_netdev_vport_ops;
 extern const struct vport_ops ovs_internal_vport_ops;
-extern const struct vport_ops ovs_patch_vport_ops;
 extern const struct vport_ops ovs_gre_vport_ops;
-extern const struct vport_ops ovs_gre_ft_vport_ops;
 extern const struct vport_ops ovs_gre64_vport_ops;
-extern const struct vport_ops ovs_capwap_vport_ops;
+extern const struct vport_ops ovs_vxlan_vport_ops;
+extern const struct vport_ops ovs_lisp_vport_ops;
 
+static inline void ovs_skb_postpush_rcsum(struct sk_buff *skb,
+				      const void *start, unsigned int len)
+{
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
+		skb->csum = csum_add(skb->csum, csum_partial(start, len, 0));
+}
 #endif /* vport.h */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,10 +34,12 @@ struct stream;
 
 /* Default port numbers.
  *
- * There is nothing standard about these port numbers.  They are simply what
- * we have chosen. */
-#define JSONRPC_TCP_PORT 6632
-#define JSONRPC_SSL_PORT 6632
+ * OVSDB_OLD_PORT defines the original port number used by OVS.
+ * OVSDB_PORT defines the official port number assigned by IANA.  By
+ * default, we still uses OVSDB_OLD_PORT, but we present a warning that
+ * that will change. */
+#define OVSDB_OLD_PORT 6632
+#define OVSDB_PORT 6640
 
 int jsonrpc_stream_open(const char *name, struct stream **, uint8_t dscp);
 int jsonrpc_pstream_open(const char *name, struct pstream **, uint8_t dscp);
@@ -98,7 +100,7 @@ struct json *jsonrpc_msg_to_json(struct jsonrpc_msg *);
 
 /* A JSON-RPC session with reconnection. */
 
-struct jsonrpc_session *jsonrpc_session_open(const char *name);
+struct jsonrpc_session *jsonrpc_session_open(const char *name, bool retry);
 struct jsonrpc_session *jsonrpc_session_open_unreliably(struct jsonrpc *,
                                                         uint8_t);
 void jsonrpc_session_close(struct jsonrpc_session *);
@@ -117,9 +119,11 @@ bool jsonrpc_session_is_alive(const struct jsonrpc_session *);
 bool jsonrpc_session_is_connected(const struct jsonrpc_session *);
 unsigned int jsonrpc_session_get_seqno(const struct jsonrpc_session *);
 int jsonrpc_session_get_status(const struct jsonrpc_session *);
+int jsonrpc_session_get_last_error(const struct jsonrpc_session *);
 void jsonrpc_session_get_reconnect_stats(const struct jsonrpc_session *,
                                          struct reconnect_stats *);
 
+void jsonrpc_session_enable_reconnect(struct jsonrpc_session *);
 void jsonrpc_session_force_reconnect(struct jsonrpc_session *);
 
 void jsonrpc_session_set_max_backoff(struct jsonrpc_session *,

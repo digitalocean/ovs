@@ -48,7 +48,7 @@ VLOG_DEFINE_THIS_MODULE(learning_switch);
 
 struct lswitch_port {
     struct hmap_node hmap_node; /* Hash node for port number. */
-    uint16_t port_no;           /* OpenFlow port number, in host byte order. */
+    ofp_port_t port_no;         /* OpenFlow port number. */
     uint32_t queue_id;          /* OpenFlow queue number. */
 };
 
@@ -89,6 +89,7 @@ struct lswitch {
      * to set up the flow table. */
     const struct ofputil_flow_mod *default_flows;
     size_t n_default_flows;
+    enum ofputil_protocol usable_protocols;
 };
 
 /* The log messages here could actually be useful in debugging, so keep the
@@ -161,6 +162,7 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
 
     sw->default_flows = cfg->default_flows;
     sw->n_default_flows = cfg->n_default_flows;
+    sw->usable_protocols = cfg->usable_protocols;
 
     sw->queued = rconn_packet_counter_create();
 
@@ -176,7 +178,6 @@ lswitch_handshake(struct lswitch *sw)
 
     protocol = ofputil_protocol_from_ofp_version(rconn_get_version(sw->rconn));
     if (sw->default_flows) {
-        enum ofputil_protocol usable_protocols;
         struct ofpbuf *msg = NULL;
         int error = 0;
         size_t i;
@@ -188,10 +189,8 @@ lswitch_handshake(struct lswitch *sw)
          * This could be improved by actually negotiating a mutually acceptable
          * flow format with the switch, but that would require an asynchronous
          * state machine.  This version ought to work fine in practice. */
-        usable_protocols = ofputil_flow_mod_usable_protocols(
-            sw->default_flows, sw->n_default_flows);
-        if (!(protocol & usable_protocols)) {
-            enum ofputil_protocol want = rightmost_1bit(usable_protocols);
+        if (!(protocol & sw->usable_protocols)) {
+            enum ofputil_protocol want = rightmost_1bit(sw->usable_protocols);
             while (!error) {
                 msg = ofputil_encode_set_protocol(protocol, want, &protocol);
                 if (!msg) {
@@ -200,15 +199,19 @@ lswitch_handshake(struct lswitch *sw)
                 error = rconn_send(sw->rconn, msg, NULL);
             }
         }
+        if (protocol & sw->usable_protocols) {
+            for (i = 0; !error && i < sw->n_default_flows; i++) {
+                msg = ofputil_encode_flow_mod(&sw->default_flows[i], protocol);
+                error = rconn_send(sw->rconn, msg, NULL);
+            }
 
-        for (i = 0; !error && i < sw->n_default_flows; i++) {
-            msg = ofputil_encode_flow_mod(&sw->default_flows[i], protocol);
-            error = rconn_send(sw->rconn, msg, NULL);
-        }
-
-        if (error) {
-            VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
-                         rconn_get_name(sw->rconn), strerror(error));
+            if (error) {
+                VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
+                             rconn_get_name(sw->rconn), ovs_strerror(error));
+            }
+        } else {
+            VLOG_INFO_RL(&rl, "%s: failed to set usable protocol",
+                         rconn_get_name(sw->rconn));
         }
     }
     sw->protocol = protocol;
@@ -233,7 +236,7 @@ lswitch_destroy(struct lswitch *sw)
             free(node);
         }
         shash_destroy(&sw->queue_names);
-        mac_learning_destroy(sw->ml);
+        mac_learning_unref(sw->ml);
         rconn_packet_counter_destroy(sw->queued);
         free(sw);
     }
@@ -247,7 +250,9 @@ lswitch_run(struct lswitch *sw)
     int i;
 
     if (sw->ml) {
-        mac_learning_run(sw->ml, NULL);
+        ovs_rwlock_wrlock(&sw->ml->rwlock);
+        mac_learning_run(sw->ml);
+        ovs_rwlock_unlock(&sw->ml->rwlock);
     }
 
     rconn_run(sw->rconn);
@@ -279,7 +284,9 @@ void
 lswitch_wait(struct lswitch *sw)
 {
     if (sw->ml) {
+        ovs_rwlock_rdlock(&sw->ml->rwlock);
         mac_learning_wait(sw->ml);
+        ovs_rwlock_unlock(&sw->ml->rwlock);
     }
     rconn_run_wait(sw->rconn);
     rconn_recv_wait(sw->rconn);
@@ -339,9 +346,13 @@ lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
     case OFPTYPE_PORT_STATUS:
     case OFPTYPE_PACKET_OUT:
     case OFPTYPE_FLOW_MOD:
+    case OFPTYPE_GROUP_MOD:
     case OFPTYPE_PORT_MOD:
+    case OFPTYPE_TABLE_MOD:
     case OFPTYPE_BARRIER_REQUEST:
     case OFPTYPE_BARRIER_REPLY:
+    case OFPTYPE_QUEUE_GET_CONFIG_REQUEST:
+    case OFPTYPE_QUEUE_GET_CONFIG_REPLY:
     case OFPTYPE_DESC_STATS_REQUEST:
     case OFPTYPE_DESC_STATS_REPLY:
     case OFPTYPE_FLOW_STATS_REQUEST:
@@ -358,17 +369,35 @@ lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
     case OFPTYPE_PORT_DESC_STATS_REPLY:
     case OFPTYPE_ROLE_REQUEST:
     case OFPTYPE_ROLE_REPLY:
+    case OFPTYPE_ROLE_STATUS:
     case OFPTYPE_SET_FLOW_FORMAT:
     case OFPTYPE_FLOW_MOD_TABLE_ID:
     case OFPTYPE_SET_PACKET_IN_FORMAT:
     case OFPTYPE_FLOW_AGE:
-    case OFPTYPE_SET_ASYNC_CONFIG:
     case OFPTYPE_SET_CONTROLLER_ID:
     case OFPTYPE_FLOW_MONITOR_STATS_REQUEST:
     case OFPTYPE_FLOW_MONITOR_STATS_REPLY:
     case OFPTYPE_FLOW_MONITOR_CANCEL:
     case OFPTYPE_FLOW_MONITOR_PAUSED:
     case OFPTYPE_FLOW_MONITOR_RESUMED:
+    case OFPTYPE_GET_ASYNC_REQUEST:
+    case OFPTYPE_GET_ASYNC_REPLY:
+    case OFPTYPE_SET_ASYNC_CONFIG:
+    case OFPTYPE_METER_MOD:
+    case OFPTYPE_GROUP_STATS_REQUEST:
+    case OFPTYPE_GROUP_STATS_REPLY:
+    case OFPTYPE_GROUP_DESC_STATS_REQUEST:
+    case OFPTYPE_GROUP_DESC_STATS_REPLY:
+    case OFPTYPE_GROUP_FEATURES_STATS_REQUEST:
+    case OFPTYPE_GROUP_FEATURES_STATS_REPLY:
+    case OFPTYPE_METER_STATS_REQUEST:
+    case OFPTYPE_METER_STATS_REPLY:
+    case OFPTYPE_METER_CONFIG_STATS_REQUEST:
+    case OFPTYPE_METER_CONFIG_STATS_REPLY:
+    case OFPTYPE_METER_FEATURES_STATS_REQUEST:
+    case OFPTYPE_METER_FEATURES_STATS_REPLY:
+    case OFPTYPE_TABLE_FEATURES_STATS_REQUEST:
+    case OFPTYPE_TABLE_FEATURES_STATS_REPLY:
     default:
         if (VLOG_IS_DBG_ENABLED()) {
             char *s = ofp_to_string(msg->data, msg->size, 2);
@@ -386,7 +415,7 @@ send_features_request(struct lswitch *sw)
     struct ofp_switch_config *osc;
     int ofp_version = rconn_get_version(sw->rconn);
 
-    assert(ofp_version > 0 && ofp_version < 0xff);
+    ovs_assert(ofp_version > 0 && ofp_version < 0xff);
 
     /* Send OFPT_FEATURES_REQUEST. */
     b = ofpraw_alloc(OFPRAW_OFPT_FEATURES_REQUEST, ofp_version, 0);
@@ -410,7 +439,7 @@ queue_tx(struct lswitch *sw, struct ofpbuf *b)
         } else {
             VLOG_WARN_RL(&rl, "%016llx: %s: send: %s",
                          sw->datapath_id, rconn_get_name(sw->rconn),
-                         strerror(retval));
+                         ovs_strerror(retval));
         }
     }
 }
@@ -437,28 +466,34 @@ process_switch_features(struct lswitch *sw, struct ofp_header *oh)
         if (lp && hmap_node_is_null(&lp->hmap_node)) {
             lp->port_no = port.port_no;
             hmap_insert(&sw->queue_numbers, &lp->hmap_node,
-                        hash_int(lp->port_no, 0));
+                        hash_ofp_port(lp->port_no));
         }
     }
     return 0;
 }
 
-static uint16_t
+static ofp_port_t
 lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
 {
-    uint16_t out_port;
+    ofp_port_t out_port;
 
     /* Learn the source MAC. */
-    if (sw->ml && mac_learning_may_learn(sw->ml, flow->dl_src, 0)) {
-        struct mac_entry *mac = mac_learning_insert(sw->ml, flow->dl_src, 0);
-        if (mac_entry_is_new(mac) || mac->port.i != flow->in_port) {
-            VLOG_DBG_RL(&rl, "%016llx: learned that "ETH_ADDR_FMT" is on "
-                        "port %"PRIu16, sw->datapath_id,
-                        ETH_ADDR_ARGS(flow->dl_src), flow->in_port);
+    if (sw->ml) {
+        ovs_rwlock_wrlock(&sw->ml->rwlock);
+        if (mac_learning_may_learn(sw->ml, flow->dl_src, 0)) {
+            struct mac_entry *mac = mac_learning_insert(sw->ml, flow->dl_src,
+                                                        0);
+            if (mac->port.ofp_port != flow->in_port.ofp_port) {
+                VLOG_DBG_RL(&rl, "%016llx: learned that "ETH_ADDR_FMT" is on "
+                            "port %"PRIu16, sw->datapath_id,
+                            ETH_ADDR_ARGS(flow->dl_src),
+                            flow->in_port.ofp_port);
 
-            mac->port.i = flow->in_port;
-            mac_learning_changed(sw->ml, mac);
+                mac->port.ofp_port = flow->in_port.ofp_port;
+                mac_learning_changed(sw->ml);
+            }
         }
+        ovs_rwlock_unlock(&sw->ml->rwlock);
     }
 
     /* Drop frames for reserved multicast addresses. */
@@ -470,14 +505,17 @@ lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
     if (sw->ml) {
         struct mac_entry *mac;
 
-        mac = mac_learning_lookup(sw->ml, flow->dl_dst, 0, NULL);
+        ovs_rwlock_rdlock(&sw->ml->rwlock);
+        mac = mac_learning_lookup(sw->ml, flow->dl_dst, 0);
         if (mac) {
-            out_port = mac->port.i;
-            if (out_port == flow->in_port) {
+            out_port = mac->port.ofp_port;
+            if (out_port == flow->in_port.ofp_port) {
                 /* Don't send a packet back out its input port. */
+                ovs_rwlock_unlock(&sw->ml->rwlock);
                 return OFPP_NONE;
             }
         }
+        ovs_rwlock_unlock(&sw->ml->rwlock);
     }
 
     /* Check if we need to use "NORMAL" action. */
@@ -489,11 +527,11 @@ lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
 }
 
 static uint32_t
-get_queue_id(const struct lswitch *sw, uint16_t in_port)
+get_queue_id(const struct lswitch *sw, ofp_port_t in_port)
 {
     const struct lswitch_port *port;
 
-    HMAP_FOR_EACH_WITH_HASH (port, hmap_node, hash_int(in_port, 0),
+    HMAP_FOR_EACH_WITH_HASH (port, hmap_node, hash_ofp_port(in_port),
                              &sw->queue_numbers) {
         if (port->port_no == in_port) {
             return port->queue_id;
@@ -508,7 +546,7 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
 {
     struct ofputil_packet_in pi;
     uint32_t queue_id;
-    uint16_t out_port;
+    ofp_port_t out_port;
 
     uint64_t ofpacts_stub[64 / 8];
     struct ofpbuf ofpacts;
@@ -518,6 +556,7 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
 
     struct ofpbuf pkt;
     struct flow flow;
+    union flow_in_port in_port_;
 
     error = ofputil_decode_packet_in(&pi, oh);
     if (error) {
@@ -535,7 +574,8 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
 
     /* Extract flow data from 'opi' into 'flow'. */
     ofpbuf_use_const(&pkt, pi.packet, pi.packet_len);
-    flow_extract(&pkt, 0, 0, NULL, pi.fmd.in_port, &flow);
+    in_port_.ofp_port = pi.fmd.in_port;
+    flow_extract(&pkt, 0, 0, NULL, &in_port_, &flow);
     flow.tunnel.tun_id = pi.fmd.tun_id;
 
     /* Choose output port. */
@@ -546,7 +586,8 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
     ofpbuf_use_stack(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
     if (out_port == OFPP_NONE) {
         /* No actions. */
-    } else if (queue_id == UINT32_MAX || out_port >= OFPP_MAX) {
+    } else if (queue_id == UINT32_MAX
+               || ofp_to_u16(out_port) >= ofp_to_u16(OFPP_MAX)) {
         ofpact_put_OUTPUT(&ofpacts)->port = out_port;
     } else {
         struct ofpact_enqueue *enqueue = ofpact_put_ENQUEUE(&ofpacts);

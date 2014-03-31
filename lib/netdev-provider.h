@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,6 @@
 
 /* Generic interface to network devices. */
 
-#include <assert.h>
-
 #include "netdev.h"
 #include "list.h"
 #include "shash.h"
@@ -32,59 +30,136 @@ extern "C" {
 
 /* A network device (e.g. an Ethernet device).
  *
- * This structure should be treated as opaque by network device
- * implementations. */
-struct netdev_dev {
+ * Network device implementations may read these members but should not modify
+ * them. */
+struct netdev {
+    /* The following do not change during the lifetime of a struct netdev. */
     char *name;                         /* Name of network device. */
     const struct netdev_class *netdev_class; /* Functions to control
                                                 this device. */
+
+    /* The following are protected by 'netdev_mutex' (internal to netdev.c). */
     int ref_cnt;                        /* Times this devices was opened. */
     struct shash_node *node;            /* Pointer to element in global map. */
+    struct list saved_flags_list; /* Contains "struct netdev_saved_flags". */
 };
 
-void netdev_dev_init(struct netdev_dev *, const char *name,
-                     const struct netdev_class *);
-void netdev_dev_uninit(struct netdev_dev *, bool destroy);
-const char *netdev_dev_get_type(const struct netdev_dev *);
-const struct netdev_class *netdev_dev_get_class(const struct netdev_dev *);
-const char *netdev_dev_get_name(const struct netdev_dev *);
-struct netdev_dev *netdev_dev_from_name(const char *name);
-void netdev_dev_get_devices(const struct netdev_class *,
-                            struct shash *device_list);
+const char *netdev_get_type(const struct netdev *);
+const struct netdev_class *netdev_get_class(const struct netdev *);
+const char *netdev_get_name(const struct netdev *);
+struct netdev *netdev_from_name(const char *name);
+void netdev_get_devices(const struct netdev_class *,
+                        struct shash *device_list);
 
-static inline void netdev_dev_assert_class(const struct netdev_dev *netdev_dev,
-                                           const struct netdev_class *class_)
-{
-    assert(netdev_dev->netdev_class == class_);
-}
-
-/* A instance of an open network device.
+/* A data structure for capturing packets received by a network device.
  *
- * This structure should be treated as opaque by network device
- * implementations. */
-struct netdev {
-    struct netdev_dev *netdev_dev;   /* Parent netdev_dev. */
-    struct list node;                /* Element in global list. */
-
-    enum netdev_flags save_flags;    /* Initial device flags. */
-    enum netdev_flags changed_flags; /* Flags that we changed. */
+ * Network device implementations may read these members but should not modify
+ * them.
+ *
+ * None of these members change during the lifetime of a struct netdev_rx. */
+struct netdev_rx {
+    struct netdev *netdev;      /* Owns a reference to the netdev. */
 };
 
-void netdev_init(struct netdev *, struct netdev_dev *);
-void netdev_uninit(struct netdev *, bool close);
-struct netdev_dev *netdev_get_dev(const struct netdev *);
-
-static inline void netdev_assert_class(const struct netdev *netdev,
-                                       const struct netdev_class *netdev_class)
-{
-    netdev_dev_assert_class(netdev_get_dev(netdev), netdev_class);
-}
+struct netdev *netdev_rx_get_netdev(const struct netdev_rx *);
 
 /* Network device class structure, to be defined by each implementation of a
  * network device.
  *
  * These functions return 0 if successful or a positive errno value on failure,
- * except where otherwise noted. */
+ * except where otherwise noted.
+ *
+ *
+ * Data Structures
+ * ===============
+ *
+ * These functions work primarily with two different kinds of data structures:
+ *
+ *   - "struct netdev", which represents a network device.
+ *
+ *   - "struct netdev_rx", which represents a handle for capturing packets
+ *     received on a network device
+ *
+ * Each of these data structures contains all of the implementation-independent
+ * generic state for the respective concept, called the "base" state.  None of
+ * them contains any extra space for implementations to use.  Instead, each
+ * implementation is expected to declare its own data structure that contains
+ * an instance of the generic data structure plus additional
+ * implementation-specific members, called the "derived" state.  The
+ * implementation can use casts or (preferably) the CONTAINER_OF macro to
+ * obtain access to derived state given only a pointer to the embedded generic
+ * data structure.
+ *
+ *
+ * Life Cycle
+ * ==========
+ *
+ * Four stylized functions accompany each of these data structures:
+ *
+ *            "alloc"       "construct"       "destruct"       "dealloc"
+ *            ------------  ----------------  ---------------  --------------
+ * netdev     ->alloc       ->construct       ->destruct       ->dealloc
+ * netdev_rx  ->rx_alloc    ->rx_construct    ->rx_destruct    ->rx_dealloc
+ *
+ * Any instance of a given data structure goes through the following life
+ * cycle:
+ *
+ *   1. The client calls the "alloc" function to obtain raw memory.  If "alloc"
+ *      fails, skip all the other steps.
+ *
+ *   2. The client initializes all of the data structure's base state.  If this
+ *      fails, skip to step 7.
+ *
+ *   3. The client calls the "construct" function.  The implementation
+ *      initializes derived state.  It may refer to the already-initialized
+ *      base state.  If "construct" fails, skip to step 6.
+ *
+ *   4. The data structure is now initialized and in use.
+ *
+ *   5. When the data structure is no longer needed, the client calls the
+ *      "destruct" function.  The implementation uninitializes derived state.
+ *      The base state has not been uninitialized yet, so the implementation
+ *      may still refer to it.
+ *
+ *   6. The client uninitializes all of the data structure's base state.
+ *
+ *   7. The client calls the "dealloc" to free the raw memory.  The
+ *      implementation must not refer to base or derived state in the data
+ *      structure, because it has already been uninitialized.
+ *
+ * Each "alloc" function allocates and returns a new instance of the respective
+ * data structure.  The "alloc" function is not given any information about the
+ * use of the new data structure, so it cannot perform much initialization.
+ * Its purpose is just to ensure that the new data structure has enough room
+ * for base and derived state.  It may return a null pointer if memory is not
+ * available, in which case none of the other functions is called.
+ *
+ * Each "construct" function initializes derived state in its respective data
+ * structure.  When "construct" is called, all of the base state has already
+ * been initialized, so the "construct" function may refer to it.  The
+ * "construct" function is allowed to fail, in which case the client calls the
+ * "dealloc" function (but not the "destruct" function).
+ *
+ * Each "destruct" function uninitializes and frees derived state in its
+ * respective data structure.  When "destruct" is called, the base state has
+ * not yet been uninitialized, so the "destruct" function may refer to it.  The
+ * "destruct" function is not allowed to fail.
+ *
+ * Each "dealloc" function frees raw memory that was allocated by the the
+ * "alloc" function.  The memory's base and derived members might not have ever
+ * been initialized (but if "construct" returned successfully, then it has been
+ * "destruct"ed already).  The "dealloc" function is not allowed to fail.
+ *
+ *
+ * Device Change Notification
+ * ==========================
+ *
+ * Minimally, implementations are required to report changes to netdev flags,
+ * features, ethernet address or carrier through connectivity_seq. Changes to
+ * other properties are allowed to cause notification through this interface,
+ * although implementations should try to avoid this. connectivity_seq_get()
+ * can be used to acquire a reference to the struct seq. The interface is
+ * described in detail in seq.h. */
 struct netdev_class {
     /* Type of netdevs in this class, e.g. "system", "tap", "gre", etc.
      *
@@ -93,6 +168,10 @@ struct netdev_class {
      * The "system" type corresponds to an existing network device on
      * the system. */
     const char *type;
+
+/* ## ------------------- ## */
+/* ## Top-Level Functions ## */
+/* ## ------------------- ## */
 
     /* Called when the netdev provider is registered, typically at program
      * startup.  Returning an error from this function will prevent any network
@@ -113,90 +192,37 @@ struct netdev_class {
      * needed here. */
     void (*wait)(void);
 
-    /* Attempts to create a network device named 'name' in 'netdev_class'.  On
-     * success sets 'netdev_devp' to the newly created device. */
-    int (*create)(const struct netdev_class *netdev_class, const char *name,
-                  struct netdev_dev **netdev_devp);
+/* ## ---------------- ## */
+/* ## netdev Functions ## */
+/* ## ---------------- ## */
 
-    /* Destroys 'netdev_dev'.
-     *
-     * Netdev devices maintain a reference count that is incremented on
-     * netdev_open() and decremented on netdev_close().  If 'netdev_dev'
-     * has a non-zero reference count, then this function will not be
-     * called. */
-    void (*destroy)(struct netdev_dev *netdev_dev);
+    /* Life-cycle functions for a netdev.  See the large comment above on
+     * struct netdev_class. */
+    struct netdev *(*alloc)(void);
+    int (*construct)(struct netdev *);
+    void (*destruct)(struct netdev *);
+    void (*dealloc)(struct netdev *);
 
-    /* Fetches the device 'netdev_dev''s configuration, storing it in 'args'.
+    /* Fetches the device 'netdev''s configuration, storing it in 'args'.
      * The caller owns 'args' and pre-initializes it to an empty smap.
      *
      * If this netdev class does not have any configuration options, this may
      * be a null pointer. */
-    int (*get_config)(struct netdev_dev *netdev_dev, struct smap *args);
+    int (*get_config)(const struct netdev *netdev, struct smap *args);
 
-    /* Changes the device 'netdev_dev''s configuration to 'args'.
+    /* Changes the device 'netdev''s configuration to 'args'.
      *
      * If this netdev class does not support configuration, this may be a null
      * pointer. */
-    int (*set_config)(struct netdev_dev *netdev_dev, const struct smap *args);
+    int (*set_config)(struct netdev *netdev, const struct smap *args);
 
-    /* Attempts to open a network device.  On success, sets 'netdevp'
-     * to the new network device. */
-    int (*open)(struct netdev_dev *netdev_dev, struct netdev **netdevp);
-
-    /* Closes 'netdev'. */
-    void (*close)(struct netdev *netdev);
-
-/* ## ----------------- ## */
-/* ## Receiving Packets ## */
-/* ## ----------------- ## */
-
-/* The network provider interface is mostly used for inspecting and configuring
- * device "metadata", not for sending and receiving packets directly.  It may
- * be impractical to implement these functions on some operating systems and
- * hardware.  These functions may all be NULL in such cases.
- *
- * (However, the "dpif-netdev" implementation, which is the easiest way to
- * integrate Open vSwitch with a new operating system or hardware, does require
- * the ability to receive packets.) */
-
-    /* Attempts to set up 'netdev' for receiving packets with ->recv().
-     * Returns 0 if successful, otherwise a positive errno value.  Return
-     * EOPNOTSUPP to indicate that the network device does not implement packet
-     * reception through this interface.  This function may be set to null if
-     * it would always return EOPNOTSUPP anyhow.  (This will prevent the
-     * network device from being usefully used by the netdev-based "userspace
-     * datapath".)*/
-    int (*listen)(struct netdev *netdev);
-
-    /* Attempts to receive a packet from 'netdev' into the 'size' bytes in
-     * 'buffer'.  If successful, returns the number of bytes in the received
-     * packet, otherwise a negative errno value.  Returns -EAGAIN immediately
-     * if no packet is ready to be received.
+    /* Returns the tunnel configuration of 'netdev'.  If 'netdev' is
+     * not a tunnel, returns null.
      *
-     * Returns -EMSGSIZE, and discards the packet, if the received packet is
-     * longer than 'size' bytes.
-     *
-     * This function can only be expected to return a packet if ->listen() has
-     * been called successfully.
-     *
-     * May be null if not needed, such as for a network device that does not
-     * implement packet reception through the 'recv' member function. */
-    int (*recv)(struct netdev *netdev, void *buffer, size_t size);
+     * If this function would always return null, it may be null instead. */
+    const struct netdev_tunnel_config *
+        (*get_tunnel_config)(const struct netdev *netdev);
 
-    /* Registers with the poll loop to wake up from the next call to
-     * poll_block() when a packet is ready to be received with netdev_recv() on
-     * 'netdev'.
-     *
-     * May be null if not needed, such as for a network device that does not
-     * implement packet reception through the 'recv' member function. */
-    void (*recv_wait)(struct netdev *netdev);
-
-    /* Discards all packets waiting to be received from 'netdev'.
-     *
-     * May be null if not needed, such as for a network device that does not
-     * implement packet reception through the 'recv' member function. */
-    int (*drain)(struct netdev *netdev);
-
     /* Sends the 'size'-byte packet in 'buffer' on 'netdev'.  Returns 0 if
      * successful, otherwise a positive errno value.  Returns EAGAIN without
      * blocking if the packet cannot be queued immediately.  Returns EMSGSIZE
@@ -463,22 +489,39 @@ struct netdev_class {
     int (*get_queue_stats)(const struct netdev *netdev, unsigned int queue_id,
                            struct netdev_queue_stats *stats);
 
-    /* Iterates over all of 'netdev''s queues, calling 'cb' with the queue's
-     * ID, its configuration, and the 'aux' specified by the caller.  The order
-     * of iteration is unspecified, but (when successful) each queue is visited
-     * exactly once.
+    /* Attempts to begin dumping the queues in 'netdev'.  On success, returns 0
+     * and initializes '*statep' with any data needed for iteration.  On
+     * failure, returns a positive errno value.
      *
-     * 'cb' will not modify or free the 'details' argument passed in.  It may
-     * delete or modify the queue passed in as its 'queue_id' argument.  It may
-     * modify but will not delete any other queue within 'netdev'.  If 'cb'
-     * adds new queues, then ->dump_queues is allowed to visit some queues
-     * twice or not at all.
-     */
-    int (*dump_queues)(const struct netdev *netdev,
-                       void (*cb)(unsigned int queue_id,
-                                  const struct smap *details,
-                                  void *aux),
-                       void *aux);
+     * May be NULL if 'netdev' does not support QoS at all. */
+    int (*queue_dump_start)(const struct netdev *netdev, void **statep);
+
+    /* Attempts to retrieve another queue from 'netdev' for 'state', which was
+     * initialized by a successful call to the 'queue_dump_start' function for
+     * 'netdev'.  On success, stores a queue ID into '*queue_id' and fills
+     * 'details' with the configuration of the queue with that ID.  Returns EOF
+     * if the last queue has been dumped, or a positive errno value on error.
+     * This function will not be called again once it returns nonzero once for
+     * a given iteration (but the 'queue_dump_done' function will be called
+     * afterward).
+     *
+     * The caller initializes and clears 'details' before calling this
+     * function.  The caller takes ownership of the string key-values pairs
+     * added to 'details'.
+     *
+     * The returned contents of 'details' should be documented as valid for the
+     * given 'type' in the "other_config" column in the "Queue" table in
+     * vswitchd/vswitch.xml (which is built as ovs-vswitchd.conf.db(8)).
+     *
+     * May be NULL if 'netdev' does not support QoS at all. */
+    int (*queue_dump_next)(const struct netdev *netdev, void *state,
+                           unsigned int *queue_id, struct smap *details);
+
+    /* Releases resources from 'netdev' for 'state', which was initialized by a
+     * successful call to the 'queue_dump_start' function for 'netdev'.
+     *
+     * May be NULL if 'netdev' does not support QoS at all. */
+    int (*queue_dump_done)(const struct netdev *netdev, void *state);
 
     /* Iterates over all of 'netdev''s queues, calling 'cb' with the queue's
      * ID, its statistics, and the 'aux' specified by the caller.  The order of
@@ -533,7 +576,7 @@ struct netdev_class {
      * anyhow. */
     int (*add_router)(struct netdev *netdev, struct in_addr router);
 
-    /* Looks up the next hop for 'host'.  If succesful, stores the next hop
+    /* Looks up the next hop for 'host'.  If successful, stores the next hop
      * gateway's address (0 if 'host' is on a directly connected network) in
      * '*next_hop' and a copy of the name of the device to reach 'host' in
      * '*netdev_name', and returns 0.  The caller is responsible for freeing
@@ -546,16 +589,16 @@ struct netdev_class {
 
     /* Retrieves driver information of the device.
      *
-     * Populates 'sh' with key-value pairs representing the status of the
-     * device.  Driver info is a set of key-value string pairs
-     * representing netdev type specific information.  For more information see
+     * Populates 'smap' with key-value pairs representing the status of the
+     * device.  'smap' is a set of key-value string pairs representing netdev
+     * type specific information.  For more information see
      * ovs-vswitchd.conf.db(5).
      *
      * The caller is responsible for destroying 'smap' and its data.
      *
      * This function may be set to null if it would always return EOPNOTSUPP
      * anyhow. */
-    int (*get_drv_info)(const struct netdev *netdev, struct smap *smap);
+    int (*get_status)(const struct netdev *netdev, struct smap *smap);
 
     /* Looks up the ARP table entry for 'ip' on 'netdev' and stores the
      * corresponding MAC address in 'mac'.  A return value of ENXIO, in
@@ -567,36 +610,57 @@ struct netdev_class {
     int (*arp_lookup)(const struct netdev *netdev, ovs_be32 ip,
                       uint8_t mac[6]);
 
-    /* Retrieves the current set of flags on 'netdev' into '*old_flags'.
-     * Then, turns off the flags that are set to 1 in 'off' and turns on the
-     * flags that are set to 1 in 'on'.  (No bit will be set to 1 in both 'off'
-     * and 'on'; that is, off & on == 0.)
+    /* Retrieves the current set of flags on 'netdev' into '*old_flags'.  Then,
+     * turns off the flags that are set to 1 in 'off' and turns on the flags
+     * that are set to 1 in 'on'.  (No bit will be set to 1 in both 'off' and
+     * 'on'; that is, off & on == 0.)
      *
      * This function may be invoked from a signal handler.  Therefore, it
      * should not do anything that is not signal-safe (such as logging). */
     int (*update_flags)(struct netdev *netdev, enum netdev_flags off,
                         enum netdev_flags on, enum netdev_flags *old_flags);
 
-    /* Returns a sequence number which indicates changes in one of 'netdev''s
-     * properties.  The returned sequence number must be nonzero so that
-     * callers have a value which they may use as a reset when tracking
-     * 'netdev'.
+/* ## ------------------- ## */
+/* ## netdev_rx Functions ## */
+/* ## ------------------- ## */
+
+/* If a particular netdev class does not support receiving packets, all these
+ * function pointers must be NULL. */
+
+    /* Life-cycle functions for a netdev_rx.  See the large comment above on
+     * struct netdev_class. */
+    struct netdev_rx *(*rx_alloc)(void);
+    int (*rx_construct)(struct netdev_rx *);
+    void (*rx_destruct)(struct netdev_rx *);
+    void (*rx_dealloc)(struct netdev_rx *);
+
+    /* Attempts to receive a packet from 'rx' into the 'size' bytes in
+     * 'buffer'.  If successful, returns the number of bytes in the received
+     * packet, otherwise a negative errno value.  Returns -EAGAIN immediately
+     * if no packet is ready to be received.
      *
-     * Minimally, the returned sequence number is required to change whenever
-     * 'netdev''s flags, features, ethernet address, or carrier changes.  The
-     * returned sequence number is allowed to change even when 'netdev' doesn't
-     * change, although implementations should try to avoid this. */
-    unsigned int (*change_seq)(const struct netdev *netdev);
+     * Must return -EMSGSIZE, and discard the packet, if the received packet
+     * is longer than 'size' bytes.
+     *
+     * Specify NULL if this */
+    int (*rx_recv)(struct netdev_rx *rx, void *buffer, size_t size);
+
+    /* Registers with the poll loop to wake up from the next call to
+     * poll_block() when a packet is ready to be received with netdev_rx_recv()
+     * on 'rx'. */
+    void (*rx_wait)(struct netdev_rx *rx);
+
+    /* Discards all packets waiting to be received from 'rx'. */
+    int (*rx_drain)(struct netdev_rx *rx);
 };
 
 int netdev_register_provider(const struct netdev_class *);
 int netdev_unregister_provider(const char *type);
-const struct netdev_class *netdev_lookup_provider(const char *type);
 
 extern const struct netdev_class netdev_linux_class;
 extern const struct netdev_class netdev_internal_class;
 extern const struct netdev_class netdev_tap_class;
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__NetBSD__)
 extern const struct netdev_class netdev_bsd_class;
 #endif
 

@@ -1,7 +1,7 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 # Spec file for Open vSwitch.
 
-# Copyright (C) 2009, 2010 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2013 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -14,7 +14,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 1.9.3
+Version: 2.1.0
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: ASL 2.0
@@ -36,7 +36,7 @@ traffic.
 %setup -q -n openvswitch-%{version}
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --enable-ssl %{build_number}
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --enable-ssl
 make %{_smp_mflags}
 
 %install
@@ -69,6 +69,9 @@ install python/compat/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
+
+# Get rid of stuff we don't want to make RPM happy.
+(cd "$RPM_BUILD_ROOT" && rm -f usr/lib/lib*)
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -106,83 +109,85 @@ systemctl start openvswitch.service
 %{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
 /usr/share/openvswitch/bugtool-plugins/
-/usr/share/openvswitch/python/ovs/__init__.py
-/usr/share/openvswitch/python/ovs/daemon.py
-/usr/share/openvswitch/python/ovs/db/__init__.py
-/usr/share/openvswitch/python/ovs/db/data.py
-/usr/share/openvswitch/python/ovs/db/error.py
-/usr/share/openvswitch/python/ovs/db/idl.py
-/usr/share/openvswitch/python/ovs/db/parser.py
-/usr/share/openvswitch/python/ovs/db/schema.py
-/usr/share/openvswitch/python/ovs/db/types.py
-/usr/share/openvswitch/python/ovs/dirs.py
-/usr/share/openvswitch/python/ovs/fatal_signal.py
-/usr/share/openvswitch/python/ovs/json.py
-/usr/share/openvswitch/python/ovs/jsonrpc.py
-/usr/share/openvswitch/python/ovs/ovsuuid.py
-/usr/share/openvswitch/python/ovs/poller.py
-/usr/share/openvswitch/python/ovs/process.py
-/usr/share/openvswitch/python/ovs/reconnect.py
-/usr/share/openvswitch/python/ovs/socket_util.py
-/usr/share/openvswitch/python/ovs/stream.py
-/usr/share/openvswitch/python/ovs/timeval.py
-/usr/share/openvswitch/python/ovs/util.py
-/usr/share/openvswitch/python/ovs/version.py
-/usr/share/openvswitch/python/ovs/unixctl/__init__.py
-/usr/share/openvswitch/python/ovs/unixctl/client.py
-/usr/share/openvswitch/python/ovs/unixctl/server.py
-/usr/share/openvswitch/python/uuid.py
-/usr/share/openvswitch/python/argparse.py
-/usr/share/openvswitch/python/ovs/vlog.py
-/usr/share/openvswitch/python/ovstest/__init__.py
-/usr/share/openvswitch/python/ovstest/args.py
-/usr/share/openvswitch/python/ovstest/rpcserver.py
-/usr/share/openvswitch/python/ovstest/tcp.py
-/usr/share/openvswitch/python/ovstest/udp.py
-/usr/share/openvswitch/python/ovstest/util.py
-/usr/share/openvswitch/python/ovstest/vswitch.py
-/usr/share/openvswitch/python/ovstest/tests.py
+/usr/share/openvswitch/python/ovs/__init__.py*
+/usr/share/openvswitch/python/ovs/daemon.py*
+/usr/share/openvswitch/python/ovs/db/__init__.py*
+/usr/share/openvswitch/python/ovs/db/data.py*
+/usr/share/openvswitch/python/ovs/db/error.py*
+/usr/share/openvswitch/python/ovs/db/idl.py*
+/usr/share/openvswitch/python/ovs/db/parser.py*
+/usr/share/openvswitch/python/ovs/db/schema.py*
+/usr/share/openvswitch/python/ovs/db/types.py*
+/usr/share/openvswitch/python/ovs/dirs.py*
+/usr/share/openvswitch/python/ovs/fatal_signal.py*
+/usr/share/openvswitch/python/ovs/json.py*
+/usr/share/openvswitch/python/ovs/jsonrpc.py*
+/usr/share/openvswitch/python/ovs/ovsuuid.py*
+/usr/share/openvswitch/python/ovs/poller.py*
+/usr/share/openvswitch/python/ovs/process.py*
+/usr/share/openvswitch/python/ovs/reconnect.py*
+/usr/share/openvswitch/python/ovs/socket_util.py*
+/usr/share/openvswitch/python/ovs/stream.py*
+/usr/share/openvswitch/python/ovs/timeval.py*
+/usr/share/openvswitch/python/ovs/util.py*
+/usr/share/openvswitch/python/ovs/version.py*
+/usr/share/openvswitch/python/ovs/unixctl/__init__.py*
+/usr/share/openvswitch/python/ovs/unixctl/client.py*
+/usr/share/openvswitch/python/ovs/unixctl/server.py*
+/usr/share/openvswitch/python/uuid.py*
+/usr/share/openvswitch/python/argparse.py*
+/usr/share/openvswitch/python/ovs/vlog.py*
+/usr/share/openvswitch/python/ovstest/__init__.py*
+/usr/share/openvswitch/python/ovstest/args.py*
+/usr/share/openvswitch/python/ovstest/rpcserver.py*
+/usr/share/openvswitch/python/ovstest/tcp.py*
+/usr/share/openvswitch/python/ovstest/udp.py*
+/usr/share/openvswitch/python/ovstest/util.py*
+/usr/share/openvswitch/python/ovstest/vswitch.py*
+/usr/share/openvswitch/python/ovstest/tests.py*
 /usr/share/openvswitch/scripts/ovs-bugtool-*
 /usr/share/openvswitch/scripts/ovs-check-dead-ifs
 /usr/share/openvswitch/scripts/ovs-lib
+/usr/share/openvswitch/scripts/ovs-vtep
 %config /usr/share/openvswitch/vswitch.ovsschema
-/usr/sbin/ovs-brcompatd
+%config /usr/share/openvswitch/vtep.ovsschema
 /usr/sbin/ovs-bugtool
 /usr/sbin/ovs-vswitchd
 /usr/sbin/ovsdb-server
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
+/usr/bin/ovs-dpctl-top
 /usr/bin/ovs-ofctl
 /usr/bin/ovs-vsctl
 /usr/bin/ovsdb-client
 /usr/bin/ovsdb-tool
-/usr/bin/ovs-controller
 /usr/bin/ovs-pki
 /usr/bin/ovs-test
 /usr/bin/ovs-l3ping
-%doc /usr/share/man/man8/ovs-controller.8.gz
+/usr/bin/vtep-ctl
 %doc /usr/share/man/man8/ovs-pki.8.gz
 %doc /usr/share/man/man1/ovsdb-client.1.gz
 %doc /usr/share/man/man1/ovsdb-server.1.gz
 %doc /usr/share/man/man1/ovsdb-tool.1.gz
 %doc /usr/share/man/man5/ovs-vswitchd.conf.db.5.gz
+%doc /usr/share/man/man5/vtep.5.gz
 %doc /usr/share/man/man8/ovs-appctl.8.gz
 %doc /usr/share/man/man8/ovs-bugtool.8.gz
-%doc /usr/share/man/man8/ovs-brcompatd.8.gz
 %doc /usr/share/man/man8/ovs-dpctl.8.gz
+%doc /usr/share/man/man8/ovs-dpctl-top.8.gz
 %doc /usr/share/man/man8/ovs-ofctl.8.gz
 %doc /usr/share/man/man8/ovs-parse-backtrace.8.gz
-%doc /usr/share/man/man8/ovs-parse-leaks.8.gz
 %doc /usr/share/man/man8/ovs-vsctl.8.gz
 %doc /usr/share/man/man8/ovs-vswitchd.8.gz
 %doc /usr/share/man/man8/ovs-test.8.gz
 %doc /usr/share/man/man8/ovs-l3ping.8.gz
+%doc /usr/share/man/man8/vtep-ctl.8.gz
 /var/lib/openvswitch
+/var/log/openvswitch
 /usr/share/openvswitch/scripts/ovs-ctl
 %exclude /etc/openvswitch
 %exclude /usr/bin/ovs-benchmark
 %exclude /usr/bin/ovs-parse-backtrace
-%exclude /usr/bin/ovs-parse-leaks
 %exclude /usr/bin/ovs-pcap
 %exclude /usr/bin/ovs-tcpundump
 %exclude /usr/bin/ovs-vlan-test

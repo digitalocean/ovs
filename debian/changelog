@@ -1,3 +1,19 @@
+openvswitch (2.1.0+git20140325-1) unstable; urgency=low
+
+  * New upstream release.
+    - Included kernel module builds against Linux 3.11.  Closes: #732260.
+    - Log rotation bug fixed.  Closes: #729304.
+    - Bridge compatibility feature removed.  Closes: #680538, #681954.
+    - Controller package removed.  Closes: #731133.
+  * Shut down OVS after libvirt guests to allow those guests to remove
+    their interfaces gracefully. Closes: #701760.  Reported by Ernesto
+    Domato <edomat@gmail.com>.  Fix from Lukasz Szotek
+    <szotman@gmail.com>.
+  * debian/control: Depend on kmod instead of module-init-tools.  Closes:
+    #733696.  Reported by md@Linux.IT (Marco d'Itri).
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 31 Mar 2014 09:31:10 -0700
+
 openvswitch (1.9.3+git20131029-1) unstable; urgency=low
 
   * New upstream release.

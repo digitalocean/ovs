@@ -1,6 +1,6 @@
 AT_INIT
 
-AT_COPYRIGHT([Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+AT_COPYRIGHT([Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -67,6 +67,8 @@ EOF
 m4_include([tests/ovsdb-macros.at])
 m4_include([tests/ofproto-macros.at])
 
+m4_include([tests/bfd.at])
+m4_include([tests/cfm.at])
 m4_include([tests/lacp.at])
 m4_include([tests/library.at])
 m4_include([tests/heap.at])
@@ -77,11 +79,11 @@ m4_include([tests/daemon.at])
 m4_include([tests/daemon-py.at])
 m4_include([tests/ofp-actions.at])
 m4_include([tests/ofp-print.at])
+m4_include([tests/ofp-util.at])
 m4_include([tests/ofp-errors.at])
 m4_include([tests/ovs-ofctl.at])
 m4_include([tests/odp.at])
 m4_include([tests/multipath.at])
-m4_include([tests/autopath.at])
 m4_include([tests/learn.at])
 m4_include([tests/vconn.at])
 m4_include([tests/file_name.at])
@@ -91,11 +93,13 @@ m4_include([tests/uuid.at])
 m4_include([tests/json.at])
 m4_include([tests/jsonrpc.at])
 m4_include([tests/jsonrpc-py.at])
-m4_include([tests/timeval.at])
+m4_include([tests/tunnel.at])
 m4_include([tests/lockfile.at])
 m4_include([tests/reconnect.at])
+m4_include([tests/ovs-vswitchd.at])
 m4_include([tests/ofproto.at])
 m4_include([tests/ofproto-dpif.at])
+m4_include([tests/vlan-splinters.at])
 m4_include([tests/ovsdb.at])
 m4_include([tests/ovs-vsctl.at])
 m4_include([tests/ovs-monitor-ipsec.at])
@@ -103,3 +107,4 @@ m4_include([tests/ovs-xapi-sync.at])
 m4_include([tests/interface-reconfigure.at])
 m4_include([tests/stp.at])
 m4_include([tests/vlog.at])
+m4_include([tests/vtep-ctl.at])

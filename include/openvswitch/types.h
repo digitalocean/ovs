@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,10 @@
 typedef __be16 ovs_be16;
 typedef __be32 ovs_be32;
 typedef __be64 ovs_be64;
+
+#define OVS_BE16_MAX ((OVS_FORCE ovs_be16) 0xffff)
+#define OVS_BE32_MAX ((OVS_FORCE ovs_be32) 0xffffffff)
+#define OVS_BE64_MAX ((OVS_FORCE ovs_be64) 0xffffffffffffffffULL)
 
 /* These types help with a few funny situations:
  *
@@ -87,5 +91,17 @@ typedef struct {
 typedef struct {
         ovs_be32 hi, lo;
 } ovs_32aligned_be64;
+
+/* ofp_port_t represents the port number of a OpenFlow switch.
+ * odp_port_t represents the port number on the datapath.
+ * ofp11_port_t represents the OpenFlow-1.1 port number. */
+typedef uint16_t OVS_BITWISE ofp_port_t;
+typedef uint32_t OVS_BITWISE odp_port_t;
+typedef uint32_t OVS_BITWISE ofp11_port_t;
+
+/* Macro functions that cast int types to ofp/odp/ofp11 types. */
+#define OFP_PORT_C(X) ((OVS_FORCE ofp_port_t) (X))
+#define ODP_PORT_C(X) ((OVS_FORCE odp_port_t) (X))
+#define OFP11_PORT_C(X) ((OVS_FORCE ofp11_port_t) (X))
 
 #endif /* openvswitch/types.h */

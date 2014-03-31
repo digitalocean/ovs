@@ -17,7 +17,6 @@
 
 #include "log.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -33,9 +32,6 @@
 #include "socket-util.h"
 #include "transaction.h"
 #include "util.h"
-#include "vlog.h"
-
-VLOG_DEFINE_THIS_MODULE(ovsdb_log);
 
 enum ovsdb_log_mode {
     OVSDB_LOG_READ,
@@ -75,7 +71,7 @@ ovsdb_log_open(const char *name, enum ovsdb_log_open_mode open_mode,
 
     *filep = NULL;
 
-    assert(locking == -1 || locking == false || locking == true);
+    ovs_assert(locking == -1 || locking == false || locking == true);
     if (locking < 0) {
         locking = open_mode != OVSDB_LOG_READ_ONLY;
     }
@@ -106,7 +102,7 @@ ovsdb_log_open(const char *name, enum ovsdb_log_open_mode open_mode,
             flags = O_RDWR | O_CREAT | O_EXCL;
         }
     } else {
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
     fd = open(name, flags, 0666);
     if (fd < 0) {
@@ -317,7 +313,7 @@ error:
 void
 ovsdb_log_unread(struct ovsdb_log *file)
 {
-    assert(file->mode == OVSDB_LOG_READ);
+    ovs_assert(file->mode == OVSDB_LOG_READ);
     file->offset = file->prev_offset;
 }
 
@@ -360,7 +356,7 @@ ovsdb_log_write(struct ovsdb_log *file, struct json *json)
 
     /* Compose header. */
     sha1_bytes(json_string, length, sha1);
-    snprintf(header, sizeof header, "%s%zu "SHA1_FMT"\n",
+    snprintf(header, sizeof header, "%s%"PRIuSIZE" "SHA1_FMT"\n",
              magic, length, SHA1_ARGS(sha1));
 
     /* Write. */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@
 
 #include "jsonrpc.h"
 
-#include <assert.h>
 #include <errno.h>
 
 #include "byteq.h"
@@ -27,6 +26,7 @@
 #include "json.h"
 #include "list.h"
 #include "ofpbuf.h"
+#include "ovs-thread.h"
 #include "poll-loop.h"
 #include "reconnect.h"
 #include "stream.h"
@@ -42,6 +42,7 @@ struct jsonrpc {
 
     /* Input. */
     struct byteq input;
+    uint8_t input_buffer[512];
     struct json_parser *parser;
     struct jsonrpc_msg *received;
 
@@ -58,22 +59,21 @@ static void jsonrpc_cleanup(struct jsonrpc *);
 static void jsonrpc_error(struct jsonrpc *, int error);
 
 /* This is just the same as stream_open() except that it uses the default
- * JSONRPC ports if none is specified. */
+ * JSONRPC port if none is specified. */
 int
 jsonrpc_stream_open(const char *name, struct stream **streamp, uint8_t dscp)
 {
-    return stream_open_with_default_ports(name, JSONRPC_TCP_PORT,
-                                          JSONRPC_SSL_PORT, streamp,
-                                          dscp);
+    return stream_open_with_default_port(name, OVSDB_OLD_PORT,
+                                         streamp, dscp);
 }
 
 /* This is just the same as pstream_open() except that it uses the default
- * JSONRPC ports if none is specified. */
+ * JSONRPC port if none is specified. */
 int
 jsonrpc_pstream_open(const char *name, struct pstream **pstreamp, uint8_t dscp)
 {
-    return pstream_open_with_default_ports(name, JSONRPC_TCP_PORT,
-                                           JSONRPC_SSL_PORT, pstreamp, dscp);
+    return pstream_open_with_default_port(name, OVSDB_OLD_PORT,
+                                          pstreamp, dscp);
 }
 
 /* Returns a new JSON-RPC stream that uses 'stream' for input and output.  The
@@ -83,12 +83,12 @@ jsonrpc_open(struct stream *stream)
 {
     struct jsonrpc *rpc;
 
-    assert(stream != NULL);
+    ovs_assert(stream != NULL);
 
     rpc = xzalloc(sizeof *rpc);
     rpc->name = xstrdup(stream_get_name(stream));
     rpc->stream = stream;
-    byteq_init(&rpc->input);
+    byteq_init(&rpc->input, rpc->input_buffer, sizeof rpc->input_buffer);
     list_init(&rpc->output);
 
     return rpc;
@@ -130,7 +130,7 @@ jsonrpc_run(struct jsonrpc *rpc)
         } else {
             if (retval != -EAGAIN) {
                 VLOG_WARN_RL(&rl, "%s: send error: %s",
-                             rpc->name, strerror(-retval));
+                             rpc->name, ovs_strerror(-retval));
                 jsonrpc_error(rpc, -retval);
             }
             break;
@@ -308,7 +308,7 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
                     return EAGAIN;
                 } else {
                     VLOG_WARN_RL(&rl, "%s: receive error: %s",
-                                 rpc->name, strerror(-retval));
+                                 rpc->name, ovs_strerror(-retval));
                     jsonrpc_error(rpc, -retval);
                     return rpc->status;
                 }
@@ -331,7 +331,7 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
                 jsonrpc_received(rpc);
                 if (rpc->status) {
                     const struct byteq *q = &rpc->input;
-                    if (q->head <= BYTEQ_SIZE) {
+                    if (q->head <= q->size) {
                         stream_report_content(q->buffer, q->head,
                                               STREAM_JSONRPC,
                                               THIS_MODULE, rpc->name);
@@ -351,7 +351,7 @@ void
 jsonrpc_recv_wait(struct jsonrpc *rpc)
 {
     if (rpc->status || rpc->received || !byteq_is_empty(&rpc->input)) {
-        (poll_immediate_wake)(rpc->name);
+        poll_immediate_wake_at(rpc->name);
     } else {
         stream_recv_wait(rpc->stream);
     }
@@ -473,7 +473,7 @@ jsonrpc_received(struct jsonrpc *rpc)
 static void
 jsonrpc_error(struct jsonrpc *rpc, int error)
 {
-    assert(error);
+    ovs_assert(error);
     if (!rpc->status) {
         rpc->status = error;
         jsonrpc_cleanup(rpc);
@@ -514,8 +514,11 @@ jsonrpc_create(enum jsonrpc_msg_type type, const char *method,
 static struct json *
 jsonrpc_create_id(void)
 {
-    static unsigned int id;
-    return json_integer_create(id++);
+    static atomic_uint next_id = ATOMIC_VAR_INIT(0);
+    unsigned int id;
+
+    atomic_add(&next_id, 1, &id);
+    return json_integer_create(id);
 }
 
 struct jsonrpc_msg *
@@ -745,6 +748,7 @@ struct jsonrpc_session {
     struct jsonrpc *rpc;
     struct stream *stream;
     struct pstream *pstream;
+    int last_error;
     unsigned int seqno;
     uint8_t dscp;
 };
@@ -753,14 +757,18 @@ struct jsonrpc_session {
  * acceptable to stream_open() or pstream_open().
  *
  * If 'name' is an active connection method, e.g. "tcp:127.1.2.3", the new
- * jsonrpc_session connects and reconnects, with back-off, to 'name'.
+ * jsonrpc_session connects to 'name'.  If 'retry' is true, then the new
+ * session connects and reconnects to 'name', with backoff.  If 'retry' is
+ * false, the new session will only try to connect once and after a connection
+ * failure or a disconnection jsonrpc_session_is_alive() will return false for
+ * the new session.
  *
  * If 'name' is a passive connection method, e.g. "ptcp:", the new
  * jsonrpc_session listens for connections to 'name'.  It maintains at most one
  * connection at any given time.  Any new connection causes the previous one
  * (if any) to be dropped. */
 struct jsonrpc_session *
-jsonrpc_session_open(const char *name)
+jsonrpc_session_open(const char *name, bool retry)
 {
     struct jsonrpc_session *s;
 
@@ -773,9 +781,13 @@ jsonrpc_session_open(const char *name)
     s->pstream = NULL;
     s->seqno = 0;
     s->dscp = 0;
+    s->last_error = 0;
 
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
+    } else if (!retry) {
+        reconnect_set_max_tries(s->reconnect, 1);
+        reconnect_set_backoff(s->reconnect, INT_MAX, INT_MAX);
     }
 
     if (!stream_or_pstream_needs_probes(name)) {
@@ -848,6 +860,8 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
         error = jsonrpc_stream_open(name, &s->stream, s->dscp);
         if (!error) {
             reconnect_connecting(s->reconnect, time_msec());
+        } else {
+            s->last_error = error;
         }
     } else {
         error = s->pstream ? 0 : jsonrpc_pstream_open(name, &s->pstream,
@@ -909,6 +923,7 @@ jsonrpc_session_run(struct jsonrpc_session *s)
         if (error) {
             reconnect_disconnected(s->reconnect, time_msec(), error);
             jsonrpc_session_disconnect(s);
+            s->last_error = error;
         }
     } else if (s->stream) {
         int error;
@@ -1062,11 +1077,25 @@ jsonrpc_session_get_status(const struct jsonrpc_session *s)
     return s && s->rpc ? jsonrpc_get_status(s->rpc) : 0;
 }
 
+int
+jsonrpc_session_get_last_error(const struct jsonrpc_session *s)
+{
+    return s->last_error;
+}
+
 void
 jsonrpc_session_get_reconnect_stats(const struct jsonrpc_session *s,
                                     struct reconnect_stats *stats)
 {
     reconnect_get_stats(s->reconnect, time_msec(), stats);
+}
+
+void
+jsonrpc_session_enable_reconnect(struct jsonrpc_session *s)
+{
+    reconnect_set_max_tries(s->reconnect, UINT_MAX);
+    reconnect_set_backoff(s->reconnect, RECONNECT_DEFAULT_MIN_BACKOFF,
+                          RECONNECT_DEFAULT_MAX_BACKOFF);
 }
 
 void
@@ -1099,10 +1128,11 @@ jsonrpc_session_set_dscp(struct jsonrpc_session *s,
             error = pstream_set_dscp(s->pstream, dscp);
             if (error) {
                 VLOG_ERR("%s: failed set_dscp %s",
-                         reconnect_get_name(s->reconnect), strerror(error));
+                         reconnect_get_name(s->reconnect),
+                         ovs_strerror(error));
             }
             /*
-             * TODO:XXX race window between setting dscp to listening socket
+             * XXX race window between setting dscp to listening socket
              * and accepting socket. accepted socket may have old dscp value.
              * Ignore this race window for now.
              */

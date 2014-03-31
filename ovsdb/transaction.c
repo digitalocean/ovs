@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,6 @@
 #include <config.h>
 
 #include "transaction.h"
-
-#include <assert.h>
 
 #include "bitmap.h"
 #include "dynamic-string.h"
@@ -111,7 +109,7 @@ ovsdb_txn_create(struct ovsdb *db)
 static void
 ovsdb_txn_free(struct ovsdb_txn *txn)
 {
-    assert(list_is_empty(&txn->txn_tables));
+    ovs_assert(list_is_empty(&txn->txn_tables));
     ds_destroy(&txn->comment);
     free(txn);
 }
@@ -297,7 +295,7 @@ check_ref_count(struct ovsdb_txn *txn OVS_UNUSED, struct ovsdb_txn_row *r)
     } else {
         return ovsdb_error("referential integrity violation",
                            "cannot delete %s row "UUID_FMT" because "
-                           "of %zu remaining reference(s)",
+                           "of %"PRIuSIZE" remaining reference(s)",
                            r->table->schema->name, UUID_ARGS(&r->uuid),
                            r->n_refs);
     }
@@ -616,7 +614,7 @@ check_max_rows(struct ovsdb_txn *txn)
         if (n_rows > max_rows) {
             return ovsdb_error("constraint violation",
                                "transaction causes \"%s\" table to contain "
-                               "%zu rows, greater than the schema-defined "
+                               "%"PRIuSIZE" rows, greater than the schema-defined "
                                "limit of %u row(s)",
                                t->table->schema->name, n_rows, max_rows);
         }
@@ -807,7 +805,7 @@ ovsdb_txn_commit(struct ovsdb_txn *txn, bool durable)
         if (error) {
             /* We don't support two-phase commit so only the first replica is
              * allowed to report an error. */
-            assert(&replica->node == txn->db->replicas.next);
+            ovs_assert(&replica->node == txn->db->replicas.next);
 
             ovsdb_txn_abort(txn);
             return error;
@@ -898,7 +896,7 @@ ovsdb_txn_row_modify(struct ovsdb_txn *txn, const struct ovsdb_row *ro_row_)
     struct ovsdb_row *ro_row = CONST_CAST(struct ovsdb_row *, ro_row_);
 
     if (ro_row->txn_row) {
-        assert(ro_row == ro_row->txn_row->new);
+        ovs_assert(ro_row == ro_row->txn_row->new);
         return ro_row;
     } else {
         struct ovsdb_table *table = ro_row->table;
@@ -940,7 +938,7 @@ ovsdb_txn_row_delete(struct ovsdb_txn *txn, const struct ovsdb_row *row_)
     if (!txn_row) {
         ovsdb_txn_row_create(txn, table, row, NULL);
     } else {
-        assert(txn_row->new == row);
+        ovs_assert(txn_row->new == row);
         if (txn_row->old) {
             txn_row->new = NULL;
         } else {
@@ -987,7 +985,7 @@ ovsdb_txn_table_destroy(struct ovsdb_txn_table *txn_table)
 {
     size_t i;
 
-    assert(hmap_is_empty(&txn_table->txn_rows));
+    ovs_assert(hmap_is_empty(&txn_table->txn_rows));
 
     for (i = 0; i < txn_table->table->schema->n_indexes; i++) {
         hmap_destroy(&txn_table->txn_indexes[i]);

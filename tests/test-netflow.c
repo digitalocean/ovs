@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,7 +75,7 @@ print_netflow(struct ofpbuf *buf)
         }
 
         printf("seq %"PRIu32": "IP_FMT" > "IP_FMT, ntohl(hdr->flow_seq),
-               IP_ARGS(&rec->src_addr), IP_ARGS(&rec->dst_addr));
+               IP_ARGS(rec->src_addr), IP_ARGS(rec->dst_addr));
 
         printf(", if %"PRIu16" > %"PRIu16,
                ntohs(rec->input), ntohs(rec->output));
@@ -100,6 +100,11 @@ print_netflow(struct ofpbuf *buf)
                    ntohs(rec->src_port), ntohs(rec->dst_port));
             break;
 
+        case IPPROTO_SCTP:
+            printf(", SCTP %"PRIu16" > %"PRIu16,
+                   ntohs(rec->src_port), ntohs(rec->dst_port));
+            break;
+
         case IPPROTO_ICMP:
             printf(", ICMP %"PRIu16":%"PRIu16,
                    ntohs(rec->dst_port) >> 8,
@@ -120,6 +125,7 @@ print_netflow(struct ofpbuf *buf)
 
         if (rec->ip_proto != IPPROTO_TCP &&
             rec->ip_proto != IPPROTO_UDP &&
+            rec->ip_proto != IPPROTO_SCTP &&
             rec->ip_proto != IPPROTO_ICMP) {
             if (rec->src_port != htons(0)) {
                 printf(", src_port %"PRIu16, ntohs(rec->src_port));
@@ -137,7 +143,7 @@ print_netflow(struct ofpbuf *buf)
                ntohl(rec->init_time), ntohl(rec->used_time));
 
         if (rec->nexthop != htonl(0)) {
-            printf(", nexthop "IP_FMT, IP_ARGS(&rec->nexthop));
+            printf(", nexthop "IP_FMT, IP_ARGS(rec->nexthop));
         }
         if (rec->src_as != htons(0) || rec->dst_as != htons(0)) {
             printf(", AS %"PRIu16" > %"PRIu16,
@@ -156,7 +162,7 @@ print_netflow(struct ofpbuf *buf)
     }
 
     if (buf->size) {
-        printf("%zu extra bytes after last record\n", buf->size);
+        printf("%"PRIuSIZE" extra bytes after last record\n", buf->size);
     }
 }
 
@@ -184,7 +190,7 @@ main(int argc, char *argv[])
 
     sock = inet_open_passive(SOCK_DGRAM, target, 0, NULL, 0);
     if (sock < 0) {
-        ovs_fatal(0, "%s: failed to open (%s)", argv[1], strerror(-sock));
+        ovs_fatal(0, "%s: failed to open (%s)", argv[1], ovs_strerror(-sock));
     }
 
     daemon_save_fd(STDOUT_FILENO);
@@ -234,12 +240,13 @@ static void
 parse_options(int argc, char *argv[])
 {
     enum {
-        DAEMON_OPTION_ENUMS
+        DAEMON_OPTION_ENUMS,
+        VLOG_OPTION_ENUMS
     };
-    static struct option long_options[] = {
-        {"verbose", optional_argument, NULL, 'v'},
+    static const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
         DAEMON_LONG_OPTIONS,
+        VLOG_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
@@ -254,11 +261,8 @@ parse_options(int argc, char *argv[])
         case 'h':
             usage();
 
-        case 'v':
-            vlog_set_verbosity(optarg);
-            break;
-
         DAEMON_OPTION_HANDLERS
+        VLOG_OPTION_HANDLERS
 
         case '?':
             exit(EXIT_FAILURE);

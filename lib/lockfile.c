@@ -1,4 +1,4 @@
- /* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ /* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "coverage.h"
 #include "hash.h"
 #include "hmap.h"
+#include "ovs-thread.h"
 #include "timeval.h"
 #include "util.h"
 #include "vlog.h"
@@ -34,7 +35,6 @@
 VLOG_DEFINE_THIS_MODULE(lockfile);
 
 COVERAGE_DEFINE(lockfile_lock);
-COVERAGE_DEFINE(lockfile_timeout);
 COVERAGE_DEFINE(lockfile_error);
 COVERAGE_DEFINE(lockfile_unlock);
 
@@ -52,7 +52,10 @@ struct lockfile {
  * descriptor for a file on which a process holds a lock drops *all* locks on
  * that file.  That means that we can't afford to open a lockfile more than
  * once. */
-static struct hmap lock_table = HMAP_INITIALIZER(&lock_table);
+static struct ovs_mutex lock_table_mutex = OVS_MUTEX_INITIALIZER;
+static struct hmap lock_table__ = HMAP_INITIALIZER(&lock_table__);
+static struct hmap *const lock_table OVS_GUARDED_BY(lock_table_mutex)
+    = &lock_table__;
 
 static void lockfile_unhash(struct lockfile *);
 static int lockfile_try_lock(const char *name, pid_t *pidp,
@@ -106,7 +109,9 @@ lockfile_lock(const char *file, struct lockfile **lockfilep)
 
     lock_name = lockfile_name(file);
 
+    ovs_mutex_lock(&lock_table_mutex);
     error = lockfile_try_lock(lock_name, &pid, lockfilep);
+    ovs_mutex_unlock(&lock_table_mutex);
 
     if (error) {
         COVERAGE_INC(lockfile_error);
@@ -118,7 +123,7 @@ lockfile_lock(const char *file, struct lockfile **lockfilep)
                       "pid %ld", lock_name, (long int) pid);
         } else {
             VLOG_WARN("%s: failed to lock file: %s",
-                      lock_name, strerror(error));
+                      lock_name, ovs_strerror(error));
         }
     }
 
@@ -132,8 +137,11 @@ void
 lockfile_unlock(struct lockfile *lockfile)
 {
     if (lockfile) {
-        COVERAGE_INC(lockfile_unlock);
+        ovs_mutex_lock(&lock_table_mutex);
         lockfile_unhash(lockfile);
+        ovs_mutex_unlock(&lock_table_mutex);
+
+        COVERAGE_INC(lockfile_unlock);
         free(lockfile->name);
         free(lockfile);
     }
@@ -147,12 +155,14 @@ lockfile_postfork(void)
 {
     struct lockfile *lockfile;
 
-    HMAP_FOR_EACH (lockfile, hmap_node, &lock_table) {
+    ovs_mutex_lock(&lock_table_mutex);
+    HMAP_FOR_EACH (lockfile, hmap_node, lock_table) {
         if (lockfile->fd >= 0) {
             VLOG_WARN("%s: child does not inherit lock", lockfile->name);
             lockfile_unhash(lockfile);
         }
     }
+    ovs_mutex_unlock(&lock_table_mutex);
 }
 
 static uint32_t
@@ -163,12 +173,12 @@ lockfile_hash(dev_t device, ino_t inode)
 }
 
 static struct lockfile *
-lockfile_find(dev_t device, ino_t inode)
+lockfile_find(dev_t device, ino_t inode) OVS_REQUIRES(&lock_table_mutex)
 {
     struct lockfile *lockfile;
 
     HMAP_FOR_EACH_WITH_HASH (lockfile, hmap_node,
-                             lockfile_hash(device, inode), &lock_table) {
+                             lockfile_hash(device, inode), lock_table) {
         if (lockfile->device == device && lockfile->inode == inode) {
             return lockfile;
         }
@@ -177,17 +187,18 @@ lockfile_find(dev_t device, ino_t inode)
 }
 
 static void
-lockfile_unhash(struct lockfile *lockfile)
+lockfile_unhash(struct lockfile *lockfile) OVS_REQUIRES(&lock_table_mutex)
 {
     if (lockfile->fd >= 0) {
         close(lockfile->fd);
         lockfile->fd = -1;
-        hmap_remove(&lock_table, &lockfile->hmap_node);
+        hmap_remove(lock_table, &lockfile->hmap_node);
     }
 }
 
 static struct lockfile *
 lockfile_register(const char *name, dev_t device, ino_t inode, int fd)
+    OVS_REQUIRES(&lock_table_mutex)
 {
     struct lockfile *lockfile;
 
@@ -202,13 +213,14 @@ lockfile_register(const char *name, dev_t device, ino_t inode, int fd)
     lockfile->device = device;
     lockfile->inode = inode;
     lockfile->fd = fd;
-    hmap_insert(&lock_table, &lockfile->hmap_node,
+    hmap_insert(lock_table, &lockfile->hmap_node,
                 lockfile_hash(device, inode));
     return lockfile;
 }
 
 static int
 lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
+    OVS_REQUIRES(&lock_table_mutex)
 {
     struct flock l;
     struct stat s;
@@ -225,7 +237,7 @@ lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
         }
     } else if (errno != ENOENT) {
         VLOG_WARN("%s: failed to stat lock file: %s",
-                  name, strerror(errno));
+                  name, ovs_strerror(errno));
         return errno;
     }
 
@@ -233,13 +245,14 @@ lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
     fd = open(name, O_RDWR | O_CREAT, 0600);
     if (fd < 0) {
         VLOG_WARN("%s: failed to open lock file: %s",
-                  name, strerror(errno));
+                  name, ovs_strerror(errno));
         return errno;
     }
 
     /* Get the inode and device number for the lock table. */
     if (fstat(fd, &s)) {
-        VLOG_ERR("%s: failed to fstat lock file: %s", name, strerror(errno));
+        VLOG_ERR("%s: failed to fstat lock file: %s",
+                 name, ovs_strerror(errno));
         close(fd);
         return errno;
     }
@@ -251,9 +264,7 @@ lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
     l.l_start = 0;
     l.l_len = 0;
 
-    time_disable_restart();
     error = fcntl(fd, F_SETLK, &l) == -1 ? errno : 0;
-    time_enable_restart();
 
     if (!error) {
         *lockfilep = lockfile_register(name, s.st_dev, s.st_ino, fd);

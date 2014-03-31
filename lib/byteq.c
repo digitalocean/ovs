@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,22 @@
 
 #include <config.h>
 #include "byteq.h"
-#include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
 #include "util.h"
 
-/* The queue size must be a power of 2. */
-BUILD_ASSERT_DECL(!(BYTEQ_SIZE & (BYTEQ_SIZE - 1)));
-
-/* Initializes 'q' as empty. */
+/* Initializes 'q' as an empty byteq that uses the 'size' bytes of 'buffer' to
+ * store data.  'size' must be a power of 2.
+ *
+ * The caller must ensure that 'buffer' remains available to the byteq as long
+ * as 'q' is in use. */
 void
-byteq_init(struct byteq *q)
+byteq_init(struct byteq *q, uint8_t *buffer, size_t size)
 {
+    ovs_assert(is_pow2(size));
+    q->buffer = buffer;
+    q->size = size;
     q->head = q->tail = 0;
 }
 
@@ -42,7 +45,7 @@ byteq_used(const struct byteq *q)
 int
 byteq_avail(const struct byteq *q)
 {
-    return BYTEQ_SIZE - byteq_used(q);
+    return q->size - byteq_used(q);
 }
 
 /* Returns true if no bytes are queued in 'q',
@@ -65,7 +68,7 @@ byteq_is_full(const struct byteq *q)
 void
 byteq_put(struct byteq *q, uint8_t c)
 {
-    assert(!byteq_is_full(q));
+    ovs_assert(!byteq_is_full(q));
     *byteq_head(q) = c;
     q->head++;
 }
@@ -76,7 +79,7 @@ void
 byteq_putn(struct byteq *q, const void *p_, size_t n)
 {
     const uint8_t *p = p_;
-    assert(byteq_avail(q) >= n);
+    ovs_assert(byteq_avail(q) >= n);
     while (n > 0) {
         size_t chunk = MIN(n, byteq_headroom(q));
         memcpy(byteq_head(q), p, chunk);
@@ -100,7 +103,7 @@ uint8_t
 byteq_get(struct byteq *q)
 {
     uint8_t c;
-    assert(!byteq_is_empty(q));
+    ovs_assert(!byteq_is_empty(q));
     c = *byteq_tail(q);
     q->tail++;
     return c;
@@ -117,7 +120,7 @@ byteq_write(struct byteq *q, int fd)
         if (n > 0) {
             byteq_advance_tail(q, n);
         } else {
-            assert(n < 0);
+            ovs_assert(n < 0);
             return errno;
         }
     }
@@ -148,7 +151,7 @@ int
 byteq_tailroom(const struct byteq *q)
 {
     int used = byteq_used(q);
-    int tail_to_end = BYTEQ_SIZE - (q->tail & (BYTEQ_SIZE - 1));
+    int tail_to_end = q->size - (q->tail & (q->size - 1));
     return MIN(used, tail_to_end);
 }
 
@@ -157,7 +160,7 @@ byteq_tailroom(const struct byteq *q)
 const uint8_t *
 byteq_tail(const struct byteq *q)
 {
-    return &q->buffer[q->tail & (BYTEQ_SIZE - 1)];
+    return &q->buffer[q->tail & (q->size - 1)];
 }
 
 /* Removes 'n' bytes from the tail of 'q', which must have at least 'n' bytes
@@ -165,7 +168,7 @@ byteq_tail(const struct byteq *q)
 void
 byteq_advance_tail(struct byteq *q, unsigned int n)
 {
-    assert(byteq_tailroom(q) >= n);
+    ovs_assert(byteq_tailroom(q) >= n);
     q->tail += n;
 }
 
@@ -174,7 +177,7 @@ byteq_advance_tail(struct byteq *q, unsigned int n)
 uint8_t *
 byteq_head(struct byteq *q)
 {
-    return &q->buffer[q->head & (BYTEQ_SIZE - 1)];
+    return &q->buffer[q->head & (q->size - 1)];
 }
 
 /* Returns the number of contiguous bytes of free space starting at the head
@@ -183,7 +186,7 @@ int
 byteq_headroom(const struct byteq *q)
 {
     int avail = byteq_avail(q);
-    int head_to_end = BYTEQ_SIZE - (q->head & (BYTEQ_SIZE - 1));
+    int head_to_end = q->size - (q->head & (q->size - 1));
     return MIN(avail, head_to_end);
 }
 
@@ -192,6 +195,6 @@ byteq_headroom(const struct byteq *q)
 void
 byteq_advance_head(struct byteq *q, unsigned int n)
 {
-    assert(byteq_headroom(q) >= n);
+    ovs_assert(byteq_headroom(q) >= n);
     q->head += n;
 }

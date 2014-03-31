@@ -1,7 +1,7 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 # Spec file for Open vSwitch.
 
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -20,7 +20,7 @@
 #      -bb /usr/src/redhat/SPECS/openvswitch-xen.spec
 
 %if %{?openvswitch_version:0}%{!?openvswitch_version:1}
-%define openvswitch_version 1.9.3
+%define openvswitch_version 2.1.0
 %endif
 
 %if %{?kernel_name:0}%{!?kernel_name:1}
@@ -119,22 +119,19 @@ install python/compat/uuid.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
 install -d -m 755 $RPM_BUILD_ROOT/etc/xensource/bugtool
-mv $RPM_BUILD_ROOT/usr/share/openvswitch/bugtool-plugins/* $RPM_BUILD_ROOT/etc/xensource/bugtool
+cp -rf $RPM_BUILD_ROOT/usr/share/openvswitch/bugtool-plugins/* $RPM_BUILD_ROOT/etc/xensource/bugtool
 
 # Get rid of stuff we don't want to make RPM happy.
 rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-benchmark \
-    $RPM_BUILD_ROOT/usr/sbin/ovs-bugtool \
-    $RPM_BUILD_ROOT/usr/bin/ovs-controller \
     $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/bin/ovs-pki \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
     $RPM_BUILD_ROOT/usr/share/man/man1/ovs-benchmark.1 \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-bugtool.8 \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-pki.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8
+(cd "$RPM_BUILD_ROOT" && rm -f usr/lib/lib*)
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
 
@@ -286,7 +283,7 @@ done
 # provided by OVS. Any time a replacement script is removed from OVS,
 # it should be added here to ensure correct reversion from old versions of
 # OVS that don't clean up dangling symlinks during the uninstall phase.
-for orig in /usr/sbin/brctl /usr/sbin/xen-bugtool $keep_files; do
+for orig in /usr/sbin/xen-bugtool $keep_files; do
     saved=/usr/lib/openvswitch/xs-saved/$(basename "$orig")
     [ -e "$saved" ] && mv -f "$saved" "$orig"
 done
@@ -358,7 +355,6 @@ fi
 # this restore-on-upgrade logic.
 for f in \
     /etc/xensource/scripts/vif \
-    /usr/sbin/brctl \
     /usr/sbin/xen-bugtool \
     /opt/xensource/libexec/interface-reconfigure \
     /opt/xensource/libexec/InterfaceReconfigure.py \
@@ -410,6 +406,7 @@ exit 0
 /etc/logrotate.d/openvswitch
 /etc/profile.d/openvswitch.sh
 /usr/share/openvswitch/python/
+/usr/share/openvswitch/bugtool-plugins/*
 /usr/share/openvswitch/scripts/ovs-check-dead-ifs
 /usr/share/openvswitch/scripts/ovs-xapi-sync
 /usr/share/openvswitch/scripts/interface-reconfigure
@@ -422,42 +419,48 @@ exit 0
 /usr/share/openvswitch/scripts/ovs-save
 /usr/share/openvswitch/scripts/ovs-ctl
 /usr/share/openvswitch/scripts/ovs-lib
+/usr/share/openvswitch/scripts/ovs-vtep
 /usr/share/openvswitch/vswitch.ovsschema
+/usr/share/openvswitch/vtep.ovsschema
+/usr/sbin/ovs-bugtool
 /usr/sbin/ovs-vlan-bug-workaround
 /usr/sbin/ovs-vswitchd
 /usr/sbin/ovsdb-server
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
+/usr/bin/ovs-dpctl-top
 /usr/bin/ovs-ofctl
 /usr/bin/ovs-parse-backtrace
-/usr/bin/ovs-parse-leaks
 /usr/bin/ovs-pcap
 /usr/bin/ovs-tcpundump
 /usr/bin/ovs-vlan-test
 /usr/bin/ovs-vsctl
 /usr/bin/ovsdb-client
 /usr/bin/ovsdb-tool
+/usr/bin/vtep-ctl
 /usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.py
 /usr/share/man/man1/ovsdb-client.1.gz
 /usr/share/man/man1/ovsdb-server.1.gz
 /usr/share/man/man1/ovsdb-tool.1.gz
 /usr/share/man/man5/ovs-vswitchd.conf.db.5.gz
+/usr/share/man/man5/vtep.5.gz
 /usr/share/man/man8/ovs-appctl.8.gz
+/usr/share/man/man8/ovs-bugtool.8.gz
 /usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
+/usr/share/man/man8/ovs-dpctl-top.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
 /usr/share/man/man8/ovs-parse-backtrace.8.gz
-/usr/share/man/man8/ovs-parse-leaks.8.gz
 /usr/share/man/man1/ovs-pcap.1.gz
 /usr/share/man/man1/ovs-tcpundump.1.gz
 /usr/share/man/man8/ovs-vlan-bug-workaround.8.gz
 /usr/share/man/man8/ovs-vlan-test.8.gz
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
+/usr/share/man/man8/vtep-ctl.8.gz
 /var/lib/openvswitch
+/var/log/openvswitch
 %exclude /usr/lib/xsconsole/plugins-base/*.py[co]
-%exclude /usr/sbin/ovs-brcompatd
-%exclude /usr/share/man/man8/ovs-brcompatd.8.gz
 %exclude /usr/share/openvswitch/scripts/*.py[co]
 %exclude /usr/share/openvswitch/python/*.py[co]
 %exclude /usr/share/openvswitch/python/ovs/*.py[co]
@@ -465,4 +468,3 @@ exit 0
 
 %files %{module_package}
 /lib/modules/%{xen_version}/extra/openvswitch/openvswitch.ko
-%exclude /lib/modules/%{xen_version}/extra/openvswitch/brcompat.ko

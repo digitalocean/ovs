@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ VLOG_DEFINE_THIS_MODULE(stream_tcp);
 
 static int
 new_tcp_stream(const char *name, int fd, int connect_status,
-               const struct sockaddr_in *remote, struct stream **streamp)
+               struct stream **streamp)
 {
     struct sockaddr_in local;
     socklen_t local_len = sizeof local;
@@ -53,33 +53,24 @@ new_tcp_stream(const char *name, int fd, int connect_status,
 
     retval = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
     if (retval) {
-        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name, strerror(errno));
+        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name, ovs_strerror(errno));
         close(fd);
         return errno;
     }
 
-    retval = new_fd_stream(name, fd, connect_status, streamp);
-    if (!retval) {
-        struct stream *stream = *streamp;
-        stream_set_remote_ip(stream, remote->sin_addr.s_addr);
-        stream_set_remote_port(stream, remote->sin_port);
-        stream_set_local_ip(stream, local.sin_addr.s_addr);
-        stream_set_local_port(stream, local.sin_port);
-    }
-    return retval;
+    return new_fd_stream(name, fd, connect_status, streamp);
 }
 
 static int
 tcp_open(const char *name, char *suffix, struct stream **streamp, uint8_t dscp)
 {
-    struct sockaddr_in sin;
     int fd, error;
 
-    error = inet_open_active(SOCK_STREAM, suffix, 0, &sin, &fd, dscp);
+    error = inet_open_active(SOCK_STREAM, suffix, 0, NULL, &fd, dscp);
     if (fd >= 0) {
-        return new_tcp_stream(name, fd, error, &sin, streamp);
+        return new_tcp_stream(name, fd, error, streamp);
     } else {
-        VLOG_ERR("%s: connect: %s", name, strerror(error));
+        VLOG_ERR("%s: connect: %s", name, ovs_strerror(error));
         return error;
     }
 }
@@ -108,6 +99,7 @@ ptcp_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
 {
     struct sockaddr_in sin;
     char bound_name[128];
+    int error;
     int fd;
 
     fd = inet_open_passive(SOCK_STREAM, suffix, -1, &sin, dscp);
@@ -116,25 +108,30 @@ ptcp_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
     }
 
     sprintf(bound_name, "ptcp:%"PRIu16":"IP_FMT,
-            ntohs(sin.sin_port), IP_ARGS(&sin.sin_addr.s_addr));
-    return new_fd_pstream(bound_name, fd, ptcp_accept, set_dscp, NULL,
-                          pstreamp);
+            ntohs(sin.sin_port), IP_ARGS(sin.sin_addr.s_addr));
+    error = new_fd_pstream(bound_name, fd, ptcp_accept, set_dscp, NULL,
+                           pstreamp);
+    if (!error) {
+        pstream_set_bound_port(*pstreamp, sin.sin_port);
+    }
+    return error;
 }
 
 static int
 ptcp_accept(int fd, const struct sockaddr *sa, size_t sa_len,
             struct stream **streamp)
 {
-    const struct sockaddr_in *sin = (const struct sockaddr_in *) sa;
+    const struct sockaddr_in *sin = ALIGNED_CAST(const struct sockaddr_in *,
+                                                 sa);
     char name[128];
 
     if (sa_len == sizeof(struct sockaddr_in) && sin->sin_family == AF_INET) {
-        sprintf(name, "tcp:"IP_FMT, IP_ARGS(&sin->sin_addr));
+        sprintf(name, "tcp:"IP_FMT, IP_ARGS(sin->sin_addr.s_addr));
         sprintf(strchr(name, '\0'), ":%"PRIu16, ntohs(sin->sin_port));
     } else {
         strcpy(name, "tcp");
     }
-    return new_tcp_stream(name, fd, 0, sin, streamp);
+    return new_tcp_stream(name, fd, 0, streamp);
 }
 
 const struct pstream_class ptcp_pstream_class = {

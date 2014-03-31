@@ -14,7 +14,6 @@
 
 import errno
 import os
-import select
 import socket
 
 import ovs.poller
@@ -108,6 +107,8 @@ class Stream(object):
             return errno.EAFNOSUPPORT, None
 
         suffix = name.split(":", 1)[1]
+        if name.startswith("unix:"):
+            suffix = ovs.util.abs_file_name(ovs.dirs.RUNDIR, suffix)
         error, sock = cls._open(suffix, dscp)
         if error:
             return error, None
@@ -238,9 +239,9 @@ class Stream(object):
         if self.state == Stream.__S_CONNECTING:
             wait = Stream.W_CONNECT
         if wait == Stream.W_RECV:
-            poller.fd_wait(self.socket, select.POLLIN)
+            poller.fd_wait(self.socket, ovs.poller.POLLIN)
         else:
-            poller.fd_wait(self.socket, select.POLLOUT)
+            poller.fd_wait(self.socket, ovs.poller.POLLOUT)
 
     def connect_wait(self, poller):
         self.wait(poller, Stream.W_CONNECT)
@@ -283,6 +284,8 @@ class PassiveStream(object):
             return errno.EAFNOSUPPORT, None
 
         bind_path = name[6:]
+        if name.startswith("punix:"):
+            bind_path = ovs.util.abs_file_name(ovs.dirs.RUNDIR, bind_path)
         error, sock = ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
                                                        True, bind_path, None)
         if error:
@@ -326,7 +329,7 @@ class PassiveStream(object):
                 return error, None
 
     def wait(self, poller):
-        poller.fd_wait(self.socket, select.POLLIN)
+        poller.fd_wait(self.socket, ovs.poller.POLLIN)
 
     def __del__(self):
         # Don't delete the file: we might have forked.

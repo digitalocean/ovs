@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include "openvswitch/types.h"
+#include <netinet/in_systm.h>
 #include <netinet/ip.h>
 
 int set_nonblocking(int fd);
@@ -36,7 +37,6 @@ int lookup_ipv6(const char *host_name, struct in6_addr *address);
 
 int lookup_hostname(const char *host_name, struct in_addr *);
 
-int get_socket_error(int sock);
 int get_socket_rcvbuf(int sock);
 int check_connection_completion(int fd);
 int drain_rcvbuf(int fd);
@@ -96,5 +96,11 @@ int send_iovec_and_fds_fully_block(int sock,
 int recv_data_and_fds(int sock,
                       void *data, size_t size,
                       int fds[SOUTIL_MAX_FDS], size_t *n_fdsp);
+
+/* Helpers for calling ioctl() on an AF_INET socket. */
+struct ifreq;
+int af_inet_ioctl(unsigned long int command, const void *arg);
+int af_inet_ifreq_ioctl(const char *name, struct ifreq *,
+                        unsigned long int cmd, const char *cmd_name);
 
 #endif /* socket-util.h */

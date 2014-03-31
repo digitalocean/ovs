@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <config.h>
 #include "stream-fd.h"
-#include <assert.h>
 #include <errno.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -25,10 +24,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include "fatal-signal.h"
-#include "leak-checker.h"
 #include "poll-loop.h"
 #include "socket-util.h"
-#include "stress.h"
 #include "util.h"
 #include "stream-provider.h"
 #include "stream.h"
@@ -91,37 +88,21 @@ fd_connect(struct stream *stream)
     return check_connection_completion(s->fd);
 }
 
-STRESS_OPTION(
-    stream_flaky_recv, "simulate failure of fd stream recvs",
-    100, 0, -1, 0);
-
 static ssize_t
 fd_recv(struct stream *stream, void *buffer, size_t n)
 {
     struct stream_fd *s = stream_fd_cast(stream);
     ssize_t retval;
 
-    if (STRESS(stream_flaky_recv)) {
-        return -EIO;
-    }
-
     retval = read(s->fd, buffer, n);
     return retval >= 0 ? retval : -errno;
 }
-
-STRESS_OPTION(
-    stream_flaky_send, "simulate failure of fd stream sends",
-    100, 0, -1, 0);
 
 static ssize_t
 fd_send(struct stream *stream, const void *buffer, size_t n)
 {
     struct stream_fd *s = stream_fd_cast(stream);
     ssize_t retval;
-
-    if (STRESS(stream_flaky_send)) {
-        return -EIO;
-    }
 
     retval = write(s->fd, buffer, n);
     return (retval > 0 ? retval
@@ -144,7 +125,7 @@ fd_wait(struct stream *stream, enum stream_wait_type wait)
         break;
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 }
 
@@ -173,7 +154,7 @@ struct fd_pstream
     char *unlink_path;
 };
 
-static struct pstream_class fd_pstream_class;
+static const struct pstream_class fd_pstream_class;
 
 static struct fd_pstream *
 fd_pstream_cast(struct pstream *pstream)
@@ -235,7 +216,7 @@ pfd_accept(struct pstream *pstream, struct stream **new_streamp)
     if (new_fd < 0) {
         retval = errno;
         if (retval != EAGAIN) {
-            VLOG_DBG_RL(&rl, "accept: %s", strerror(retval));
+            VLOG_DBG_RL(&rl, "accept: %s", ovs_strerror(retval));
         }
         return retval;
     }
@@ -267,7 +248,7 @@ pfd_set_dscp(struct pstream *pstream, uint8_t dscp)
     return 0;
 }
 
-static struct pstream_class fd_pstream_class = {
+static const struct pstream_class fd_pstream_class = {
     "pstream",
     false,
     NULL,

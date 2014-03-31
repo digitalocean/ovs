@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <config.h>
 #include "unixctl.h"
-#include <assert.h>
 #include <errno.h>
 #include <unistd.h>
 #include "coverage.h"
@@ -110,7 +109,7 @@ unixctl_command_register(const char *name, const char *usage,
     struct unixctl_command *command;
     struct unixctl_command *lookup = shash_find_data(&commands, name);
 
-    assert(!lookup || lookup->cb == cb);
+    ovs_assert(!lookup || lookup->cb == cb);
 
     if (lookup) {
         return;
@@ -133,7 +132,7 @@ unixctl_command_reply__(struct unixctl_conn *conn,
     struct jsonrpc_msg *reply;
 
     COVERAGE_INC(unixctl_replied);
-    assert(conn->request_id);
+    ovs_assert(conn->request_id);
 
     if (!body) {
         body = "";
@@ -169,7 +168,7 @@ unixctl_command_reply(struct unixctl_conn *conn, const char *result)
 }
 
 /* Replies to the active unixctl connection 'conn'. 'error' is sent to the
- * client indicating an error occured processing the command.  Only one call to
+ * client indicating an error occurred processing the command.  Only one call to
  * unixctl_command_reply() or unixctl_command_reply_error() may be made per
  * request. */
 void
@@ -359,7 +358,7 @@ unixctl_server_run(struct unixctl_server *server)
         } else {
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                          pstream_get_name(server->listener),
-                         strerror(error));
+                         ovs_strerror(error));
         }
     }
 
@@ -463,7 +462,7 @@ unixctl_client_transact(struct jsonrpc *client, const char *command, int argc,
     error = jsonrpc_transact_block(client, request, &reply);
     if (error) {
         VLOG_WARN("error communicating with %s: %s", jsonrpc_get_name(client),
-                  strerror(error));
+                  ovs_retval_to_string(error));
         return error;
     }
 

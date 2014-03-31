@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -325,7 +325,7 @@ err(const char *message, ...)
 {
     va_list args;
 
-    fprintf(stderr, "%s:%d:%td: ", file_name, line_number, pos - line);
+    fprintf(stderr, "%s:%d:%"PRIdPTR": ", file_name, line_number, pos - line);
     va_start(args, message);
     vfprintf(stderr, message, args);
     va_end(args);
@@ -661,7 +661,7 @@ main(int argc, char *argv[])
     }
     for (i = 0; i < tc->n_bridges; i++) {
         struct bridge *bridge = tc->bridges[i];
-        stp_destroy(bridge->stp);
+        stp_unref(bridge->stp);
         free(bridge);
     }
     free(tc);

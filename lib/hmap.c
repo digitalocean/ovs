@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@
 
 #include <config.h>
 #include "hmap.h"
-#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include "coverage.h"
 #include "random.h"
 #include "util.h"
+#include "vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(hmap);
 
 COVERAGE_DEFINE(hmap_pathological);
 COVERAGE_DEFINE(hmap_expand);
@@ -86,13 +88,12 @@ hmap_moved(struct hmap *hmap)
 }
 
 static void
-resize(struct hmap *hmap, size_t new_mask)
+resize(struct hmap *hmap, size_t new_mask, const char *where)
 {
     struct hmap tmp;
     size_t i;
 
-    assert(!(new_mask & (new_mask + 1)));
-    assert(new_mask != SIZE_MAX);
+    ovs_assert(is_pow2(new_mask + 1));
 
     hmap_init(&tmp);
     if (new_mask) {
@@ -111,7 +112,10 @@ resize(struct hmap *hmap, size_t new_mask)
             count++;
         }
         if (count > 5) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(10, 10);
             COVERAGE_INC(hmap_pathological);
+            VLOG_DBG_RL(&rl, "%s: %d nodes in bucket (%"PRIuSIZE" nodes, %"PRIuSIZE" buckets)",
+                        where, count, hmap->n, hmap->mask + 1);
         }
     }
     hmap_swap(hmap, &tmp);
@@ -138,38 +142,50 @@ calc_mask(size_t capacity)
     return mask;
 }
 
-/* Expands 'hmap', if necessary, to optimize the performance of searches. */
+/* Expands 'hmap', if necessary, to optimize the performance of searches.
+ *
+ * ('where' is used in debug logging.  Commonly one would use hmap_expand() to
+ * automatically provide the caller's source file and line number for
+ * 'where'.) */
 void
-hmap_expand(struct hmap *hmap)
+hmap_expand_at(struct hmap *hmap, const char *where)
 {
     size_t new_mask = calc_mask(hmap->n);
     if (new_mask > hmap->mask) {
         COVERAGE_INC(hmap_expand);
-        resize(hmap, new_mask);
+        resize(hmap, new_mask, where);
     }
 }
 
-/* Shrinks 'hmap', if necessary, to optimize the performance of iteration. */
+/* Shrinks 'hmap', if necessary, to optimize the performance of iteration.
+ *
+ * ('where' is used in debug logging.  Commonly one would use hmap_shrink() to
+ * automatically provide the caller's source file and line number for
+ * 'where'.) */
 void
-hmap_shrink(struct hmap *hmap)
+hmap_shrink_at(struct hmap *hmap, const char *where)
 {
     size_t new_mask = calc_mask(hmap->n);
     if (new_mask < hmap->mask) {
         COVERAGE_INC(hmap_shrink);
-        resize(hmap, new_mask);
+        resize(hmap, new_mask, where);
     }
 }
 
 /* Expands 'hmap', if necessary, to optimize the performance of searches when
  * it has up to 'n' elements.  (But iteration will be slow in a hash map whose
- * allocated capacity is much higher than its current number of nodes.)  */
+ * allocated capacity is much higher than its current number of nodes.)
+ *
+ * ('where' is used in debug logging.  Commonly one would use hmap_reserve() to
+ * automatically provide the caller's source file and line number for
+ * 'where'.) */
 void
-hmap_reserve(struct hmap *hmap, size_t n)
+hmap_reserve_at(struct hmap *hmap, size_t n, const char *where)
 {
     size_t new_mask = calc_mask(n);
     if (new_mask > hmap->mask) {
         COVERAGE_INC(hmap_reserve);
-        resize(hmap, new_mask);
+        resize(hmap, new_mask, where);
     }
 }
 

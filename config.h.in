@@ -3,21 +3,56 @@
 /* Define if building universal (internal helper macro) */
 #undef AC_APPLE_UNIVERSAL_BUILD
 
-/* Define to 1 to enable time caching, to 0 to disable time caching, or leave
-   undefined to use the default (as one should ordinarily do). */
-#undef CACHE_TIME
+/* If the C compiler is GCC 4.7 or later, define to the return value of
+   __atomic_always_lock_free(1, 0). If the C compiler is not GCC or is an
+   older version of GCC, the value does not matter. */
+#undef ATOMIC_ALWAYS_LOCK_FREE_1B
+
+/* If the C compiler is GCC 4.7 or later, define to the return value of
+   __atomic_always_lock_free(2, 0). If the C compiler is not GCC or is an
+   older version of GCC, the value does not matter. */
+#undef ATOMIC_ALWAYS_LOCK_FREE_2B
+
+/* If the C compiler is GCC 4.7 or later, define to the return value of
+   __atomic_always_lock_free(4, 0). If the C compiler is not GCC or is an
+   older version of GCC, the value does not matter. */
+#undef ATOMIC_ALWAYS_LOCK_FREE_4B
+
+/* If the C compiler is GCC 4.7 or later, define to the return value of
+   __atomic_always_lock_free(8, 0). If the C compiler is not GCC or is an
+   older version of GCC, the value does not matter. */
+#undef ATOMIC_ALWAYS_LOCK_FREE_8B
 
 /* Define to 1 if building on ESX. */
 #undef ESX
 
-/* Define to 1 if you have the `backtrace' function. */
+/* Define to 1 if you have backtrace(3). */
 #undef HAVE_BACKTRACE
 
-/* Define to 1 if you have the <execinfo.h> header file. */
-#undef HAVE_EXECINFO_H
+/* Define to 1 if you have the declaration of `strerror_r', and to 0 if you
+   don't. */
+#undef HAVE_DECL_STRERROR_R
+
+/* Define to 1 if you have the declaration of `sys_siglist', and to 0 if you
+   don't. */
+#undef HAVE_DECL_SYS_SIGLIST
+
+/* Define to 1 if you have the <dlfcn.h> header file. */
+#undef HAVE_DLFCN_H
+
+/* Define to 1 if the C compiler and linker supports the GCC 4.0+ atomic
+   built-ins. */
+#undef HAVE_GCC4_ATOMICS
 
 /* Define to 1 if you have the `getloadavg' function. */
 #undef HAVE_GETLOADAVG
+
+/* Define to 1 if you have the `getmntent_r' function. */
+#undef HAVE_GETMNTENT_R
+
+/* Define to 1 if pthread_setname_np() is available and takes 2 parameters
+   (like glibc). */
+#undef HAVE_GLIBC_PTHREAD_SETNAME_NP
 
 /* Define to 1 if net/if_dl.h is available. */
 #undef HAVE_IF_DL
@@ -30,6 +65,9 @@
 
 /* Define to 1 if you have the `socket' library (-lsocket). */
 #undef HAVE_LIBSOCKET
+
+/* Define to 1 if you have the <linux/if_ether.h> header file. */
+#undef HAVE_LINUX_IF_ETHER_H
 
 /* Define to 1 if you have the <linux/types.h> header file. */
 #undef HAVE_LINUX_TYPES_H
@@ -47,23 +85,36 @@
 /* Define to 1 if you have the <mntent.h> header file. */
 #undef HAVE_MNTENT_H
 
+/* Define to 1 if pthread_setname_np() is available and takes 3 parameters
+   (like NetBSD). */
+#undef HAVE_NETBSD_PTHREAD_SETNAME_NP
+
 /* Define to 1 if Netlink protocol is available. */
 #undef HAVE_NETLINK
+
+/* Define to 1 if you have the <net/if_mib.h> header file. */
+#undef HAVE_NET_IF_MIB_H
 
 /* Define to 1 if OpenSSL is installed. */
 #undef HAVE_OPENSSL
 
-/* Define to 1 if you have the `setmntent' function. */
-#undef HAVE_SETMNTENT
+/* Define to 1 if you have the `pthread_set_name_np' function. */
+#undef HAVE_PTHREAD_SET_NAME_NP
 
 /* Define to 1 if you have the `statvfs' function. */
 #undef HAVE_STATVFS
+
+/* Define to 1 if you have the <stdatomic.h> header file. */
+#undef HAVE_STDATOMIC_H
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
+
+/* Define to 1 if you have the `strerror_r' function. */
+#undef HAVE_STRERROR_R
 
 /* Define to 1 if you have the <strings.h> header file. */
 #undef HAVE_STRINGS_H
@@ -74,11 +125,11 @@
 /* Define to 1 if you have the `strnlen' function. */
 #undef HAVE_STRNLEN
 
-/* Define to 1 if you have the `strsignal' function. */
-#undef HAVE_STRSIGNAL
-
 /* Define if strtok_r macro segfaults on some inputs */
 #undef HAVE_STRTOK_R_BUG
+
+/* Define to 1 if `ifr_flagshigh' is a member of `struct ifreq'. */
+#undef HAVE_STRUCT_IFREQ_IFR_FLAGSHIGH
 
 /* Define to 1 if `st_mtimensec' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIMENSEC
@@ -95,14 +146,26 @@
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
+/* Define to 1 if the C compiler and linker supports the C11 thread_local
+   matcro defined in <threads.h>. */
+#undef HAVE_THREAD_LOCAL
+
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
 /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
 #undef HAVE_VALGRIND_VALGRIND_H
 
+/* Define to 1 if the C compiler and linker supports the GCC __thread
+   extenions. */
+#undef HAVE___THREAD
+
 /* System uses the linux datapath module. */
 #undef LINUX_DATAPATH
+
+/* Define to the sub-directory in which libtool stores uninstalled libraries.
+   */
+#undef LT_OBJDIR
 
 /* Define to 1 if your C compiler doesn't accept -c and -o together. */
 #undef NO_MINUS_C_MINUS_O
@@ -131,10 +194,8 @@
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
-/* Define to 1 if the compiler support putting variables into sections with
-   user-defined names and the linker automatically defines __start_SECNAME and
-   __stop_SECNAME symbols that designate the start and end of the section. */
-#undef USE_LINKER_SECTIONS
+/* Define to 1 if strerror_r returns char *. */
+#undef STRERROR_R_CHAR_P
 
 /* Enable extensions on AIX 3, Interix.  */
 #ifndef _ALL_SOURCE
@@ -160,6 +221,9 @@
 
 /* Version number of package */
 #undef VERSION
+
+/* Define to 1 if building on WIN32. */
+#undef WIN32
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

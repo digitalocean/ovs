@@ -16,11 +16,13 @@ TESTSUITE_AT = \
 	tests/daemon-py.at \
 	tests/ofp-actions.at \
 	tests/ofp-print.at \
+	tests/ofp-util.at \
 	tests/ofp-errors.at \
 	tests/ovs-ofctl.at \
 	tests/odp.at \
 	tests/multipath.at \
-	tests/autopath.at \
+	tests/bfd.at \
+	tests/cfm.at \
 	tests/lacp.at \
 	tests/learn.at \
 	tests/vconn.at \
@@ -31,10 +33,12 @@ TESTSUITE_AT = \
 	tests/json.at \
 	tests/jsonrpc.at \
 	tests/jsonrpc-py.at \
-	tests/timeval.at \
+	tests/tunnel.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
+	tests/ovs-vswitchd.at \
 	tests/ofproto-dpif.at \
+	tests/vlan-splinters.at \
 	tests/ofproto-macros.at \
 	tests/ofproto.at \
 	tests/ovsdb.at \
@@ -60,11 +64,12 @@ TESTSUITE_AT = \
 	tests/ovs-xapi-sync.at \
 	tests/stp.at \
 	tests/interface-reconfigure.at \
-	tests/vlog.at
+	tests/vlog.at \
+	tests/vtep-ctl.at
 TESTSUITE = $(srcdir)/tests/testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
 
-AUTOTEST_PATH = utilities:vswitchd:ovsdb:tests
+AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests
 
 check-local: tests/atconfig tests/atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
@@ -95,6 +100,7 @@ valgrind_wrappers = \
 	tests/valgrind/ovsdb-server \
 	tests/valgrind/ovsdb-tool \
 	tests/valgrind/test-aes128 \
+	tests/valgrind/test-atomic \
 	tests/valgrind/test-bundle \
 	tests/valgrind/test-byte-order \
 	tests/valgrind/test-classifier \
@@ -103,6 +109,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-flows \
 	tests/valgrind/test-hash \
 	tests/valgrind/test-heap \
+	tests/valgrind/test-hindex \
 	tests/valgrind/test-hmap \
 	tests/valgrind/test-json \
 	tests/valgrind/test-jsonrpc \
@@ -116,7 +123,6 @@ valgrind_wrappers = \
 	tests/valgrind/test-reconnect \
 	tests/valgrind/test-sha1 \
 	tests/valgrind/test-stp \
-	tests/valgrind/test-timeval \
 	tests/valgrind/test-type-props \
 	tests/valgrind/test-unix-socket \
 	tests/valgrind/test-uuid \
@@ -143,6 +149,12 @@ check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
 	@echo 'Valgrind output can be found in tests/testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
 
+# OFTest support.
+
+check-oftest: all
+	srcdir='$(srcdir)' $(SHELL) $(srcdir)/tests/run-oftest
+EXTRA_DIST += tests/run-oftest
+
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean
 
@@ -164,84 +176,103 @@ $(srcdir)/package.m4: $(top_srcdir)/configure.ac
 
 noinst_PROGRAMS += tests/test-aes128
 tests_test_aes128_SOURCES = tests/test-aes128.c
-tests_test_aes128_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_aes128_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+
+noinst_PROGRAMS += tests/test-atomic
+tests_test_atomic_SOURCES = tests/test-atomic.c
+tests_test_atomic_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-bundle
 tests_test_bundle_SOURCES = tests/test-bundle.c
-tests_test_bundle_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_bundle_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-classifier
 tests_test_classifier_SOURCES = tests/test-classifier.c
-tests_test_classifier_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_classifier_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+
+noinst_PROGRAMS += tests/test-controller
+MAN_ROOTS += tests/test-controller.8.in
+DISTCLEANFILES += utilities/test-controller.8
+noinst_man_MANS += tests/test-controller.8
+tests_test_controller_SOURCES = tests/test-controller.c
+tests_test_controller_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-csum
 tests_test_csum_SOURCES = tests/test-csum.c
-tests_test_csum_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_csum_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-file_name
 tests_test_file_name_SOURCES = tests/test-file_name.c
-tests_test_file_name_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_file_name_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-flows
 tests_test_flows_SOURCES = tests/test-flows.c
-tests_test_flows_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_flows_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 dist_check_SCRIPTS = tests/flowgen.pl
 
 noinst_PROGRAMS += tests/test-hash
 tests_test_hash_SOURCES = tests/test-hash.c
-tests_test_hash_LDADD = lib/libopenvswitch.a
+tests_test_hash_LDADD = lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/test-heap
 tests_test_heap_SOURCES = tests/test-heap.c
-tests_test_heap_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_heap_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+
+noinst_PROGRAMS += tests/test-hindex
+tests_test_hindex_SOURCES = tests/test-hindex.c
+tests_test_hindex_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-hmap
 tests_test_hmap_SOURCES = tests/test-hmap.c
-tests_test_hmap_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_hmap_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-json
 tests_test_json_SOURCES = tests/test-json.c
-tests_test_json_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_json_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-jsonrpc
 tests_test_jsonrpc_SOURCES = tests/test-jsonrpc.c
-tests_test_jsonrpc_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_jsonrpc_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-list
 tests_test_list_SOURCES = tests/test-list.c
-tests_test_list_LDADD = lib/libopenvswitch.a
+tests_test_list_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-lockfile
 tests_test_lockfile_SOURCES = tests/test-lockfile.c
-tests_test_lockfile_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_lockfile_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-multipath
 tests_test_multipath_SOURCES = tests/test-multipath.c
-tests_test_multipath_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_multipath_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-packets
 tests_test_packets_SOURCES = tests/test-packets.c
-tests_test_packets_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_packets_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-random
 tests_test_random_SOURCES = tests/test-random.c
-tests_test_random_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_random_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-stp
 tests_test_stp_SOURCES = tests/test-stp.c
-tests_test_stp_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_stp_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+
+noinst_PROGRAMS += tests/test-sflow
+tests_test_sflow_SOURCES = tests/test-sflow.c
+tests_test_sflow_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-netflow
 tests_test_netflow_SOURCES = tests/test-netflow.c
-tests_test_netflow_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_netflow_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-unix-socket
 tests_test_unix_socket_SOURCES = tests/test-unix-socket.c
-tests_test_unix_socket_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_unix_socket_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-odp
 tests_test_odp_SOURCES = tests/test-odp.c
-tests_test_odp_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_odp_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-ovsdb
 tests_test_ovsdb_SOURCES = \
@@ -249,7 +280,7 @@ tests_test_ovsdb_SOURCES = \
 	tests/idltest.c \
 	tests/idltest.h
 EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
-tests_test_ovsdb_LDADD = ovsdb/libovsdb.a lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_ovsdb_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la $(SSL_LIBS)
 
 # idltest schema and IDL
 OVSIDL_BUILT += tests/idltest.c tests/idltest.h tests/idltest.ovsidl
@@ -263,15 +294,11 @@ tests/idltest.c: tests/idltest.h
 
 noinst_PROGRAMS += tests/test-reconnect
 tests_test_reconnect_SOURCES = tests/test-reconnect.c
-tests_test_reconnect_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_reconnect_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-sha1
 tests_test_sha1_SOURCES = tests/test-sha1.c
-tests_test_sha1_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
-
-noinst_PROGRAMS += tests/test-timeval
-tests_test_timeval_SOURCES = tests/test-timeval.c
-tests_test_timeval_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_sha1_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-strtok_r
 tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
@@ -281,21 +308,19 @@ tests_test_type_props_SOURCES = tests/test-type-props.c
 
 noinst_PROGRAMS += tests/test-util
 tests_test_util_SOURCES = tests/test-util.c
-tests_test_util_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_util_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-uuid
 tests_test_uuid_SOURCES = tests/test-uuid.c
-tests_test_uuid_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_uuid_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-vconn
 tests_test_vconn_SOURCES = tests/test-vconn.c
-tests_test_vconn_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
+tests_test_vconn_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 noinst_PROGRAMS += tests/test-byte-order
 tests_test_byte_order_SOURCES = tests/test-byte-order.c
-tests_test_byte_order_LDADD = lib/libopenvswitch.a
-
-EXTRA_DIST += tests/choose-port.pl
+tests_test_byte_order_LDADD = lib/libopenvswitch.la
 
 # Python tests.
 CHECK_PYFILES = \
@@ -306,6 +331,7 @@ CHECK_PYFILES = \
 	tests/test-ovsdb.py \
 	tests/test-reconnect.py \
 	tests/MockXenAPI.py \
+	tests/test-unix-socket.py \
 	tests/test-unixctl.py \
 	tests/test-vlog.py
 EXTRA_DIST += $(CHECK_PYFILES)

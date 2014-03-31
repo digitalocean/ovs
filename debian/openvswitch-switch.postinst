@@ -59,6 +59,11 @@ case "$1" in
         ;;
 esac
 
+# force-reload-kmod during upgrade. If a user wants to override this,
+# they can set the variable OVS_FORCE_RELOAD_KMOD=no while installing.
+[ -z "${OVS_FORCE_RELOAD_KMOD}" ] && OVS_FORCE_RELOAD_KMOD=yes || true
+export OVS_FORCE_RELOAD_KMOD
+
 # Do not fail package installation just because the kernel module
 # is not available.
 OVS_MISSING_KMOD_OK=yes

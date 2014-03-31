@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #ifndef STREAM_PROVIDER_H
 #define STREAM_PROVIDER_H 1
 
-#include <assert.h>
 #include <sys/types.h>
 #include "stream.h"
 
@@ -30,23 +29,15 @@ struct stream {
     const struct stream_class *class;
     int state;
     int error;
-    ovs_be32 remote_ip;
-    ovs_be16 remote_port;
-    ovs_be32 local_ip;
-    ovs_be16 local_port;
     char *name;
 };
 
 void stream_init(struct stream *, const struct stream_class *,
                  int connect_status, const char *name);
-void stream_set_remote_ip(struct stream *, ovs_be32 remote_ip);
-void stream_set_remote_port(struct stream *, ovs_be16 remote_port);
-void stream_set_local_ip(struct stream *, ovs_be32 local_ip);
-void stream_set_local_port(struct stream *, ovs_be16 local_port);
 static inline void stream_assert_class(const struct stream *stream,
                                        const struct stream_class *class)
 {
-    assert(stream->class == class);
+    ovs_assert(stream->class == class);
 }
 
 struct stream_class {
@@ -140,13 +131,15 @@ struct stream_class {
 struct pstream {
     const struct pstream_class *class;
     char *name;
+    ovs_be16 bound_port;
 };
 
 void pstream_init(struct pstream *, const struct pstream_class *, const char *name);
+void pstream_set_bound_port(struct pstream *, ovs_be16 bound_port);
 static inline void pstream_assert_class(const struct pstream *pstream,
                                         const struct pstream_class *class)
 {
-    assert(pstream->class == class);
+    ovs_assert(pstream->class == class);
 }
 
 struct pstream_class {

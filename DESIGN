@@ -84,8 +84,8 @@ OFPP_LOCAL as a physical port and support OFPAT_ENQUEUE on it as well.
 OFPT_FLOW_MOD
 =============
 
-The OpenFlow 1.0 specification for the behavior of OFPT_FLOW_MOD is
-confusing.  The following table summarizes the Open vSwitch
+The OpenFlow specification for the behavior of OFPT_FLOW_MOD is
+confusing.  The following tables summarize the Open vSwitch
 implementation of its behavior in the following categories:
 
     - "match on priority": Whether the flow_mod acts only on flows
@@ -93,7 +93,12 @@ implementation of its behavior in the following categories:
 
     - "match on out_port": Whether the flow_mod acts only on flows
       that output to the out_port included in the flow_mod message (if
-      out_port is not OFPP_NONE).
+      out_port is not OFPP_NONE).  OpenFlow 1.1 and later have a
+      similar feature (not listed separately here) for out_group.
+
+    - "match on flow_cookie": Whether the flow_mod acts only on flows
+      whose flow_cookie matches an optional controller-specified value
+      and mask.
 
     - "updates flow_cookie": Whether the flow_mod changes the
       flow_cookie of the flow or flows that it matches to the
@@ -120,6 +125,11 @@ implementation of its behavior in the following categories:
     - "zeros counters": Whether the flow_mod resets per-flow packet
       and byte counters to zero.
 
+    - "may add a new flow": Whether the flow_mod may add a new flow to
+      the flow table.  (Obviously this is always true for "add"
+      commands but in some OpenFlow versions "modify" and
+      "modify-strict" can also add new flows.)
+
     - "sends flow_removed message": Whether the flow_mod generates a
       flow_removed message for the flow or flows that it affects.
 
@@ -128,11 +138,17 @@ indicated behavior, "---" means that it does not, an empty cell means
 that the property is not applicable, and other values are explained
 below the table.
 
+OpenFlow 1.0
+------------
+
                                           MODIFY          DELETE
                              ADD  MODIFY  STRICT  DELETE  STRICT
                              ===  ======  ======  ======  ======
-match on priority            ---    ---     yes     ---     yes
+match on priority            yes    ---     yes     ---     yes
 match on out_port            ---    ---     ---     yes     yes
+match on flow_cookie         ---    ---     ---     ---     ---
+match on table_id            ---    ---     ---     ---     ---
+controller chooses table_id  ---    ---     ---
 updates flow_cookie          yes    yes     yes
 updates OFPFF_SEND_FLOW_REM  yes     +       +
 honors OFPFF_CHECK_OVERLAP   yes     +       +
@@ -141,6 +157,7 @@ updates hard_timeout         yes     +       +
 resets idle timer            yes     +       +
 resets hard timer            yes    yes     yes
 zeros counters               yes     +       +
+may add a new flow           yes    yes     yes
 sends flow_removed message   ---    ---     ---      %       %
 
 (+) "modify" and "modify-strict" only take these actions when they
@@ -150,6 +167,150 @@ sends flow_removed message   ---    ---     ---      %       %
     the deleted flow or flows have the OFPFF_SEND_FLOW_REM flag set.
     (Each controller can separately control whether it wants to
     receive the generated messages.)
+
+OpenFlow 1.1
+------------
+
+OpenFlow 1.1 makes these changes:
+
+    - The controller now must specify the table_id of the flow match
+      searched and into which a flow may be inserted.  Behavior for a
+      table_id of 255 is undefined.
+
+    - A flow_mod, except an "add", can now match on the flow_cookie.
+
+    - When a flow_mod matches on the flow_cookie, "modify" and
+      "modify-strict" never insert a new flow.
+
+                                          MODIFY          DELETE
+                             ADD  MODIFY  STRICT  DELETE  STRICT
+                             ===  ======  ======  ======  ======
+match on priority            yes    ---     yes     ---     yes
+match on out_port            ---    ---     ---     yes     yes
+match on flow_cookie         ---    yes     yes     yes     yes
+match on table_id            yes    yes     yes     yes     yes
+controller chooses table_id  yes    yes     yes
+updates flow_cookie          yes    ---     ---
+updates OFPFF_SEND_FLOW_REM  yes     +       +
+honors OFPFF_CHECK_OVERLAP   yes     +       +
+updates idle_timeout         yes     +       +
+updates hard_timeout         yes     +       +
+resets idle timer            yes     +       +
+resets hard timer            yes    yes     yes
+zeros counters               yes     +       +
+may add a new flow           yes     #       #
+sends flow_removed message   ---    ---     ---      %       %
+
+(+) "modify" and "modify-strict" only take these actions when they
+    create a new flow, not when they update an existing flow.
+
+(%) "delete" and "delete_strict" generates a flow_removed message if
+    the deleted flow or flows have the OFPFF_SEND_FLOW_REM flag set.
+    (Each controller can separately control whether it wants to
+    receive the generated messages.)
+
+(#) "modify" and "modify-strict" only add a new flow if the flow_mod
+    does not match on any bits of the flow cookie
+
+OpenFlow 1.2
+------------
+
+OpenFlow 1.2 makes these changes:
+
+    - Only "add" commands ever add flows, "modify" and "modify-strict"
+      never do.
+
+    - A new flag OFPFF_RESET_COUNTS now controls whether "modify" and
+      "modify-strict" reset counters, whereas previously they never
+      reset counters (except when they inserted a new flow).
+
+                                          MODIFY          DELETE
+                             ADD  MODIFY  STRICT  DELETE  STRICT
+                             ===  ======  ======  ======  ======
+match on priority            yes    ---     yes     ---     yes
+match on out_port            ---    ---     ---     yes     yes
+match on flow_cookie         ---    yes     yes     yes     yes
+match on table_id            yes    yes     yes     yes     yes
+controller chooses table_id  yes    yes     yes
+updates flow_cookie          yes    ---     ---
+updates OFPFF_SEND_FLOW_REM  yes    ---     ---
+honors OFPFF_CHECK_OVERLAP   yes    ---     ---
+updates idle_timeout         yes    ---     ---
+updates hard_timeout         yes    ---     ---
+resets idle timer            yes    ---     ---
+resets hard timer            yes    yes     yes
+zeros counters               yes     &       &
+may add a new flow           yes    ---     ---
+sends flow_removed message   ---    ---     ---      %       %
+
+(%) "delete" and "delete_strict" generates a flow_removed message if
+    the deleted flow or flows have the OFPFF_SEND_FLOW_REM flag set.
+    (Each controller can separately control whether it wants to
+    receive the generated messages.)
+
+(&) "modify" and "modify-strict" reset counters if the
+    OFPFF_RESET_COUNTS flag is specified.
+
+OpenFlow 1.3
+------------
+
+OpenFlow 1.3 makes these changes:
+
+    - Behavior for a table_id of 255 is now defined, for "delete" and
+      "delete-strict" commands, as meaning to delete from all tables.
+      A table_id of 255 is now explicitly invalid for other commands.
+
+    - New flags OFPFF_NO_PKT_COUNTS and OFPFF_NO_BYT_COUNTS for "add"
+      operations.
+
+The table for 1.3 is the same as the one shown above for 1.2.
+
+
+OFPT_PACKET_IN
+==============
+
+The OpenFlow 1.1 specification for OFPT_PACKET_IN is confusing.  The
+definition in OF1.1 openflow.h is[*]:
+
+  /* Packet received on port (datapath -> controller). */
+  struct ofp_packet_in {
+      struct ofp_header header;
+      uint32_t buffer_id;     /* ID assigned by datapath. */
+      uint32_t in_port;       /* Port on which frame was received. */
+      uint32_t in_phy_port;   /* Physical Port on which frame was received. */
+      uint16_t total_len;     /* Full length of frame. */
+      uint8_t reason;         /* Reason packet is being sent (one of OFPR_*) */
+      uint8_t table_id;       /* ID of the table that was looked up */
+      uint8_t data[0];        /* Ethernet frame, halfway through 32-bit word,
+                                 so the IP header is 32-bit aligned.  The
+                                 amount of data is inferred from the length
+                                 field in the header.  Because of padding,
+                                 offsetof(struct ofp_packet_in, data) ==
+                                 sizeof(struct ofp_packet_in) - 2. */
+  };
+  OFP_ASSERT(sizeof(struct ofp_packet_in) == 24);
+
+The confusing part is the comment on the data[] member.  This comment
+is a leftover from OF1.0 openflow.h, in which the comment was correct:
+sizeof(struct ofp_packet_in) is 20 in OF1.0 and offsetof(struct
+ofp_packet_in, data) is 18.  When OF1.1 was written, the structure
+members were changed but the comment was carelessly not updated, and
+the comment became wrong: sizeof(struct ofp_packet_in) and
+offsetof(struct ofp_packet_in, data) are both 24 in OF1.1.
+
+That leaves the question of how to implement ofp_packet_in in OF1.1.
+The OpenFlow reference implementation for OF1.1 does not include any
+padding, that is, the first byte of the encapsulated frame immediately
+follows the 'table_id' member without a gap.  Open vSwitch therefore
+implements it the same way for compatibility.
+
+For an earlier discussion, please see the thread archived at:
+https://mailman.stanford.edu/pipermail/openflow-discuss/2011-August/002604.html
+
+[*] The quoted definition is directly from OF1.1.  Definitions used
+    inside OVS omit the 8-byte ofp_header members, so the sizes in
+    this discussion are 8 bytes larger than those declared in OVS
+    header files.
 
 
 VLAN Matching
@@ -185,7 +346,7 @@ Each column is interpreted as follows.
 
     - OF1.0 and OF1.1: wwww/x,yy/z means dl_vlan wwww, OFPFW_DL_VLAN
       x, dl_vlan_pcp yy, and OFPFW_DL_VLAN_PCP z.  ? means that the
-      given nibble is ignored (and conventionally 0 for wwww or z,
+      given nibble is ignored (and conventionally 0 for wwww or yy,
       conventionally 1 for x or z).  <none> means that the given match
       is not supported.
 

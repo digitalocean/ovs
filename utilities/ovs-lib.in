@@ -37,6 +37,33 @@ else
     dbdir='@DBDIR@'
 fi
 
+ovs_ctl_log () {
+    echo "$@" >> "${logdir}/ovs-ctl.log"
+}
+
+ovs_ctl () {
+    case "$@" in
+        *"=strace"*)
+            # In case of running the daemon with strace, piping the o/p causes
+            # the script to block (strace probably does not close the inherited
+            # pipe). So, do not log the o/p to ovs-ctl.log.
+            "${datadir}/scripts/ovs-ctl" "$@"
+        ;;
+        "status")
+            # In case of the command 'status', we should return the exit status
+            # of ovs-ctl. It is also useful to document the o/p in ovs-ctl.log.
+            display=`"${datadir}/scripts/ovs-ctl" "$@" 2>&1`
+            rc=$?
+            echo "${display}" | tee -a "${logdir}/ovs-ctl.log"
+            return ${rc}
+        ;;
+        *)
+            echo "`date -u`:$@" >> "${logdir}/ovs-ctl.log"
+            "${datadir}/scripts/ovs-ctl" "$@" 2>&1 | tee -a "${logdir}/ovs-ctl.log"
+        ;;
+    esac
+}
+
 VERSION='@VERSION@'
 
 DAEMON_CWD=/
@@ -167,7 +194,10 @@ start_daemon () {
 stop_daemon () {
     if test -e "$rundir/$1.pid"; then
         if pid=`cat "$rundir/$1.pid"`; then
-            for action in TERM .1 .25 .65 1 1 1 1 KILL 1 1 1 1 FAIL; do
+            for action in TERM .1 .25 .65 1 1 1 1 KILL 1 1 1 2 10 15 30 FAIL; do
+                if pid_exists "$pid" >/dev/null 2>&1; then :; else
+                    return 0
+                fi
                 case $action in
                     TERM)
                         action "Killing $1 ($pid)" kill $pid
@@ -180,11 +210,7 @@ stop_daemon () {
                         return 1
                         ;;
                     *)
-                        if pid_exists $pid >/dev/null 2>&1; then
-                            sleep $action
-                        else
-                            return 0
-                        fi
+                        sleep $action
                         ;;
                 esac
             done

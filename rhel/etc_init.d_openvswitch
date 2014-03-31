@@ -31,7 +31,7 @@
 test -e /etc/sysconfig/openvswitch && . /etc/sysconfig/openvswitch
 
 start () {
-    set $ovs_ctl ${1-start}
+    set ovs_ctl ${1-start}
     set "$@" --system-id=random
     if test X"$FORCE_COREFILES" != X; then
 	set "$@" --force-corefiles="$FORCE_COREFILES"
@@ -45,23 +45,26 @@ start () {
     if test X"$VSWITCHD_MLOCKALL" != X; then
 	set "$@" --mlockall="$VSWITCHD_MLOCKALL"
     fi
-    if test X"$BRCOMPAT" = Xyes; then
-	set "$@" --brcompat
-    fi
     set "$@" $OVS_CTL_OPTS
     "$@"
-
-    $ovs_ctl --protocol=gre enable-protocol
 
     touch /var/lock/subsys/openvswitch
 }
 
 stop () {
-    $ovs_ctl stop
+    ovs_ctl stop
     rm -f /var/lock/subsys/openvswitch
 }
 
-ovs_ctl=/usr/share/openvswitch/scripts/ovs-ctl
+restart () {
+    if [ "$1" = "--save-flows=yes" ]; then
+        start restart
+    else
+        stop
+        start
+    fi
+}
+
 case $1 in
     start)
         start
@@ -70,18 +73,18 @@ case $1 in
         stop
         ;;
     restart)
-        stop
-        start
+        shift
+        restart "$@"
         ;;
     reload|force-reload)
         # Nothing to do.
         ;;
     status)
-        $ovs_ctl status
+        ovs_ctl status
         exit $?
         ;;
     version)
-        $ovs_ctl version
+        ovs_ctl version
         ;;
     force-reload-kmod)
         start force-reload-kmod

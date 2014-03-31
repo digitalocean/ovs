@@ -4,7 +4,7 @@
 .  ns
 .  IP "\\$1"
 ..
-.TH ovs\-appctl 8 "November 2009" "Open vSwitch" "Open vSwitch Manual"
+.TH ovs\-appctl 8 "@VERSION@" "Open vSwitch" "Open vSwitch Manual"
 .ds PN ovs\-appctl
 .
 .SH NAME
@@ -148,6 +148,9 @@ expanded as follows:
 .IP \fB%A\fR
 The name of the application logging the message, e.g. \fBovs\-vswitchd\fR.
 .
+.IP \fB%B\fR
+The RFC5424 syslog PRI of the message.
+.
 .IP \fB%c\fR
 The name of the module (as shown by \fBovs\-appctl \-\-list\fR) logging
 the message.
@@ -158,13 +161,23 @@ The current date and time in ISO 8601 format (YYYY\-MM\-DD HH:MM:SS).
 .IP \fB%d{\fIformat\fB}\fR
 The current date and time in the specified \fIformat\fR, which takes
 the same format as the \fItemplate\fR argument to \fBstrftime\fR(3).
+As an extension, any \fB#\fR characters in \fIformat\fR will be
+replaced by fractional seconds, e.g. use \fB%H:%M:%S.###\fR for the
+time to the nearest millisecond.  Sub-second times are only
+approximate and currently decimal places after the third will always
+be reported as zero.
 .
 .IP \fB%D\fR
 The current UTC date and time in ISO 8601 format (YYYY\-MM\-DD HH:MM:SS).
 .
 .IP \fB%D{\fIformat\fB}\fR
-The current UTC date and time in the specified \fIformat\fR, which takes
-the same format as the \fItemplate\fR argument to \fBstrftime\fR(3).
+The current UTC date and time in the specified \fIformat\fR, which
+takes the same format as the \fItemplate\fR argument to
+\fBstrftime\fR(3).  Supports the same extension for sub-second
+resolution as \fB%d{\fR...\fB}\fR.
+.
+.IP \fB%E\fR
+The hostname of the node running the application.
 .
 .IP \fB%m\fR
 The message being logged.

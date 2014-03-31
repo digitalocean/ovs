@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,16 @@
 VLOG_DEFINE_THIS_MODULE(connmgr);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-/* An OpenFlow connection. */
+/* An OpenFlow connection.
+ *
+ *
+ * Thread-safety
+ * =============
+ *
+ * 'ofproto_mutex' must be held whenever an ofconn is created or destroyed or,
+ * more or less equivalently, whenever an ofconn is added to or removed from a
+ * connmgr.  'ofproto_mutex' doesn't protect the data inside the ofconn, except
+ * as specifically noted below. */
 struct ofconn {
 /* Configuration that persists from one connection to the next. */
 
@@ -60,7 +69,7 @@ struct ofconn {
 /* State that should be cleared from one connection to the next. */
 
     /* OpenFlow state. */
-    enum nx_role role;           /* Role. */
+    enum ofp12_controller_role role;           /* Role. */
     enum ofputil_protocol protocol; /* Current protocol variant. */
     enum nx_packet_in_format packet_in_format; /* OFPT_PACKET_IN format. */
 
@@ -90,25 +99,50 @@ struct ofconn {
     uint32_t master_async_config[OAM_N_TYPES]; /* master, other */
     uint32_t slave_async_config[OAM_N_TYPES];  /* slave */
 
-    /* Flow monitors. */
-    struct hmap monitors;       /* Contains "struct ofmonitor"s. */
-    struct list updates;        /* List of "struct ofpbuf"s. */
-    bool sent_abbrev_update;    /* Does 'updates' contain NXFME_ABBREV? */
-    struct rconn_packet_counter *monitor_counter;
-    uint64_t monitor_paused;
+/* Flow monitors (e.g. NXST_FLOW_MONITOR). */
+
+    /* Configuration.  Contains "struct ofmonitor"s. */
+    struct hmap monitors OVS_GUARDED_BY(ofproto_mutex);
+
+    /* Flow control.
+     *
+     * When too many flow monitor notifications back up in the transmit buffer,
+     * we pause the transmission of further notifications.  These members track
+     * the flow control state.
+     *
+     * When notifications are flowing, 'monitor_paused' is 0.  When
+     * notifications are paused, 'monitor_paused' is the value of
+     * 'monitor_seqno' at the point we paused.
+     *
+     * 'monitor_counter' counts the OpenFlow messages and bytes currently in
+     * flight.  This value growing too large triggers pausing. */
+    uint64_t monitor_paused OVS_GUARDED_BY(ofproto_mutex);
+    struct rconn_packet_counter *monitor_counter OVS_GUARDED_BY(ofproto_mutex);
+
+    /* State of monitors for a single ongoing flow_mod.
+     *
+     * 'updates' is a list of "struct ofpbuf"s that contain
+     * NXST_FLOW_MONITOR_REPLY messages representing the changes made by the
+     * current flow_mod.
+     *
+     * When 'updates' is nonempty, 'sent_abbrev_update' is true if 'updates'
+     * contains an update event of type NXFME_ABBREV and false otherwise.. */
+    struct list updates OVS_GUARDED_BY(ofproto_mutex);
+    bool sent_abbrev_update OVS_GUARDED_BY(ofproto_mutex);
 };
 
 static struct ofconn *ofconn_create(struct connmgr *, struct rconn *,
-                                    enum ofconn_type, bool enable_async_msgs);
-static void ofconn_destroy(struct ofconn *);
-static void ofconn_flush(struct ofconn *);
+                                    enum ofconn_type, bool enable_async_msgs)
+    OVS_REQUIRES(ofproto_mutex);
+static void ofconn_destroy(struct ofconn *) OVS_REQUIRES(ofproto_mutex);
+static void ofconn_flush(struct ofconn *) OVS_REQUIRES(ofproto_mutex);
 
 static void ofconn_reconfigure(struct ofconn *,
                                const struct ofproto_controller *);
 
 static void ofconn_run(struct ofconn *,
                        bool (*handle_openflow)(struct ofconn *,
-                                               struct ofpbuf *ofp_msg));
+                                               const struct ofpbuf *ofp_msg));
 static void ofconn_wait(struct ofconn *, bool handling_openflow);
 
 static const char *ofconn_get_target(const struct ofconn *);
@@ -119,7 +153,7 @@ static void ofconn_set_rate_limit(struct ofconn *, int rate, int burst);
 static void ofconn_send(const struct ofconn *, struct ofpbuf *,
                         struct rconn_packet_counter *);
 
-static void do_send_packet_in(struct ofpbuf *, void *ofconn_);
+static void do_send_packet_ins(struct ofconn *, struct list *txq);
 
 /* A listener for incoming OpenFlow "service" connections. */
 struct ofservice {
@@ -133,11 +167,14 @@ struct ofservice {
     int burst_limit;            /* Limit on accumulating packet credits. */
     bool enable_async_msgs;     /* Initially enable async messages? */
     uint8_t dscp;               /* DSCP Value for controller connection */
+    uint32_t allowed_versions;  /* OpenFlow protocol versions that may
+                                 * be negotiated for a session. */
 };
 
 static void ofservice_reconfigure(struct ofservice *,
                                   const struct ofproto_controller *);
-static int ofservice_create(struct connmgr *, const char *target, uint8_t dscp);
+static int ofservice_create(struct connmgr *mgr, const char *target,
+                            uint32_t allowed_versions, uint8_t dscp);
 static void ofservice_destroy(struct connmgr *, struct ofservice *);
 static struct ofservice *ofservice_lookup(struct connmgr *,
                                           const char *target);
@@ -151,6 +188,9 @@ struct connmgr {
     /* OpenFlow connections. */
     struct hmap controllers;   /* Controller "struct ofconn"s. */
     struct list all_conns;     /* Contains "struct ofconn"s. */
+    uint64_t master_election_id; /* monotonically increasing sequence number
+                                  * for master election */
+    bool master_election_id_defined;
 
     /* OpenFlow listeners. */
     struct hmap services;       /* Contains "struct ofservice"s. */
@@ -190,6 +230,8 @@ connmgr_create(struct ofproto *ofproto,
 
     hmap_init(&mgr->controllers);
     list_init(&mgr->all_conns);
+    mgr->master_election_id = 0;
+    mgr->master_election_id_defined = false;
 
     hmap_init(&mgr->services);
     mgr->snoops = NULL;
@@ -218,9 +260,12 @@ connmgr_destroy(struct connmgr *mgr)
         return;
     }
 
+    ovs_mutex_lock(&ofproto_mutex);
     LIST_FOR_EACH_SAFE (ofconn, next_ofconn, node, &mgr->all_conns) {
         ofconn_destroy(ofconn);
     }
+    ovs_mutex_unlock(&ofproto_mutex);
+
     hmap_destroy(&mgr->controllers);
 
     HMAP_FOR_EACH_SAFE (ofservice, next_ofservice, node, &mgr->services) {
@@ -261,7 +306,9 @@ connmgr_destroy(struct connmgr *mgr)
  * fail-open processing) are suppressed too. */
 void
 connmgr_run(struct connmgr *mgr,
-            bool (*handle_openflow)(struct ofconn *, struct ofpbuf *ofp_msg))
+            bool (*handle_openflow)(struct ofconn *,
+                                    const struct ofpbuf *ofp_msg))
+    OVS_EXCLUDED(ofproto_mutex)
 {
     struct ofconn *ofconn, *next_ofconn;
     struct ofservice *ofservice;
@@ -289,23 +336,27 @@ connmgr_run(struct connmgr *mgr,
         struct vconn *vconn;
         int retval;
 
-        retval = pvconn_accept(ofservice->pvconn, OFP10_VERSION, &vconn);
+        retval = pvconn_accept(ofservice->pvconn, &vconn);
         if (!retval) {
             struct rconn *rconn;
             char *name;
 
             /* Passing default value for creation of the rconn */
-            rconn = rconn_create(ofservice->probe_interval, 0, ofservice->dscp);
+            rconn = rconn_create(ofservice->probe_interval, 0, ofservice->dscp,
+                                 vconn_get_allowed_versions(vconn));
             name = ofconn_make_name(mgr, vconn_get_name(vconn));
             rconn_connect_unreliably(rconn, vconn, name);
             free(name);
 
+            ovs_mutex_lock(&ofproto_mutex);
             ofconn = ofconn_create(mgr, rconn, OFCONN_SERVICE,
                                    ofservice->enable_async_msgs);
+            ovs_mutex_unlock(&ofproto_mutex);
+
             ofconn_set_rate_limit(ofconn, ofservice->rate_limit,
                                   ofservice->burst_limit);
         } else if (retval != EAGAIN) {
-            VLOG_WARN_RL(&rl, "accept failed (%s)", strerror(retval));
+            VLOG_WARN_RL(&rl, "accept failed (%s)", ovs_strerror(retval));
         }
     }
 
@@ -313,11 +364,11 @@ connmgr_run(struct connmgr *mgr,
         struct vconn *vconn;
         int retval;
 
-        retval = pvconn_accept(mgr->snoops[i], OFP10_VERSION, &vconn);
+        retval = pvconn_accept(mgr->snoops[i], &vconn);
         if (!retval) {
             add_snooper(mgr, vconn);
         } else if (retval != EAGAIN) {
-            VLOG_WARN_RL(&rl, "accept failed (%s)", strerror(retval));
+            VLOG_WARN_RL(&rl, "accept failed (%s)", ovs_strerror(retval));
         }
     }
 }
@@ -398,7 +449,9 @@ connmgr_retry(struct connmgr *mgr)
 
 /* OpenFlow configuration. */
 
-static void add_controller(struct connmgr *, const char *target, uint8_t dscp);
+static void add_controller(struct connmgr *, const char *target, uint8_t dscp,
+                           uint32_t allowed_versions)
+    OVS_REQUIRES(ofproto_mutex);
 static struct ofconn *find_controller_by_target(struct connmgr *,
                                                 const char *target);
 static void update_fail_open(struct connmgr *);
@@ -489,13 +542,18 @@ connmgr_free_controller_info(struct shash *info)
 void
 connmgr_set_controllers(struct connmgr *mgr,
                         const struct ofproto_controller *controllers,
-                        size_t n_controllers)
+                        size_t n_controllers, uint32_t allowed_versions)
+    OVS_EXCLUDED(ofproto_mutex)
 {
     bool had_controllers = connmgr_has_controllers(mgr);
     struct shash new_controllers;
     struct ofconn *ofconn, *next_ofconn;
     struct ofservice *ofservice, *next_ofservice;
     size_t i;
+
+    /* Required to add and remove ofconns.  This could probably be narrowed to
+     * cover a smaller amount of code, if that yielded some benefit. */
+    ovs_mutex_lock(&ofproto_mutex);
 
     /* Create newly configured controllers and services.
      * Create a name to ofproto_controller mapping in 'new_controllers'. */
@@ -504,16 +562,37 @@ connmgr_set_controllers(struct connmgr *mgr,
         const struct ofproto_controller *c = &controllers[i];
 
         if (!vconn_verify_name(c->target)) {
-            if (!find_controller_by_target(mgr, c->target)) {
+            bool add = false;
+            ofconn = find_controller_by_target(mgr, c->target);
+            if (!ofconn) {
                 VLOG_INFO("%s: added primary controller \"%s\"",
                           mgr->name, c->target);
-                add_controller(mgr, c->target, c->dscp);
+                add = true;
+            } else if (rconn_get_allowed_versions(ofconn->rconn) !=
+                       allowed_versions) {
+                VLOG_INFO("%s: re-added primary controller \"%s\"",
+                          mgr->name, c->target);
+                add = true;
+                ofconn_destroy(ofconn);
+            }
+            if (add) {
+                add_controller(mgr, c->target, c->dscp, allowed_versions);
             }
         } else if (!pvconn_verify_name(c->target)) {
-            if (!ofservice_lookup(mgr, c->target)) {
+            bool add = false;
+            ofservice = ofservice_lookup(mgr, c->target);
+            if (!ofservice) {
                 VLOG_INFO("%s: added service controller \"%s\"",
                           mgr->name, c->target);
-                ofservice_create(mgr, c->target, c->dscp);
+                add = true;
+            } else if (ofservice->allowed_versions != allowed_versions) {
+                VLOG_INFO("%s: re-added service controller \"%s\"",
+                          mgr->name, c->target);
+                ofservice_destroy(mgr, ofservice);
+                add = true;
+            }
+            if (add) {
+                ofservice_create(mgr, c->target, allowed_versions, c->dscp);
             }
         } else {
             VLOG_WARN_RL(&rl, "%s: unsupported controller \"%s\"",
@@ -557,6 +636,8 @@ connmgr_set_controllers(struct connmgr *mgr,
     }
 
     shash_destroy(&new_controllers);
+
+    ovs_mutex_unlock(&ofproto_mutex);
 
     update_in_band_remotes(mgr);
     update_fail_open(mgr);
@@ -608,12 +689,15 @@ connmgr_has_snoops(const struct connmgr *mgr)
 /* Creates a new controller for 'target' in 'mgr'.  update_controller() needs
  * to be called later to finish the new ofconn's configuration. */
 static void
-add_controller(struct connmgr *mgr, const char *target, uint8_t dscp)
+add_controller(struct connmgr *mgr, const char *target, uint8_t dscp,
+               uint32_t allowed_versions)
+    OVS_REQUIRES(ofproto_mutex)
 {
     char *name = ofconn_make_name(mgr, target);
     struct ofconn *ofconn;
 
-    ofconn = ofconn_create(mgr, rconn_create(5, 8, dscp), OFCONN_PRIMARY, true);
+    ofconn = ofconn_create(mgr, rconn_create(5, 8, dscp, allowed_versions),
+                           OFCONN_PRIMARY, true);
     ofconn->pktbuf = pktbuf_create();
     rconn_connect(ofconn->rconn, target, name);
     hmap_insert(&mgr->controllers, &ofconn->hmap_node, hash_string(target, 0));
@@ -657,10 +741,9 @@ update_in_band_remotes(struct connmgr *mgr)
             continue;
         }
 
-        if (stream_parse_target_with_default_ports(target,
-                                                   OFP_TCP_PORT,
-                                                   OFP_SSL_PORT,
-                                                   sin)) {
+        if (stream_parse_target_with_default_port(target,
+                                                  OFP_OLD_PORT,
+                                                  sin)) {
             n_addrs++;
         }
     }
@@ -720,12 +803,11 @@ set_pvconns(struct pvconn ***pvconnsp, size_t *n_pvconnsp,
     SSET_FOR_EACH (name, sset) {
         struct pvconn *pvconn;
         int error;
-
-        error = pvconn_open(name, &pvconn, 0);
+        error = pvconn_open(name, 0, 0, &pvconn);
         if (!error) {
             pvconns[n_pvconns++] = pvconn;
         } else {
-            VLOG_ERR("failed to listen on %s: %s", name, strerror(error));
+            VLOG_ERR("failed to listen on %s: %s", name, ovs_strerror(error));
             if (!retval) {
                 retval = error;
             }
@@ -745,12 +827,13 @@ static int
 snoop_preference(const struct ofconn *ofconn)
 {
     switch (ofconn->role) {
-    case NX_ROLE_MASTER:
+    case OFPCR12_ROLE_MASTER:
         return 3;
-    case NX_ROLE_OTHER:
+    case OFPCR12_ROLE_EQUAL:
         return 2;
-    case NX_ROLE_SLAVE:
+    case OFPCR12_ROLE_SLAVE:
         return 1;
+    case OFPCR12_ROLE_NOCHANGE:
     default:
         /* Shouldn't happen. */
         return 0;
@@ -790,26 +873,73 @@ ofconn_get_type(const struct ofconn *ofconn)
     return ofconn->type;
 }
 
+/* If a master election id is defined, stores it into '*idp' and returns
+ * true.  Otherwise, stores UINT64_MAX into '*idp' and returns false. */
+bool
+ofconn_get_master_election_id(const struct ofconn *ofconn, uint64_t *idp)
+{
+    *idp = (ofconn->connmgr->master_election_id_defined
+            ? ofconn->connmgr->master_election_id
+            : UINT64_MAX);
+    return ofconn->connmgr->master_election_id_defined;
+}
+
+/* Sets the master election id.
+ *
+ * Returns true if successful, false if the id is stale
+ */
+bool
+ofconn_set_master_election_id(struct ofconn *ofconn, uint64_t id)
+{
+    if (ofconn->connmgr->master_election_id_defined
+        &&
+        /* Unsigned difference interpreted as a two's complement signed
+         * value */
+        (int64_t)(id - ofconn->connmgr->master_election_id) < 0) {
+        return false;
+    }
+    ofconn->connmgr->master_election_id = id;
+    ofconn->connmgr->master_election_id_defined = true;
+
+    return true;
+}
+
 /* Returns the role configured for 'ofconn'.
  *
- * The default role, if no other role has been set, is NX_ROLE_OTHER. */
-enum nx_role
+ * The default role, if no other role has been set, is OFPCR12_ROLE_EQUAL. */
+enum ofp12_controller_role
 ofconn_get_role(const struct ofconn *ofconn)
 {
     return ofconn->role;
 }
 
-/* Changes 'ofconn''s role to 'role'.  If 'role' is NX_ROLE_MASTER then any
- * existing master is demoted to a slave. */
 void
-ofconn_set_role(struct ofconn *ofconn, enum nx_role role)
+ofconn_send_role_status(struct ofconn *ofconn, uint32_t role, uint8_t reason)
 {
-    if (role == NX_ROLE_MASTER) {
+    struct ofputil_role_status status;
+    struct ofpbuf *buf;
+
+    status.reason = reason;
+    status.role = role;
+    ofconn_get_master_election_id(ofconn, &status.generation_id);
+
+    buf = ofputil_encode_role_status(&status, ofconn_get_protocol(ofconn));
+
+    ofconn_send(ofconn, buf, NULL);
+}
+
+/* Changes 'ofconn''s role to 'role'.  If 'role' is OFPCR12_ROLE_MASTER then
+ * any existing master is demoted to a slave. */
+void
+ofconn_set_role(struct ofconn *ofconn, enum ofp12_controller_role role)
+{
+    if (role != ofconn->role && role == OFPCR12_ROLE_MASTER) {
         struct ofconn *other;
 
         HMAP_FOR_EACH (other, hmap_node, &ofconn->connmgr->controllers) {
-            if (other->role == NX_ROLE_MASTER) {
-                other->role = NX_ROLE_SLAVE;
+            if (other->role == OFPCR12_ROLE_MASTER) {
+                other->role = OFPCR12_ROLE_SLAVE;
+                ofconn_send_role_status(other, OFPCR12_ROLE_SLAVE, OFPCRR_MASTER_REQUEST);
             }
         }
     }
@@ -836,10 +966,24 @@ ofconn_get_invalid_ttl_to_controller(struct ofconn *ofconn)
 
 /* Returns the currently configured protocol for 'ofconn', one of OFPUTIL_P_*.
  *
- * The default, if no other format has been set, is OFPUTIL_P_OPENFLOW10. */
+ * Returns OFPUTIL_P_NONE, which is not a valid protocol, if 'ofconn' hasn't
+ * completed version negotiation.  This can't happen if at least one OpenFlow
+ * message, other than OFPT_HELLO, has been received on the connection (such as
+ * in ofproto.c's message handling code), since version negotiation is a
+ * prerequisite for starting to receive messages.  This means that
+ * OFPUTIL_P_NONE is a special case that most callers need not worry about. */
 enum ofputil_protocol
-ofconn_get_protocol(struct ofconn *ofconn)
+ofconn_get_protocol(const struct ofconn *ofconn)
 {
+    if (ofconn->protocol == OFPUTIL_P_NONE &&
+        rconn_is_connected(ofconn->rconn)) {
+        int version = rconn_get_version(ofconn->rconn);
+        if (version > 0) {
+            ofconn_set_protocol(CONST_CAST(struct ofconn *, ofconn),
+                                ofputil_protocol_from_ofp_version(version));
+        }
+    }
+
     return ofconn->protocol;
 }
 
@@ -906,6 +1050,15 @@ ofconn_set_async_config(struct ofconn *ofconn,
     memcpy(ofconn->slave_async_config, slave_masks, size);
 }
 
+void
+ofconn_get_async_config(struct ofconn *ofconn,
+                        uint32_t *master_masks, uint32_t *slave_masks)
+{
+    size_t size = sizeof ofconn->master_async_config;
+    memcpy(master_masks, ofconn->master_async_config, size);
+    memcpy(slave_masks, ofconn->slave_async_config, size);
+}
+
 /* Sends 'msg' on 'ofconn', accounting it as a reply.  (If there is a
  * sufficient number of OpenFlow replies in-flight on a single ofconn, then the
  * connmgr will stop accepting new OpenFlow requests on that ofconn until the
@@ -935,35 +1088,32 @@ void
 ofconn_send_error(const struct ofconn *ofconn,
                   const struct ofp_header *request, enum ofperr error)
 {
+    static struct vlog_rate_limit err_rl = VLOG_RATE_LIMIT_INIT(10, 10);
     struct ofpbuf *reply;
 
     reply = ofperr_encode_reply(error, request);
-    if (reply) {
-        static struct vlog_rate_limit err_rl = VLOG_RATE_LIMIT_INIT(10, 10);
+    if (!VLOG_DROP_INFO(&err_rl)) {
+        const char *type_name;
+        size_t request_len;
+        enum ofpraw raw;
 
-        if (!VLOG_DROP_INFO(&err_rl)) {
-            const char *type_name;
-            size_t request_len;
-            enum ofpraw raw;
+        request_len = ntohs(request->length);
+        type_name = (!ofpraw_decode_partial(&raw, request,
+                                            MIN(64, request_len))
+                     ? ofpraw_get_name(raw)
+                     : "invalid");
 
-            request_len = ntohs(request->length);
-            type_name = (!ofpraw_decode_partial(&raw, request,
-                                                MIN(64, request_len))
-                         ? ofpraw_get_name(raw)
-                         : "invalid");
-
-            VLOG_INFO("%s: sending %s error reply to %s message",
-                      rconn_get_name(ofconn->rconn), ofperr_to_string(error),
-                      type_name);
-        }
-        ofconn_send_reply(ofconn, reply);
+        VLOG_INFO("%s: sending %s error reply to %s message",
+                  rconn_get_name(ofconn->rconn), ofperr_to_string(error),
+                  type_name);
     }
+    ofconn_send_reply(ofconn, reply);
 }
 
 /* Same as pktbuf_retrieve(), using the pktbuf owned by 'ofconn'. */
 enum ofperr
 ofconn_pktbuf_retrieve(struct ofconn *ofconn, uint32_t id,
-                       struct ofpbuf **bufferp, uint16_t *in_port)
+                       struct ofpbuf **bufferp, ofp_port_t *in_port)
 {
     return pktbuf_retrieve(ofconn->pktbuf, id, bufferp, in_port);
 }
@@ -1025,12 +1175,13 @@ ofconn_create(struct connmgr *mgr, struct rconn *rconn, enum ofconn_type type,
  * connection to the next. */
 static void
 ofconn_flush(struct ofconn *ofconn)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofmonitor *monitor, *next_monitor;
     int i;
 
-    ofconn->role = NX_ROLE_OTHER;
-    ofconn->protocol = OFPUTIL_P_OF10;
+    ofconn->role = OFPCR12_ROLE_EQUAL;
+    ofconn_set_protocol(ofconn, OFPUTIL_P_NONE);
     ofconn->packet_in_format = NXPIF_OPENFLOW10;
 
     /* Disassociate 'ofconn' from all of the ofopgroups that it initiated that
@@ -1107,6 +1258,7 @@ ofconn_flush(struct ofconn *ofconn)
 
 static void
 ofconn_destroy(struct ofconn *ofconn)
+    OVS_REQUIRES(ofproto_mutex)
 {
     ofconn_flush(ofconn);
 
@@ -1153,19 +1305,23 @@ ofconn_reconfigure(struct ofconn *ofconn, const struct ofproto_controller *c)
 static bool
 ofconn_may_recv(const struct ofconn *ofconn)
 {
-    int count = ofconn->reply_counter->n_packets;
+    int count = rconn_packet_counter_n_packets(ofconn->reply_counter);
     return (!ofconn->blocked || ofconn->retry) && count < OFCONN_REPLY_MAX;
 }
 
 static void
 ofconn_run(struct ofconn *ofconn,
-           bool (*handle_openflow)(struct ofconn *, struct ofpbuf *ofp_msg))
+           bool (*handle_openflow)(struct ofconn *,
+                                   const struct ofpbuf *ofp_msg))
 {
     struct connmgr *mgr = ofconn->connmgr;
     size_t i;
 
     for (i = 0; i < N_SCHEDULERS; i++) {
-        pinsched_run(ofconn->schedulers[i], do_send_packet_in, ofconn);
+        struct list txq;
+
+        pinsched_run(ofconn->schedulers[i], &txq);
+        do_send_packet_ins(ofconn, &txq);
     }
 
     rconn_run(ofconn->rconn);
@@ -1195,11 +1351,13 @@ ofconn_run(struct ofconn *ofconn,
         }
     }
 
+    ovs_mutex_lock(&ofproto_mutex);
     if (!rconn_is_alive(ofconn->rconn)) {
         ofconn_destroy(ofconn);
     } else if (!rconn_is_connected(ofconn->rconn)) {
         ofconn_flush(ofconn);
     }
+    ovs_mutex_unlock(&ofproto_mutex);
 }
 
 static void
@@ -1228,10 +1386,11 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
 {
     const uint32_t *async_config;
 
-    assert(reason < 32);
-    assert((unsigned int) type < OAM_N_TYPES);
+    ovs_assert(reason < 32);
+    ovs_assert((unsigned int) type < OAM_N_TYPES);
 
-    if (!rconn_is_connected(ofconn->rconn)) {
+    if (ofconn_get_protocol(ofconn) == OFPUTIL_P_NONE
+        || !rconn_is_connected(ofconn->rconn)) {
         return false;
     }
 
@@ -1244,7 +1403,7 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
         return false;
     }
 
-    async_config = (ofconn->role == NX_ROLE_SLAVE
+    async_config = (ofconn->role == OFPCR12_ROLE_SLAVE
                     ? ofconn->slave_async_config
                     : ofconn->master_async_config);
     if (!(async_config[type] & (1u << reason))) {
@@ -1296,7 +1455,8 @@ ofconn_send(const struct ofconn *ofconn, struct ofpbuf *msg,
 
 /* Sending asynchronous messages. */
 
-static void schedule_packet_in(struct ofconn *, struct ofputil_packet_in);
+static void schedule_packet_in(struct ofconn *, struct ofproto_packet_in,
+                               enum ofp_packet_in_reason wire_reason);
 
 /* Sends an OFPT_PORT_STATUS message with 'opp' and 'reason' to appropriate
  * controllers managed by 'mgr'. */
@@ -1314,7 +1474,7 @@ connmgr_send_port_status(struct connmgr *mgr,
         if (ofconn_receives_async_msg(ofconn, OAM_PORT_STATUS, reason)) {
             struct ofpbuf *msg;
 
-            msg = ofputil_encode_port_status(&ps, ofconn->protocol);
+            msg = ofputil_encode_port_status(&ps, ofconn_get_protocol(ofconn));
             ofconn_send(ofconn, msg, NULL);
         }
     }
@@ -1337,10 +1497,29 @@ connmgr_send_flow_removed(struct connmgr *mgr,
              * also prevents new flows from being added (and expiring).  (It
              * also prevents processing OpenFlow requests that would not add
              * new flows, so it is imperfect.) */
-            msg = ofputil_encode_flow_removed(fr, ofconn->protocol);
+            msg = ofputil_encode_flow_removed(fr, ofconn_get_protocol(ofconn));
             ofconn_send_reply(ofconn, msg);
         }
     }
+}
+
+/* Normally a send-to-controller action uses reason OFPR_ACTION.  However, in
+ * OpenFlow 1.3 and later, packet_ins generated by a send-to-controller action
+ * in a "table-miss" flow (one with priority 0 and completely wildcarded) are
+ * sent as OFPR_NO_MATCH.  This function returns the reason that should
+ * actually be sent on 'ofconn' for 'pin'. */
+static enum ofp_packet_in_reason
+wire_reason(struct ofconn *ofconn, const struct ofproto_packet_in *pin)
+{
+    if (pin->generated_by_table_miss && pin->up.reason == OFPR_ACTION) {
+        enum ofputil_protocol protocol = ofconn_get_protocol(ofconn);
+
+        if (protocol != OFPUTIL_P_NONE
+            && ofputil_protocol_to_ofp_version(protocol) >= OFP13_VERSION) {
+            return OFPR_NO_MATCH;
+        }
+    }
+    return pin->up.reason;
 }
 
 /* Given 'pin', sends an OFPT_PACKET_IN message to each OpenFlow controller as
@@ -1349,68 +1528,83 @@ connmgr_send_flow_removed(struct connmgr *mgr,
  * The caller doesn't need to fill in pin->buffer_id or pin->total_len. */
 void
 connmgr_send_packet_in(struct connmgr *mgr,
-                       const struct ofputil_packet_in *pin)
+                       const struct ofproto_packet_in *pin)
 {
     struct ofconn *ofconn;
 
     LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
-        if (ofconn_receives_async_msg(ofconn, OAM_PACKET_IN, pin->reason)
+        enum ofp_packet_in_reason reason = wire_reason(ofconn, pin);
+
+        if (ofconn_receives_async_msg(ofconn, OAM_PACKET_IN, reason)
             && ofconn->controller_id == pin->controller_id) {
-            schedule_packet_in(ofconn, *pin);
+            schedule_packet_in(ofconn, *pin, reason);
         }
     }
 }
 
-/* pinsched callback for sending 'ofp_packet_in' on 'ofconn'. */
 static void
-do_send_packet_in(struct ofpbuf *ofp_packet_in, void *ofconn_)
+do_send_packet_ins(struct ofconn *ofconn, struct list *txq)
 {
-    struct ofconn *ofconn = ofconn_;
+    struct ofpbuf *pin, *next_pin;
 
-    rconn_send_with_limit(ofconn->rconn, ofp_packet_in,
-                          ofconn->packet_in_counter, 100);
+    LIST_FOR_EACH_SAFE (pin, next_pin, list_node, txq) {
+        list_remove(&pin->list_node);
+
+        rconn_send_with_limit(ofconn->rconn, pin,
+                              ofconn->packet_in_counter, 100);
+    }
 }
 
 /* Takes 'pin', composes an OpenFlow packet-in message from it, and passes it
  * to 'ofconn''s packet scheduler for sending. */
 static void
-schedule_packet_in(struct ofconn *ofconn, struct ofputil_packet_in pin)
+schedule_packet_in(struct ofconn *ofconn, struct ofproto_packet_in pin,
+                   enum ofp_packet_in_reason wire_reason)
 {
     struct connmgr *mgr = ofconn->connmgr;
+    uint16_t controller_max_len;
+    struct list txq;
 
-    pin.total_len = pin.packet_len;
+    pin.up.total_len = pin.up.packet_len;
 
-    /* Get OpenFlow buffer_id. */
-    if (pin.reason == OFPR_ACTION) {
-        pin.buffer_id = UINT32_MAX;
+    pin.up.reason = wire_reason;
+    if (pin.up.reason == OFPR_ACTION) {
+        controller_max_len = pin.send_len;  /* max_len */
+    } else {
+        controller_max_len = ofconn->miss_send_len;
+    }
+
+    /* Get OpenFlow buffer_id.
+     * For OpenFlow 1.2+, OFPCML_NO_BUFFER (== UINT16_MAX) specifies
+     * unbuffered.  This behaviour doesn't violate prior versions, too. */
+    if (controller_max_len == UINT16_MAX) {
+        pin.up.buffer_id = UINT32_MAX;
     } else if (mgr->fail_open && fail_open_is_active(mgr->fail_open)) {
-        pin.buffer_id = pktbuf_get_null();
+        pin.up.buffer_id = pktbuf_get_null();
     } else if (!ofconn->pktbuf) {
-        pin.buffer_id = UINT32_MAX;
+        pin.up.buffer_id = UINT32_MAX;
     } else {
-        pin.buffer_id = pktbuf_save(ofconn->pktbuf, pin.packet, pin.packet_len,
-                                    pin.fmd.in_port);
+        pin.up.buffer_id = pktbuf_save(ofconn->pktbuf,
+                                       pin.up.packet, pin.up.packet_len,
+                                       pin.up.fmd.in_port);
     }
 
-    /* Figure out how much of the packet to send. */
-    if (pin.reason == OFPR_NO_MATCH) {
-        pin.send_len = pin.packet_len;
-    } else {
-        /* Caller should have initialized 'send_len' to 'max_len' specified in
-         * output action. */
-    }
-    if (pin.buffer_id != UINT32_MAX) {
-        pin.send_len = MIN(pin.send_len, ofconn->miss_send_len);
+    /* Figure out how much of the packet to send.
+     * If not buffered, send the entire packet.  Otherwise, depending on
+     * the reason of packet-in, send what requested by the controller. */
+    if (pin.up.buffer_id != UINT32_MAX
+        && controller_max_len < pin.up.packet_len) {
+        pin.up.packet_len = controller_max_len;
     }
 
-    /* Make OFPT_PACKET_IN and hand over to packet scheduler.  It might
-     * immediately call into do_send_packet_in() or it might buffer it for a
-     * while (until a later call to pinsched_run()). */
-    pinsched_send(ofconn->schedulers[pin.reason == OFPR_NO_MATCH ? 0 : 1],
-                  pin.fmd.in_port,
-                  ofputil_encode_packet_in(&pin, ofconn->protocol,
+    /* Make OFPT_PACKET_IN and hand over to packet scheduler. */
+    pinsched_send(ofconn->schedulers[pin.up.reason == OFPR_NO_MATCH ? 0 : 1],
+                  pin.up.fmd.in_port,
+                  ofputil_encode_packet_in(&pin.up,
+                                           ofconn_get_protocol(ofconn),
                                            ofconn->packet_in_format),
-                  do_send_packet_in, ofconn);
+                  &txq);
+    do_send_packet_ins(ofconn, &txq);
 }
 
 /* Fail-open settings. */
@@ -1567,18 +1761,9 @@ any_extras_changed(const struct connmgr *mgr,
 /* In-band implementation. */
 
 bool
-connmgr_msg_in_hook(struct connmgr *mgr, const struct flow *flow,
-                    const struct ofpbuf *packet)
+connmgr_has_in_band(struct connmgr *mgr)
 {
-    return mgr->in_band && in_band_msg_in_hook(mgr->in_band, flow, packet);
-}
-
-bool
-connmgr_may_set_up_flow(struct connmgr *mgr, const struct flow *flow,
-                        const struct nlattr *odp_actions,
-                        size_t actions_len)
-{
-    return !mgr->in_band || in_band_rule_check(flow, odp_actions, actions_len);
+    return mgr->in_band != NULL;
 }
 
 /* Fail-open and in-band implementation. */
@@ -1589,6 +1774,7 @@ connmgr_may_set_up_flow(struct connmgr *mgr, const struct flow *flow,
  * In-band control has more sophisticated code that manages flows itself. */
 void
 connmgr_flushed(struct connmgr *mgr)
+    OVS_EXCLUDED(ofproto_mutex)
 {
     if (mgr->fail_open) {
         fail_open_flushed(mgr->fail_open);
@@ -1620,13 +1806,14 @@ connmgr_flushed(struct connmgr *mgr)
  * ofservice_reconfigure() must be called to fully configure the new
  * ofservice. */
 static int
-ofservice_create(struct connmgr *mgr, const char *target, uint8_t dscp)
+ofservice_create(struct connmgr *mgr, const char *target,
+                 uint32_t allowed_versions, uint8_t dscp)
 {
     struct ofservice *ofservice;
     struct pvconn *pvconn;
     int error;
 
-    error = pvconn_open(target, &pvconn, dscp);
+    error = pvconn_open(target, allowed_versions, dscp, &pvconn);
     if (error) {
         return error;
     }
@@ -1634,6 +1821,7 @@ ofservice_create(struct connmgr *mgr, const char *target, uint8_t dscp)
     ofservice = xzalloc(sizeof *ofservice);
     hmap_insert(&mgr->services, &ofservice->node, hash_string(target, 0));
     ofservice->pvconn = pvconn;
+    ofservice->allowed_versions = allowed_versions;
 
     return 0;
 }
@@ -1701,6 +1889,7 @@ COVERAGE_DEFINE(ofmonitor_resume);
 enum ofperr
 ofmonitor_create(const struct ofputil_flow_monitor_request *request,
                  struct ofconn *ofconn, struct ofmonitor **monitorp)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofmonitor *m;
 
@@ -1726,6 +1915,7 @@ ofmonitor_create(const struct ofputil_flow_monitor_request *request,
 
 struct ofmonitor *
 ofmonitor_lookup(struct ofconn *ofconn, uint32_t id)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofmonitor *m;
 
@@ -1740,8 +1930,10 @@ ofmonitor_lookup(struct ofconn *ofconn, uint32_t id)
 
 void
 ofmonitor_destroy(struct ofmonitor *m)
+    OVS_REQUIRES(ofproto_mutex)
 {
     if (m) {
+        minimatch_destroy(&m->match);
         hmap_remove(&m->ofconn->monitors, &m->ofconn_node);
         free(m);
     }
@@ -1752,6 +1944,7 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
                  enum nx_flow_update_event event,
                  enum ofp_flow_removed_reason reason,
                  const struct ofconn *abbrev_ofconn, ovs_be32 abbrev_xid)
+    OVS_REQUIRES(ofproto_mutex)
 {
     enum nx_flow_monitor_flags update;
     struct ofconn *ofconn;
@@ -1773,7 +1966,7 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
 
     default:
     case NXFME_ABBREV:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 
     LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
@@ -1810,16 +2003,20 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
 
                 fu.event = event;
                 fu.reason = event == NXFME_DELETED ? reason : 0;
-                fu.idle_timeout = rule->idle_timeout;
-                fu.hard_timeout = rule->hard_timeout;
                 fu.table_id = rule->table_id;
                 fu.cookie = rule->flow_cookie;
                 minimatch_expand(&rule->cr.match, &match);
                 fu.match = &match;
                 fu.priority = rule->cr.priority;
+
+                ovs_mutex_lock(&rule->mutex);
+                fu.idle_timeout = rule->idle_timeout;
+                fu.hard_timeout = rule->hard_timeout;
+                ovs_mutex_unlock(&rule->mutex);
+
                 if (flags & NXFMF_ACTIONS) {
-                    fu.ofpacts = rule->ofpacts;
-                    fu.ofpacts_len = rule->ofpacts_len;
+                    fu.ofpacts = rule->actions->ofpacts;
+                    fu.ofpacts_len = rule->actions->ofpacts_len;
                 } else {
                     fu.ofpacts = NULL;
                     fu.ofpacts_len = 0;
@@ -1840,6 +2037,7 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
 
 void
 ofmonitor_flush(struct connmgr *mgr)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofconn *ofconn;
 
@@ -1847,10 +2045,12 @@ ofmonitor_flush(struct connmgr *mgr)
         struct ofpbuf *msg, *next;
 
         LIST_FOR_EACH_SAFE (msg, next, list_node, &ofconn->updates) {
+            unsigned int n_bytes;
+
             list_remove(&msg->list_node);
             ofconn_send(ofconn, msg, ofconn->monitor_counter);
-            if (!ofconn->monitor_paused
-                && ofconn->monitor_counter->n_bytes > 128 * 1024) {
+            n_bytes = rconn_packet_counter_n_bytes(ofconn->monitor_counter);
+            if (!ofconn->monitor_paused && n_bytes > 128 * 1024) {
                 struct ofpbuf *pause;
 
                 COVERAGE_INC(ofmonitor_pause);
@@ -1865,13 +2065,14 @@ ofmonitor_flush(struct connmgr *mgr)
 
 static void
 ofmonitor_resume(struct ofconn *ofconn)
+    OVS_REQUIRES(ofproto_mutex)
 {
+    struct rule_collection rules;
     struct ofpbuf *resumed;
     struct ofmonitor *m;
-    struct list rules;
     struct list msgs;
 
-    list_init(&rules);
+    rule_collection_init(&rules);
     HMAP_FOR_EACH (m, ofconn_node, &ofconn->monitors) {
         ofmonitor_collect_resume_rules(m, ofconn->monitor_paused, &rules);
     }
@@ -1887,17 +2088,27 @@ ofmonitor_resume(struct ofconn *ofconn)
     ofconn->monitor_paused = 0;
 }
 
+static bool
+ofmonitor_may_resume(const struct ofconn *ofconn)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    return (ofconn->monitor_paused != 0
+            && !rconn_packet_counter_n_packets(ofconn->monitor_counter));
+}
+
 static void
 ofmonitor_run(struct connmgr *mgr)
 {
     struct ofconn *ofconn;
 
+    ovs_mutex_lock(&ofproto_mutex);
     LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
-        if (ofconn->monitor_paused && !ofconn->monitor_counter->n_packets) {
+        if (ofmonitor_may_resume(ofconn)) {
             COVERAGE_INC(ofmonitor_resume);
             ofmonitor_resume(ofconn);
         }
     }
+    ovs_mutex_unlock(&ofproto_mutex);
 }
 
 static void
@@ -1905,9 +2116,11 @@ ofmonitor_wait(struct connmgr *mgr)
 {
     struct ofconn *ofconn;
 
+    ovs_mutex_lock(&ofproto_mutex);
     LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
-        if (ofconn->monitor_paused && !ofconn->monitor_counter->n_packets) {
+        if (ofmonitor_may_resume(ofconn)) {
             poll_immediate_wake();
         }
     }
+    ovs_mutex_unlock(&ofproto_mutex);
 }

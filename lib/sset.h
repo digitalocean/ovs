@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,26 +64,32 @@ char *sset_pop(struct sset *);
 struct sset_node *sset_find(const struct sset *, const char *);
 bool sset_contains(const struct sset *, const char *);
 bool sset_equals(const struct sset *, const struct sset *);
+struct sset_node *sset_at_position(const struct sset *,
+                                   uint32_t *bucketp, uint32_t *offsetp);
 
 /* Iteration macros. */
 #define SSET_FOR_EACH(NAME, SSET)               \
     for ((NAME) = SSET_FIRST(SSET);             \
-         SSET_NODE_FROM_NAME(NAME) != NULL;     \
+         NAME != NULL;                          \
          (NAME) = SSET_NEXT(SSET, NAME))
 
 #define SSET_FOR_EACH_SAFE(NAME, NEXT, SSET)        \
     for ((NAME) = SSET_FIRST(SSET);                 \
-         (SSET_NODE_FROM_NAME(NAME) != NULL         \
+         (NAME != NULL                              \
           ? (NEXT) = SSET_NEXT(SSET, NAME), true    \
           : false);                                 \
          (NAME) = (NEXT))
+
+const char **sset_sort(const struct sset *);
 
 /* Implementation helper macros. */
 
 #define SSET_NODE_FROM_HMAP_NODE(HMAP_NODE) \
     CONTAINER_OF(HMAP_NODE, struct sset_node, hmap_node)
 #define SSET_NAME_FROM_HMAP_NODE(HMAP_NODE) \
-    (CONST_CAST(const char *, (SSET_NODE_FROM_HMAP_NODE(HMAP_NODE)->name)))
+    HMAP_NODE == NULL                       \
+    ? NULL                                  \
+    : (CONST_CAST(const char *, (SSET_NODE_FROM_HMAP_NODE(HMAP_NODE)->name)))
 #define SSET_NODE_FROM_NAME(NAME) CONTAINER_OF(NAME, struct sset_node, name)
 #define SSET_FIRST(SSET) SSET_NAME_FROM_HMAP_NODE(hmap_first(&(SSET)->map))
 #define SSET_NEXT(SSET, NAME)                                           \

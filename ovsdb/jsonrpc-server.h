@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #define OVSDB_JSONRPC_SERVER_H 1
 
 #include <stdbool.h>
+#include "openvswitch/types.h"
 
 struct ovsdb;
 struct shash;
@@ -25,6 +26,8 @@ struct simap;
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
                                  struct ovsdb *);
+bool ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
+                                     struct ovsdb *);
 void ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *);
 
 /* Options for a remote. */
@@ -50,6 +53,7 @@ struct ovsdb_jsonrpc_remote_status {
     char *locks_waiting;
     char *locks_lost;
     int n_connections;
+    ovs_be16 bound_port;
 };
 bool ovsdb_jsonrpc_server_get_remote_status(
     const struct ovsdb_jsonrpc_server *, const char *target,

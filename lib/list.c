@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 #include <config.h>
 #include "list.h"
-#include <assert.h>
 
 /* Initializes 'list' as an empty list. */
 void
@@ -47,8 +46,9 @@ list_insert(struct list *before, struct list *elem)
 void
 list_splice(struct list *before, struct list *first, struct list *last)
 {
-    if (first == last)
+    if (first == last) {
         return;
+    }
     last = last->prev;
 
     /* Cleanly remove 'first'...'last' from its current list. */
@@ -101,6 +101,20 @@ list_moved(struct list *list)
     list->prev->next = list->next->prev = list;
 }
 
+/* Initializes 'dst' with the contents of 'src', compensating for moving it
+ * around in memory.  The effect is that, if 'src' was the head of a list, now
+ * 'dst' is the head of a list containing the same elements. */
+void
+list_move(struct list *dst, struct list *src)
+{
+    if (!list_is_empty(src)) {
+        *dst = *src;
+        list_moved(dst);
+    } else {
+        list_init(dst);
+    }
+}
+
 /* Removes 'elem' from its list and returns the element that followed it.
    Undefined behavior if 'elem' is not in a list. */
 struct list *
@@ -138,7 +152,7 @@ list_front(const struct list *list_)
 {
     struct list *list = CONST_CAST(struct list *, list_);
 
-    assert(!list_is_empty(list));
+    ovs_assert(!list_is_empty(list));
     return list->next;
 }
 
@@ -149,7 +163,7 @@ list_back(const struct list *list_)
 {
     struct list *list = CONST_CAST(struct list *, list_);
 
-    assert(!list_is_empty(list));
+    ovs_assert(!list_is_empty(list));
     return list->prev;
 }
 
@@ -161,8 +175,9 @@ list_size(const struct list *list)
     const struct list *e;
     size_t cnt = 0;
 
-    for (e = list->next; e != list; e = e->next)
+    for (e = list->next; e != list; e = e->next) {
         cnt++;
+    }
     return cnt;
 }
 

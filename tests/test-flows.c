@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@
 #include "ofpbuf.h"
 #include "ofp-print.h"
 #include "ofp-util.h"
-#include "pcap.h"
+#include "pcap-file.h"
 #include "util.h"
 #include "vlog.h"
 
@@ -58,18 +58,19 @@ main(int argc OVS_UNUSED, char *argv[])
         struct ofp10_match extracted_match;
         struct match match;
         struct flow flow;
-
+        union flow_in_port in_port_;
         n++;
 
-        retval = pcap_read(pcap, &packet);
+        retval = pcap_read(pcap, &packet, NULL);
         if (retval == EOF) {
             ovs_fatal(0, "unexpected end of file reading pcap file");
         } else if (retval) {
             ovs_fatal(retval, "error reading pcap file");
         }
 
-        flow_extract(packet, 0, 0, NULL, 1, &flow);
-        match_init_exact(&match, &flow);
+        in_port_.ofp_port = u16_to_ofp(1);
+        flow_extract(packet, 0, 0, NULL, &in_port_, &flow);
+        match_wc_init(&match, &flow);
         ofputil_match_to_ofp10_match(&match, &extracted_match);
 
         if (memcmp(&expected_match, &extracted_match, sizeof expected_match)) {

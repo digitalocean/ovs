@@ -1,6 +1,6 @@
 #! /bin/sh
 #
-# Copyright (C) 2011, 2012 Nicira, Inc.
+# Copyright (C) 2011, 2012, 2014 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 # Provides:          openvswitch-switch
 # Required-Start:    $network $named $remote_fs $syslog
 # Required-Stop:     $remote_fs
+# X-Stop-After:      libvirt-guests
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Open vSwitch switch
@@ -30,17 +31,12 @@
 . /usr/share/openvswitch/scripts/ovs-lib
 test -e /etc/default/openvswitch-switch && . /etc/default/openvswitch-switch
 
-if test X"$BRCOMPAT" = Xyes && test ! -x /usr/sbin/ovs-brcompatd; then
-    BRCOMPAT=no
-    log_warning_msg "ovs-brcompatd missing, disabling bridge compatibility"
-fi
-
-ovs_ctl () {
-    set /usr/share/openvswitch/scripts/ovs-ctl "$@"
-    if test X"$BRCOMPAT" = Xyes; then
-        set "$@" --brcompat
-    fi
-    "$@"
+network_interfaces () {
+    [ -z "${RUNLEVEL}" ] && return
+    INTERFACES="/etc/network/interfaces"
+    [ -e "${INTERFACES}" ] || return
+    bridges=`awk '{ if ($1 == "allow-ovs") { print $2; } }' "${INTERFACES}"`
+    [ -n "${bridges}" ] && $1 --allow=ovs ${bridges}
 }
 
 load_kmod () {
@@ -72,10 +68,48 @@ start () {
     fi
     set "$@" $OVS_CTL_OPTS
     "$@" || exit $?
+    [ "$2" = "start" ] && network_interfaces ifup
 }
 
 stop () {
+    network_interfaces ifdown
     ovs_ctl stop
+}
+
+restart () {
+    # OVS_FORCE_RELOAD_KMOD can be set by package postinst script.
+    if [ "$1" = "--save-flows=yes" ] || \
+        [ "${OVS_FORCE_RELOAD_KMOD}" = "no" ]; then
+        start restart
+    elif [ "${OVS_FORCE_RELOAD_KMOD}" = "yes" ]; then
+        depmod -a
+
+        if [ -e /sys/module/openvswitch ]; then
+            LOADED_SRCVERSION=`cat /sys/module/openvswitch/srcversion`
+            LOADED_VERSION=`cat /sys/module/openvswitch/version`
+        elif [ -e /sys/module/openvswitch_mod ]; then
+            LOADED_SRCVERSION=`cat /sys/module/openvswitch_mod/srcversion`
+            LOADED_VERSION=`cat /sys/module/openvswitch_mod/version`
+        fi
+        SRCVERSION=`modinfo -F srcversion openvswitch 2>/dev/null`
+        VERSION=`modinfo -F version openvswitch 2>/dev/null`
+
+        ovs_ctl_log "Package upgrading:\n"\
+                    "Loaded version: ${LOADED_VERSION} ${LOADED_SRCVERSION}.\n"\
+                    "Version on disk: ${VERSION} ${SRCVERSION}."
+
+        # If the kernel module was previously loaded and it is different than
+        # the kernel module on disk, then do a 'force-reload-kmod'.
+        if [ -n "${LOADED_SRCVERSION}" ] && [ -n "${SRCVERSION}" ] && \
+            [ "${SRCVERSION}" != "${LOADED_SRCVERSION}" ]; then
+            start force-reload-kmod
+        else
+            start restart
+        fi
+    else
+        stop
+        start
+    fi
 }
 
 case $1 in
@@ -89,8 +123,8 @@ case $1 in
         # The OVS daemons keep up-to-date.
         ;;
     restart)
-        stop
-        start
+        shift
+        restart "$@"
         ;;
     status)
         ovs_ctl status

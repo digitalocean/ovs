@@ -1,11 +1,7 @@
 sbin_PROGRAMS += vswitchd/ovs-vswitchd
 man_MANS += vswitchd/ovs-vswitchd.8
-if BUILD_BRCOMPAT
-  man_MANS += vswitchd/ovs-brcompatd.8
-endif
 DISTCLEANFILES += \
-	vswitchd/ovs-vswitchd.8 \
-	vswitchd/ovs-brcompatd.8
+	vswitchd/ovs-vswitchd.8
 
 vswitchd_ovs_vswitchd_SOURCES = \
 	vswitchd/bridge.c \
@@ -16,22 +12,12 @@ vswitchd_ovs_vswitchd_SOURCES = \
 	vswitchd/xenserver.c \
 	vswitchd/xenserver.h
 vswitchd_ovs_vswitchd_LDADD = \
-	ofproto/libofproto.a \
-	lib/libsflow.a \
-	lib/libopenvswitch.a \
+	ofproto/libofproto.la \
+	lib/libsflow.la \
+	lib/libopenvswitch.la \
 	$(SSL_LIBS)
 EXTRA_DIST += vswitchd/INTERNALS
 MAN_ROOTS += vswitchd/ovs-vswitchd.8.in
-
-if BUILD_BRCOMPAT
-if LINUX_DATAPATH
-sbin_PROGRAMS += vswitchd/ovs-brcompatd
-vswitchd_ovs_brcompatd_SOURCES = \
-	vswitchd/ovs-brcompatd.c
-vswitchd_ovs_brcompatd_LDADD = lib/libopenvswitch.a $(SSL_LIBS)
-endif
-MAN_ROOTS += vswitchd/ovs-brcompatd.8.in
-endif
 
 # vswitch schema and IDL
 EXTRA_DIST += vswitchd/vswitch.ovsschema
@@ -39,45 +25,31 @@ pkgdata_DATA += vswitchd/vswitch.ovsschema
 
 # vswitch E-R diagram
 #
-# There are two complications here.  First, if "python" or "dot" is not
-# available, then we have to just use the existing diagram.  Second, different
-# "dot" versions produce slightly different output for the same input, but we
-# don't want to gratuitously change vswitch.pic if someone tweaks the schema in
-# some minor way that doesn't affect the table structure.  To avoid that we
-# store a checksum of vswitch.gv in vswitch.pic and only regenerate vswitch.pic
-# if vswitch.gv actually changes.
-$(srcdir)/vswitchd/vswitch.gv: ovsdb/ovsdb-dot.in vswitchd/vswitch.ovsschema
+# If "python" or "dot" is not available, then we do not add graphical diagram
+# to the documentation.
 if HAVE_PYTHON
-	$(OVSDB_DOT) $(srcdir)/vswitchd/vswitch.ovsschema > $@
-else
-	touch $@
-endif
-$(srcdir)/vswitchd/vswitch.pic: $(srcdir)/vswitchd/vswitch.gv ovsdb/dot2pic
 if HAVE_DOT
-	sum=`cksum < $(srcdir)/vswitchd/vswitch.gv`;			\
-	if grep "$$sum" $@ >/dev/null 2>&1; then			\
-	  echo "vswitch.gv unchanged, not regenerating vswitch.pic";	\
-	  touch $@;							\
-	else								\
-	  echo "regenerating vswitch.pic";				\
-	  (echo ".\\\" Generated from vswitch.gv with cksum \"$$sum\"";	\
-	   dot -T plain < $(srcdir)/vswitchd/vswitch.gv			\
-	    | $(srcdir)/ovsdb/dot2pic) > $@;				\
-	fi
-else
-	touch $@
+vswitchd/vswitch.gv: ovsdb/ovsdb-dot.in vswitchd/vswitch.ovsschema
+	$(OVSDB_DOT) --no-arrows $(srcdir)/vswitchd/vswitch.ovsschema > $@
+vswitchd/vswitch.pic: vswitchd/vswitch.gv ovsdb/dot2pic
+	(dot -T plain < vswitchd/vswitch.gv | $(srcdir)/ovsdb/dot2pic -f 3) > $@;
+VSWITCH_PIC = vswitchd/vswitch.pic
+VSWITCH_DOT_DIAGRAM_ARG = --er-diagram=$(VSWITCH_PIC)
+DISTCLEANFILES += vswitchd/vswitch.gv vswitchd/vswitch.pic
 endif
-EXTRA_DIST += vswitchd/vswitch.gv vswitchd/vswitch.pic
+endif
 
 # vswitch schema documentation
 EXTRA_DIST += vswitchd/vswitch.xml
-dist_man_MANS += vswitchd/ovs-vswitchd.conf.db.5
-$(srcdir)/vswitchd/ovs-vswitchd.conf.db.5: \
-	ovsdb/ovsdb-doc.in vswitchd/vswitch.xml vswitchd/vswitch.ovsschema \
-	$(srcdir)/vswitchd/vswitch.pic
+DISTCLEANFILES += vswitchd/ovs-vswitchd.conf.db.5
+man_MANS += vswitchd/ovs-vswitchd.conf.db.5
+vswitchd/ovs-vswitchd.conf.db.5: \
+	ovsdb/ovsdb-doc vswitchd/vswitch.xml vswitchd/vswitch.ovsschema \
+	$(VSWITCH_PIC)
 	$(OVSDB_DOC) \
 		--title="ovs-vswitchd.conf.db" \
-		--er-diagram=$(srcdir)/vswitchd/vswitch.pic \
+		$(VSWITCH_DOT_DIAGRAM_ARG) \
+		--version=$(VERSION) \
 		$(srcdir)/vswitchd/vswitch.ovsschema \
 		$(srcdir)/vswitchd/vswitch.xml > $@.tmp
 	mv $@.tmp $@

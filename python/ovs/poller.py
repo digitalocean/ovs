@@ -29,6 +29,11 @@ except:
 
 vlog = ovs.vlog.Vlog("poller")
 
+POLLIN = 0x001
+POLLOUT = 0x004
+POLLERR = 0x008
+POLLHUP = 0x010
+POLLNVAL = 0x020
 
 # eventlet/gevent doesn't support select.poll. If select.poll is used,
 # python interpreter is blocked as a whole instead of switching from the
@@ -48,12 +53,12 @@ class _SelectSelect(object):
         if isinstance(fd, socket.socket):
             fd = fd.fileno()
         assert isinstance(fd, int)
-        if events & select.POLLIN:
+        if events & POLLIN:
             self.rlist.append(fd)
-            events &= ~select.POLLIN
-        if events & select.POLLOUT:
+            events &= ~POLLIN
+        if events & POLLOUT:
             self.wlist.append(fd)
-            events &= ~select.POLLOUT
+            events &= ~POLLOUT
         if events:
             self.xlist.append(fd)
 
@@ -76,13 +81,13 @@ class _SelectSelect(object):
         # events_dict[fd] |= event
         events_dict = {}
         for fd in rlist:
-            events_dict[fd] = events_dict.get(fd, 0) | select.POLLIN
+            events_dict[fd] = events_dict.get(fd, 0) | POLLIN
         for fd in wlist:
-            events_dict[fd] = events_dict.get(fd, 0) | select.POLLOUT
+            events_dict[fd] = events_dict.get(fd, 0) | POLLOUT
         for fd in xlist:
-            events_dict[fd] = events_dict.get(fd, 0) | (select.POLLERR |
-                                                        select.POLLHUP |
-                                                        select.POLLNVAL)
+            events_dict[fd] = events_dict.get(fd, 0) | (POLLERR |
+                                                        POLLHUP |
+                                                        POLLNVAL)
         return events_dict.items()
 
 
@@ -181,15 +186,15 @@ class Poller(object):
             for fd, revents in events:
                 if revents != 0:
                     s = ""
-                    if revents & select.POLLIN:
+                    if revents & POLLIN:
                         s += "[POLLIN]"
-                    if revents & select.POLLOUT:
+                    if revents & POLLOUT:
                         s += "[POLLOUT]"
-                    if revents & select.POLLERR:
+                    if revents & POLLERR:
                         s += "[POLLERR]"
-                    if revents & select.POLLHUP:
+                    if revents & POLLHUP:
                         s += "[POLLHUP]"
-                    if revents & select.POLLNVAL:
+                    if revents & POLLNVAL:
                         s += "[POLLNVAL]"
                     vlog.dbg("%s on fd %d" % (s, fd))
 

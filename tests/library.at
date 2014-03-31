@@ -7,7 +7,7 @@ AT_CHECK([test-flows <flows 3<pcap], [0], [checked 247 packets, 0 errors
 AT_CLEANUP
 
 AT_SETUP([test TCP/IP checksumming])
-AT_CHECK([test-csum], [0], [....#....#....##................................#................................#
+AT_CHECK([test-csum], [0], [....#....#....###................................#................................#
 ])
 AT_CLEANUP
 
@@ -18,6 +18,15 @@ AT_CLEANUP
 AT_SETUP([test hash map])
 AT_CHECK([test-hmap], [0], [.........
 ])
+AT_CLEANUP
+
+AT_SETUP([test hash index])
+AT_CHECK([test-hindex], [0], [.....................
+])
+AT_CLEANUP
+
+AT_SETUP([test atomic operations])
+AT_CHECK([test-atomic])
 AT_CLEANUP
 
 AT_SETUP([test linked lists])
@@ -103,18 +112,22 @@ AT_CLEANUP
 m4_foreach(
   [testname],
   [[ctz],
-   [popcount],
+   [clz],
+   [round_up_pow2],
+   [round_down_pow2],
+   [count_1bits],
    [log_2_floor],
    [bitwise_copy],
    [bitwise_zero],
    [bitwise_one],
-   [bitwise_is_all_zeros]],
+   [bitwise_is_all_zeros],
+   [ovs_scan]],
   [AT_SETUP([testname[()] function])
    AT_KEYWORDS([testname])
    AT_CHECK([test-util testname], [0], [], [])
    AT_CLEANUP])
 
-AT_SETUP([test unix socket -- short pathname])
+AT_SETUP([test unix socket, short pathname - C])
 AT_CHECK([test-unix-socket x])
 AT_CLEANUP
 
@@ -123,20 +136,48 @@ dnl go in a fixed-length field in struct sockaddr_un.  Generally the limit
 dnl is about 100 bytes.  On Linux, we work around this by indirecting through
 dnl a directory fd using /proc/self/fd/<dirfd>.  We do not have a workaround
 dnl for other platforms, so we skip the test there.
-AT_SETUP([test unix socket -- long pathname])
-AT_CHECK([dnl
-    case `uname` in dnl (
-      *[[lL]]inux*)
-        exit 0
-        ;; dnl (
-      *)
-        dnl Magic exit code to tell Autotest to skip this test.
-        exit 77
-        ;;
-    esac
-])
+AT_SETUP([test unix socket, long pathname - C])
 dnl Linux has a 108 byte limit; this is 150 bytes long.
-mkdir 012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
-cd 012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
-AT_CHECK([test-unix-socket ../012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789/socket socket])
+longname=012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+mkdir $longname
+cd $longname
+AT_CHECK([test-unix-socket ../$longname/socket socket])
+AT_CLEANUP
+
+AT_SETUP([test unix socket, short pathname - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+AT_CHECK([$PYTHON $srcdir/test-unix-socket.py x])
+AT_CLEANUP
+
+dnl Unix sockets with long names are problematic because the name has to
+dnl go in a fixed-length field in struct sockaddr_un.  Generally the limit
+dnl is about 100 bytes.  On Linux, we work around this by indirecting through
+dnl a directory fd using /proc/self/fd/<dirfd>.  We do not have a workaround
+dnl for other platforms, so we skip the test there.
+AT_SETUP([test unix socket, long pathname - Python])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+dnl Linux has a 108 byte limit; this is 150 bytes long.
+longname=012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+mkdir $longname
+cd $longname
+AT_CHECK([$PYTHON $abs_srcdir/test-unix-socket.py ../$longname/socket socket])
+AT_CLEANUP
+
+AT_SETUP([ovs_assert])
+OVS_LOGDIR=`pwd`; export OVS_LOGDIR
+AT_CHECK([test-util -voff -vfile:info '-vPATTERN:file:%c|%p|%m' --log-file assert || kill -l $?],
+  [0], [ABRT
+], [stderr])
+
+AT_CHECK([sed 's/\(opened log file\) .*/\1/
+s/|[[^|]]*: /|/' test-util.log], [0], [dnl
+vlog|INFO|opened log file
+util|EMER|assertion false failed in test_assert()
+])
+
+AT_CHECK([sed 's/.*: //
+1q' stderr], [0],
+  [assertion false failed in test_assert()
+])
+
 AT_CLEANUP

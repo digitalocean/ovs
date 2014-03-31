@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Nicira, Inc.
+ * Copyright (c) 2011, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@ extern const struct in6_addr in6addr_any;
 #define IPPROTO_ICMPV6 58
 #define IPPROTO_NONE 59
 #define IPPROTO_DSTOPTS 60
+#define IPPROTO_SCTP 132
 
 /* All the IP options documented in Linux ip(7). */
 #define IP_ADD_MEMBERSHIP 0
@@ -109,7 +110,6 @@ static inline uint16_t ntohs(ovs_be16 x)
 
 in_addr_t inet_addr(const char *);
 int inet_aton (const char *, struct in_addr *);
-char *inet_ntoa(struct in_addr);
 const char *inet_ntop(int, const void *, char *, socklen_t);
 int inet_pton(int, const char *, void *);
 

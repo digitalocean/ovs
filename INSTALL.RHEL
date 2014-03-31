@@ -17,39 +17,74 @@ Before you begin, note the RPM source directory on your version of
 RHEL.  On RHEL 5, the default RPM source directory is
 /usr/src/redhat/SOURCES.  On RHEL 6, it is $HOME/rpmbuild/SOURCES.
 
-1. If you are building from an Open vSwitch Git tree, then you will
+1. If you are building from a distribution tarball, proceed to step 2.
+   Otherwise, if you are building from an Open vSwitch Git tree,
+   determine the version of Autoconf available in the RHEL version you
+   are using.  If it is not at least version 2.64, then you have two
+   choices:
+
+     a. Install Autoconf 2.64 or later, one way or another.
+
+     b. Create a distribution tarball on some other machine, by
+        running "./boot.sh; ./configure; make dist" in the Git tree.
+        You must run this on a machine that has the tools listed in
+        INSTALL as prerequisites for building from a Git tree.
+        Afterward, proceed with the rest of the instructions using the
+        distribution tarball.
+
+2. Install build prerequisites:
+
+   yum install gcc make python-devel openssl-devel kernel-devel graphviz \
+       kernel-debug-devel autoconf automake rpm-build redhat-rpm-config \
+       libtool
+
+3. Some versions of the RHEL 6 kernel-devel package contain a broken
+   "build" symlink.  If you are using such a version, you must fix
+   the problem before continuing.
+
+   To find out whether you are affected, run:
+
+       cd /lib/modules/<version>
+       ls -l build/
+
+   where <version> is the version number of the RHEL 6 kernel.  (The
+   trailing slash in the final command is important.  Be sure to include
+   it.)  If the "ls" command produces a directory listing, your
+   kernel-devel package is OK.  If it produces a "No such file or
+   directory" error, your kernel-devel package is buggy.
+
+   If your kernel-devel package is buggy, then you can fix it with:
+
+       cd /lib/modules/<version>
+       rm build
+       ln -s /usr/src/kernels/<target> build
+
+   where <target> is the name of an existing directory under
+   /usr/src/kernels, whose name should be similar to <version> but may
+   contain some extra parts.  Once you have done this, verify the fix with
+   the same procedure you used above to check for the problem.
+
+4. If you are building from an Open vSwitch Git tree, then you will
    need to first create a distribution tarball by running "./boot.sh;
    ./configure; make dist" in the Git tree.
 
-2. Copy the distribution tarball into the RPM source directory.
+5. Copy the distribution tarball into the RPM source directory.
 
-3. Unpack the distribution tarball into a temporary directory and "cd"
+6. Unpack the distribution tarball into a temporary directory and "cd"
    into the root of the distribution tarball.
 
-4. To build Open vSwitch userspace, run:
+7. To build Open vSwitch userspace, run:
 
        rpmbuild -bb rhel/openvswitch.spec
 
    This produces two RPMs: "openvswitch" and "openvswitch-debuginfo".
 
-5a. On RHEL 5, to build the Open vSwitch kernel module, copy
-    rhel/kmodtool-openvswitch-el5.sh into the RPM source directory and
-    run:
+   If the build fails with "configure: error: source dir
+   /lib/modules/2.6.32-279.el6.x86_64/build doesn't exist" or similar,
+   then the kernel-devel package is missing or buggy.  Go back to step
+   1 or 2 and fix the problem.
 
-	rpmbuild -bb --target=i686-unknown-linux \
-		rhel/openvswitch-kmod-rhel5.spec
-
-    You might have to specify a kernel version, e.g.:
-
-	rpmbuild -bb -D "kversion 2.6.18-238.12.1.el5" \
-		--target=i686-unknown-linux \
-		rhel/openvswitch-kmod-rhel5.spec
-
-    This produces a "kmod-openvswitch" RPM for each kernel variant,
-    which is usually: "kmod-openvswitch", "kmod-openvswitch-xen", and
-    "kmod-openvswitch-PAE".
-
-5b. On RHEL 6, to build the Open vSwitch kernel module, copy
+8. On RHEL 6, to build the Open vSwitch kernel module, copy
     rhel/openvswitch-kmod.files into the RPM source directory and run:
 
 	rpmbuild -bb rhel/openvswitch-kmod-rhel6.spec
@@ -64,6 +99,12 @@ RHEL.  On RHEL 5, the default RPM source directory is
     This produces an "kmod-openvswitch" RPM for each kernel variant,
     in this example: "kmod-openvswitch", "kmod-openvswitch-debug", and
     "kmod-openvswitch-kdump".
+
+A RHEL host has default firewall rules that prevent any Open vSwitch tunnel
+traffic from passing through. If a user configures Open vSwitch tunnels like
+GRE, VXLAN, LISP etc., they will either have to manually add iptables firewall
+rules to allow the tunnel traffic or add it through a startup script (Please
+refer to the "enable-protocol" command in the ovs-ctl(8) manpage).
 
 Red Hat Network Scripts Integration
 -----------------------------------

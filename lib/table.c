@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,6 @@
 #include <config.h>
 
 #include "table.h"
-
-#include <assert.h>
 
 #include "dynamic-string.h"
 #include "json.h"
@@ -143,7 +141,7 @@ table_add_column(struct table *table, const char *heading, ...)
     struct column *column;
     va_list args;
 
-    assert(!table->n_rows);
+    ovs_assert(!table->n_rows);
     if (table->n_columns >= table->allocated_columns) {
         table->columns = x2nrealloc(table->columns, &table->allocated_columns,
                                     sizeof *table->columns);
@@ -204,8 +202,8 @@ table_add_cell(struct table *table)
 {
     size_t x, y;
 
-    assert(table->n_rows > 0);
-    assert(table->current_column < table->n_columns);
+    ovs_assert(table->n_rows > 0);
+    ovs_assert(table->current_column < table->n_columns);
 
     x = table->current_column++;
     y = table->n_rows - 1;
@@ -220,21 +218,19 @@ table_print_table_line__(struct ds *line)
     ds_clear(line);
 }
 
-static void
-table_format_timestamp__(char *s, size_t size)
+static char *
+table_format_timestamp__(void)
 {
-    time_t now = time_wall();
-    strftime(s, size, "%Y-%m-%d %H:%M:%S", gmtime(&now));
+    return xastrftime_msec("%Y-%m-%d %H:%M:%S.###", time_wall_msec(), true);
 }
 
 static void
 table_print_timestamp__(const struct table *table)
 {
     if (table->timestamp) {
-        char s[32];
-
-        table_format_timestamp__(s, sizeof s);
+        char *s = table_format_timestamp__();
         puts(s);
+        free(s);
     }
 }
 
@@ -501,10 +497,9 @@ table_print_json__(const struct table *table, const struct table_style *style)
         json_object_put_string(json, "caption", table->caption);
     }
     if (table->timestamp) {
-        char s[32];
-
-        table_format_timestamp__(s, sizeof s);
+        char *s = table_format_timestamp__();
         json_object_put_string(json, "time", s);
+        free(s);
     }
 
     headings = json_array_create_empty();

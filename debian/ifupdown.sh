@@ -1,6 +1,6 @@
 #! /bin/sh
 
-# Copyright (c) 2012 Nicira, Inc.
+# Copyright (c) 2012, 2013 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -61,6 +61,16 @@ if [ "${MODE}" = "start" ]; then
                     ${OVS_EXTRA+-- $OVS_EXTRA}
 
                 ifconfig "${IFACE}" up
+                for slave in ${IF_OVS_BONDS}
+                do
+                    ifconfig "${slave}" up
+                done
+                ;;
+        OVSTunnel)
+                ovs_vsctl -- --may-exist add-port "${IF_OVS_BRIDGE}"\
+                    "${IFACE}" ${IF_OVS_OPTIONS} -- set Interface "${IFACE}" \
+                    type=${IF_OVS_TUNNEL_TYPE} ${IF_OVS_TUNNEL_OPTIONS} \
+                    ${OVS_EXTRA+-- $OVS_EXTRA}
                 ;;
         *)
                 exit 0
@@ -75,7 +85,7 @@ elif [ "${MODE}" = "stop" ]; then
 
                 ovs_vsctl -- --if-exists del-br "${IFACE}"
                 ;;
-        OVSPort|OVSIntPort|OVSBond)
+        OVSPort|OVSIntPort|OVSBond|OVSTunnel)
                 ovs_vsctl -- --if-exists del-port "${IF_OVS_BRIDGE}" "${IFACE}"
                 ;;
         *)

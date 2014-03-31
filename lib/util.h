@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "compiler.h"
+#include "openvswitch/types.h"
 
 #ifndef va_copy
 #ifdef __va_copy
@@ -62,6 +64,17 @@
 #define BUILD_ASSERT_DECL_GCCONLY(EXPR) ((void) 0)
 #endif
 
+/* Like the standard assert macro, except:
+ *
+ *   - Writes the failure message to the log.
+ *
+ *   - Not affected by NDEBUG. */
+#define ovs_assert(CONDITION)                                           \
+    if (!OVS_LIKELY(CONDITION)) {                                       \
+        ovs_assert_failure(SOURCE_LOCATOR, __func__, #CONDITION);       \
+    }
+void ovs_assert_failure(const char *, const char *, const char *) NO_RETURN;
+
 /* Casts 'pointer' to 'type' and issues a compiler warning if the cast changes
  * anything other than an outermost "const" or "volatile" qualifier.
  *
@@ -73,10 +86,24 @@
      (TYPE) (POINTER))
 
 extern const char *program_name;
-extern const char *subprogram_name;
+
+#define __ARRAY_SIZE_NOCHECK(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
+#ifdef __GNUC__
+/* return 0 for array types, 1 otherwise */
+#define __ARRAY_CHECK(ARRAY) 					\
+    !__builtin_types_compatible_p(typeof(ARRAY), typeof(&ARRAY[0]))
+
+/* compile-time fail if not array */
+#define __ARRAY_FAIL(ARRAY) (sizeof(char[-2*!__ARRAY_CHECK(ARRAY)]))
+#define __ARRAY_SIZE(ARRAY)					\
+    __builtin_choose_expr(__ARRAY_CHECK(ARRAY),			\
+        __ARRAY_SIZE_NOCHECK(ARRAY), __ARRAY_FAIL(ARRAY))
+#else
+#define __ARRAY_SIZE(ARRAY) __ARRAY_SIZE_NOCHECK(ARRAY)
+#endif
 
 /* Returns the number of elements in ARRAY. */
-#define ARRAY_SIZE(ARRAY) (sizeof ARRAY / sizeof *ARRAY)
+#define ARRAY_SIZE(ARRAY) __ARRAY_SIZE(ARRAY)
 
 /* Returns X / Y, rounding up.  X must be nonnegative to round correctly. */
 #define DIV_ROUND_UP(X, Y) (((X) + ((Y) - 1)) / (Y))
@@ -96,21 +123,24 @@ is_pow2(uintmax_t x)
     return IS_POW2(x);
 }
 
-/* Returns the rightmost 1-bit in 'x' (e.g. 01011000 => 00001000), or 0 if 'x'
- * is 0. */
-static inline uintmax_t
-rightmost_1bit(uintmax_t x)
-{
-    return x & -x;
-}
+/* Returns X rounded up to a power of 2.  X must be a constant expression. */
+#define ROUND_UP_POW2(X) RUP2__(X)
+#define RUP2__(X) (RUP2_1(X) + 1)
+#define RUP2_1(X) (RUP2_2(X) | (RUP2_2(X) >> 16))
+#define RUP2_2(X) (RUP2_3(X) | (RUP2_3(X) >> 8))
+#define RUP2_3(X) (RUP2_4(X) | (RUP2_4(X) >> 4))
+#define RUP2_4(X) (RUP2_5(X) | (RUP2_5(X) >> 2))
+#define RUP2_5(X) (RUP2_6(X) | (RUP2_6(X) >> 1))
+#define RUP2_6(X) ((X) - 1)
 
-/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
- * 01010000), or 0 if 'x' is 0. */
-static inline uintmax_t
-zero_rightmost_1bit(uintmax_t x)
-{
-    return x & (x - 1);
-}
+/* Returns X rounded down to a power of 2.  X must be a constant expression. */
+#define ROUND_DOWN_POW2(X) RDP2__(X)
+#define RDP2__(X) (RDP2_1(X) - (RDP2_1(X) >> 1))
+#define RDP2_1(X) (RDP2_2(X) | (RDP2_2(X) >> 16))
+#define RDP2_2(X) (RDP2_3(X) | (RDP2_3(X) >> 8))
+#define RDP2_3(X) (RDP2_4(X) | (RDP2_4(X) >> 4))
+#define RDP2_4(X) (RDP2_5(X) | (RDP2_5(X) >> 2))
+#define RDP2_5(X) (      (X) | (      (X) >> 1))
 
 #ifndef MIN
 #define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
@@ -120,7 +150,7 @@ zero_rightmost_1bit(uintmax_t x)
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 #endif
 
-#define NOT_REACHED() abort()
+#define OVS_NOT_REACHED() abort()
 
 /* Expands to a string that looks like "<file>:<line>", e.g. "tmp.c:10".
  *
@@ -174,9 +204,30 @@ zero_rightmost_1bit(uintmax_t x)
  * that that OBJECT points to, assigns the address of the outer object to
  * OBJECT, which must be an lvalue.
  *
- * Evaluates to 1. */
+ * Evaluates to (void) 0 as the result is not to be used. */
 #define ASSIGN_CONTAINER(OBJECT, POINTER, MEMBER) \
-    ((OBJECT) = OBJECT_CONTAINING(POINTER, OBJECT, MEMBER), 1)
+    ((OBJECT) = OBJECT_CONTAINING(POINTER, OBJECT, MEMBER), (void) 0)
+
+/* Given ATTR, and TYPE, cast the ATTR to TYPE by first casting ATTR to
+ * (void *). This is to suppress the alignment warning issued by clang. */
+#define ALIGNED_CAST(TYPE, ATTR) ((TYPE) (void *) (ATTR))
+
+/* Use "%"PRIuSIZE to format size_t with printf(). */
+#ifdef _WIN32
+#define PRIdSIZE "Id"
+#define PRIiSIZE "Ii"
+#define PRIoSIZE "Io"
+#define PRIuSIZE "Iu"
+#define PRIxSIZE "Ix"
+#define PRIXSIZE "IX"
+#else
+#define PRIdSIZE "zd"
+#define PRIiSIZE "zi"
+#define PRIoSIZE "zo"
+#define PRIuSIZE "zu"
+#define PRIxSIZE "zx"
+#define PRIXSIZE "zX"
+#endif
 
 #ifdef  __cplusplus
 extern "C" {
@@ -186,6 +237,9 @@ void set_program_name__(const char *name, const char *version,
                         const char *date, const char *time);
 #define set_program_name(name) \
         set_program_name__(name, VERSION, __DATE__, __TIME__)
+
+const char *get_subprogram_name(void);
+void set_subprogram_name(const char *format, ...) PRINTF_FORMAT(1, 2);
 
 const char *get_program_version(void);
 void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
@@ -217,14 +271,32 @@ void ovs_error(int err_no, const char *format, ...) PRINTF_FORMAT(2, 3);
 void ovs_error_valist(int err_no, const char *format, va_list)
     PRINTF_FORMAT(2, 0);
 const char *ovs_retval_to_string(int);
+const char *ovs_strerror(int);
 void ovs_hex_dump(FILE *, const void *, size_t, uintptr_t offset, bool ascii);
 
 bool str_to_int(const char *, int base, int *);
 bool str_to_long(const char *, int base, long *);
 bool str_to_llong(const char *, int base, long long *);
-bool str_to_uint(const char *, int base, unsigned int *);
-bool str_to_ulong(const char *, int base, unsigned long *);
-bool str_to_ullong(const char *, int base, unsigned long long *);
+
+static inline bool
+str_to_uint(const char *s, int base, unsigned int *u)
+{
+    return str_to_int(s, base, (int *) u);
+}
+
+static inline bool
+str_to_ulong(const char *s, int base, unsigned long *ul)
+{
+    return str_to_long(s, base, (long *) ul);
+}
+
+static inline bool
+str_to_ullong(const char *s, int base, unsigned long long *ull)
+{
+    return str_to_llong(s, base, (long long *) ull);
+}
+
+bool ovs_scan(const char *s, const char *format, ...) SCANF_FORMAT(2, 3);
 
 bool str_to_double(const char *, double *);
 
@@ -242,34 +314,165 @@ char *xreadlink(const char *filename);
 char *follow_symlinks(const char *filename);
 
 void ignore(bool x OVS_UNUSED);
+
+/* Bitwise tests. */
 
-/* Returns the number of trailing 0-bits in 'n'.  Undefined if 'n' == 0.
- *
- * This compiles to a single machine instruction ("bsf") with GCC on x86. */
-#if !defined(UINT_MAX) || !defined(UINT32_MAX)
-#error "Someone screwed up the #includes."
-#elif __GNUC__ >= 4 && UINT_MAX == UINT32_MAX
+/* Returns the number of trailing 0-bits in 'n'.  Undefined if 'n' == 0. */
+#if __GNUC__ >= 4
 static inline int
-raw_ctz(uint32_t n)
+raw_ctz(uint64_t n)
 {
-    return __builtin_ctz(n);
+    /* With GCC 4.7 on 32-bit x86, if a 32-bit integer is passed as 'n', using
+     * a plain __builtin_ctzll() here always generates an out-of-line function
+     * call.  The test below helps it to emit a single 'bsf' instruction. */
+    return (__builtin_constant_p(n <= UINT32_MAX) && n <= UINT32_MAX
+            ? __builtin_ctz(n)
+            : __builtin_ctzll(n));
+}
+
+static inline int
+raw_clz64(uint64_t n)
+{
+    return __builtin_clzll(n);
 }
 #else
 /* Defined in util.c. */
-int raw_ctz(uint32_t n);
+int raw_ctz(uint64_t n);
+int raw_clz64(uint64_t n);
 #endif
 
 /* Returns the number of trailing 0-bits in 'n', or 32 if 'n' is 0. */
 static inline int
-ctz(uint32_t n)
+ctz32(uint32_t n)
 {
     return n ? raw_ctz(n) : 32;
 }
 
-int log_2_floor(uint32_t);
-int log_2_ceil(uint32_t);
-int popcount(uint32_t);
+/* Returns the number of trailing 0-bits in 'n', or 64 if 'n' is 0. */
+static inline int
+ctz64(uint64_t n)
+{
+    return n ? raw_ctz(n) : 64;
+}
 
+/* Returns the number of leading 0-bits in 'n', or 32 if 'n' is 0. */
+static inline int
+clz32(uint32_t n)
+{
+    return n ? raw_clz64(n) - 32 : 32;
+}
+
+/* Returns the number of leading 0-bits in 'n', or 64 if 'n' is 0. */
+static inline int
+clz64(uint64_t n)
+{
+    return n ? raw_clz64(n) : 64;
+}
+
+/* Given a word 'n', calculates floor(log_2('n')).  This is equivalent
+ * to finding the bit position of the most significant one bit in 'n'.  It is
+ * an error to call this function with 'n' == 0. */
+static inline int
+log_2_floor(uint64_t n)
+{
+    return 63 - raw_clz64(n);
+}
+
+/* Given a word 'n', calculates ceil(log_2('n')).  It is an error to
+ * call this function with 'n' == 0. */
+static inline int
+log_2_ceil(uint64_t n)
+{
+    return log_2_floor(n) + !is_pow2(n);
+}
+
+/* unsigned int count_1bits(uint64_t x):
+ *
+ * Returns the number of 1-bits in 'x', between 0 and 64 inclusive. */
+#if UINTPTR_MAX == UINT64_MAX
+static inline unsigned int
+count_1bits(uint64_t x)
+{
+#if __GNUC__ >= 4 && __POPCNT__
+    return __builtin_popcountll(x);
+#else
+    /* This portable implementation is the fastest one we know of for 64
+     * bits, and about 3x faster than GCC 4.7 __builtin_popcountll(). */
+    const uint64_t h55 = UINT64_C(0x5555555555555555);
+    const uint64_t h33 = UINT64_C(0x3333333333333333);
+    const uint64_t h0F = UINT64_C(0x0F0F0F0F0F0F0F0F);
+    const uint64_t h01 = UINT64_C(0x0101010101010101);
+    x -= (x >> 1) & h55;               /* Count of each 2 bits in-place. */
+    x = (x & h33) + ((x >> 2) & h33);  /* Count of each 4 bits in-place. */
+    x = (x + (x >> 4)) & h0F;          /* Count of each 8 bits in-place. */
+    return (x * h01) >> 56;            /* Sum of all bytes. */
+#endif
+}
+#else /* Not 64-bit. */
+#if __GNUC__ >= 4 && __POPCNT__
+static inline unsigned int
+count_1bits_32__(uint32_t x)
+{
+    return __builtin_popcount(x);
+}
+#else
+#define NEED_COUNT_1BITS_8 1
+extern const uint8_t count_1bits_8[256];
+static inline unsigned int
+count_1bits_32__(uint32_t x)
+{
+    /* This portable implementation is the fastest one we know of for 32 bits,
+     * and faster than GCC __builtin_popcount(). */
+    return (count_1bits_8[x & 0xff] +
+            count_1bits_8[(x >> 8) & 0xff] +
+            count_1bits_8[(x >> 16) & 0xff] +
+            count_1bits_8[x >> 24]);
+}
+#endif
+static inline unsigned int
+count_1bits(uint64_t x)
+{
+    return count_1bits_32__(x) + count_1bits_32__(x >> 32);
+}
+#endif
+
+/* Returns the rightmost 1-bit in 'x' (e.g. 01011000 => 00001000), or 0 if 'x'
+ * is 0. */
+static inline uintmax_t
+rightmost_1bit(uintmax_t x)
+{
+    return x & -x;
+}
+
+/* Returns 'x' with its rightmost 1-bit changed to a zero (e.g. 01011000 =>
+ * 01010000), or 0 if 'x' is 0. */
+static inline uintmax_t
+zero_rightmost_1bit(uintmax_t x)
+{
+    return x & (x - 1);
+}
+
+/* Returns the index of the rightmost 1-bit in 'x' (e.g. 01011000 => 3), or 32
+ * if 'x' is 0.
+ *
+ * Unlike the other functions for rightmost 1-bits, this function only works
+ * with 32-bit integers. */
+static inline uint32_t
+rightmost_1bit_idx(uint32_t x)
+{
+    return ctz32(x);
+}
+
+/* Returns the index of the leftmost 1-bit in 'x' (e.g. 01011000 => 6), or 32
+ * if 'x' is 0.
+ *
+ * This function only works with 32-bit integers. */
+static inline uint32_t
+leftmost_1bit_idx(uint32_t x)
+{
+    return x ? log_2_floor(x) : 32;
+}
+
 bool is_all_zeros(const uint8_t *, size_t);
 bool is_all_ones(const uint8_t *, size_t);
 void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,

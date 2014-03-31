@@ -2,10 +2,11 @@
 
 #include <config.h>
 #include "tests/idltest.h"
-#include <assert.h>
 #include <limits.h>
+#include "ovs-thread.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
+#include "util.h"
 
 #ifdef __CHECKER__
 /* Sparse dislikes sizeof(bool) ("warning: expression using sizeof bool"). */
@@ -42,7 +43,7 @@ idltest_link1_parse_i(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datu
 {
     struct idltest_link1 *row = idltest_link1_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->i = datum->keys[0].integer;
     } else {
@@ -55,7 +56,7 @@ idltest_link1_parse_k(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datu
 {
     struct idltest_link1 *row = idltest_link1_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->k = idltest_link1_cast(ovsdb_idl_get_row_arc(row_, &idltest_table_classes[IDLTEST_TABLE_LINK1], &datum->keys[0].uuid));
     } else {
@@ -69,7 +70,7 @@ idltest_link1_parse_ka(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
     struct idltest_link1 *row = idltest_link1_cast(row_);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->ka = NULL;
     row->n_ka = 0;
     for (i = 0; i < datum->n; i++) {
@@ -89,7 +90,7 @@ idltest_link1_parse_l2(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_link1 *row = idltest_link1_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->l2 = idltest_link2_cast(ovsdb_idl_get_row_arc(row_, &idltest_table_classes[IDLTEST_TABLE_LINK2], &datum->keys[0].uuid));
     } else {
@@ -114,7 +115,7 @@ idltest_link1_unparse_ka(struct ovsdb_idl_row *row_)
 {
     struct idltest_link1 *row = idltest_link1_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->ka);
 }
 
@@ -164,28 +165,28 @@ idltest_link1_insert(struct ovsdb_idl_txn *txn)
 void
 idltest_link1_verify_i(const struct idltest_link1 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_I]);
 }
 
 void
 idltest_link1_verify_k(const struct idltest_link1 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_K]);
 }
 
 void
 idltest_link1_verify_ka(const struct idltest_link1 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_KA]);
 }
 
 void
 idltest_link1_verify_l2(const struct idltest_link1 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_L2]);
 }
 
@@ -208,7 +209,7 @@ const struct ovsdb_datum *
 idltest_link1_get_i(const struct idltest_link1 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_INTEGER);
+    ovs_assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &idltest_link1_col_i);
 }
 
@@ -231,7 +232,7 @@ const struct ovsdb_datum *
 idltest_link1_get_k(const struct idltest_link1 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_link1_col_k);
 }
 
@@ -254,7 +255,7 @@ const struct ovsdb_datum *
 idltest_link1_get_ka(const struct idltest_link1 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_link1_col_ka);
 }
 
@@ -277,7 +278,7 @@ const struct ovsdb_datum *
 idltest_link1_get_l2(const struct idltest_link1 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_link1_col_l2);
 }
 
@@ -285,26 +286,28 @@ void
 idltest_link1_set_i(const struct idltest_link1 *row, int64_t i)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].integer = i;
+    datum.keys = &key;
+    key.integer = i;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_I], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_I], &datum);
 }
 
 void
 idltest_link1_set_k(const struct idltest_link1 *row, const struct idltest_link1 *k)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].uuid = k->header_.uuid;
+    datum.keys = &key;
+    key.uuid = k->header_.uuid;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_K], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_K], &datum);
 }
 
 void
@@ -313,9 +316,9 @@ idltest_link1_set_ka(const struct idltest_link1 *row, struct idltest_link1 **ka,
     struct ovsdb_datum datum;
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = n_ka;
-    datum.keys = xmalloc(n_ka * sizeof *datum.keys);
+    datum.keys = n_ka ? xmalloc(n_ka * sizeof *datum.keys) : NULL;
     datum.values = NULL;
     for (i = 0; i < n_ka; i++) {
         datum.keys[i].uuid = ka[i]->header_.uuid;
@@ -328,18 +331,19 @@ void
 idltest_link1_set_l2(const struct idltest_link1 *row, const struct idltest_link2 *l2)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     if (l2) {
         datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].uuid = l2->header_.uuid;
+        datum.keys = &key;
+        key.uuid = l2->header_.uuid;
     } else {
         datum.n = 0;
         datum.keys = NULL;
     }
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_L2], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_link1_columns[IDLTEST_LINK1_COL_L2], &datum);
 }
 
 struct ovsdb_idl_column idltest_link1_columns[IDLTEST_LINK1_N_COLUMNS];
@@ -407,7 +411,7 @@ idltest_link2_parse_i(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datu
 {
     struct idltest_link2 *row = idltest_link2_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->i = datum->keys[0].integer;
     } else {
@@ -420,7 +424,7 @@ idltest_link2_parse_l1(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_link2 *row = idltest_link2_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->l1 = idltest_link1_cast(ovsdb_idl_get_row_arc(row_, &idltest_table_classes[IDLTEST_TABLE_LINK1], &datum->keys[0].uuid));
     } else {
@@ -480,14 +484,14 @@ idltest_link2_insert(struct ovsdb_idl_txn *txn)
 void
 idltest_link2_verify_i(const struct idltest_link2 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_I]);
 }
 
 void
 idltest_link2_verify_l1(const struct idltest_link2 *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_L1]);
 }
 
@@ -510,7 +514,7 @@ const struct ovsdb_datum *
 idltest_link2_get_i(const struct idltest_link2 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_INTEGER);
+    ovs_assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &idltest_link2_col_i);
 }
 
@@ -533,7 +537,7 @@ const struct ovsdb_datum *
 idltest_link2_get_l1(const struct idltest_link2 *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_link2_col_l1);
 }
 
@@ -541,31 +545,33 @@ void
 idltest_link2_set_i(const struct idltest_link2 *row, int64_t i)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].integer = i;
+    datum.keys = &key;
+    key.integer = i;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_I], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_I], &datum);
 }
 
 void
 idltest_link2_set_l1(const struct idltest_link2 *row, const struct idltest_link1 *l1)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     if (l1) {
         datum.n = 1;
-        datum.keys = xmalloc(sizeof *datum.keys);
-        datum.keys[0].uuid = l1->header_.uuid;
+        datum.keys = &key;
+        key.uuid = l1->header_.uuid;
     } else {
         datum.n = 0;
         datum.keys = NULL;
     }
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_L1], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_link2_columns[IDLTEST_LINK2_COL_L1], &datum);
 }
 
 struct ovsdb_idl_column idltest_link2_columns[IDLTEST_LINK2_N_COLUMNS];
@@ -607,7 +613,7 @@ idltest_simple_parse_b(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->b = datum->keys[0].boolean;
     } else {
@@ -622,7 +628,7 @@ idltest_simple_parse_ba(struct ovsdb_idl_row *row_, const struct ovsdb_datum *da
     size_t n = MIN(1, datum->n);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->ba = NULL;
     row->n_ba = 0;
     for (i = 0; i < n; i++) {
@@ -639,7 +645,7 @@ idltest_simple_parse_i(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->i = datum->keys[0].integer;
     } else {
@@ -653,7 +659,7 @@ idltest_simple_parse_ia(struct ovsdb_idl_row *row_, const struct ovsdb_datum *da
     struct idltest_simple *row = idltest_simple_cast(row_);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->ia = NULL;
     row->n_ia = 0;
     for (i = 0; i < datum->n; i++) {
@@ -670,7 +676,7 @@ idltest_simple_parse_r(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->r = datum->keys[0].real;
     } else {
@@ -684,7 +690,7 @@ idltest_simple_parse_ra(struct ovsdb_idl_row *row_, const struct ovsdb_datum *da
     struct idltest_simple *row = idltest_simple_cast(row_);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->ra = NULL;
     row->n_ra = 0;
     for (i = 0; i < datum->n; i++) {
@@ -701,7 +707,7 @@ idltest_simple_parse_s(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->s = datum->keys[0].string;
     } else {
@@ -715,7 +721,7 @@ idltest_simple_parse_sa(struct ovsdb_idl_row *row_, const struct ovsdb_datum *da
     struct idltest_simple *row = idltest_simple_cast(row_);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->sa = NULL;
     row->n_sa = 0;
     for (i = 0; i < datum->n; i++) {
@@ -732,7 +738,7 @@ idltest_simple_parse_u(struct ovsdb_idl_row *row_, const struct ovsdb_datum *dat
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     if (datum->n >= 1) {
         row->u = datum->keys[0].uuid;
     } else {
@@ -746,7 +752,7 @@ idltest_simple_parse_ua(struct ovsdb_idl_row *row_, const struct ovsdb_datum *da
     struct idltest_simple *row = idltest_simple_cast(row_);
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     row->ua = NULL;
     row->n_ua = 0;
     for (i = 0; i < datum->n; i++) {
@@ -769,7 +775,7 @@ idltest_simple_unparse_ba(struct ovsdb_idl_row *row_)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->ba);
 }
 
@@ -784,7 +790,7 @@ idltest_simple_unparse_ia(struct ovsdb_idl_row *row_)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->ia);
 }
 
@@ -799,7 +805,7 @@ idltest_simple_unparse_ra(struct ovsdb_idl_row *row_)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->ra);
 }
 
@@ -814,7 +820,7 @@ idltest_simple_unparse_sa(struct ovsdb_idl_row *row_)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->sa);
 }
 
@@ -829,7 +835,7 @@ idltest_simple_unparse_ua(struct ovsdb_idl_row *row_)
 {
     struct idltest_simple *row = idltest_simple_cast(row_);
 
-    assert(inited);
+    ovs_assert(inited);
     free(row->ua);
 }
 
@@ -873,70 +879,70 @@ idltest_simple_insert(struct ovsdb_idl_txn *txn)
 void
 idltest_simple_verify_b(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_B]);
 }
 
 void
 idltest_simple_verify_ba(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_BA]);
 }
 
 void
 idltest_simple_verify_i(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_I]);
 }
 
 void
 idltest_simple_verify_ia(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_IA]);
 }
 
 void
 idltest_simple_verify_r(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_R]);
 }
 
 void
 idltest_simple_verify_ra(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_RA]);
 }
 
 void
 idltest_simple_verify_s(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_S]);
 }
 
 void
 idltest_simple_verify_sa(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_SA]);
 }
 
 void
 idltest_simple_verify_u(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_U]);
 }
 
 void
 idltest_simple_verify_ua(const struct idltest_simple *row)
 {
-    assert(inited);
+    ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_UA]);
 }
 
@@ -959,7 +965,7 @@ const struct ovsdb_datum *
 idltest_simple_get_b(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    ovs_assert(key_type == OVSDB_TYPE_BOOLEAN);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_b);
 }
 
@@ -982,7 +988,7 @@ const struct ovsdb_datum *
 idltest_simple_get_ba(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_BOOLEAN);
+    ovs_assert(key_type == OVSDB_TYPE_BOOLEAN);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_ba);
 }
 
@@ -1005,7 +1011,7 @@ const struct ovsdb_datum *
 idltest_simple_get_i(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_INTEGER);
+    ovs_assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_i);
 }
 
@@ -1028,7 +1034,7 @@ const struct ovsdb_datum *
 idltest_simple_get_ia(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_INTEGER);
+    ovs_assert(key_type == OVSDB_TYPE_INTEGER);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_ia);
 }
 
@@ -1051,7 +1057,7 @@ const struct ovsdb_datum *
 idltest_simple_get_r(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_REAL);
+    ovs_assert(key_type == OVSDB_TYPE_REAL);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_r);
 }
 
@@ -1074,7 +1080,7 @@ const struct ovsdb_datum *
 idltest_simple_get_ra(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_REAL);
+    ovs_assert(key_type == OVSDB_TYPE_REAL);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_ra);
 }
 
@@ -1097,7 +1103,7 @@ const struct ovsdb_datum *
 idltest_simple_get_s(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_s);
 }
 
@@ -1120,7 +1126,7 @@ const struct ovsdb_datum *
 idltest_simple_get_sa(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_sa);
 }
 
@@ -1143,7 +1149,7 @@ const struct ovsdb_datum *
 idltest_simple_get_u(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_u);
 }
 
@@ -1166,7 +1172,7 @@ const struct ovsdb_datum *
 idltest_simple_get_ua(const struct idltest_simple *row,
 	enum ovsdb_atomic_type key_type OVS_UNUSED)
 {
-    assert(key_type == OVSDB_TYPE_UUID);
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
     return ovsdb_idl_read(&row->header_, &idltest_simple_col_ua);
 }
 
@@ -1174,43 +1180,47 @@ void
 idltest_simple_set_b(const struct idltest_simple *row, bool b)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].boolean = b;
+    datum.keys = &key;
+    key.boolean = b;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_B], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_B], &datum);
 }
 
 void
 idltest_simple_set_ba(const struct idltest_simple *row, const bool *ba, size_t n_ba)
 {
     struct ovsdb_datum datum;
-    size_t i;
+    union ovsdb_atom key;
 
-    assert(inited);
-    datum.n = n_ba;
-    datum.keys = xmalloc(n_ba * sizeof *datum.keys);
-    datum.values = NULL;
-    for (i = 0; i < n_ba; i++) {
-        datum.keys[i].boolean = ba[i];
+    ovs_assert(inited);
+    if (n_ba) {
+        datum.n = 1;
+        datum.keys = &key;
+        key.boolean = *ba;
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
     }
-    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_BOOLEAN, OVSDB_TYPE_VOID);
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_BA], &datum);
+    datum.values = NULL;
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_BA], &datum);
 }
 
 void
 idltest_simple_set_i(const struct idltest_simple *row, int64_t i)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].integer = i;
+    datum.keys = &key;
+    key.integer = i;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_I], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_I], &datum);
 }
 
 void
@@ -1219,9 +1229,9 @@ idltest_simple_set_ia(const struct idltest_simple *row, const int64_t *ia, size_
     struct ovsdb_datum datum;
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = n_ia;
-    datum.keys = xmalloc(n_ia * sizeof *datum.keys);
+    datum.keys = n_ia ? xmalloc(n_ia * sizeof *datum.keys) : NULL;
     datum.values = NULL;
     for (i = 0; i < n_ia; i++) {
         datum.keys[i].integer = ia[i];
@@ -1234,13 +1244,14 @@ void
 idltest_simple_set_r(const struct idltest_simple *row, double r)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].real = r;
+    datum.keys = &key;
+    key.real = r;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_R], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_R], &datum);
 }
 
 void
@@ -1249,9 +1260,9 @@ idltest_simple_set_ra(const struct idltest_simple *row, const double *ra, size_t
     struct ovsdb_datum datum;
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = n_ra;
-    datum.keys = xmalloc(n_ra * sizeof *datum.keys);
+    datum.keys = n_ra ? xmalloc(n_ra * sizeof *datum.keys) : NULL;
     datum.values = NULL;
     for (i = 0; i < n_ra; i++) {
         datum.keys[i].real = ra[i];
@@ -1264,13 +1275,14 @@ void
 idltest_simple_set_s(const struct idltest_simple *row, const char *s)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].string = xstrdup(s);
+    datum.keys = &key;
+    key.string = CONST_CAST(char *, s);
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_S], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_S], &datum);
 }
 
 void
@@ -1279,9 +1291,9 @@ idltest_simple_set_sa(const struct idltest_simple *row, char **sa, size_t n_sa)
     struct ovsdb_datum datum;
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = n_sa;
-    datum.keys = xmalloc(n_sa * sizeof *datum.keys);
+    datum.keys = n_sa ? xmalloc(n_sa * sizeof *datum.keys) : NULL;
     datum.values = NULL;
     for (i = 0; i < n_sa; i++) {
         datum.keys[i].string = xstrdup(sa[i]);
@@ -1294,13 +1306,14 @@ void
 idltest_simple_set_u(const struct idltest_simple *row, struct uuid u)
 {
     struct ovsdb_datum datum;
+    union ovsdb_atom key;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = 1;
-    datum.keys = xmalloc(sizeof *datum.keys);
-    datum.keys[0].uuid = u;
+    datum.keys = &key;
+    key.uuid = u;
     datum.values = NULL;
-    ovsdb_idl_txn_write(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_U], &datum);
+    ovsdb_idl_txn_write_clone(&row->header_, &idltest_simple_columns[IDLTEST_SIMPLE_COL_U], &datum);
 }
 
 void
@@ -1309,9 +1322,9 @@ idltest_simple_set_ua(const struct idltest_simple *row, const struct uuid *ua, s
     struct ovsdb_datum datum;
     size_t i;
 
-    assert(inited);
+    ovs_assert(inited);
     datum.n = n_ua;
-    datum.keys = xmalloc(n_ua * sizeof *datum.keys);
+    datum.keys = n_ua ? xmalloc(n_ua * sizeof *datum.keys) : NULL;
     datum.values = NULL;
     for (i = 0; i < n_ua; i++) {
         datum.keys[i].uuid = ua[i];
@@ -1462,6 +1475,7 @@ idltest_init(void)
     if (inited) {
         return;
     }
+    assert_single_threaded();
     inited = true;
 
     idltest_link1_columns_init();

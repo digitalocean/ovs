@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 
 #include "file.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -69,12 +68,10 @@ static struct ovsdb_error *ovsdb_file_open__(const char *file_name,
                                              bool read_only, struct ovsdb **,
                                              struct ovsdb_file **);
 static struct ovsdb_error *ovsdb_file_txn_from_json(
-    struct ovsdb *, const struct json *, bool converting,
-    long long int *date, struct ovsdb_txn **);
+    struct ovsdb *, const struct json *, bool converting, struct ovsdb_txn **);
 static struct ovsdb_error *ovsdb_file_create(struct ovsdb *,
                                              struct ovsdb_log *,
                                              const char *file_name,
-                                             long long int oldest_commit,
                                              unsigned int n_transactions,
                                              struct ovsdb_file **filep);
 
@@ -129,7 +126,7 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
     struct ovsdb_error *error;
     struct json *json = NULL;
 
-    assert(logp || schemap);
+    ovs_assert(logp || schemap);
 
     error = ovsdb_log_open(file_name, open_mode, -1, &log);
     if (error) {
@@ -185,7 +182,6 @@ ovsdb_file_open__(const char *file_name,
                   struct ovsdb_file **filep)
 {
     enum ovsdb_log_open_mode open_mode;
-    long long int oldest_commit;
     unsigned int n_transactions;
     struct ovsdb_schema *schema = NULL;
     struct ovsdb_error *error;
@@ -194,7 +190,7 @@ ovsdb_file_open__(const char *file_name,
     struct ovsdb *db = NULL;
 
     /* In read-only mode there is no ovsdb_file so 'filep' must be null. */
-    assert(!(read_only && filep));
+    ovs_assert(!(read_only && filep));
 
     open_mode = read_only ? OVSDB_LOG_READ_ONLY : OVSDB_LOG_READ_WRITE;
     error = ovsdb_file_open_log(file_name, open_mode, &log,
@@ -205,14 +201,12 @@ ovsdb_file_open__(const char *file_name,
 
     db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema));
 
-    oldest_commit = LLONG_MAX;
     n_transactions = 0;
     while ((error = ovsdb_log_read(log, &json)) == NULL && json) {
         struct ovsdb_txn *txn;
-        long long int date;
 
         error = ovsdb_file_txn_from_json(db, json, alternate_schema != NULL,
-                                         &date, &txn);
+                                         &txn);
         json_destroy(json);
         if (error) {
             ovsdb_log_unread(log);
@@ -220,10 +214,6 @@ ovsdb_file_open__(const char *file_name,
         }
 
         n_transactions++;
-        if (date < oldest_commit) {
-            oldest_commit = date;
-        }
-
         error = ovsdb_txn_commit(txn, false);
         if (error) {
             ovsdb_log_unread(log);
@@ -244,8 +234,7 @@ ovsdb_file_open__(const char *file_name,
     if (!read_only) {
         struct ovsdb_file *file;
 
-        error = ovsdb_file_create(db, log, file_name, oldest_commit,
-                                  n_transactions, &file);
+        error = ovsdb_file_create(db, log, file_name, n_transactions, &file);
         if (error) {
             goto error;
         }
@@ -377,22 +366,16 @@ ovsdb_file_txn_table_from_json(struct ovsdb_txn *txn,
  *
  * If 'converting' is true, then unknown table and column names are ignored
  * (which can ease upgrading and downgrading schemas); otherwise, they are
- * treated as errors.
- *
- * If successful, the date associated with the transaction, as the number of
- * milliseconds since the epoch, is stored in '*date'.  If the transaction does
- * not include a date, LLONG_MAX is stored. */
+ * treated as errors. */
 static struct ovsdb_error *
 ovsdb_file_txn_from_json(struct ovsdb *db, const struct json *json,
-                         bool converting, long long int *date,
-                         struct ovsdb_txn **txnp)
+                         bool converting, struct ovsdb_txn **txnp)
 {
     struct ovsdb_error *error;
     struct shash_node *node;
     struct ovsdb_txn *txn;
 
     *txnp = NULL;
-    *date = LLONG_MAX;
 
     if (json->type != JSON_OBJECT) {
         return ovsdb_syntax_error(json, NULL, "object expected");
@@ -408,7 +391,6 @@ ovsdb_file_txn_from_json(struct ovsdb *db, const struct json *json,
         if (!table) {
             if (!strcmp(table_name, "_date")
                 && node_json->type == JSON_INTEGER) {
-                *date = json_integer(node_json);
                 continue;
             } else if (!strcmp(table_name, "_comment") || converting) {
                 continue;
@@ -504,7 +486,7 @@ ovsdb_file_save_copy(const char *file_name, int locking,
 struct ovsdb_error *
 ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
 {
-    assert(schemap != NULL);
+    ovs_assert(schemap != NULL);
     return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemap);
 }
 
@@ -515,7 +497,7 @@ struct ovsdb_file {
     struct ovsdb *db;
     struct ovsdb_log *log;
     char *file_name;
-    long long int oldest_commit;
+    long long int last_compact;
     long long int next_compact;
     unsigned int n_transactions;
 };
@@ -525,11 +507,9 @@ static const struct ovsdb_replica_class ovsdb_file_class;
 static struct ovsdb_error *
 ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
                   const char *file_name,
-                  long long int oldest_commit,
                   unsigned int n_transactions,
                   struct ovsdb_file **filep)
 {
-    long long int now = time_msec();
     struct ovsdb_file *file;
     char *deref_name;
     char *abs_name;
@@ -550,8 +530,8 @@ ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
     file->db = db;
     file->log = log;
     file->file_name = abs_name;
-    file->oldest_commit = MIN(oldest_commit, now);
-    file->next_compact = file->oldest_commit + COMPACT_MIN_MSEC;
+    file->last_compact = time_msec();
+    file->next_compact = file->last_compact + COMPACT_MIN_MSEC;
     file->n_transactions = n_transactions;
     ovsdb_add_replica(db, &file->replica);
 
@@ -562,7 +542,7 @@ ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
 static struct ovsdb_file *
 ovsdb_file_cast(struct ovsdb_replica *replica)
 {
-    assert(replica->class == &ovsdb_file_class);
+    ovs_assert(replica->class == &ovsdb_file_class);
     return CONTAINER_OF(replica, struct ovsdb_file, replica);
 }
 
@@ -599,8 +579,8 @@ ovsdb_file_commit(struct ovsdb_replica *replica,
     }
     file->n_transactions++;
 
-    /* If it has been at least COMPACT_MIN_MSEC millseconds since the last time
-     * we compacted (or at least COMPACT_RETRY_MSEC since the last time we
+    /* If it has been at least COMPACT_MIN_MSEC ms since the last time we
+     * compacted (or at least COMPACT_RETRY_MSEC ms since the last time we
      * tried), and if there are at least 100 transactions in the database, and
      * if the database is at least 10 MB, then compact the database. */
     if (time_msec() >= file->next_compact
@@ -635,7 +615,7 @@ ovsdb_file_compact(struct ovsdb_file *file)
 
     comment = xasprintf("compacting database online "
                         "(%.3f seconds old, %u transactions, %llu bytes)",
-                        (time_msec() - file->oldest_commit) / 1000.0,
+                        (time_wall_msec() - file->last_compact) / 1000.0,
                         file->n_transactions,
                         (unsigned long long) ovsdb_log_get_offset(file->log));
     VLOG_INFO("%s: %s", file->file_name, comment);
@@ -680,8 +660,8 @@ exit:
     if (!error) {
         ovsdb_log_close(file->log);
         file->log = new_log;
-        file->oldest_commit = time_msec();
-        file->next_compact = file->oldest_commit + COMPACT_MIN_MSEC;
+        file->last_compact = time_msec();
+        file->next_compact = file->last_compact + COMPACT_MIN_MSEC;
         file->n_transactions = 1;
     } else {
         ovsdb_log_close(new_log);
@@ -788,7 +768,7 @@ ovsdb_file_txn_commit(struct json *json, const char *comment,
     if (comment) {
         json_object_put_string(json, "_comment", comment);
     }
-    json_object_put(json, "_date", json_integer_create(time_wall()));
+    json_object_put(json, "_date", json_integer_create(time_wall_msec()));
 
     error = ovsdb_log_write(log, json);
     json_destroy(json);

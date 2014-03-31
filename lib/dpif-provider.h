@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@
  * exposed over OpenFlow as a single switch.  Datapaths and the collections of
  * ports that they contain may be fixed or dynamic. */
 
-#include <assert.h>
 #include "openflow/openflow.h"
 #include "dpif.h"
 #include "util.h"
@@ -49,7 +48,7 @@ void dpif_uninit(struct dpif *dpif, bool close);
 static inline void dpif_assert_class(const struct dpif *dpif,
                                      const struct dpif_class *dpif_class)
 {
-    assert(dpif->dpif_class == dpif_class);
+    ovs_assert(dpif->dpif_class == dpif_class);
 }
 
 /* Datapath interface class structure, to be defined by each implementation of
@@ -79,6 +78,17 @@ struct dpif_class {
      * Some kinds of datapaths might not be practically enumerable, in which
      * case this function may be a null pointer. */
     int (*enumerate)(struct sset *all_dps);
+
+    /* Returns the type to pass to netdev_open() when a dpif of class
+     * 'dpif_class' has a port of type 'type', for a few special cases
+     * when a netdev type differs from a port type.  For example, when
+     * using the userspace datapath, a port of type "internal" needs to
+     * be opened as "tap".
+     *
+     * Returns either 'type' itself or a string literal, which must not
+     * be freed. */
+    const char *(*port_open_type)(const struct dpif_class *dpif_class,
+                                  const char *type);
 
     /* Attempts to open an existing dpif called 'name', if 'create' is false,
      * or to open an existing dpif or create a new one, if 'create' is true.
@@ -111,36 +121,38 @@ struct dpif_class {
     int (*get_stats)(const struct dpif *dpif, struct dpif_dp_stats *stats);
 
     /* Adds 'netdev' as a new port in 'dpif'.  If '*port_no' is not
-     * UINT16_MAX, attempts to use that as the port's port number.
+     * UINT32_MAX, attempts to use that as the port's port number.
      *
      * If port is successfully added, sets '*port_no' to the new port's
      * port number.  Returns EBUSY if caller attempted to choose a port
      * number, and it was in use. */
     int (*port_add)(struct dpif *dpif, struct netdev *netdev,
-                    uint16_t *port_no);
+                    odp_port_t *port_no);
 
     /* Removes port numbered 'port_no' from 'dpif'. */
-    int (*port_del)(struct dpif *dpif, uint16_t port_no);
+    int (*port_del)(struct dpif *dpif, odp_port_t port_no);
 
-    /* Queries 'dpif' for a port with the given 'port_no' or 'devname'.  Stores
-     * information about the port into '*port' if successful.
+    /* Queries 'dpif' for a port with the given 'port_no' or 'devname'.
+     * If 'port' is not null, stores information about the port into
+     * '*port' if successful.
      *
-     * The caller takes ownership of data in 'port' and must free it with
-     * dpif_port_destroy() when it is no longer needed. */
-    int (*port_query_by_number)(const struct dpif *dpif, uint16_t port_no,
+     * If 'port' is not null, the caller takes ownership of data in
+     * 'port' and must free it with dpif_port_destroy() when it is no
+     * longer needed. */
+    int (*port_query_by_number)(const struct dpif *dpif, odp_port_t port_no,
                                 struct dpif_port *port);
     int (*port_query_by_name)(const struct dpif *dpif, const char *devname,
                               struct dpif_port *port);
 
     /* Returns one greater than the largest port number accepted in flow
      * actions. */
-    int (*get_max_ports)(const struct dpif *dpif);
+    uint32_t (*get_max_ports)(const struct dpif *dpif);
 
     /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE
      * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
      * flows whose packets arrived on port 'port_no'.
      *
-     * A 'port_no' of UINT16_MAX should be treated as a special case.  The
+     * A 'port_no' of UINT32_MAX should be treated as a special case.  The
      * implementation should return a reserved PID, not allocated to any port,
      * that the client may use for special purposes.
      *
@@ -150,7 +162,7 @@ struct dpif_class {
      *
      * A dpif provider that doesn't have meaningful Netlink PIDs can use NULL
      * for this function.  This is equivalent to always returning 0. */
-    uint32_t (*port_get_pid)(const struct dpif *dpif, uint16_t port_no);
+    uint32_t (*port_get_pid)(const struct dpif *dpif, odp_port_t port_no);
 
     /* Attempts to begin dumping the ports in a dpif.  On success, returns 0
      * and initializes '*statep' with any data needed for iteration.  On
@@ -267,12 +279,22 @@ struct dpif_class {
      * called again once it returns nonzero within a given iteration (but the
      * 'flow_dump_done' function will be called afterward).
      *
-     * On success, if 'key' and 'key_len' are nonnull then '*key' and
-     * '*key_len' must be set to Netlink attributes with types OVS_KEY_ATTR_*
-     * representing the dumped flow's key.  If 'actions' and 'actions_len' are
-     * nonnull then they should be set to Netlink attributes with types
-     * OVS_ACTION_ATTR_* representing the dumped flow's actions.  If 'stats'
-     * is nonnull then it should be set to the dumped flow's statistics.
+     * On success:
+     *
+     *     - If 'key' and 'key_len' are nonnull, then '*key' and '*key_len'
+     *       must be set to Netlink attributes with types OVS_KEY_ATTR_*
+     *       representing the dumped flow's key.
+     *
+     *     - If 'mask' and 'mask_len' are nonnull then '*mask' and '*mask_len'
+     *       must be set to Netlink attributes with types of OVS_KEY_ATTR_*
+     *       representing the dumped flow's mask.
+     *
+     *     - If 'actions' and 'actions_len' are nonnull then they should be set
+     *       to Netlink attributes with types OVS_ACTION_ATTR_* representing
+     *       the dumped flow's actions.
+     *
+     *     - If 'stats' is nonnull then it should be set to the dumped flow's
+     *       statistics.
      *
      * All of the returned data is owned by 'dpif', not by the caller, and the
      * caller must not modify or free it.  'dpif' must guarantee that it
@@ -280,6 +302,7 @@ struct dpif_class {
      * 'flow_dump_next' or 'flow_dump_done' for 'state'. */
     int (*flow_dump_next)(const struct dpif *dpif, void *state,
                           const struct nlattr **key, size_t *key_len,
+                          const struct nlattr **mask, size_t *mask_len,
                           const struct nlattr **actions, size_t *actions_len,
                           const struct dpif_flow_stats **stats);
 
@@ -318,11 +341,17 @@ struct dpif_class {
      * '*upcall', using 'buf' for storage.  Should only be called if 'recv_set'
      * has been used to enable receiving packets from 'dpif'.
      *
-     * The implementation should point 'upcall->packet' and 'upcall->key' into
-     * data in the caller-provided 'buf'.  If necessary to make room, the
-     * implementation may expand the data in 'buf'.  (This is hardly a great
-     * way to do things but it works out OK for the dpif providers that exist
-     * so far.)
+     * The implementation should point 'upcall->key' and 'upcall->userdata'
+     * (if any) into data in the caller-provided 'buf'.  The implementation may
+     * also use 'buf' for storing the data of 'upcall->packet'.  If necessary
+     * to make room, the implementation may reallocate the data in 'buf'.
+     *
+     * The caller owns the data of 'upcall->packet' and may modify it.  If
+     * packet's headroom is exhausted as it is manipulated, 'upcall->packet'
+     * will be reallocated.  This requires the data of 'upcall->packet' to be
+     * released with ofpbuf_uninit() before 'upcall' is destroyed.  However,
+     * when an error is returned, the 'upcall->packet' may be uninitialized
+     * and should not be released.
      *
      * This function must not block.  If no upcall is pending when it is
      * called, it should return EAGAIN without blocking. */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 #include <config.h>
 #include "dynamic-string.h"
-#include <assert.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -165,7 +165,7 @@ ds_put_format_valist(struct ds *ds, const char *format, va_list args_)
         needed = vsnprintf(&ds->string[ds->length], available, format, args);
         va_end(args);
 
-        assert(needed < available);
+        ovs_assert(needed < available);
         ds->length += needed;
     }
 }
@@ -184,28 +184,42 @@ ds_put_printable(struct ds *ds, const char *s, size_t n)
     }
 }
 
-/* Writes the current time to 'string' based on 'template'.
+/* Writes the current time with optional millisecond resolution to 'string'
+ * based on 'template'.
  * The current time is either localtime or UTC based on 'utc'. */
 void
-ds_put_strftime(struct ds *ds, const char *template, bool utc)
+ds_put_strftime_msec(struct ds *ds, const char *template, long long int when,
+                     bool utc)
 {
-    const struct tm *tm;
-    time_t now = time_wall();
+    struct tm_msec tm;
     if (utc) {
-        tm = gmtime(&now);
+        gmtime_msec(when, &tm);
     } else {
-        tm = localtime(&now);
+        localtime_msec(when, &tm);
     }
 
     for (;;) {
         size_t avail = ds->string ? ds->allocated - ds->length + 1 : 0;
-        size_t used = strftime(&ds->string[ds->length], avail, template, tm);
+        size_t used = strftime_msec(&ds->string[ds->length], avail, template,
+                                    &tm);
         if (used) {
             ds->length += used;
             return;
         }
         ds_reserve(ds, ds->length + (avail < 32 ? 64 : 2 * avail));
     }
+}
+
+/* Returns a malloc()'d string for time 'when' based on 'template', in local
+ * time or UTC based on 'utc'. */
+char *
+xastrftime_msec(const char *template, long long int when, bool utc)
+{
+    struct ds s;
+
+    ds_init(&s);
+    ds_put_strftime_msec(&s, template, when, utc);
+    return s.string;
 }
 
 int
@@ -228,13 +242,20 @@ ds_get_line(struct ds *ds, FILE *file)
  * Deletes comments introduced by "#" and skips lines that contains only white
  * space (after deleting comments).
  *
+ * If 'line_numberp' is nonnull, increments '*line_numberp' by the number of
+ * lines read from 'file'.
+ *
  * Returns 0 if successful, EOF if no non-blank line was found. */
 int
-ds_get_preprocessed_line(struct ds *ds, FILE *file)
+ds_get_preprocessed_line(struct ds *ds, FILE *file, int *line_numberp)
 {
     while (!ds_get_line(ds, file)) {
         char *line = ds_cstr(ds);
         char *comment;
+
+        if (line_numberp) {
+            ++*line_numberp;
+        }
 
         /* Delete comments. */
         comment = strchr(line, '#');
@@ -348,48 +369,51 @@ void
 ds_put_hex_dump(struct ds *ds, const void *buf_, size_t size,
                 uintptr_t ofs, bool ascii)
 {
-  const uint8_t *buf = buf_;
-  const size_t per_line = 16; /* Maximum bytes per line. */
+    const uint8_t *buf = buf_;
+    const size_t per_line = 16; /* Maximum bytes per line. */
 
-  while (size > 0)
-    {
-      size_t start, end, n;
-      size_t i;
+    while (size > 0) {
+        size_t start, end, n;
+        size_t i;
 
-      /* Number of bytes on this line. */
-      start = ofs % per_line;
-      end = per_line;
-      if (end - start > size)
-        end = start + size;
-      n = end - start;
+        /* Number of bytes on this line. */
+        start = ofs % per_line;
+        end = per_line;
+        if (end - start > size)
+            end = start + size;
+        n = end - start;
 
-      /* Print line. */
-      ds_put_format(ds, "%08jx  ", (uintmax_t) ROUND_DOWN(ofs, per_line));
-      for (i = 0; i < start; i++)
-        ds_put_format(ds, "   ");
-      for (; i < end; i++)
-        ds_put_format(ds, "%02hhx%c",
-                buf[i - start], i == per_line / 2 - 1? '-' : ' ');
-      if (ascii)
-        {
-          for (; i < per_line; i++)
+        /* Print line. */
+        ds_put_format(ds, "%08"PRIxMAX"  ",
+                      (uintmax_t) ROUND_DOWN(ofs, per_line));
+        for (i = 0; i < start; i++) {
             ds_put_format(ds, "   ");
-          ds_put_format(ds, "|");
-          for (i = 0; i < start; i++)
-            ds_put_format(ds, " ");
-          for (; i < end; i++) {
-              int c = buf[i - start];
-              ds_put_char(ds, c >= 32 && c < 127 ? c : '.');
-          }
-          for (; i < per_line; i++)
-            ds_put_format(ds, " ");
-          ds_put_format(ds, "|");
         }
-      ds_put_format(ds, "\n");
+        for (; i < end; i++) {
+            ds_put_format(ds, "%02x%c",
+                          buf[i - start], i == per_line / 2 - 1? '-' : ' ');
+        }
+        if (ascii) {
+            for (; i < per_line; i++)
+                ds_put_format(ds, "   ");
+            ds_put_format(ds, "|");
+            for (i = 0; i < start; i++)
+                ds_put_format(ds, " ");
+            for (; i < end; i++) {
+                int c = buf[i - start];
+                ds_put_char(ds, c >= 32 && c < 127 ? c : '.');
+            }
+            for (; i < per_line; i++)
+                ds_put_format(ds, " ");
+            ds_put_format(ds, "|");
+        } else {
+            ds_chomp(ds, ' ');
+        }
+        ds_put_format(ds, "\n");
 
-      ofs += n;
-      buf += n;
-      size -= n;
+        ofs += n;
+        buf += n;
+        size -= n;
     }
 }
 

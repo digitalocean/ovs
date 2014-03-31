@@ -38,15 +38,7 @@ netdev_vport_priv(const struct vport *vport)
 	return vport_priv(vport);
 }
 
-int ovs_netdev_set_addr(struct vport *, const unsigned char *addr);
 const char *ovs_netdev_get_name(const struct vport *);
-const unsigned char *ovs_netdev_get_addr(const struct vport *);
-const char *ovs_netdev_get_config(const struct vport *);
-struct kobject *ovs_netdev_get_kobj(const struct vport *);
-unsigned ovs_netdev_get_dev_flags(const struct vport *);
-int ovs_netdev_is_running(const struct vport *);
-unsigned char ovs_netdev_get_operstate(const struct vport *);
-int ovs_netdev_get_ifindex(const struct vport *);
-int ovs_netdev_get_mtu(const struct vport *);
+void ovs_netdev_detach_dev(struct vport *);
 
 #endif /* vport_netdev.h */

@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 
 #include <config.h>
 
-#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <limits.h>
@@ -33,7 +32,6 @@
 #include "dirs.h"
 #include "dpif.h"
 #include "dummy.h"
-#include "leak-checker.h"
 #include "memory.h"
 #include "netdev.h"
 #include "openflow/openflow.h"
@@ -44,7 +42,6 @@
 #include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
-#include "stress.h"
 #include "svec.h"
 #include "timeval.h"
 #include "unixctl.h"
@@ -52,7 +49,6 @@
 #include "vconn.h"
 #include "vlog.h"
 #include "lib/vswitch-idl.h"
-#include "worker.h"
 
 VLOG_DEFINE_THIS_MODULE(vswitchd);
 
@@ -77,7 +73,6 @@ main(int argc, char *argv[])
 
     proctitle_init(argc, argv);
     set_program_name(argv[0]);
-    stress_init_command();
     remote = parse_options(argc, argv, &unixctl_path);
     signal(SIGPIPE, SIG_IGN);
     sighup = signal_register(SIGHUP);
@@ -89,14 +84,12 @@ main(int argc, char *argv[])
     if (want_mlockall) {
 #ifdef HAVE_MLOCKALL
         if (mlockall(MCL_CURRENT | MCL_FUTURE)) {
-            VLOG_ERR("mlockall failed: %s", strerror(errno));
+            VLOG_ERR("mlockall failed: %s", ovs_strerror(errno));
         }
 #else
         VLOG_ERR("mlockall not supported on this system");
 #endif
     }
-
-    worker_start();
 
     retval = unixctl_server_create(unixctl_path, &unixctl);
     if (retval) {
@@ -109,7 +102,6 @@ main(int argc, char *argv[])
 
     exiting = false;
     while (!exiting) {
-        worker_run();
         if (signal_poll(sighup)) {
             vlog_reopen_log_file();
         }
@@ -122,13 +114,10 @@ main(int argc, char *argv[])
             memory_report(&usage);
             simap_destroy(&usage);
         }
-        bridge_run_fast();
         bridge_run();
-        bridge_run_fast();
         unixctl_server_run(unixctl);
         netdev_run();
 
-        worker_wait();
         signal_wait(sighup);
         memory_wait();
         bridge_wait();
@@ -141,7 +130,6 @@ main(int argc, char *argv[])
     }
     bridge_exit();
     unixctl_server_destroy(unixctl);
-    signal_unregister(sighup);
 
     return 0;
 }
@@ -154,20 +142,18 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
         OPT_MLOCKALL,
         OPT_UNIXCTL,
         VLOG_OPTION_ENUMS,
-        LEAK_CHECKER_OPTION_ENUMS,
         OPT_BOOTSTRAP_CA_CERT,
         OPT_ENABLE_DUMMY,
         OPT_DISABLE_SYSTEM,
         DAEMON_OPTION_ENUMS
     };
-    static struct option long_options[] = {
+    static const struct option long_options[] = {
         {"help",        no_argument, NULL, 'h'},
         {"version",     no_argument, NULL, 'V'},
         {"mlockall",    no_argument, NULL, OPT_MLOCKALL},
         {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
-        LEAK_CHECKER_LONG_OPTIONS,
         STREAM_SSL_LONG_OPTIONS,
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
@@ -203,7 +189,6 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
 
         VLOG_OPTION_HANDLERS
         DAEMON_OPTION_HANDLERS
-        LEAK_CHECKER_OPTION_HANDLERS
         STREAM_SSL_OPTION_HANDLERS
 
         case OPT_PEER_CA_CERT:
@@ -262,7 +247,6 @@ usage(void)
            "  --unixctl=SOCKET        override default control socket name\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
-    leak_checker_usage();
     exit(EXIT_SUCCESS);
 }
 

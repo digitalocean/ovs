@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
 /* Provider interface to vconns, which provide a virtual connection to an
  * OpenFlow device. */
 
-#include <assert.h>
 #include "vconn.h"
+#include "util.h"
 #include "openflow/openflow-common.h"
 
 /* Active virtual connection to an OpenFlow device. */
@@ -30,28 +30,26 @@
  *
  * This structure should be treated as opaque by vconn implementations. */
 struct vconn {
-    struct vconn_class *class;
+    const struct vconn_class *class;
     int state;
     int error;
-    enum ofp_version min_version;
-    enum ofp_version version;
-    ovs_be32 remote_ip;
-    ovs_be16 remote_port;
-    ovs_be32 local_ip;
-    ovs_be16 local_port;
+
+    /* OpenFlow versions. */
+    uint32_t allowed_versions;  /* Bitmap of versions we will accept. */
+    uint32_t peer_versions;     /* Peer's bitmap of versions it will accept. */
+    enum ofp_version version;   /* Negotiated version (or 0). */
+    bool recv_any_version;      /* True to receive a message of any version. */
+
     char *name;
 };
 
-void vconn_init(struct vconn *, struct vconn_class *, int connect_status,
-                const char *name);
-void vconn_set_remote_ip(struct vconn *, ovs_be32 remote_ip);
-void vconn_set_remote_port(struct vconn *, ovs_be16 remote_port);
-void vconn_set_local_ip(struct vconn *, ovs_be32 local_ip);
-void vconn_set_local_port(struct vconn *, ovs_be16 local_port);
+void vconn_init(struct vconn *, const struct vconn_class *, int connect_status,
+                const char *name, uint32_t allowed_versions);
+void vconn_free_data(struct vconn *vconn);
 static inline void vconn_assert_class(const struct vconn *vconn,
                                       const struct vconn_class *class)
 {
-    assert(vconn->class == class);
+    ovs_assert(vconn->class == class);
 }
 
 struct vconn_class {
@@ -61,6 +59,9 @@ struct vconn_class {
     /* Attempts to connect to an OpenFlow device.  'name' is the full
      * connection name provided by the user, e.g. "tcp:1.2.3.4".  This name is
      * useful for error messages but must not be modified.
+     *
+     * 'allowed_verions' is the OpenFlow versions that may be
+     * negotiated for a connection.
      *
      * 'suffix' is a copy of 'name' following the colon and may be modified.
      * 'dscp' is the DSCP value that the new connection should use in the IP
@@ -73,8 +74,8 @@ struct vconn_class {
      * If the connection cannot be completed immediately, it should return
      * EAGAIN (not EINPROGRESS, as returned by the connect system call) and
      * continue the connection in the background. */
-    int (*open)(const char *name, char *suffix, struct vconn **vconnp,
-                uint8_t dscp);
+    int (*open)(const char *name, uint32_t allowed_versions,
+                char *suffix, struct vconn **vconnp, uint8_t dscp);
 
     /* Closes 'vconn' and frees associated memory. */
     void (*close)(struct vconn *vconn);
@@ -133,15 +134,17 @@ struct vconn_class {
  *
  * This structure should be treated as opaque by vconn implementations. */
 struct pvconn {
-    struct pvconn_class *class;
+    const struct pvconn_class *class;
     char *name;
+    uint32_t allowed_versions;
 };
 
-void pvconn_init(struct pvconn *, struct pvconn_class *, const char *name);
+void pvconn_init(struct pvconn *pvconn, const struct pvconn_class *class,
+                 const char *name, uint32_t allowed_versions);
 static inline void pvconn_assert_class(const struct pvconn *pvconn,
                                        const struct pvconn_class *class)
 {
-    assert(pvconn->class == class);
+    ovs_assert(pvconn->class == class);
 }
 
 struct pvconn_class {
@@ -151,6 +154,9 @@ struct pvconn_class {
     /* Attempts to start listening for OpenFlow connections.  'name' is the
      * full connection name provided by the user, e.g. "ptcp:1234".  This name
      * is useful for error messages but must not be modified.
+     *
+     * 'allowed_versions' is the OpenFlow protocol versions that may
+     * be negotiated for a session.
      *
      * 'suffix' is a copy of 'name' following the colon and may be modified.
      * 'dscp' is the DSCP value that the new connection should use in the IP
@@ -163,8 +169,8 @@ struct pvconn_class {
      * completed immediately, it should return EAGAIN (not EINPROGRESS, as
      * returned by the connect system call) and continue the connection in the
      * background. */
-    int (*listen)(const char *name, char *suffix, struct pvconn **pvconnp,
-                  uint8_t dscp);
+    int (*listen)(const char *name, uint32_t allowed_versions,
+                  char *suffix, struct pvconn **pvconnp, uint8_t dscp);
 
     /* Closes 'pvconn' and frees associated memory. */
     void (*close)(struct pvconn *pvconn);
@@ -183,13 +189,13 @@ struct pvconn_class {
 };
 
 /* Active and passive vconn classes. */
-extern struct vconn_class tcp_vconn_class;
-extern struct pvconn_class ptcp_pvconn_class;
-extern struct vconn_class unix_vconn_class;
-extern struct pvconn_class punix_pvconn_class;
+extern const struct vconn_class tcp_vconn_class;
+extern const struct pvconn_class ptcp_pvconn_class;
+extern const struct vconn_class unix_vconn_class;
+extern const struct pvconn_class punix_pvconn_class;
 #ifdef HAVE_OPENSSL
-extern struct vconn_class ssl_vconn_class;
-extern struct pvconn_class pssl_pvconn_class;
+extern const struct vconn_class ssl_vconn_class;
+extern const struct pvconn_class pssl_pvconn_class;
 #endif
 
 #endif /* vconn-provider.h */

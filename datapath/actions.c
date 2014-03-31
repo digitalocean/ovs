@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira, Inc.
+ * Copyright (c) 2007-2013 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -22,6 +22,7 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/openvswitch.h>
+#include <linux/sctp.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/in6.h>
@@ -31,15 +32,14 @@
 #include <net/ipv6.h>
 #include <net/checksum.h>
 #include <net/dsfield.h>
+#include <net/sctp/checksum.h>
 
-#include "checksum.h"
 #include "datapath.h"
 #include "vlan.h"
 #include "vport.h"
 
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
-			      const struct nlattr *attr, int len,
-			      struct ovs_key_ipv4_tunnel *tun_key, bool keep_skb);
+			      const struct nlattr *attr, int len, bool keep_skb);
 
 static int make_writable(struct sk_buff *skb, int write_len)
 {
@@ -59,7 +59,7 @@ static int __pop_vlan_tci(struct sk_buff *skb, __be16 *current_tci)
 	if (unlikely(err))
 		return err;
 
-	if (get_ip_summed(skb) == OVS_CSUM_COMPLETE)
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
 		skb->csum = csum_sub(skb->csum, csum_partial(skb->data
 					+ (2 * ETH_ALEN), VLAN_HLEN, 0));
 
@@ -101,7 +101,7 @@ static int pop_vlan(struct sk_buff *skb)
 	if (unlikely(err))
 		return err;
 
-	__vlan_hwaccel_put_tag(skb, ntohs(tci));
+	__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), ntohs(tci));
 	return 0;
 }
 
@@ -113,15 +113,15 @@ static int push_vlan(struct sk_buff *skb, const struct ovs_action_push_vlan *vla
 		/* push down current VLAN tag */
 		current_tag = vlan_tx_tag_get(skb);
 
-		if (!__vlan_put_tag(skb, current_tag))
+		if (!__vlan_put_tag(skb, skb->vlan_proto, current_tag))
 			return -ENOMEM;
 
-		if (get_ip_summed(skb) == OVS_CSUM_COMPLETE)
+		if (skb->ip_summed == CHECKSUM_COMPLETE)
 			skb->csum = csum_add(skb->csum, csum_partial(skb->data
 					+ (2 * ETH_ALEN), VLAN_HLEN, 0));
 
 	}
-	__vlan_hwaccel_put_tag(skb, ntohs(vlan->vlan_tci) & ~VLAN_TAG_PRESENT);
+	__vlan_hwaccel_put_tag(skb, vlan->vlan_tpid, ntohs(vlan->vlan_tci) & ~VLAN_TAG_PRESENT);
 	return 0;
 }
 
@@ -133,8 +133,12 @@ static int set_eth_addr(struct sk_buff *skb,
 	if (unlikely(err))
 		return err;
 
+	skb_postpull_rcsum(skb, eth_hdr(skb), ETH_ALEN * 2);
+
 	memcpy(eth_hdr(skb)->h_source, eth_key->eth_src, ETH_ALEN);
 	memcpy(eth_hdr(skb)->h_dest, eth_key->eth_dst, ETH_ALEN);
+
+	ovs_skb_postpush_rcsum(skb, eth_hdr(skb), ETH_ALEN * 2);
 
 	return 0;
 }
@@ -152,8 +156,7 @@ static void set_ip_addr(struct sk_buff *skb, struct iphdr *nh,
 		if (likely(transport_len >= sizeof(struct udphdr))) {
 			struct udphdr *uh = udp_hdr(skb);
 
-			if (uh->check ||
-			    get_ip_summed(skb) == OVS_CSUM_PARTIAL) {
+			if (uh->check || skb->ip_summed == CHECKSUM_PARTIAL) {
 				inet_proto_csum_replace4(&uh->check, skb,
 							 *addr, new_addr, 1);
 				if (!uh->check)
@@ -180,8 +183,7 @@ static void update_ipv6_checksum(struct sk_buff *skb, u8 l4_proto,
 		if (likely(transport_len >= sizeof(struct udphdr))) {
 			struct udphdr *uh = udp_hdr(skb);
 
-			if (uh->check ||
-			    get_ip_summed(skb) == OVS_CSUM_PARTIAL) {
+			if (uh->check || skb->ip_summed == CHECKSUM_PARTIAL) {
 				inet_proto_csum_replace16(&uh->check, skb,
 							  addr, new_addr, 1);
 				if (!uh->check)
@@ -302,7 +304,7 @@ static void set_udp_port(struct sk_buff *skb, __be16 *port, __be16 new_port)
 {
 	struct udphdr *uh = udp_hdr(skb);
 
-	if (uh->check && get_ip_summed(skb) != OVS_CSUM_PARTIAL) {
+	if (uh->check && skb->ip_summed != CHECKSUM_PARTIAL) {
 		set_tp_port(skb, port, new_port, &uh->check);
 
 		if (!uh->check)
@@ -353,6 +355,39 @@ static int set_tcp(struct sk_buff *skb, const struct ovs_key_tcp *tcp_port_key)
 	return 0;
 }
 
+static int set_sctp(struct sk_buff *skb,
+		     const struct ovs_key_sctp *sctp_port_key)
+{
+	struct sctphdr *sh;
+	int err;
+	unsigned int sctphoff = skb_transport_offset(skb);
+
+	err = make_writable(skb, sctphoff + sizeof(struct sctphdr));
+	if (unlikely(err))
+		return err;
+
+	sh = sctp_hdr(skb);
+	if (sctp_port_key->sctp_src != sh->source ||
+	    sctp_port_key->sctp_dst != sh->dest) {
+		__le32 old_correct_csum, new_csum, old_csum;
+
+		old_csum = sh->checksum;
+		old_correct_csum = sctp_compute_cksum(skb, sctphoff);
+
+		sh->source = sctp_port_key->sctp_src;
+		sh->dest = sctp_port_key->sctp_dst;
+
+		new_csum = sctp_compute_cksum(skb, sctphoff);
+
+		/* Carry any checksum errors through. */
+		sh->checksum = old_csum ^ old_correct_csum ^ new_csum;
+
+		skb_clear_rxhash(skb);
+	}
+
+	return 0;
+}
+
 static int do_output(struct datapath *dp, struct sk_buff *skb, int out_port)
 {
 	struct vport *vport;
@@ -377,8 +412,10 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 	const struct nlattr *a;
 	int rem;
 
+	BUG_ON(!OVS_CB(skb)->pkt_key);
+
 	upcall.cmd = OVS_PACKET_CMD_ACTION;
-	upcall.key = &OVS_CB(skb)->flow->key;
+	upcall.key = OVS_CB(skb)->pkt_key;
 	upcall.userdata = NULL;
 	upcall.portid = 0;
 
@@ -399,8 +436,7 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 }
 
 static int sample(struct datapath *dp, struct sk_buff *skb,
-		  const struct nlattr *attr,
-		  struct ovs_key_ipv4_tunnel *tun_key)
+		  const struct nlattr *attr)
 {
 	const struct nlattr *acts_list = NULL;
 	const struct nlattr *a;
@@ -421,12 +457,11 @@ static int sample(struct datapath *dp, struct sk_buff *skb,
 	}
 
 	return do_execute_actions(dp, skb, nla_data(acts_list),
-				  nla_len(acts_list), tun_key, true);
+				  nla_len(acts_list), true);
 }
 
 static int execute_set_action(struct sk_buff *skb,
-				 const struct nlattr *nested_attr,
-				 struct ovs_key_ipv4_tunnel *tun_key)
+				 const struct nlattr *nested_attr)
 {
 	int err = 0;
 
@@ -436,23 +471,7 @@ static int execute_set_action(struct sk_buff *skb,
 		break;
 
 	case OVS_KEY_ATTR_SKB_MARK:
-		skb_set_mark(skb, nla_get_u32(nested_attr));
-		break;
-
-	case OVS_KEY_ATTR_TUN_ID:
-		/* If we're only using the TUN_ID action, store the value in a
-		 * temporary instance of struct ovs_key_ipv4_tunnel on the stack.
-		 * If both IPV4_TUNNEL and TUN_ID are being used together we
-		 * can't write into the IPV4_TUNNEL action, so make a copy and
-		 * write into that version.
-		 */
-		if (!OVS_CB(skb)->tun_key)
-			memset(tun_key, 0, sizeof(*tun_key));
-		else if (OVS_CB(skb)->tun_key != tun_key)
-			memcpy(tun_key, OVS_CB(skb)->tun_key, sizeof(*tun_key));
-		OVS_CB(skb)->tun_key = tun_key;
-
-		OVS_CB(skb)->tun_key->tun_id = nla_get_be64(nested_attr);
+		skb->mark = nla_get_u32(nested_attr);
 		break;
 
 	case OVS_KEY_ATTR_IPV4_TUNNEL:
@@ -478,6 +497,10 @@ static int execute_set_action(struct sk_buff *skb,
 	case OVS_KEY_ATTR_UDP:
 		err = set_udp(skb, nla_data(nested_attr));
 		break;
+
+	case OVS_KEY_ATTR_SCTP:
+		err = set_sctp(skb, nla_data(nested_attr));
+		break;
 	}
 
 	return err;
@@ -485,8 +508,7 @@ static int execute_set_action(struct sk_buff *skb,
 
 /* Execute a list of actions against 'skb'. */
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
-			const struct nlattr *attr, int len,
-			struct ovs_key_ipv4_tunnel *tun_key, bool keep_skb)
+			const struct nlattr *attr, int len, bool keep_skb)
 {
 	/* Every output action needs a separate clone of 'skb', but the common
 	 * case is just a single output action, so that doing a clone and
@@ -525,11 +547,11 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			break;
 
 		case OVS_ACTION_ATTR_SET:
-			err = execute_set_action(skb, nla_data(a), tun_key);
+			err = execute_set_action(skb, nla_data(a));
 			break;
 
 		case OVS_ACTION_ATTR_SAMPLE:
-			err = sample(dp, skb, a, tun_key);
+			err = sample(dp, skb, a);
 			break;
 		}
 
@@ -576,7 +598,6 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 	struct sw_flow_actions *acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
 	struct loop_counter *loop;
 	int error;
-	struct ovs_key_ipv4_tunnel tun_key;
 
 	/* Check whether we've looped too much. */
 	loop = &__get_cpu_var(loop_counters);
@@ -590,7 +611,7 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 
 	OVS_CB(skb)->tun_key = NULL;
 	error = do_execute_actions(dp, skb, acts->actions,
-					 acts->actions_len, &tun_key, false);
+					 acts->actions_len, false);
 
 	/* Check whether sub-actions looped too much. */
 	if (unlikely(loop->looping))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Nicira, Inc.
+ * Copyright (c) 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,7 +51,10 @@ static void memory_init(void);
 
 /* Runs the memory monitor.
  *
- * The client should call memory_should_report() afterward. */
+ * The client should call memory_should_report() afterward.
+ *
+ * This function, and the remainder of this module's interface, should be
+ * called from only a single thread. */
 void
 memory_run(void)
 {
@@ -138,7 +141,9 @@ memory_report(const struct simap *usage)
     compose_report(usage, &s);
 
     if (want_report) {
-        VLOG_INFO("%s", ds_cstr(&s));
+        if (s.length) {
+            VLOG_INFO("%s", ds_cstr(&s));
+        }
         want_report = false;
     }
     if (n_conns) {

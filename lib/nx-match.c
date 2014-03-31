@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,13 +90,38 @@ nx_entry_ok(const void *p, unsigned int match_len)
     return header;
 }
 
+/* Given NXM/OXM value 'value' and mask 'mask', each 'width' bytes long,
+ * checks for any 1-bit in the value where there is a 0-bit in the mask.  If it
+ * finds one, logs a warning. */
+static void
+check_mask_consistency(const uint8_t *p, const struct mf_field *mf)
+{
+    unsigned int width = mf->n_bytes;
+    const uint8_t *value = p + 4;
+    const uint8_t *mask = p + 4 + width;
+    unsigned int i;
+
+    for (i = 0; i < width; i++) {
+        if (value[i] & ~mask[i]) {
+            if (!VLOG_DROP_WARN(&rl)) {
+                char *s = nx_match_to_string(p, width * 2 + 4);
+                VLOG_WARN_RL(&rl, "NXM/OXM entry %s has 1-bits in value for "
+                             "bits wildcarded by the mask.  (Future versions "
+                             "of OVS may report this as an OpenFlow error.)",
+                             s);
+                break;
+            }
+        }
+    }
+}
+
 static enum ofperr
 nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
             struct match *match, ovs_be64 *cookie, ovs_be64 *cookie_mask)
 {
     uint32_t header;
 
-    assert((cookie != NULL) == (cookie_mask != NULL));
+    ovs_assert((cookie != NULL) == (cookie_mask != NULL));
 
     match_init_catchall(match);
     if (cookie) {
@@ -123,7 +148,7 @@ nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
             error = OFPERR_OFPBMC_BAD_PREREQ;
         } else if (!mf_is_all_wild(mf, &match->wc)) {
             error = OFPERR_OFPBMC_DUP_FIELD;
-        } else if (header != OXM_OF_IN_PORT) {
+        } else {
             unsigned int width = mf->n_bytes;
             union mf_value value;
 
@@ -141,19 +166,9 @@ nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
                     error = OFPERR_OFPBMC_BAD_MASK;
                 } else {
                     error = 0;
+                    check_mask_consistency(p, mf);
                     mf_set(mf, &value, &mask, match);
                 }
-            }
-        } else {
-            /* Special case for 32bit ports when using OXM,
-             * ports are 16 bits wide otherwise. */
-            ovs_be32 port_of11;
-            uint16_t port;
-
-            memcpy(&port_of11, p + 4, sizeof port_of11);
-            error = ofputil_port_from_ofp11(port_of11, &port);
-            if (!error) {
-                match_set_in_port(match, port);
             }
         }
 
@@ -168,7 +183,7 @@ nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
                 if (NXM_HASMASK(header)) {
                     memcpy(cookie_mask, p + 4 + width, width);
                 } else {
-                    *cookie_mask = htonll(UINT64_MAX);
+                    *cookie_mask = OVS_BE64_MAX;
                 }
                 error = 0;
             }
@@ -200,7 +215,7 @@ nx_pull_match__(struct ofpbuf *b, unsigned int match_len, bool strict,
         if (!p) {
             VLOG_DBG_RL(&rl, "nx_match length %u, rounded up to a "
                         "multiple of 8, is longer than space in message (max "
-                        "length %zu)", match_len, b->size);
+                        "length %"PRIuSIZE")", match_len, b->size);
             return OFPERR_OFPBMC_BAD_LEN;
         }
     }
@@ -257,7 +272,7 @@ oxm_pull_match__(struct ofpbuf *b, bool strict, struct match *match)
     if (!p) {
         VLOG_DBG_RL(&rl, "oxm length %u, rounded up to a "
                     "multiple of 8, is longer than space in message (max "
-                    "length %zu)", match_len, b->size);
+                    "length %"PRIuSIZE")", match_len, b->size);
         return OFPERR_OFPBMC_BAD_LEN;
     }
 
@@ -265,8 +280,8 @@ oxm_pull_match__(struct ofpbuf *b, bool strict, struct match *match)
                        strict, match, NULL, NULL);
 }
 
-/* Parses the oxm formatted match description preceeded by a struct ofp11_match
- * in 'b' with length 'match_len'.  Stores the result in 'match'.
+/* Parses the oxm formatted match description preceded by a struct
+ * ofp11_match_header in 'b'.  Stores the result in 'match'.
  *
  * Fails with an error when encountering unknown OXM headers.
  *
@@ -278,7 +293,7 @@ oxm_pull_match(struct ofpbuf *b, struct match *match)
 }
 
 /* Behaves the same as oxm_pull_match() with one exception.  Skips over unknown
- * PXM headers instead of failing with an error when they are encountered. */
+ * OXM headers instead of failing with an error when they are encountered. */
 enum ofperr
 oxm_pull_match_loose(struct ofpbuf *b, struct match *match)
 {
@@ -346,7 +361,7 @@ nxm_put_16m(struct ofpbuf *b, uint32_t header, ovs_be16 value, ovs_be16 mask)
     case 0:
         break;
 
-    case CONSTANT_HTONS(UINT16_MAX):
+    case OVS_BE16_MAX:
         nxm_put_16(b, header, value);
         break;
 
@@ -378,7 +393,7 @@ nxm_put_32m(struct ofpbuf *b, uint32_t header, ovs_be32 value, ovs_be32 mask)
     case 0:
         break;
 
-    case CONSTANT_HTONL(UINT32_MAX):
+    case OVS_BE32_MAX:
         nxm_put_32(b, header, value);
         break;
 
@@ -410,7 +425,7 @@ nxm_put_64m(struct ofpbuf *b, uint32_t header, ovs_be64 value, ovs_be64 mask)
     case 0:
         break;
 
-    case CONSTANT_HTONLL(UINT64_MAX):
+    case OVS_BE64_MAX:
         nxm_put_64(b, header, value);
         break;
 
@@ -491,8 +506,11 @@ nxm_put_ip(struct ofpbuf *b, const struct match *match,
     nxm_put_frag(b, match);
 
     if (match->wc.masks.nw_tos & IP_DSCP_MASK) {
-        nxm_put_8(b, oxm ? OXM_OF_IP_DSCP : NXM_OF_IP_TOS,
-                  flow->nw_tos & IP_DSCP_MASK);
+        if (oxm) {
+            nxm_put_8(b, OXM_OF_IP_DSCP, flow->nw_tos >> 2);
+        } else {
+            nxm_put_8(b, NXM_OF_IP_TOS, flow->nw_tos & IP_DSCP_MASK);
+        }
     }
 
     if (match->wc.masks.nw_tos & IP_ECN_MASK) {
@@ -512,11 +530,18 @@ nxm_put_ip(struct ofpbuf *b, const struct match *match,
                         flow->tp_src, match->wc.masks.tp_src);
             nxm_put_16m(b, oxm ? OXM_OF_TCP_DST : NXM_OF_TCP_DST,
                         flow->tp_dst, match->wc.masks.tp_dst);
+            nxm_put_16m(b, NXM_NX_TCP_FLAGS,
+                        flow->tcp_flags, match->wc.masks.tcp_flags);
         } else if (flow->nw_proto == IPPROTO_UDP) {
             nxm_put_16m(b, oxm ? OXM_OF_UDP_SRC : NXM_OF_UDP_SRC,
                         flow->tp_src, match->wc.masks.tp_src);
             nxm_put_16m(b, oxm ? OXM_OF_UDP_DST : NXM_OF_UDP_DST,
                         flow->tp_dst, match->wc.masks.tp_dst);
+        } else if (flow->nw_proto == IPPROTO_SCTP) {
+            nxm_put_16m(b, OXM_OF_SCTP_SRC, flow->tp_src,
+                        match->wc.masks.tp_src);
+            nxm_put_16m(b, OXM_OF_SCTP_DST, flow->tp_dst,
+                        match->wc.masks.tp_dst);
         } else if (flow->nw_proto == icmp_proto) {
             if (match->wc.masks.tp_src) {
                 nxm_put_8(b, icmp_type, ntohs(flow->tp_src));
@@ -547,15 +572,15 @@ nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
     int match_len;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 18);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 23);
 
     /* Metadata. */
-    if (match->wc.masks.in_port) {
-        uint16_t in_port = flow->in_port;
+    if (match->wc.masks.in_port.ofp_port) {
+        ofp_port_t in_port = flow->in_port.ofp_port;
         if (oxm) {
             nxm_put_32(b, OXM_OF_IN_PORT, ofputil_port_to_ofp11(in_port));
         } else {
-            nxm_put_16(b, NXM_OF_IN_PORT, htons(in_port));
+            nxm_put_16(b, NXM_OF_IN_PORT, htons(ofp_to_u16(in_port)));
         }
     }
 
@@ -587,6 +612,22 @@ nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
     } else {
         nxm_put_16m(b, NXM_OF_VLAN_TCI, flow->vlan_tci,
                     match->wc.masks.vlan_tci);
+    }
+
+    /* MPLS. */
+    if (eth_type_mpls(flow->dl_type)) {
+        if (match->wc.masks.mpls_lse & htonl(MPLS_TC_MASK)) {
+            nxm_put_8(b, OXM_OF_MPLS_TC, mpls_lse_to_tc(flow->mpls_lse));
+        }
+
+        if (match->wc.masks.mpls_lse & htonl(MPLS_BOS_MASK)) {
+            nxm_put_8(b, OXM_OF_MPLS_BOS, mpls_lse_to_bos(flow->mpls_lse));
+        }
+
+        if (match->wc.masks.mpls_lse & htonl(MPLS_LABEL_MASK)) {
+            nxm_put_32(b, OXM_OF_MPLS_LABEL,
+                       htonl(mpls_lse_to_label(flow->mpls_lse)));
+        }
     }
 
     /* L3. */
@@ -644,14 +685,24 @@ nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
     }
 
     /* Tunnel ID. */
-    nxm_put_64m(b, NXM_NX_TUN_ID, flow->tunnel.tun_id,
-                match->wc.masks.tunnel.tun_id);
+    nxm_put_64m(b, oxm ? OXM_OF_TUNNEL_ID : NXM_NX_TUN_ID,
+                flow->tunnel.tun_id, match->wc.masks.tunnel.tun_id);
+
+    /* Other tunnel metadata. */
+    nxm_put_32m(b, NXM_NX_TUN_IPV4_SRC,
+                flow->tunnel.ip_src, match->wc.masks.tunnel.ip_src);
+    nxm_put_32m(b, NXM_NX_TUN_IPV4_DST,
+                flow->tunnel.ip_dst, match->wc.masks.tunnel.ip_dst);
 
     /* Registers. */
     for (i = 0; i < FLOW_N_REGS; i++) {
         nxm_put_32m(b, NXM_NX_REG(i),
                     htonl(flow->regs[i]), htonl(match->wc.masks.regs[i]));
     }
+
+    /* Mark. */
+    nxm_put_32m(b, NXM_NX_PKT_MARK, htonl(flow->pkt_mark),
+                htonl(match->wc.masks.pkt_mark));
 
     /* OpenFlow 1.1+ Metadata. */
     nxm_put_64m(b, OXM_OF_METADATA, flow->metadata, match->wc.masks.metadata);
@@ -704,7 +755,7 @@ oxm_put_match(struct ofpbuf *b, const struct match *match)
     match_len = nx_put_raw(b, true, match, cookie, cookie_mask) + sizeof *omh;
     ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
 
-    omh = (struct ofp11_match_header *)((char *)b->data + start_len);
+    omh = ofpbuf_at(b, start_len, sizeof *omh);
     omh->type = htons(OFPMT_OXM);
     omh->length = htons(match_len);
 
@@ -767,9 +818,9 @@ nx_match_to_string(const uint8_t *p, unsigned int match_len)
 }
 
 char *
-oxm_match_to_string(const uint8_t *p, unsigned int match_len)
+oxm_match_to_string(const struct ofpbuf *p, unsigned int match_len)
 {
-    const struct ofp11_match_header *omh = (struct ofp11_match_header *)p;
+    const struct ofp11_match_header *omh = p->data;
     uint16_t match_len_;
     struct ds s;
 
@@ -797,7 +848,8 @@ oxm_match_to_string(const uint8_t *p, unsigned int match_len)
         goto err;
     }
 
-    return nx_match_to_string(p + sizeof *omh, match_len - sizeof *omh);
+    return nx_match_to_string(ofpbuf_at(p, sizeof *omh, 0),
+                              match_len - sizeof *omh);
 
 err:
     return ds_steal_cstr(&s);
@@ -957,57 +1009,74 @@ oxm_match_from_string(const char *s, struct ofpbuf *b)
     match_len = nx_match_from_string_raw(s, b) + sizeof *omh;
     ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
 
-    omh = (struct ofp11_match_header *)((char *)b->data + start_len);
+    omh = ofpbuf_at(b, start_len, sizeof *omh);
     omh->type = htons(OFPMT_OXM);
     omh->length = htons(match_len);
 
     return match_len;
 }
 
-void
+/* Parses 's' as a "move" action, in the form described in ovs-ofctl(8), into
+ * '*move'.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string. */
+char * WARN_UNUSED_RESULT
 nxm_parse_reg_move(struct ofpact_reg_move *move, const char *s)
 {
     const char *full_s = s;
+    char *error;
 
-    s = mf_parse_subfield(&move->src, s);
+    error = mf_parse_subfield__(&move->src, &s);
+    if (error) {
+        return error;
+    }
     if (strncmp(s, "->", 2)) {
-        ovs_fatal(0, "%s: missing `->' following source", full_s);
+        return xasprintf("%s: missing `->' following source", full_s);
     }
     s += 2;
-    s = mf_parse_subfield(&move->dst, s);
-    if (*s != '\0') {
-        ovs_fatal(0, "%s: trailing garbage following destination", full_s);
+    error = mf_parse_subfield(&move->dst, s);
+    if (error) {
+        return error;
     }
 
     if (move->src.n_bits != move->dst.n_bits) {
-        ovs_fatal(0, "%s: source field is %d bits wide but destination is "
-                  "%d bits wide", full_s,
-                  move->src.n_bits, move->dst.n_bits);
+        return xasprintf("%s: source field is %d bits wide but destination is "
+                         "%d bits wide", full_s,
+                         move->src.n_bits, move->dst.n_bits);
     }
+    return NULL;
 }
 
-void
+/* Parses 's' as a "load" action, in the form described in ovs-ofctl(8), into
+ * '*load'.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string. */
+char * WARN_UNUSED_RESULT
 nxm_parse_reg_load(struct ofpact_reg_load *load, const char *s)
 {
     const char *full_s = s;
     uint64_t value = strtoull(s, (char **) &s, 0);
+    char *error;
 
     if (strncmp(s, "->", 2)) {
-        ovs_fatal(0, "%s: missing `->' following value", full_s);
+        return xasprintf("%s: missing `->' following value", full_s);
     }
     s += 2;
-    s = mf_parse_subfield(&load->dst, s);
-    if (*s != '\0') {
-        ovs_fatal(0, "%s: trailing garbage following destination", full_s);
+    error = mf_parse_subfield(&load->dst, s);
+    if (error) {
+        return error;
     }
 
     if (load->dst.n_bits < 64 && (value >> load->dst.n_bits) != 0) {
-        ovs_fatal(0, "%s: value %"PRIu64" does not fit into %d bits",
-                  full_s, value, load->dst.n_bits);
+        return xasprintf("%s: value %"PRIu64" does not fit into %d bits",
+                         full_s, value, load->dst.n_bits);
     }
 
     load->subvalue.be64[0] = htonll(0);
     load->subvalue.be64[1] = htonll(value);
+    return NULL;
 }
 
 /* nxm_format_reg_move(), nxm_format_reg_load(). */
@@ -1021,38 +1090,13 @@ nxm_format_reg_move(const struct ofpact_reg_move *move, struct ds *s)
     mf_format_subfield(&move->dst, s);
 }
 
-static void
-set_field_format(const struct ofpact_reg_load *load, struct ds *s)
-{
-    const struct mf_field *mf = load->dst.field;
-    union mf_value value;
-
-    assert(load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD);
-    ds_put_format(s, "set_field:");
-    memset(&value, 0, sizeof value);
-    bitwise_copy(&load->subvalue, sizeof load->subvalue, 0,
-                 &value, mf->n_bytes, 0, load->dst.n_bits);
-    mf_format(mf, &value, NULL, s);
-    ds_put_format(s, "->%s", mf->name);
-}
-
-static void
-load_format(const struct ofpact_reg_load *load, struct ds *s)
+void
+nxm_format_reg_load(const struct ofpact_reg_load *load, struct ds *s)
 {
     ds_put_cstr(s, "load:");
     mf_format_subvalue(&load->subvalue, s);
     ds_put_cstr(s, "->");
     mf_format_subfield(&load->dst, s);
-}
-
-void
-nxm_format_reg_load(const struct ofpact_reg_load *load, struct ds *s)
-{
-    if (load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD) {
-        set_field_format(load, s);
-    } else {
-        load_format(load, s);
-    }
 }
 
 enum ofperr
@@ -1093,38 +1137,6 @@ nxm_reg_load_from_openflow(const struct nx_action_reg_load *narl,
 
     return nxm_reg_load_check(load, NULL);
 }
-
-enum ofperr
-nxm_reg_load_from_openflow12_set_field(
-    const struct ofp12_action_set_field * oasf, struct ofpbuf *ofpacts)
-{
-    uint16_t oasf_len = ntohs(oasf->len);
-    uint32_t oxm_header = ntohl(oasf->dst);
-    uint8_t oxm_length = NXM_LENGTH(oxm_header);
-    struct ofpact_reg_load *load;
-    const struct mf_field *mf;
-
-    /* ofp12_action_set_field is padded to 64 bits by zero */
-    if (oasf_len != ROUND_UP(sizeof(*oasf) + oxm_length, 8)) {
-        return OFPERR_OFPBAC_BAD_ARGUMENT;
-    }
-    if (!is_all_zeros((const uint8_t *)(oasf) + sizeof *oasf + oxm_length,
-                      oasf_len - oxm_length - sizeof *oasf)) {
-        return OFPERR_OFPBAC_BAD_ARGUMENT;
-    }
-
-    if (NXM_HASMASK(oxm_header)) {
-        return OFPERR_OFPBAC_BAD_ARGUMENT;
-    }
-    mf = mf_from_nxm_header(oxm_header);
-    if (!mf) {
-        return OFPERR_OFPBAC_BAD_ARGUMENT;
-    }
-    load = ofpact_put_REG_LOAD(ofpacts);
-    ofpact_set_field_init(load, mf, oasf + 1);
-
-    return nxm_reg_load_check(load, NULL);
-}
 
 enum ofperr
 nxm_reg_move_check(const struct ofpact_reg_move *move, const struct flow *flow)
@@ -1159,8 +1171,9 @@ nxm_reg_move_to_nxast(const struct ofpact_reg_move *move,
     narm->dst = htonl(move->dst.field->nxm_header);
 }
 
-static void
-reg_load_to_nxast(const struct ofpact_reg_load *load, struct ofpbuf *openflow)
+void
+nxm_reg_load_to_nxast(const struct ofpact_reg_load *load,
+                      struct ofpbuf *openflow)
 {
     struct nx_action_reg_load *narl;
 
@@ -1169,79 +1182,18 @@ reg_load_to_nxast(const struct ofpact_reg_load *load, struct ofpbuf *openflow)
     narl->dst = htonl(load->dst.field->nxm_header);
     narl->value = load->subvalue.be64[1];
 }
-
-static void
-set_field_to_ofast(const struct ofpact_reg_load *load,
-                      struct ofpbuf *openflow)
-{
-    const struct mf_field *mf = load->dst.field;
-    uint16_t padded_value_len = ROUND_UP(mf->n_bytes, 8);
-    struct ofp12_action_set_field *oasf;
-    char *value;
-
-    /* Set field is the only action of variable length (so far),
-     * so handling the variable length portion is open-coded here */
-    oasf = ofputil_put_OFPAT12_SET_FIELD(openflow);
-    oasf->dst = htonl(mf->oxm_header);
-    oasf->len = htons(ntohs(oasf->len) + padded_value_len);
-
-    value = ofpbuf_put_zeros(openflow, padded_value_len);
-    bitwise_copy(&load->subvalue, sizeof load->subvalue, load->dst.ofs,
-                 value, mf->n_bytes, load->dst.ofs, load->dst.n_bits);
-}
-
-void
-nxm_reg_load_to_nxast(const struct ofpact_reg_load *load,
-                      struct ofpbuf *openflow)
-{
-
-    if (load->ofpact.compat == OFPUTIL_OFPAT12_SET_FIELD) {
-        struct ofp_header *oh = (struct ofp_header *)openflow->l2;
-
-        switch(oh->version) {
-        case OFP12_VERSION:
-            set_field_to_ofast(load, openflow);
-            break;
-
-        case OFP11_VERSION:
-        case OFP10_VERSION:
-            if (load->dst.n_bits < 64) {
-                reg_load_to_nxast(load, openflow);
-            } else {
-                /* Split into 64bit chunks */
-                int chunk, ofs;
-                for (ofs = 0; ofs < load->dst.n_bits; ofs += chunk) {
-                    struct ofpact_reg_load subload = *load;
-
-                    chunk = MIN(load->dst.n_bits - ofs, 64);
-
-                    subload.dst.field =  load->dst.field;
-                    subload.dst.ofs = load->dst.ofs + ofs;
-                    subload.dst.n_bits = chunk;
-                    bitwise_copy(&load->subvalue, sizeof load->subvalue, ofs,
-                                 &subload.subvalue, sizeof subload.subvalue, 0,
-                                 chunk);
-                    reg_load_to_nxast(&subload, openflow);
-                }
-            }
-            break;
-
-        default:
-            NOT_REACHED();
-        }
-    } else {
-        reg_load_to_nxast(load, openflow);
-    }
-}
 
 /* nxm_execute_reg_move(), nxm_execute_reg_load(). */
 
 void
 nxm_execute_reg_move(const struct ofpact_reg_move *move,
-                     struct flow *flow)
+                     struct flow *flow, struct flow_wildcards *wc)
 {
     union mf_value src_value;
     union mf_value dst_value;
+
+    mf_mask_field_and_prereqs(move->dst.field, &wc->masks);
+    mf_mask_field_and_prereqs(move->src.field, &wc->masks);
 
     mf_get_value(move->dst.field, flow, &dst_value);
     mf_get_value(move->src.field, flow, &src_value);
@@ -1252,20 +1204,219 @@ nxm_execute_reg_move(const struct ofpact_reg_move *move,
 }
 
 void
-nxm_execute_reg_load(const struct ofpact_reg_load *load, struct flow *flow)
+nxm_execute_reg_load(const struct ofpact_reg_load *load, struct flow *flow,
+                     struct flow_wildcards *wc)
 {
+    /* Since at the datapath interface we do not have set actions for
+     * individual fields, but larger sets of fields for a given protocol
+     * layer, the set action will in practice only ever apply to exactly
+     * matched flows for the given protocol layer.  For example, if the
+     * reg_load changes the IP TTL, the corresponding datapath action will
+     * rewrite also the IP addresses and TOS byte.  Since these other field
+     * values may not be explicitly set, they depend on the incoming flow field
+     * values, and are hence all of them are set in the wildcards masks, when
+     * the action is committed to the datapath.  For the rare case, where the
+     * reg_load action does not actually change the value, and no other flow
+     * field values are set (or loaded), the datapath action is skipped, and
+     * no mask bits are set.  Such a datapath flow should, however, be
+     * dependent on the specific field value, so the corresponding wildcard
+     * mask bits must be set, lest the datapath flow be applied to packets
+     * containing some other value in the field and the field value remain
+     * unchanged regardless of the incoming value.
+     *
+     * We set the masks here for the whole fields, and their prerequisities.
+     * Even if only the lower byte of a TCP destination port is set,
+     * we set the mask for the whole field, and also the ip_proto in the IP
+     * header, so that the kernel flow would not be applied on, e.g., a UDP
+     * packet, or any other IP protocol in addition to TCP packets.
+     */
+    mf_mask_field_and_prereqs(load->dst.field, &wc->masks);
     mf_write_subfield_flow(&load->dst, &load->subvalue, flow);
 }
 
 void
 nxm_reg_load(const struct mf_subfield *dst, uint64_t src_data,
-             struct flow *flow)
+             struct flow *flow, struct flow_wildcards *wc)
 {
     union mf_subvalue src_subvalue;
+    union mf_subvalue mask_value;
     ovs_be64 src_data_be = htonll(src_data);
+
+    memset(&mask_value, 0xff, sizeof mask_value);
+    mf_write_subfield_flow(dst, &mask_value, &wc->masks);
 
     bitwise_copy(&src_data_be, sizeof src_data_be, 0,
                  &src_subvalue, sizeof src_subvalue, 0,
                  sizeof src_data_be * 8);
     mf_write_subfield_flow(dst, &src_subvalue, flow);
+}
+
+/* nxm_parse_stack_action, works for both push() and pop(). */
+
+/* Parses 's' as a "push" or "pop" action, in the form described in
+ * ovs-ofctl(8), into '*stack_action'.
+ *
+ * Returns NULL if successful, otherwise a malloc()'d string describing the
+ * error.  The caller is responsible for freeing the returned string. */
+char * WARN_UNUSED_RESULT
+nxm_parse_stack_action(struct ofpact_stack *stack_action, const char *s)
+{
+    char *error;
+
+    error = mf_parse_subfield__(&stack_action->subfield, &s);
+    if (error) {
+        return error;
+    }
+
+    if (*s != '\0') {
+        return xasprintf("%s: trailing garbage following push or pop", s);
+    }
+
+    return NULL;
+}
+
+void
+nxm_format_stack_push(const struct ofpact_stack *push, struct ds *s)
+{
+    ds_put_cstr(s, "push:");
+    mf_format_subfield(&push->subfield, s);
+}
+
+void
+nxm_format_stack_pop(const struct ofpact_stack *pop, struct ds *s)
+{
+    ds_put_cstr(s, "pop:");
+    mf_format_subfield(&pop->subfield, s);
+}
+
+/* Common set for both push and pop actions. */
+static void
+stack_action_from_openflow__(const struct nx_action_stack *nasp,
+                                    struct ofpact_stack *stack_action)
+{
+    stack_action->subfield.field = mf_from_nxm_header(ntohl(nasp->field));
+    stack_action->subfield.ofs = ntohs(nasp->offset);
+    stack_action->subfield.n_bits = ntohs(nasp->n_bits);
+}
+
+static void
+nxm_stack_to_nxast__(const struct ofpact_stack *stack_action,
+                            struct nx_action_stack *nasp)
+{
+    nasp->offset = htons(stack_action->subfield.ofs);
+    nasp->n_bits = htons(stack_action->subfield.n_bits);
+    nasp->field = htonl(stack_action->subfield.field->nxm_header);
+}
+
+enum ofperr
+nxm_stack_push_from_openflow(const struct nx_action_stack *nasp,
+                             struct ofpbuf *ofpacts)
+{
+    struct ofpact_stack *push;
+
+    push = ofpact_put_STACK_PUSH(ofpacts);
+    stack_action_from_openflow__(nasp, push);
+
+    return nxm_stack_push_check(push, NULL);
+}
+
+enum ofperr
+nxm_stack_pop_from_openflow(const struct nx_action_stack *nasp,
+                             struct ofpbuf *ofpacts)
+{
+    struct ofpact_stack *pop;
+
+    pop = ofpact_put_STACK_POP(ofpacts);
+    stack_action_from_openflow__(nasp, pop);
+
+    return nxm_stack_pop_check(pop, NULL);
+}
+
+enum ofperr
+nxm_stack_push_check(const struct ofpact_stack *push,
+                     const struct flow *flow)
+{
+    return mf_check_src(&push->subfield, flow);
+}
+
+enum ofperr
+nxm_stack_pop_check(const struct ofpact_stack *pop,
+                    const struct flow *flow)
+{
+    return mf_check_dst(&pop->subfield, flow);
+}
+
+void
+nxm_stack_push_to_nxast(const struct ofpact_stack *stack,
+                        struct ofpbuf *openflow)
+{
+    nxm_stack_to_nxast__(stack, ofputil_put_NXAST_STACK_PUSH(openflow));
+}
+
+void
+nxm_stack_pop_to_nxast(const struct ofpact_stack *stack,
+                       struct ofpbuf *openflow)
+{
+    nxm_stack_to_nxast__(stack, ofputil_put_NXAST_STACK_POP(openflow));
+}
+
+/* nxm_execute_stack_push(), nxm_execute_stack_pop(). */
+static void
+nx_stack_push(struct ofpbuf *stack, union mf_subvalue *v)
+{
+    ofpbuf_put(stack, v, sizeof *v);
+}
+
+static union mf_subvalue *
+nx_stack_pop(struct ofpbuf *stack)
+{
+    union mf_subvalue *v = NULL;
+
+    if (stack->size) {
+        stack->size -= sizeof *v;
+        v = (union mf_subvalue *) ofpbuf_tail(stack);
+    }
+
+    return v;
+}
+
+void
+nxm_execute_stack_push(const struct ofpact_stack *push,
+                       const struct flow *flow, struct flow_wildcards *wc,
+                       struct ofpbuf *stack)
+{
+    union mf_subvalue mask_value;
+    union mf_subvalue dst_value;
+
+    memset(&mask_value, 0xff, sizeof mask_value);
+    mf_write_subfield_flow(&push->subfield, &mask_value, &wc->masks);
+
+    mf_read_subfield(&push->subfield, flow, &dst_value);
+    nx_stack_push(stack, &dst_value);
+}
+
+void
+nxm_execute_stack_pop(const struct ofpact_stack *pop,
+                      struct flow *flow, struct flow_wildcards *wc,
+                      struct ofpbuf *stack)
+{
+    union mf_subvalue *src_value;
+
+    src_value = nx_stack_pop(stack);
+
+    /* Only pop if stack is not empty. Otherwise, give warning. */
+    if (src_value) {
+        union mf_subvalue mask_value;
+
+        memset(&mask_value, 0xff, sizeof mask_value);
+        mf_write_subfield_flow(&pop->subfield, &mask_value, &wc->masks);
+        mf_write_subfield_flow(&pop->subfield, src_value, flow);
+    } else {
+        if (!VLOG_DROP_WARN(&rl)) {
+            char *flow_str = flow_to_string(flow);
+            VLOG_WARN_RL(&rl, "Failed to pop from an empty stack. On flow \n"
+                           " %s", flow_str);
+            free(flow_str);
+        }
+    }
 }

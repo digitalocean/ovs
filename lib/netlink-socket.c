@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <config.h>
 #include "netlink-socket.h"
-#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -30,9 +29,9 @@
 #include "netlink.h"
 #include "netlink-protocol.h"
 #include "ofpbuf.h"
+#include "ovs-thread.h"
 #include "poll-loop.h"
 #include "socket-util.h"
-#include "stress.h"
 #include "util.h"
 #include "vlog.h"
 
@@ -41,7 +40,6 @@ VLOG_DEFINE_THIS_MODULE(netlink_socket);
 COVERAGE_DEFINE(netlink_overflow);
 COVERAGE_DEFINE(netlink_received);
 COVERAGE_DEFINE(netlink_recv_jumbo);
-COVERAGE_DEFINE(netlink_send);
 COVERAGE_DEFINE(netlink_sent);
 
 /* Linux header file confusion causes this to be undefined. */
@@ -60,13 +58,11 @@ static void log_nlmsg(const char *function, int error,
 
 /* Netlink sockets. */
 
-struct nl_sock
-{
+struct nl_sock {
     int fd;
     uint32_t next_seq;
     uint32_t pid;
     int protocol;
-    struct nl_dump *dump;
     unsigned int rcvbuf;        /* Receive buffer size (SO_RCVBUF). */
 };
 
@@ -80,28 +76,30 @@ struct nl_sock
  * Initialized by nl_sock_create(). */
 static int max_iovs;
 
-static int nl_sock_cow__(struct nl_sock *);
+static int nl_pool_alloc(int protocol, struct nl_sock **sockp);
+static void nl_pool_release(struct nl_sock *);
 
 /* Creates a new netlink socket for the given netlink 'protocol'
  * (NETLINK_ROUTE, NETLINK_GENERIC, ...).  Returns 0 and sets '*sockp' to the
- * new socket if successful, otherwise returns a positive errno value.  */
+ * new socket if successful, otherwise returns a positive errno value. */
 int
 nl_sock_create(int protocol, struct nl_sock **sockp)
 {
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
     struct nl_sock *sock;
     struct sockaddr_nl local, remote;
     socklen_t local_size;
     int rcvbuf;
     int retval = 0;
 
-    if (!max_iovs) {
+    if (ovsthread_once_start(&once)) {
         int save_errno = errno;
         errno = 0;
 
         max_iovs = sysconf(_SC_UIO_MAXIOV);
         if (max_iovs < _XOPEN_IOV_MAX) {
             if (max_iovs == -1 && errno) {
-                VLOG_WARN("sysconf(_SC_UIO_MAXIOV): %s", strerror(errno));
+                VLOG_WARN("sysconf(_SC_UIO_MAXIOV): %s", ovs_strerror(errno));
             }
             max_iovs = _XOPEN_IOV_MAX;
         } else if (max_iovs > MAX_IOVS) {
@@ -109,21 +107,18 @@ nl_sock_create(int protocol, struct nl_sock **sockp)
         }
 
         errno = save_errno;
+        ovsthread_once_done(&once);
     }
 
     *sockp = NULL;
-    sock = malloc(sizeof *sock);
-    if (sock == NULL) {
-        return ENOMEM;
-    }
+    sock = xmalloc(sizeof *sock);
 
     sock->fd = socket(AF_NETLINK, SOCK_RAW, protocol);
     if (sock->fd < 0) {
-        VLOG_ERR("fcntl: %s", strerror(errno));
+        VLOG_ERR("fcntl: %s", ovs_strerror(errno));
         goto error;
     }
     sock->protocol = protocol;
-    sock->dump = NULL;
     sock->next_seq = 1;
 
     rcvbuf = 1024 * 1024;
@@ -131,9 +126,9 @@ nl_sock_create(int protocol, struct nl_sock **sockp)
                    &rcvbuf, sizeof rcvbuf)) {
         /* Only root can use SO_RCVBUFFORCE.  Everyone else gets EPERM.
          * Warn only if the failure is therefore unexpected. */
-        if (errno != EPERM || !getuid()) {
+        if (errno != EPERM) {
             VLOG_WARN_RL(&rl, "setting %d-byte socket receive buffer failed "
-                         "(%s)", rcvbuf, strerror(errno));
+                         "(%s)", rcvbuf, ovs_strerror(errno));
         }
     }
 
@@ -149,14 +144,14 @@ nl_sock_create(int protocol, struct nl_sock **sockp)
     remote.nl_family = AF_NETLINK;
     remote.nl_pid = 0;
     if (connect(sock->fd, (struct sockaddr *) &remote, sizeof remote) < 0) {
-        VLOG_ERR("connect(0): %s", strerror(errno));
+        VLOG_ERR("connect(0): %s", ovs_strerror(errno));
         goto error;
     }
 
     /* Obtain pid assigned by kernel. */
     local_size = sizeof local;
     if (getsockname(sock->fd, (struct sockaddr *) &local, &local_size) < 0) {
-        VLOG_ERR("getsockname: %s", strerror(errno));
+        VLOG_ERR("getsockname: %s", ovs_strerror(errno));
         goto error;
     }
     if (local_size < sizeof local || local.nl_family != AF_NETLINK) {
@@ -197,12 +192,8 @@ void
 nl_sock_destroy(struct nl_sock *sock)
 {
     if (sock) {
-        if (sock->dump) {
-            sock->dump = NULL;
-        } else {
-            close(sock->fd);
-            free(sock);
-        }
+        close(sock->fd);
+        free(sock);
     }
 }
 
@@ -220,14 +211,10 @@ nl_sock_destroy(struct nl_sock *sock)
 int
 nl_sock_join_mcgroup(struct nl_sock *sock, unsigned int multicast_group)
 {
-    int error = nl_sock_cow__(sock);
-    if (error) {
-        return error;
-    }
     if (setsockopt(sock->fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP,
                    &multicast_group, sizeof multicast_group) < 0) {
         VLOG_WARN("could not join multicast group %u (%s)",
-                  multicast_group, strerror(errno));
+                  multicast_group, ovs_strerror(errno));
         return errno;
     }
     return 0;
@@ -246,11 +233,10 @@ nl_sock_join_mcgroup(struct nl_sock *sock, unsigned int multicast_group)
 int
 nl_sock_leave_mcgroup(struct nl_sock *sock, unsigned int multicast_group)
 {
-    assert(!sock->dump);
     if (setsockopt(sock->fd, SOL_NETLINK, NETLINK_DROP_MEMBERSHIP,
                    &multicast_group, sizeof multicast_group) < 0) {
         VLOG_WARN("could not leave multicast group %u (%s)",
-                  multicast_group, strerror(errno));
+                  multicast_group, ovs_strerror(errno));
         return errno;
     }
     return 0;
@@ -307,21 +293,8 @@ int
 nl_sock_send_seq(struct nl_sock *sock, const struct ofpbuf *msg,
                  uint32_t nlmsg_seq, bool wait)
 {
-    int error = nl_sock_cow__(sock);
-    if (error) {
-        return error;
-    }
     return nl_sock_send__(sock, msg, nlmsg_seq, wait);
 }
-
-/* This stress option is useful for testing that OVS properly tolerates
- * -ENOBUFS on NetLink sockets.  Such errors are unavoidable because they can
- * occur if the kernel cannot temporarily allocate enough GFP_ATOMIC memory to
- * reply to a request.  They can also occur if messages arrive on a multicast
- * channel faster than OVS can process them. */
-STRESS_OPTION(
-    netlink_overflow, "simulate netlink socket receive buffer overflow",
-    5, 1, -1, 100);
 
 static int
 nl_sock_recv__(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
@@ -337,7 +310,7 @@ nl_sock_recv__(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
     struct msghdr msg;
     ssize_t retval;
 
-    assert(buf->allocated >= sizeof *nlmsghdr);
+    ovs_assert(buf->allocated >= sizeof *nlmsghdr);
     ofpbuf_clear(buf);
 
     iov[0].iov_base = buf->base;
@@ -364,7 +337,7 @@ nl_sock_recv__(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
     }
 
     if (msg.msg_flags & MSG_TRUNC) {
-        VLOG_ERR_RL(&rl, "truncated message (longer than %zu bytes)",
+        VLOG_ERR_RL(&rl, "truncated message (longer than %"PRIuSIZE" bytes)",
                     sizeof tail);
         return E2BIG;
     }
@@ -373,13 +346,9 @@ nl_sock_recv__(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
     if (retval < sizeof *nlmsghdr
         || nlmsghdr->nlmsg_len < sizeof *nlmsghdr
         || nlmsghdr->nlmsg_len > retval) {
-        VLOG_ERR_RL(&rl, "received invalid nlmsg (%zd bytes < %zu)",
+        VLOG_ERR_RL(&rl, "received invalid nlmsg (%"PRIuSIZE"d bytes < %"PRIuSIZE")",
                     retval, sizeof *nlmsghdr);
         return EPROTO;
-    }
-
-    if (STRESS(netlink_overflow)) {
-        return ENOBUFS;
     }
 
     buf->size = MIN(retval, buf->allocated);
@@ -414,10 +383,6 @@ nl_sock_recv__(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
 int
 nl_sock_recv(struct nl_sock *sock, struct ofpbuf *buf, bool wait)
 {
-    int error = nl_sock_cow__(sock);
-    if (error) {
-        return error;
-    }
     return nl_sock_recv__(sock, buf, wait);
 }
 
@@ -532,7 +497,7 @@ nl_sock_transact_multiple__(struct nl_sock *sock,
             }
             if (txn->error) {
                 VLOG_DBG_RL(&rl, "received NAK error=%d (%s)",
-                            error, strerror(txn->error));
+                            error, ovs_strerror(txn->error));
             }
         } else {
             txn->error = 0;
@@ -590,12 +555,6 @@ nl_sock_transact_multiple(struct nl_sock *sock,
         return;
     }
 
-    error = nl_sock_cow__(sock);
-    if (error) {
-        nl_sock_record_errors__(transactions, n, error);
-        return;
-    }
-
     /* In theory, every request could have a 64 kB reply.  But the default and
      * maximum socket rcvbuf size with typical Dom0 memory sizes both tend to
      * be a bit below 128 kB, so that would only allow a single message in a
@@ -634,7 +593,7 @@ nl_sock_transact_multiple(struct nl_sock *sock,
         if (error == ENOBUFS) {
             VLOG_DBG_RL(&rl, "receive buffer overflow, resending request");
         } else if (error) {
-            VLOG_ERR_RL(&rl, "transaction error (%s)", strerror(error));
+            VLOG_ERR_RL(&rl, "transaction error (%s)", ovs_strerror(error));
             nl_sock_record_errors__(transactions, n, error);
         }
     }
@@ -709,93 +668,36 @@ nl_sock_transact(struct nl_sock *sock, const struct ofpbuf *request,
 int
 nl_sock_drain(struct nl_sock *sock)
 {
-    int error = nl_sock_cow__(sock);
-    if (error) {
-        return error;
-    }
     return drain_rcvbuf(sock->fd);
 }
 
-/* The client is attempting some operation on 'sock'.  If 'sock' has an ongoing
- * dump operation, then replace 'sock''s fd with a new socket and hand 'sock''s
- * old fd over to the dump. */
-static int
-nl_sock_cow__(struct nl_sock *sock)
-{
-    struct nl_sock *copy;
-    uint32_t tmp_pid;
-    int tmp_fd;
-    int error;
-
-    if (!sock->dump) {
-        return 0;
-    }
-
-    error = nl_sock_clone(sock, &copy);
-    if (error) {
-        return error;
-    }
-
-    tmp_fd = sock->fd;
-    sock->fd = copy->fd;
-    copy->fd = tmp_fd;
-
-    tmp_pid = sock->pid;
-    sock->pid = copy->pid;
-    copy->pid = tmp_pid;
-
-    sock->dump->sock = copy;
-    sock->dump = NULL;
-
-    return 0;
-}
-
-/* Starts a Netlink "dump" operation, by sending 'request' to the kernel via
- * 'sock', and initializes 'dump' to reflect the state of the operation.
+/* Starts a Netlink "dump" operation, by sending 'request' to the kernel on a
+ * Netlink socket created with the given 'protocol', and initializes 'dump' to
+ * reflect the state of the operation.
  *
  * nlmsg_len in 'msg' will be finalized to match msg->size, and nlmsg_pid will
- * be set to 'sock''s pid, before the message is sent.  NLM_F_DUMP and
- * NLM_F_ACK will be set in nlmsg_flags.
+ * be set to the Netlink socket's pid, before the message is sent.  NLM_F_DUMP
+ * and NLM_F_ACK will be set in nlmsg_flags.
  *
- * This Netlink socket library is designed to ensure that the dump is reliable
- * and that it will not interfere with other operations on 'sock', including
- * destroying or sending and receiving messages on 'sock'.  One corner case is
- * not handled:
- *
- *   - If 'sock' has been used to send a request (e.g. with nl_sock_send())
- *     whose response has not yet been received (e.g. with nl_sock_recv()).
- *     This is unusual: usually nl_sock_transact() is used to send a message
- *     and receive its reply all in one go.
+ * The design of this Netlink socket library ensures that the dump is reliable.
  *
  * This function provides no status indication.  An error status for the entire
  * dump operation is provided when it is completed by calling nl_dump_done().
  *
  * The caller is responsible for destroying 'request'.
- *
- * The new 'dump' is independent of 'sock'.  'sock' and 'dump' may be destroyed
- * in either order.
  */
 void
-nl_dump_start(struct nl_dump *dump,
-              struct nl_sock *sock, const struct ofpbuf *request)
+nl_dump_start(struct nl_dump *dump, int protocol, const struct ofpbuf *request)
 {
     ofpbuf_init(&dump->buffer, 4096);
-    if (sock->dump) {
-        /* 'sock' already has an ongoing dump.  Clone the socket because
-         * Netlink only allows one dump at a time. */
-        dump->status = nl_sock_clone(sock, &dump->sock);
-        if (dump->status) {
-            return;
-        }
-    } else {
-        sock->dump = dump;
-        dump->sock = sock;
-        dump->status = 0;
+    dump->status = nl_pool_alloc(protocol, &dump->sock);
+    if (dump->status) {
+        return;
     }
 
     nl_msg_nlmsghdr(request)->nlmsg_flags |= NLM_F_DUMP | NLM_F_ACK;
-    dump->status = nl_sock_send__(sock, request, nl_sock_allocate_seq(sock, 1),
-                                  true);
+    dump->status = nl_sock_send__(dump->sock, request,
+                                  nl_sock_allocate_seq(dump->sock, 1), true);
     dump->seq = nl_msg_nlmsghdr(request)->nlmsg_seq;
 }
 
@@ -820,7 +722,7 @@ nl_dump_recv(struct nl_dump *dump)
 
     if (nl_msg_nlmsgerr(&dump->buffer, &retval)) {
         VLOG_INFO_RL(&rl, "netlink dump request error (%s)",
-                     strerror(retval));
+                     ovs_strerror(retval));
         return retval && retval != EAGAIN ? retval : EPROTO;
     }
 
@@ -881,21 +783,16 @@ int
 nl_dump_done(struct nl_dump *dump)
 {
     /* Drain any remaining messages that the client didn't read.  Otherwise the
-     * kernel will continue to queue them up and waste buffer space. */
+     * kernel will continue to queue them up and waste buffer space.
+     *
+     * XXX We could just destroy and discard the socket in this case. */
     while (!dump->status) {
         struct ofpbuf reply;
         if (!nl_dump_next(dump, &reply)) {
-            assert(dump->status);
+            ovs_assert(dump->status);
         }
     }
-
-    if (dump->sock) {
-        if (dump->sock->dump) {
-            dump->sock->dump = NULL;
-        } else {
-            nl_sock_destroy(dump->sock);
-        }
-    }
+    nl_pool_release(dump->sock);
     ofpbuf_uninit(&dump->buffer);
     return dump->status == EOF ? 0 : dump->status;
 }
@@ -1027,12 +924,10 @@ do_lookup_genl_family(const char *name, struct nlattr **attrs,
 /* Finds the multicast group called 'group_name' in genl family 'family_name'.
  * When successful, writes its result to 'multicast_group' and returns 0.
  * Otherwise, clears 'multicast_group' and returns a positive error code.
- *
- * Some kernels do not support looking up a multicast group with this function.
- * In this case, 'multicast_group' will be populated with 'fallback'. */
+ */
 int
 nl_lookup_genl_mcgroup(const char *family_name, const char *group_name,
-                       unsigned int *multicast_group, unsigned int fallback)
+                       unsigned int *multicast_group)
 {
     struct nlattr *family_attrs[ARRAY_SIZE(family_policy)];
     const struct nlattr *mc;
@@ -1047,10 +942,7 @@ nl_lookup_genl_mcgroup(const char *family_name, const char *group_name,
     }
 
     if (!family_attrs[CTRL_ATTR_MCAST_GROUPS]) {
-        *multicast_group = fallback;
-        VLOG_WARN("%s-%s: has no multicast group, using fallback %d",
-                  family_name, group_name, *multicast_group);
-        error = 0;
+        error = EPROTO;
         goto exit;
     }
 
@@ -1104,10 +996,94 @@ nl_lookup_genl_family(const char *name, int *number)
         }
         ofpbuf_delete(reply);
 
-        assert(*number != 0);
+        ovs_assert(*number != 0);
     }
     return *number > 0 ? 0 : -*number;
 }
+
+struct nl_pool {
+    struct nl_sock *socks[16];
+    int n;
+};
+
+static struct ovs_mutex pool_mutex = OVS_MUTEX_INITIALIZER;
+static struct nl_pool pools[MAX_LINKS] OVS_GUARDED_BY(pool_mutex);
+
+static int
+nl_pool_alloc(int protocol, struct nl_sock **sockp)
+{
+    struct nl_sock *sock = NULL;
+    struct nl_pool *pool;
+
+    ovs_assert(protocol >= 0 && protocol < ARRAY_SIZE(pools));
+
+    ovs_mutex_lock(&pool_mutex);
+    pool = &pools[protocol];
+    if (pool->n > 0) {
+        sock = pool->socks[--pool->n];
+    }
+    ovs_mutex_unlock(&pool_mutex);
+
+    if (sock) {
+        *sockp = sock;
+        return 0;
+    } else {
+        return nl_sock_create(protocol, sockp);
+    }
+}
+
+static void
+nl_pool_release(struct nl_sock *sock)
+{
+    if (sock) {
+        struct nl_pool *pool = &pools[sock->protocol];
+
+        ovs_mutex_lock(&pool_mutex);
+        if (pool->n < ARRAY_SIZE(pool->socks)) {
+            pool->socks[pool->n++] = sock;
+            sock = NULL;
+        }
+        ovs_mutex_unlock(&pool_mutex);
+
+        nl_sock_destroy(sock);
+    }
+}
+
+int
+nl_transact(int protocol, const struct ofpbuf *request,
+            struct ofpbuf **replyp)
+{
+    struct nl_sock *sock;
+    int error;
+
+    error = nl_pool_alloc(protocol, &sock);
+    if (error) {
+        *replyp = NULL;
+        return error;
+    }
+
+    error = nl_sock_transact(sock, request, replyp);
+
+    nl_pool_release(sock);
+    return error;
+}
+
+void
+nl_transact_multiple(int protocol,
+                     struct nl_transaction **transactions, size_t n)
+{
+    struct nl_sock *sock;
+    int error;
+
+    error = nl_pool_alloc(protocol, &sock);
+    if (!error) {
+        nl_sock_transact_multiple(sock, transactions, n);
+        nl_pool_release(sock);
+    } else {
+        nl_sock_record_errors__(transactions, n, error);
+    }
+}
+
 
 static uint32_t
 nl_sock_allocate_seq(struct nl_sock *sock, unsigned int n)
@@ -1192,7 +1168,7 @@ nlmsg_to_string(const struct ofpbuf *buffer, int protocol)
             if (e) {
                 ds_put_format(&ds, " error(%d", e->error);
                 if (e->error < 0) {
-                    ds_put_format(&ds, "(%s)", strerror(-e->error));
+                    ds_put_format(&ds, "(%s)", ovs_strerror(-e->error));
                 }
                 ds_put_cstr(&ds, ", in-reply-to(");
                 nlmsghdr_to_string(&e->msg, protocol, &ds);
@@ -1205,7 +1181,7 @@ nlmsg_to_string(const struct ofpbuf *buffer, int protocol)
             if (error) {
                 ds_put_format(&ds, " done(%d", *error);
                 if (*error < 0) {
-                    ds_put_format(&ds, "(%s)", strerror(-*error));
+                    ds_put_format(&ds, "(%s)", ovs_strerror(-*error));
                 }
                 ds_put_cstr(&ds, ")");
             } else {
@@ -1237,6 +1213,6 @@ log_nlmsg(const char *function, int error,
 
     ofpbuf_use_const(&buffer, message, size);
     nlmsg = nlmsg_to_string(&buffer, protocol);
-    VLOG_DBG_RL(&rl, "%s (%s): %s", function, strerror(error), nlmsg);
+    VLOG_DBG_RL(&rl, "%s (%s): %s", function, ovs_strerror(error), nlmsg);
     free(nlmsg);
 }

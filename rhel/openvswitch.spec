@@ -1,7 +1,7 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 # Spec file for Open vSwitch on Red Hat Enterprise Linux.
 
-# Copyright (C) 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -13,7 +13,7 @@ Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: Nicira, Inc.
-Version: 1.9.3
+Version: 2.1.0
 
 License: ASL 2.0
 Release: 1
@@ -57,14 +57,13 @@ install python/compat/argparse.py $RPM_BUILD_ROOT/usr/share/openvswitch/python
 
 # Get rid of stuff we don't want to make RPM happy.
 rm \
-    $RPM_BUILD_ROOT/usr/bin/ovs-controller \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-controller.8 \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
     $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
     $RPM_BUILD_ROOT/usr/sbin/ovs-vlan-bug-workaround \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-vlan-bug-workaround.8
+(cd "$RPM_BUILD_ROOT" && rm -rf usr/lib)
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
 
@@ -115,9 +114,9 @@ exit 0
 /usr/bin/ovs-appctl
 /usr/bin/ovs-benchmark
 /usr/bin/ovs-dpctl
+/usr/bin/ovs-dpctl-top
 /usr/bin/ovs-ofctl
 /usr/bin/ovs-parse-backtrace
-/usr/bin/ovs-parse-leaks
 /usr/bin/ovs-pcap
 /usr/bin/ovs-pki
 /usr/bin/ovs-tcpundump
@@ -125,7 +124,7 @@ exit 0
 /usr/bin/ovs-vsctl
 /usr/bin/ovsdb-client
 /usr/bin/ovsdb-tool
-/usr/sbin/ovs-brcompatd
+/usr/bin/vtep-ctl
 /usr/sbin/ovs-bugtool
 /usr/sbin/ovs-vswitchd
 /usr/sbin/ovsdb-server
@@ -136,18 +135,19 @@ exit 0
 /usr/share/man/man1/ovsdb-server.1.gz
 /usr/share/man/man1/ovsdb-tool.1.gz
 /usr/share/man/man5/ovs-vswitchd.conf.db.5.gz
+/usr/share/man/man5/vtep.5.gz
 /usr/share/man/man8/ovs-appctl.8.gz
-/usr/share/man/man8/ovs-brcompatd.8.gz
 /usr/share/man/man8/ovs-bugtool.8.gz
 /usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
+/usr/share/man/man8/ovs-dpctl-top.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
 /usr/share/man/man8/ovs-parse-backtrace.8.gz
-/usr/share/man/man8/ovs-parse-leaks.8.gz
 /usr/share/man/man8/ovs-pki.8.gz
 /usr/share/man/man8/ovs-vlan-test.8.gz
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
+/usr/share/man/man8/vtep-ctl.8.gz
 /usr/share/openvswitch/bugtool-plugins/
 /usr/share/openvswitch/python/
 /usr/share/openvswitch/scripts/ovs-bugtool-*
@@ -155,8 +155,11 @@ exit 0
 /usr/share/openvswitch/scripts/ovs-ctl
 /usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-save
+/usr/share/openvswitch/scripts/ovs-vtep
 /usr/share/openvswitch/scripts/sysconfig.template
 /usr/share/openvswitch/vswitch.ovsschema
+/usr/share/openvswitch/vtep.ovsschema
 /usr/share/doc/openvswitch-%{version}/FAQ
 /usr/share/doc/openvswitch-%{version}/README.RHEL
 /var/lib/openvswitch
+/var/log/openvswitch

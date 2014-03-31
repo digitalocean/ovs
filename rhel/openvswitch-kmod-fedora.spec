@@ -17,7 +17,7 @@ Summary: Open vSwitch Kernel Modules
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: OpenSource Security Ralf Spenneberg <ralf@os-s.net>
-Version: 1.9.3
+Version: 2.1.0
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: GPLv2
@@ -35,7 +35,7 @@ traffic. This package contains the kernel modules.
 %setup -q -n openvswitch-%{version}
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{kernel}/build --enable-ssl %{build_number}
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{kernel}/build --enable-ssl
 make %{_smp_mflags} -C datapath/linux
 
 %install
@@ -57,7 +57,6 @@ depmod %{kernel}
 %files
 %defattr(-,root,root)
 /lib/modules/%{kernel}/kernel/extra/openvswitch/openvswitch.ko
-/lib/modules/%{kernel}/kernel/extra/openvswitch/brcompat.ko
 
 %changelog
 * Wed Sep 21 2011 Kyle Mestery <kmestery@cisco.com>

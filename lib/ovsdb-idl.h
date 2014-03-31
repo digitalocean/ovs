@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,8 @@ struct uuid;
 
 struct ovsdb_idl *ovsdb_idl_create(const char *remote,
                                    const struct ovsdb_idl_class *,
-                                   bool monitor_everything_by_default);
+                                   bool monitor_everything_by_default,
+                                   bool retry);
 void ovsdb_idl_destroy(struct ovsdb_idl *);
 
 void ovsdb_idl_run(struct ovsdb_idl *);
@@ -56,8 +57,12 @@ bool ovsdb_idl_is_lock_contended(const struct ovsdb_idl *);
 
 unsigned int ovsdb_idl_get_seqno(const struct ovsdb_idl *);
 bool ovsdb_idl_has_ever_connected(const struct ovsdb_idl *);
+void ovsdb_idl_enable_reconnect(struct ovsdb_idl *);
 void ovsdb_idl_force_reconnect(struct ovsdb_idl *);
 void ovsdb_idl_verify_write_only(struct ovsdb_idl *);
+
+bool ovsdb_idl_is_alive(const struct ovsdb_idl *);
+int ovsdb_idl_get_last_error(const struct ovsdb_idl *);
 
 /* Choosing columns and tables to replicate. */
 
@@ -202,6 +207,9 @@ const struct uuid *ovsdb_idl_txn_get_insert_uuid(const struct ovsdb_idl_txn *,
 void ovsdb_idl_txn_write(const struct ovsdb_idl_row *,
                          const struct ovsdb_idl_column *,
                          struct ovsdb_datum *);
+void ovsdb_idl_txn_write_clone(const struct ovsdb_idl_row *,
+                               const struct ovsdb_idl_column *,
+                               const struct ovsdb_datum *);
 void ovsdb_idl_txn_delete(const struct ovsdb_idl_row *);
 const struct ovsdb_idl_row *ovsdb_idl_txn_insert(
     struct ovsdb_idl_txn *, const struct ovsdb_idl_table_class *,

@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
- "version": "6.10.0",
- "cksum": "3699312094 16958",
+ "version": "7.4.0",
+ "cksum": "951746691 20389",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -70,10 +70,21 @@
          "type": {"key": {"type": "uuid",
                           "refTable": "sFlow"},
                   "min": 0, "max": 1}},
+       "ipfix": {
+         "type": {"key": {"type": "uuid",
+                          "refTable": "IPFIX"},
+                  "min": 0, "max": 1}},
        "controller": {
          "type": {"key": {"type": "uuid",
                           "refTable": "Controller"},
                   "min": 0, "max": "unlimited"}},
+       "protocols": {
+         "type": {"key": {"type": "string",
+           "enum": ["set", ["OpenFlow10",
+                            "OpenFlow11",
+                            "OpenFlow12",
+                            "OpenFlow13"]]},
+	   "min": 0, "max": "unlimited"}},
        "fail_mode": {
          "type": {"key": {"type": "string",
                           "enum": ["set", ["standalone", "secure"]]},
@@ -130,7 +141,7 @@
                   "min": 0, "max": 1}},
        "bond_mode": {
          "type": {"key": {"type": "string",
-           "enum": ["set", ["balance-tcp", "balance-slb", "active-backup", "stable"]]},
+           "enum": ["set", ["balance-tcp", "balance-slb", "active-backup"]]},
          "min": 0, "max": 1}},
        "lacp": {
          "type": {"key": {"type": "string",
@@ -170,14 +181,38 @@
        "ingress_policing_burst": {
          "type": {"key": {"type": "integer",
                           "minInteger": 0}}},
+       "mac_in_use": {
+         "type": {"key": {"type": "string"},
+                  "min": 0, "max": 1},
+                  "ephemeral": true},
        "mac": {
          "type": {"key": {"type": "string"},
                   "min": 0, "max": 1}},
+       "ifindex": {
+         "type": {
+           "key": {"type": "integer",
+                   "minInteger": 0,
+                   "maxInteger": 4294967295},
+           "min": 0,
+           "max": 1},
+         "ephemeral": true},
        "external_ids": {
          "type": {"key": "string", "value": "string", "min": 0, "max": "unlimited"}},
        "ofport": {
-         "type": {"key": "integer", "min": 0, "max": 1},
-         "ephemeral": true},
+         "type": {"key": "integer", "min": 0, "max": 1}},
+       "ofport_request": {
+         "type": {
+           "key": {"type": "integer",
+                   "minInteger": 1,
+                   "maxInteger": 65279},
+           "min": 0,
+           "max": 1}},
+       "bfd": {
+           "type": {"key": "string", "value": "string",
+               "min": 0, "max": "unlimited"}},
+       "bfd_status": {
+           "type": {"key": "string", "value": "string",
+               "min": 0, "max": "unlimited"}},
        "cfm_mpid": {
          "type": {
            "key": {"type": "integer"},
@@ -189,6 +224,11 @@
            "min": 0,
            "max": "unlimited"},
          "ephemeral": true},
+       "cfm_flap_count": {
+         "type": {
+           "key": {"type": "integer"},
+           "min": 0,
+           "max": 1}},
        "cfm_fault": {
          "type": {
            "key": { "type": "boolean"},
@@ -260,7 +300,9 @@
 			  "enum": ["set", ["refuse", "evict"]]},
 		  "min": 0, "max": 1}},
        "groups": {
-	 "type": {"key": "string", "min": 0, "max": "unlimited"}}}},
+	 "type": {"key": "string", "min": 0, "max": "unlimited"}},
+       "prefixes": {
+         "type": {"key": "string", "min": 0, "max": 3}}}},
    "QoS": {
      "columns": {
        "type": {
@@ -369,6 +411,58 @@
        "external_ids": {
          "type": {"key": "string", "value": "string",
                   "min": 0, "max": "unlimited"}}}},
+   "IPFIX": {
+     "columns": {
+       "targets": {
+         "type": {"key": "string", "min": 0, "max": "unlimited"}},
+       "sampling": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 1,
+                          "maxInteger": 4294967295},
+                  "min": 0, "max": 1}},
+       "obs_domain_id": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 4294967295},
+                  "min": 0, "max": 1}},
+       "obs_point_id": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 4294967295},
+                  "min": 0, "max": 1}},
+       "cache_active_timeout": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 4200},
+                  "min": 0, "max": 1}},
+       "cache_max_flows": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 4294967295},
+                  "min": 0, "max": 1}},
+       "external_ids": {
+         "type": {"key": "string", "value": "string",
+                  "min": 0, "max": "unlimited"}}}},
+   "Flow_Sample_Collector_Set": {
+     "columns": {
+       "id": {
+         "type": {"key": {"type": "integer",
+                          "minInteger": 0,
+                          "maxInteger": 4294967295},
+                  "min": 1, "max": 1}},
+       "bridge": {
+         "type": {"key": {"type": "uuid",
+                          "refTable": "Bridge"},
+                  "min": 1, "max": 1}},
+       "ipfix": {
+         "type": {"key": {"type": "uuid",
+                          "refTable": "IPFIX"},
+                  "min": 0, "max": 1}},
+       "external_ids": {
+         "type": {"key": "string", "value": "string",
+                  "min": 0, "max": "unlimited"}}},
+     "isRoot": true,
+     "indexes": [["id", "bridge"]]},
    "Controller": {
      "columns": {
        "target": {

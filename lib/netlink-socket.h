@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,12 @@
  * are Linux-specific.  For Netlink protocol definitions, see
  * netlink-protocol.h.  For helper functions for working with Netlink messages,
  * see netlink.h.
+ *
+ *
+ * Thread-safety
+ * =============
+ *
+ * Only a single thread may use a given nl_sock or nl_dump at one time.
  */
 
 #include <stdbool.h>
@@ -84,6 +90,11 @@ struct nl_transaction {
 void nl_sock_transact_multiple(struct nl_sock *,
                                struct nl_transaction **, size_t n);
 
+/* Transactions without an allocated socket. */
+int nl_transact(int protocol, const struct ofpbuf *request,
+                struct ofpbuf **replyp);
+void nl_transact_multiple(int protocol, struct nl_transaction **, size_t n);
+
 /* Table dumping. */
 struct nl_dump {
     struct nl_sock *sock;       /* Socket being dumped. */
@@ -92,7 +103,7 @@ struct nl_dump {
     int status;                 /* 0=OK, EOF=done, or positive errno value. */
 };
 
-void nl_dump_start(struct nl_dump *, struct nl_sock *,
+void nl_dump_start(struct nl_dump *, int protocol,
                    const struct ofpbuf *request);
 bool nl_dump_next(struct nl_dump *, struct ofpbuf *reply);
 int nl_dump_done(struct nl_dump *);
@@ -100,7 +111,6 @@ int nl_dump_done(struct nl_dump *);
 /* Miscellaneous */
 int nl_lookup_genl_family(const char *name, int *number);
 int nl_lookup_genl_mcgroup(const char *family_name, const char *group_name,
-                           unsigned int *multicast_group,
-                           unsigned int fallback);
+                           unsigned int *multicast_group);
 
 #endif /* netlink-socket.h */

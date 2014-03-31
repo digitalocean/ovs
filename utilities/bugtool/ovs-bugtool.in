@@ -14,7 +14,7 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #
 # Copyright (c) 2005, 2007 XenSource Ltd.
-# Copyright (c) 2010, 2011, 2012 Nicira, Inc.
+# Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
 
 #
 # To add new entries to the bugtool, you need to:
@@ -76,8 +76,6 @@ FSTAB = '/etc/fstab'
 PROC_MOUNTS = '/proc/mounts'
 ISCSI_CONF = '/etc/iscsi/iscsid.conf'
 ISCSI_INITIATOR = '/etc/iscsi/initiatorname.iscsi'
-LVM_CACHE = '/etc/lvm/cache/.cache'
-LVM_CONFIG = '/etc/lvm/lvm.conf'
 PROC_CPUINFO = '/proc/cpuinfo'
 PROC_MEMINFO = '/proc/meminfo'
 PROC_IOPORTS = '/proc/ioports'
@@ -90,7 +88,6 @@ PROC_FILESYSTEMS = '/proc/filesystems'
 PROC_CMDLINE = '/proc/cmdline'
 PROC_CONFIG = '/proc/config.gz'
 PROC_USB_DEV = '/proc/bus/usb/devices'
-PROC_XEN_BALLOON = '/proc/xen/balloon'
 PROC_NET_BONDING_DIR = '/proc/net/bonding'
 IFCFG_RE = re.compile(r'^.*/ifcfg-.*')
 ROUTE_RE = re.compile(r'^.*/route-.*')
@@ -114,20 +111,13 @@ DHCP_LEASE_DIR = ['/var/lib/dhclient', '/var/lib/dhcp3']
 OPENVSWITCH_LOG_DIR = '@LOGDIR@/'
 OPENVSWITCH_DEFAULT_SWITCH = '/etc/default/openvswitch-switch' # Debian
 OPENVSWITCH_SYSCONFIG_SWITCH = '/etc/sysconfig/openvswitch'    # RHEL
-OPENVSWITCH_DEFAULT_CONTROLLER = '/etc/default/openvswitch-controller'
 OPENVSWITCH_CONF_DB = '@DBDIR@/conf.db'
+OPENVSWITCH_COMPACT_DB = '@DBDIR@/bugtool-compact-conf.db'
 OPENVSWITCH_VSWITCHD_PID = '@RUNDIR@/ovs-vswitchd.pid'
-COLLECTD_LOGS_DIR = '/var/lib/collectd/rrd'
 VAR_LOG_DIR = '/var/log/'
 VAR_LOG_CORE_DIR = '/var/log/core'
-X11_LOGS_DIR = VAR_LOG_DIR
-X11_LOGS_RE = re.compile(r'.*/Xorg\..*$')
-X11_AUTH_DIR = '/root/'
-X11_AUTH_RE = re.compile(r'.*/\.((Xauthority)|(serverauth\.[0-9]*))$')
 YUM_LOG = '/var/log/yum.log'
 YUM_REPOS_DIR = '/etc/yum.repos.d'
-PAM_DIR = '/etc/pam.d'
-KRB5_CONF = '/etc/krb5.conf'
 
 #
 # External programs
@@ -135,7 +125,6 @@ KRB5_CONF = '/etc/krb5.conf'
 
 os.environ['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:@pkgdatadir@/scripts'
 ARP = 'arp'
-BRCTL = 'brctl'
 CAT = 'cat'
 CHKCONFIG = 'chkconfig'
 DF = 'df'
@@ -146,15 +135,12 @@ DPKG_QUERY = 'dpkg-query'
 ETHTOOL = 'ethtool'
 FDISK = 'fdisk'
 FIND = 'find'
-HDPARM = 'hdparm'
 IFCONFIG = 'ifconfig'
 IPTABLES = 'iptables'
 ISCSIADM = 'iscsiadm'
 LOSETUP = 'losetup'
 LS = 'ls'
 LSPCI = 'lspci'
-LVDISPLAY = 'lvdisplay'
-LVS = 'lvs'
 MD5SUM = 'md5sum'
 MODINFO = 'modinfo'
 MPPUTIL = 'mppUtil'
@@ -163,17 +149,13 @@ NETSTAT = 'netstat'
 OVS_DPCTL = 'ovs-dpctl'
 OVS_OFCTL = 'ovs-ofctl'
 OVS_VSCTL = 'ovs-vsctl'
-OVS_APPCTL = 'ovs-appctl'
 PS = 'ps'
-PVS = 'pvs'
 ROUTE = 'route'
 RPM = 'rpm'
 SG_MAP = 'sg_map'
 SYSCTL = 'sysctl'
 TC = 'tc'
 UPTIME = 'uptime'
-VGS = 'vgs'
-VGSCAN = 'vgscan'
 ZCAT = 'zcat'
 
 #
@@ -215,29 +197,19 @@ CAP_XML_ROOT = "system-status-capabilities"
 CAP_XML_ELEMENT = 'capability'
 
 
-CAP_BLOBS                = 'blobs'
 CAP_BOOT_LOADER          = 'boot-loader'
-CAP_COLLECTD_LOGS        = 'collectd-logs'
 CAP_DISK_INFO            = 'disk-info'
-CAP_FIRSTBOOT            = 'firstboot'
 CAP_HARDWARE_INFO        = 'hardware-info'
-CAP_HDPARM_T             = 'hdparm-t'
-CAP_HIGH_AVAILABILITY    = 'high-availability'
 CAP_KERNEL_INFO          = 'kernel-info'
 CAP_LOSETUP_A            = 'loopback-devices'
 CAP_MULTIPATH            = 'multipath'
 CAP_NETWORK_CONFIG       = 'network-config'
+CAP_NETWORK_INFO         = 'network-info'
 CAP_NETWORK_STATUS       = 'network-status'
-CAP_OEM                  = 'oem'
-CAP_PAM                  = 'pam'
+CAP_OPENVSWITCH_LOGS     = 'ovs-system-logs'
 CAP_PROCESS_LIST         = 'process-list'
-CAP_PERSISTENT_STATS     = 'persistent-stats'
 CAP_SYSTEM_LOGS          = 'system-logs'
 CAP_SYSTEM_SERVICES      = 'system-services'
-CAP_VNCTERM              = 'vncterm'
-CAP_WLB                  = 'wlb'
-CAP_X11_LOGS             = 'X11'
-CAP_X11_AUTH             = 'X11-auth'
 CAP_YUM                  = 'yum'
 
 KB = 1024
@@ -247,6 +219,10 @@ caps = {}
 cap_sizes = {}
 unlimited_data = False
 dbg = False
+# Default value for the number of days to collect logs.
+log_days = 20
+log_last_mod_time = None
+free_disk_space = None
 
 def cap(key, pii=PII_MAYBE, min_size=-1, max_size=-1, min_time=-1,
         max_time=-1, mime=MIME_TEXT, checked=True, hidden=False):
@@ -255,42 +231,31 @@ def cap(key, pii=PII_MAYBE, min_size=-1, max_size=-1, min_time=-1,
     cap_sizes[key] = 0
 
 
-cap(CAP_BLOBS,               PII_NO,                    max_size=5*MB)
 cap(CAP_BOOT_LOADER,         PII_NO,                    max_size=3*KB,
-    max_time=5)
-cap(CAP_COLLECTD_LOGS,       PII_MAYBE,                 max_size=50*MB,
     max_time=5)
 cap(CAP_DISK_INFO,           PII_MAYBE,                 max_size=50*KB,
     max_time=20)
-cap(CAP_FIRSTBOOT,           PII_YES,   min_size=60*KB, max_size=80*KB)
-cap(CAP_HARDWARE_INFO,       PII_MAYBE,                 max_size=30*KB,
+cap(CAP_HARDWARE_INFO,       PII_MAYBE,                 max_size=2*MB,
     max_time=20)
-cap(CAP_HDPARM_T,            PII_NO,    min_size=0,     max_size=5*KB,
-    min_time=20, max_time=90, checked=False, hidden=True)
-cap(CAP_HIGH_AVAILABILITY,   PII_MAYBE,                 max_size=5*MB)
 cap(CAP_KERNEL_INFO,         PII_MAYBE,                 max_size=120*KB,
     max_time=5)
 cap(CAP_LOSETUP_A,           PII_MAYBE,                 max_size=KB, max_time=5)
 cap(CAP_MULTIPATH,           PII_MAYBE,                 max_size=20*KB,
     max_time=10)
 cap(CAP_NETWORK_CONFIG,      PII_IF_CUSTOMIZED,
-                                        min_size=0,     max_size=40*KB)
-cap(CAP_NETWORK_STATUS,      PII_YES,                   max_size=50*KB,
+                                        min_size=0,     max_size=5*MB)
+cap(CAP_NETWORK_INFO,        PII_YES,                   max_size=50*MB,
     max_time=30)
-cap(CAP_PAM,                 PII_NO,                    max_size=50*KB)
-cap(CAP_PERSISTENT_STATS,    PII_MAYBE,                 max_size=50*MB,
-    max_time=60)
+cap(CAP_NETWORK_STATUS,      PII_YES,                   max_size=-1,
+    max_time=30)
+cap(CAP_OPENVSWITCH_LOGS,    PII_MAYBE,                 max_size=-1,
+    max_time=5)
 cap(CAP_PROCESS_LIST,        PII_YES,                   max_size=30*KB,
     max_time=20)
-cap(CAP_SYSTEM_LOGS,         PII_MAYBE,                 max_size=50*MB,
+cap(CAP_SYSTEM_LOGS,         PII_MAYBE,                 max_size=200*MB,
     max_time=5)
 cap(CAP_SYSTEM_SERVICES,     PII_NO,                    max_size=5*KB,
     max_time=20)
-cap(CAP_VNCTERM,             PII_MAYBE, checked = False)
-cap(CAP_WLB,                 PII_NO,                    max_size=3*MB,
-    max_time=20)
-cap(CAP_X11_LOGS,            PII_NO,                    max_size=100*KB)
-cap(CAP_X11_AUTH,            PII_NO,                    max_size=100*KB)
 cap(CAP_YUM,                 PII_IF_CUSTOMIZED,         max_size=10*KB,
     max_time=30)
 
@@ -308,7 +273,7 @@ def output(x):
 def output_ts(x):
     output("[%s]  %s" % (time.strftime("%x %X %Z"), x))
 
-def cmd_output(cap, args, label=None, filter=None):
+def cmd_output(cap, args, label=None, filter=None, binary=False):
     if cap in entries:
         if not label:
             if isinstance(args, list):
@@ -317,9 +282,11 @@ def cmd_output(cap, args, label=None, filter=None):
                 label = ' '.join(a)
             else:
                 label = args
-        data[label] = {'cap': cap, 'cmd_args': args, 'filter': filter}
+        data[label] = {'cap': cap, 'cmd_args': args, 'filter': filter,
+                       'binary': binary}
 
-def file_output(cap, path_list, newest_first=False):
+
+def file_output(cap, path_list, newest_first=False, last_mod_time=None):
     """
     If newest_first is True, the list of files in path_list is sorted
     by file modification time in descending order, else its sorted
@@ -332,19 +299,18 @@ def file_output(cap, path_list, newest_first=False):
                 s = os.stat(path)
             except OSError, e:
                 continue
-            path_entries.append((path, s))
+            if last_mod_time is None or s.st_mtime >= last_mod_time:
+                path_entries.append((path, s))
 
         mtime = lambda(path, stat): stat.st_mtime
         path_entries.sort(key=mtime, reverse=newest_first)
         for p in path_entries:
-            if unlimited_data or caps[cap][MAX_SIZE] == -1 or \
-                    cap_sizes[cap] < caps[cap][MAX_SIZE]:
+            if check_space(cap, p[0], p[1].st_size):
                 data[p] = {'cap': cap, 'filename': p[0]}
-                cap_sizes[cap] += p[1].st_size
-            else:
-                output("Omitting %s, size constraint of %s exceeded" % (p[0], cap))
 
-def tree_output(cap, path, pattern=None, negate=False, newest_first=False):
+
+def tree_output(cap, path, pattern=None, negate=False, newest_first=False,
+                last_mod_time=None):
     """
     Walks the directory tree rooted at path. Files in current dir are processed
     before files in sub-dirs.
@@ -354,7 +320,21 @@ def tree_output(cap, path, pattern=None, negate=False, newest_first=False):
             for root, dirs, files in os.walk(path):
                 fns = [fn for fn in [os.path.join(root, f) for f in files]
                        if os.path.isfile(fn) and matches(fn, pattern, negate)]
-                file_output(cap, fns, newest_first=newest_first)
+                file_output(cap, fns, newest_first=newest_first,
+                            last_mod_time=last_mod_time)
+
+
+def prefix_output(cap, prefix, newest_first=False, last_mod_time=None):
+    """
+    Output files with the same prefix.
+    """
+    fns = []
+    for root, dirs, files in os.walk(os.path.dirname(prefix)):
+        fns += [fn for fn in [os.path.join(root, f) for f in files]
+                if fn.startswith(prefix)]
+    file_output(cap, fns, newest_first=newest_first,
+                last_mod_time=last_mod_time)
+
 
 def func_output(cap, label, func):
     if cap in entries:
@@ -370,19 +350,17 @@ def collect_data():
             v['output'] = StringIOmtime()
             if not process_lists.has_key(cap):
                 process_lists[cap] = []
-            process_lists[cap].append(ProcOutput(v['cmd_args'], caps[cap][MAX_TIME], v['output'], v['filter']))
+            process_lists[cap].append(
+                ProcOutput(v['cmd_args'], caps[cap][MAX_TIME], v['output'],
+                           v['filter'], v['binary']))
         elif v.has_key('filename') and v['filename'].startswith('/proc/'):
             # proc files must be read into memory
             try:
                 f = open(v['filename'], 'r')
                 s = f.read()
                 f.close()
-                if unlimited_data or caps[cap][MAX_SIZE] == -1 or \
-                        cap_sizes[cap] < caps[cap][MAX_SIZE]:
+                if check_space(cap, v['filename'], len(s)):
                     v['output'] = StringIOmtime(s)
-                    cap_sizes[cap] += len(s)
-                else:
-                    output("Omitting %s, size constraint of %s exceeded" % (v['filename'], cap))
             except:
                 pass
         elif v.has_key('func'):
@@ -390,19 +368,16 @@ def collect_data():
                 s = v['func'](cap)
             except Exception, e:
                 s = str(e)
-            if unlimited_data or caps[cap][MAX_SIZE] == -1 or \
-                    cap_sizes[cap] < caps[cap][MAX_SIZE]:
+            if check_space(cap, k, len(s)):
                 v['output'] = StringIOmtime(s)
-                cap_sizes[cap] += len(s)
-            else:
-                output("Omitting %s, size constraint of %s exceeded" % (k, cap))
 
     run_procs(process_lists.values())
 
 
 def main(argv=None):
     global ANSWER_YES_TO_ALL, SILENT_MODE
-    global entries, data, dbg, unlimited_data
+    global entries, data, dbg, unlimited_data, free_disk_space
+    global log_days, log_last_mod_time
 
     # Filter flags
     only_ovs_info = False
@@ -414,7 +389,7 @@ def main(argv=None):
         return 1
 
     output_file = None
-    output_type = 'tar.bz2'
+    output_type = 'tar.gz'
     output_fd = -1
 
     if argv is None:
@@ -424,7 +399,7 @@ def main(argv=None):
         (options, params) = getopt.gnu_getopt(
             argv, 'sy', ['capabilities', 'silent', 'yestoall', 'entries=',
                          'output=', 'outfd=', 'outfile=', 'all', 'unlimited',
-                         'debug', 'ovs'])
+                         'debug', 'ovs', 'log-days='])
     except getopt.GetoptError, opterr:
         print >>sys.stderr, opterr
         return 2
@@ -486,6 +461,10 @@ def main(argv=None):
             only_ovs_info = True
             collect_all_info = False
 
+        if k == '--log-days':
+            log_days = int(v)
+
+
     if len(params) != 1:
         print >>sys.stderr, "Invalid additional arguments", str(params)
         return 2
@@ -497,6 +476,11 @@ def main(argv=None):
     if output_fd != -1 and output_file is not None:
         print >>sys.stderr, "Cannot set both '--outfd' and '--outfile'"
         return 2
+
+    if output_file is not None and not unlimited_data:
+        free_disk_space = get_free_disk_space(output_file) * 90 / 100
+
+    log_last_mod_time = int(time.time()) - log_days * 86400
 
     if ANSWER_YES_TO_ALL:
         output("Warning: '--yestoall' argument provided, will not prompt for individual files.")
@@ -521,27 +505,18 @@ exclude those logs from the archive.
     cmd_output(CAP_BOOT_LOADER, [LS, '-lR', '/boot'])
     cmd_output(CAP_BOOT_LOADER, [MD5SUM, BOOT_KERNEL, BOOT_INITRD], label='vmlinuz-initrd.md5sum')
 
-    tree_output(CAP_COLLECTD_LOGS, COLLECTD_LOGS_DIR)
     cmd_output(CAP_DISK_INFO, [FDISK, '-l'])
     file_output(CAP_DISK_INFO, [PROC_PARTITIONS, PROC_MOUNTS])
     file_output(CAP_DISK_INFO, [FSTAB, ISCSI_CONF, ISCSI_INITIATOR])
     cmd_output(CAP_DISK_INFO, [DF, '-alT'])
     cmd_output(CAP_DISK_INFO, [DF, '-alTi'])
-    for d in disk_list():
-        cmd_output(CAP_DISK_INFO, [HDPARM, '-I', '/dev/%s' % d])
     if len(pidof('iscsid')) != 0:
         cmd_output(CAP_DISK_INFO, [ISCSIADM, '-m', 'node'])
-    cmd_output(CAP_DISK_INFO, [VGSCAN])
-    cmd_output(CAP_DISK_INFO, [PVS])
-    cmd_output(CAP_DISK_INFO, [VGS])
-    cmd_output(CAP_DISK_INFO, [LVS])
-    file_output(CAP_DISK_INFO, [LVM_CACHE, LVM_CONFIG])
     cmd_output(CAP_DISK_INFO, [LS, '-R', '/sys/class/scsi_host'])
     cmd_output(CAP_DISK_INFO, [LS, '-R', '/sys/class/scsi_disk'])
     cmd_output(CAP_DISK_INFO, [LS, '-R', '/sys/class/fc_transport'])
     cmd_output(CAP_DISK_INFO, [SG_MAP, '-x'])
     func_output(CAP_DISK_INFO, 'scsi-hosts', dump_scsi_hosts)
-    cmd_output(CAP_DISK_INFO, [LVDISPLAY, '--map'])
 
     file_output(CAP_HARDWARE_INFO, [PROC_CPUINFO, PROC_MEMINFO, PROC_IOPORTS, PROC_INTERRUPTS])
     cmd_output(CAP_HARDWARE_INFO, [DMIDECODE])
@@ -550,10 +525,7 @@ exclude those logs from the archive.
     file_output(CAP_HARDWARE_INFO, [PROC_USB_DEV, PROC_SCSI])
     file_output(CAP_HARDWARE_INFO, [SYSCONFIG_HWCONF])
     cmd_output(CAP_HARDWARE_INFO, [LS, '-lR', '/dev'])
-    # FIXME IDE?
 
-    for d in disk_list():
-        cmd_output(CAP_HDPARM_T, [HDPARM, '-tT', '/dev/%s' % d])
 
     file_output(CAP_KERNEL_INFO, [PROC_VERSION, PROC_MODULES, PROC_DEVICES,
                                   PROC_FILESYSTEMS, PROC_CMDLINE])
@@ -576,16 +548,17 @@ exclude those logs from the archive.
     tree_output(CAP_NETWORK_CONFIG, SYSCONFIG_NETWORK_SCRIPTS, ROUTE_RE)
     file_output(CAP_NETWORK_CONFIG, [SYSCONFIG_NETWORK, RESOLV_CONF, NSSWITCH_CONF, HOSTS])
     file_output(CAP_NETWORK_CONFIG, [NTP_CONF, IPTABLES_CONFIG, HOSTS_ALLOW, HOSTS_DENY])
-    file_output(CAP_NETWORK_CONFIG, [OPENVSWITCH_CONF_DB])
+    file_output(CAP_NETWORK_CONFIG, [OPENVSWITCH_DEFAULT_SWITCH,
+                OPENVSWITCH_SYSCONFIG_SWITCH])
 
-    cmd_output(CAP_NETWORK_STATUS, [IFCONFIG, '-a'])
-    cmd_output(CAP_NETWORK_STATUS, [ROUTE, '-n'])
-    cmd_output(CAP_NETWORK_STATUS, [ARP, '-n'])
-    cmd_output(CAP_NETWORK_STATUS, [NETSTAT, '-an'])
+    cmd_output(CAP_NETWORK_INFO, [IFCONFIG, '-a'])
+    cmd_output(CAP_NETWORK_INFO, [ROUTE, '-n'])
+    cmd_output(CAP_NETWORK_INFO, [ARP, '-n'])
+    cmd_output(CAP_NETWORK_INFO, [NETSTAT, '-an'])
     for dir in DHCP_LEASE_DIR:
-        tree_output(CAP_NETWORK_STATUS, dir)
-    cmd_output(CAP_NETWORK_STATUS, [BRCTL, 'show'])
-    cmd_output(CAP_NETWORK_STATUS, [IPTABLES, '-nL'])
+        tree_output(CAP_NETWORK_INFO, dir)
+    for table in ['filter', 'nat', 'mangle', 'raw', 'security']:
+        cmd_output(CAP_NETWORK_INFO, [IPTABLES, '-t', table, '-nL'])
     for p in os.listdir('/sys/class/net/'):
         try:
             f = open('/sys/class/net/%s/type' % p, 'r')
@@ -593,62 +566,48 @@ exclude those logs from the archive.
             f.close()
             if os.path.islink('/sys/class/net/%s/device' % p) and int(t) == 1:
                 # ARPHRD_ETHER
-                cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, p])
-                cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-S', p])
-                cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-k', p])
-                cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-i', p])
-                cmd_output(CAP_NETWORK_STATUS, [ETHTOOL, '-c', p])
+                cmd_output(CAP_NETWORK_INFO, [ETHTOOL, '-S', p])
+                if not p.startswith('vif') and not p.startswith('tap'):
+                    cmd_output(CAP_NETWORK_INFO, [ETHTOOL, p])
+                    cmd_output(CAP_NETWORK_INFO, [ETHTOOL, '-k', p])
+                    cmd_output(CAP_NETWORK_INFO, [ETHTOOL, '-i', p])
+                    cmd_output(CAP_NETWORK_INFO, [ETHTOOL, '-c', p])
             if int(t) == 1:
-                cmd_output(CAP_NETWORK_STATUS,
+                cmd_output(CAP_NETWORK_INFO,
                            [TC, '-s', '-d', 'class', 'show', 'dev', p])
         except:
             pass
-    tree_output(CAP_NETWORK_STATUS, PROC_NET_BONDING_DIR)
-    tree_output(CAP_NETWORK_STATUS, PROC_NET_VLAN_DIR)
-    cmd_output(CAP_NETWORK_STATUS, [TC, '-s', 'qdisc'])
-    file_output(CAP_NETWORK_STATUS, [PROC_NET_SOFTNET_STAT])
+    tree_output(CAP_NETWORK_INFO, PROC_NET_BONDING_DIR)
+    tree_output(CAP_NETWORK_INFO, PROC_NET_VLAN_DIR)
+    cmd_output(CAP_NETWORK_INFO, [TC, '-s', 'qdisc'])
+    file_output(CAP_NETWORK_INFO, [PROC_NET_SOFTNET_STAT])
+
+    collect_ovsdb()
     if os.path.exists(OPENVSWITCH_VSWITCHD_PID):
         cmd_output(CAP_NETWORK_STATUS, [OVS_DPCTL, 'show', '-s'])
         for d in dp_list():
-            cmd_output(CAP_NETWORK_STATUS, [OVS_OFCTL, 'show', d])
-            cmd_output(CAP_NETWORK_STATUS, [OVS_OFCTL, 'dump-flows', d])
             cmd_output(CAP_NETWORK_STATUS, [OVS_DPCTL, 'dump-flows', d])
-        try:
-            vspidfile = open(OPENVSWITCH_VSWITCHD_PID)
-            vspid = int(vspidfile.readline().strip())
-            vspidfile.close()
-            for b in bond_list(vspid):
-                cmd_output(CAP_NETWORK_STATUS,
-                           [OVS_APPCTL, '-t', '@RUNDIR@/ovs-vswitchd.%s.ctl' % vspid, '-e' 'bond/show %s' % b],
-                           'ovs-appctl-bond-show-%s.out' % b)
-        except e:
-            pass
-
-    tree_output(CAP_PAM, PAM_DIR)
-    file_output(CAP_PAM, [KRB5_CONF])
 
     cmd_output(CAP_PROCESS_LIST, [PS, 'wwwaxf', '-eo', 'pid,tty,stat,time,nice,psr,pcpu,pmem,nwchan,wchan:25,args'], label='process-tree')
     func_output(CAP_PROCESS_LIST, 'fd_usage', fd_usage)
 
-    logs = ([ VAR_LOG_DIR + x for x in
-             [ 'crit.log', 'kern.log', 'daemon.log', 'user.log',
-             'syslog', 'messages', 'secure', 'debug', 'dmesg', 'boot' ]]
-            + [ OPENVSWITCH_LOG_DIR + x for x in
-                [ 'ovs-vswitchd.log', 'ovs-brcompatd.log', 'ovsdb-server.log',
-                  'ovs-xapi-sync.log', 'ovs-monitor-ipsec.log' ]])
-    file_output(CAP_SYSTEM_LOGS, logs)
-    file_output(CAP_SYSTEM_LOGS,
-                [ '%s.%d' % (f, n) for n in range(20) for f in logs ])
-    file_output(CAP_SYSTEM_LOGS,
-                [ '%s.%d.gz' % (f, n) for n in range(20) for f in logs ])
+    system_logs = ([ VAR_LOG_DIR + x for x in
+        ['crit.log', 'kern.log', 'daemon.log', 'user.log',
+        'syslog', 'messages', 'secure', 'debug', 'dmesg', 'boot']])
+    for log in system_logs:
+        prefix_output(CAP_SYSTEM_LOGS, log, last_mod_time=log_last_mod_time)
+
+    ovs_logs = ([ OPENVSWITCH_LOG_DIR + x for x in
+        ['ovs-vswitchd.log', 'ovsdb-server.log',
+        'ovs-xapi-sync.log', 'ovs-monitor-ipsec.log', 'ovs-ctl.log']])
+    for log in ovs_logs:
+        prefix_output(CAP_OPENVSWITCH_LOGS, log, last_mod_time=log_last_mod_time)
 
     if not os.path.exists('/var/log/dmesg') and not os.path.exists('/var/log/boot'):
         cmd_output(CAP_SYSTEM_LOGS, [DMESG])
 
     cmd_output(CAP_SYSTEM_SERVICES, [CHKCONFIG, '--list'])
 
-    tree_output(CAP_X11_LOGS, X11_LOGS_DIR, X11_LOGS_RE)
-    tree_output(CAP_X11_AUTH, X11_AUTH_DIR, X11_AUTH_RE)
     tree_output(CAP_SYSTEM_LOGS, VAR_LOG_CORE_DIR)
 
     file_output(CAP_YUM, [YUM_LOG])
@@ -726,47 +685,14 @@ exclude those logs from the archive.
     else:
         make_zip(subdir, output_file)
 
-    clean_tapdisk_logs()
-
     if dbg:
         print >>sys.stderr, "Category sizes (max, actual):\n"
         for c in caps.keys():
             print >>sys.stderr, "    %s (%d, %d)" % (c, caps[c][MAX_SIZE],
                                                      cap_sizes[c])
+
+    cleanup_ovsdb()
     return 0
-
-def find_tapdisk_logs():
-    return glob.glob('/var/log/blktap/*.log*')
-
-def generate_tapdisk_logs():
-    for pid in pidof('tapdisk'):
-	try:
-	    os.kill(pid, SIGUSR1)
-            output_ts("Including logs for tapdisk process %d" % pid)
-        except :
-            pass
-    # give processes a second to write their logs
-    time.sleep(1)
-
-def clean_tapdisk_logs():
-    for filename in find_tapdisk_logs():
-        try:
-            os.remove(filename)
-        except :
-            pass
-
-def filter_db_pii(str, state):
-    if 'in_secret_table' not in state:
-        state['in_secret_table'] = False
-
-    if str.startswith('<table ') and 'name="secret"' in str:
-        state['in_secret_table'] = True
-    elif str.startswith('</table>'):
-        state['in_secret_table'] = False
-
-    if state['in_secret_table'] and str.startswith("<row"): # match only on DB rows
-        str = re.sub(r'(value=")[^"]+(")', r'\1REMOVED\2', str)
-    return str
 
 def dump_scsi_hosts(cap):
     output = ''
@@ -826,16 +752,35 @@ def dp_list():
         return output.getvalue().splitlines()
     return []
 
-def bond_list(pid):
-    output = StringIO.StringIO()
-    procs = [ProcOutput([OVS_APPCTL, '-t', '@RUNDIR@/ovs-vswitchd.%s.ctl' % pid, '-e' 'bond/list'], caps[CAP_NETWORK_STATUS][MAX_TIME], output)]
+def collect_ovsdb():
+    if not os.path.isfile(OPENVSWITCH_CONF_DB):
+        return
 
-    run_procs([procs])
+    max_size = 10*MB
 
-    if not procs[0].timed_out:
-        bonds = output.getvalue().splitlines()[1:]
-        return [x.split('\t')[1] for x in bonds]
-    return []
+    try:
+        if os.path.getsize(OPENVSWITCH_CONF_DB) > max_size:
+            if os.path.isfile(OPENVSWITCH_COMPACT_DB):
+                os.unlink(OPENVSWITCH_COMPACT_DB)
+
+            output = StringIO.StringIO()
+            max_time = 5
+            procs = [ProcOutput(['ovsdb-tool', 'compact',
+                                OPENVSWITCH_CONF_DB, OPENVSWITCH_COMPACT_DB],
+                                max_time, output)]
+            run_procs([procs])
+            file_output(CAP_NETWORK_STATUS, [OPENVSWITCH_COMPACT_DB])
+        else:
+            file_output(CAP_NETWORK_STATUS, [OPENVSWITCH_CONF_DB])
+    except OSError, e:
+        return
+
+def cleanup_ovsdb():
+    try:
+        if os.path.isfile(OPENVSWITCH_COMPACT_DB):
+            os.unlink(OPENVSWITCH_COMPACT_DB)
+    except:
+        return
 
 def fd_usage(cap):
     output = ''
@@ -875,6 +820,7 @@ def dump_rdac_groups(cap):
                 cmd_output(cap, [MPPUTIL, '-g', group])
 
 def load_plugins(just_capabilities=False, filter=None):
+    global log_last_mod_time
     def getText(nodelist):
         rc = ""
         for node in nodelist:
@@ -934,20 +880,32 @@ def load_plugins(just_capabilities=False, filter=None):
                     continue
                 if el.tagName == "files":
                     newest_first = getBoolAttr(el, 'newest_first')
-                    file_output(dir, getText(el.childNodes).split(),
-                                newest_first=newest_first)
+                    if el.getAttribute("type") == "logs":
+                        for fn in getText(el.childNodes).split():
+                            prefix_output(dir, fn, newest_first=newest_first,
+                                          last_mod_time=log_last_mod_time)
+                    else:
+                        file_output(dir, getText(el.childNodes).split(),
+                                    newest_first=newest_first)
                 elif el.tagName == "directory":
                     pattern = el.getAttribute("pattern")
                     if pattern == '': pattern = None
                     negate = getBoolAttr(el, 'negate')
                     newest_first = getBoolAttr(el, 'newest_first')
-                    tree_output(dir, getText(el.childNodes),
-                                pattern and re.compile(pattern) or None,
-                                negate=negate, newest_first=newest_first)
+                    if el.getAttribute("type") == "logs":
+                        tree_output(dir, getText(el.childNodes),
+                                    pattern and re.compile(pattern) or None,
+                                    negate=negate, newest_first=newest_first,
+                                    last_mod_time=log_last_mod_time)
+                    else:
+                        tree_output(dir, getText(el.childNodes),
+                                    pattern and re.compile(pattern) or None,
+                                    negate=negate, newest_first=newest_first)
                 elif el.tagName == "command":
                     label = el.getAttribute("label")
                     if label == '': label = None
-                    cmd_output(dir, getText(el.childNodes), label)
+                    binary = getBoolAttr(el, 'binary')
+                    cmd_output(dir, getText(el.childNodes), label, binary=binary)
 
 def make_tar(subdir, suffix, output_fd, output_file):
     global SILENT_MODE, data
@@ -1185,7 +1143,7 @@ def disk_list():
 class ProcOutput:
     debug = False
 
-    def __init__(self, command, max_time, inst=None, filter=None):
+    def __init__(self, command, max_time, inst=None, filter=None, binary=False):
         self.command = command
         self.max_time = max_time
         self.inst = inst
@@ -1196,6 +1154,10 @@ class ProcOutput:
         self.timeout = int(time.time()) + self.max_time
         self.filter = filter
         self.filter_state = {}
+        if binary:
+            self.bufsize = 1048576  # 1MB buffer
+        else:
+            self.bufsize = 1        # line buffered
 
     def __del__(self):
         self.terminate()
@@ -1208,7 +1170,9 @@ class ProcOutput:
         try:
             if ProcOutput.debug:
                 output_ts("Starting '%s'" % self.cmdAsStr())
-            self.proc = Popen(self.command, bufsize=1, stdin=dev_null, stdout=PIPE, stderr=dev_null, shell=isinstance(self.command, str))
+            self.proc = Popen(self.command, bufsize=self.bufsize,
+                              stdin=dev_null, stdout=PIPE, stderr=dev_null,
+                              shell=isinstance(self.command, str))
             old = fcntl.fcntl(self.proc.stdout.fileno(), fcntl.F_GETFD)
             fcntl.fcntl(self.proc.stdout.fileno(), fcntl.F_SETFD, old | fcntl.FD_CLOEXEC)
             self.running = True
@@ -1231,7 +1195,10 @@ class ProcOutput:
 
     def read_line(self):
         assert self.running
-        line = self.proc.stdout.readline()
+        if self.bufsize == 1:
+            line = self.proc.stdout.readline()
+        else:
+            line = self.proc.stdout.read(self.bufsize)
         if line == '':
             # process exited
             self.proc.stdout.close()
@@ -1294,6 +1261,31 @@ def pidof(name):
             pass
 
     return pids
+
+
+def check_space(cap, name, size):
+    global free_disk_space
+    if free_disk_space is not None and size > free_disk_space:
+        output("Omitting %s, out of disk space (requested: %u, allowed: %u)" %
+               (name, size, free_disk_space))
+        return False
+    elif unlimited_data or caps[cap][MAX_SIZE] == -1 or \
+             cap_sizes[cap] < caps[cap][MAX_SIZE]:
+        cap_sizes[cap] += size
+        if free_disk_space is not None:
+            free_disk_space -= size
+        return True
+    else:
+        output("Omitting %s, size constraint of %s exceeded" % (name, cap))
+        return False
+
+
+def get_free_disk_space(path):
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        path = os.path.dirname(path)
+    s = os.statvfs(path)
+    return s.f_frsize * s.f_bfree
 
 
 class StringIOmtime(StringIO.StringIO):

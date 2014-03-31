@@ -8,11 +8,12 @@ Upstream Authors (from AUTHORS):
 
 Upstream Copyright Holders:
 
-	Copyright (c) 2007, 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+	Copyright (c) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 	Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
 	Copyright (c) 2008,2009,2010 Citrix Systems, Inc.
 	and authors listed above.
 	Copyright (c) 2011 Gaetano Catalli
+	Copyright (C) 2000-2003 Geoffrey Wossum (gwossum@acm.org)
 
 License:
 
@@ -72,13 +73,15 @@ License:
   On Debian systems, the complete text of the GNU General Public License
   version 2 can be found in `/usr/share/common-licenses/GPL-2'
 
+* The following file is licensed under the GNU General Public License
+  version 2.
+
+	build-aux/cccl
+
 * The following components are dual-licensed under the
   GNU General Public License version 2 and the Apache License Version 2.0.
 
 	include/linux/openvswitch.h
-	include/openvswitch/brcompat-netlink.h
-	include/openvswitch/datapath-compat.h
-	include/openvswitch/tunnel.h
 
   On Debian systems, the complete text of the GNU General Public License
   version 2 can be found in `/usr/share/common-licenses/GPL-2'.
@@ -102,6 +105,10 @@ License:
 
   The full text of each license is also appended to the end of this
   file.
+
+* The following components are licensed for use as desired without restriction:
+
+	lib/crc32c.c
 
 * The following components are licensed under the
   Python Software Foundation License Version 2.
@@ -174,6 +181,14 @@ License:
     .\"
     .\" Copyright (C) 2007, 2009, 2011 Free Software Foundation, Inc.
     .\" You may freely use, modify and/or distribute this file.
+
+* m4/absolute-header.m4, by Derek Price, and m4/include_next.m4, by
+  Paul Eggert and Derek Price bear the following notices:
+
+    Copyright (C) 2006-2013 Free Software Foundation, Inc.
+    This file is free software; the Free Software Foundation
+    gives unlimited permission to copy and/or distribute it,
+    with or without modifications, as long as this notice is preserved.
 
 * All other components of this package are licensed under
   The Apache License Version 2.0.

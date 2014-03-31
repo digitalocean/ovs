@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include "list.h"
 #include "match.h"
 #include "ofp-errors.h"
+#include "ofp-util.h"
 #include "ofproto.h"
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
@@ -29,9 +30,6 @@
 struct nlattr;
 struct ofconn;
 struct ofopgroup;
-struct ofputil_flow_removed;
-struct ofputil_packet_in;
-struct ofputil_phy_port;
 struct rule;
 struct simap;
 struct sset;
@@ -64,6 +62,19 @@ enum ofconn_async_msg_type {
     OAM_N_TYPES
 };
 
+/* A packet_in, with extra members to assist in queuing and routing it. */
+struct ofproto_packet_in {
+    struct ofputil_packet_in up;
+    struct list list_node;      /* For queuing. */
+    uint16_t controller_id;     /* Controller ID to send to. */
+    int send_len;               /* Length that the action requested sending. */
+
+    /* True if the packet_in was generated directly by a table-miss flow, that
+     * is, a flow with priority 0 that wildcards all fields.  (Our
+     * interpretation of "directly" is "not via groups".) */
+    bool generated_by_table_miss;
+};
+
 /* Basics. */
 struct connmgr *connmgr_create(struct ofproto *ofproto,
                                const char *dpif_name, const char *local_name);
@@ -71,7 +82,7 @@ void connmgr_destroy(struct connmgr *);
 
 void connmgr_run(struct connmgr *,
                  bool (*handle_openflow)(struct ofconn *,
-                                         struct ofpbuf *ofp_msg));
+                                         const struct ofpbuf *ofp_msg));
 void connmgr_wait(struct connmgr *, bool handling_openflow);
 
 void connmgr_get_memory_usage(const struct connmgr *, struct simap *usage);
@@ -85,7 +96,8 @@ bool connmgr_has_controllers(const struct connmgr *);
 void connmgr_get_controller_info(struct connmgr *, struct shash *);
 void connmgr_free_controller_info(struct shash *);
 void connmgr_set_controllers(struct connmgr *,
-                             const struct ofproto_controller[], size_t n);
+                             const struct ofproto_controller[], size_t n,
+                             uint32_t allowed_versions);
 void connmgr_reconnect(const struct connmgr *);
 
 int connmgr_set_snoops(struct connmgr *, const struct sset *snoops);
@@ -95,10 +107,12 @@ void connmgr_get_snoops(const struct connmgr *, struct sset *snoops);
 /* Individual connections to OpenFlow controllers. */
 enum ofconn_type ofconn_get_type(const struct ofconn *);
 
-enum nx_role ofconn_get_role(const struct ofconn *);
-void ofconn_set_role(struct ofconn *, enum nx_role);
+bool ofconn_get_master_election_id(const struct ofconn *, uint64_t *idp);
+bool ofconn_set_master_election_id(struct ofconn *, uint64_t);
+enum ofp12_controller_role ofconn_get_role(const struct ofconn *);
+void ofconn_set_role(struct ofconn *, enum ofp12_controller_role);
 
-enum ofputil_protocol ofconn_get_protocol(struct ofconn *);
+enum ofputil_protocol ofconn_get_protocol(const struct ofconn *);
 void ofconn_set_protocol(struct ofconn *, enum ofputil_protocol);
 
 enum nx_packet_in_format ofconn_get_packet_in_format(struct ofconn *);
@@ -115,6 +129,9 @@ void ofconn_set_miss_send_len(struct ofconn *, int miss_send_len);
 void ofconn_set_async_config(struct ofconn *,
                              const uint32_t master_masks[OAM_N_TYPES],
                              const uint32_t slave_masks[OAM_N_TYPES]);
+void ofconn_get_async_config(struct ofconn *,
+                             uint32_t *master_masks,
+                             uint32_t *slave_masks);
 
 void ofconn_send_reply(const struct ofconn *, struct ofpbuf *);
 void ofconn_send_replies(const struct ofconn *, struct list *);
@@ -122,7 +139,7 @@ void ofconn_send_error(const struct ofconn *, const struct ofp_header *request,
                        enum ofperr);
 
 enum ofperr ofconn_pktbuf_retrieve(struct ofconn *, uint32_t id,
-                                   struct ofpbuf **bufferp, uint16_t *in_port);
+                                   struct ofpbuf **bufferp, ofp_port_t *in_port);
 
 bool ofconn_has_pending_opgroups(const struct ofconn *);
 void ofconn_add_opgroup(struct ofconn *, struct list *);
@@ -135,7 +152,9 @@ void connmgr_send_port_status(struct connmgr *,
 void connmgr_send_flow_removed(struct connmgr *,
                                const struct ofputil_flow_removed *);
 void connmgr_send_packet_in(struct connmgr *,
-                            const struct ofputil_packet_in *);
+                            const struct ofproto_packet_in *);
+void ofconn_send_role_status(struct ofconn *ofconn, uint32_t role,
+                             uint8_t reason);
 
 /* Fail-open settings. */
 enum ofproto_fail_mode connmgr_get_fail_mode(const struct connmgr *);
@@ -153,11 +172,7 @@ void connmgr_set_extra_in_band_remotes(struct connmgr *,
 void connmgr_set_in_band_queue(struct connmgr *, int queue_id);
 
 /* In-band implementation. */
-bool connmgr_msg_in_hook(struct connmgr *, const struct flow *,
-                         const struct ofpbuf *packet);
-bool connmgr_may_set_up_flow(struct connmgr *, const struct flow *,
-                             const struct nlattr *odp_actions,
-                             size_t actions_len);
+bool connmgr_has_in_band(struct connmgr *);
 
 /* Fail-open and in-band implementation. */
 void connmgr_flushed(struct connmgr *);
@@ -171,7 +186,7 @@ struct ofmonitor {
     enum nx_flow_monitor_flags flags;
 
     /* Matching. */
-    uint16_t out_port;
+    ofp_port_t out_port;
     uint8_t table_id;
     struct minimatch match;
 };
@@ -179,17 +194,26 @@ struct ofmonitor {
 struct ofputil_flow_monitor_request;
 
 enum ofperr ofmonitor_create(const struct ofputil_flow_monitor_request *,
-                             struct ofconn *, struct ofmonitor **);
-struct ofmonitor *ofmonitor_lookup(struct ofconn *, uint32_t id);
-void ofmonitor_destroy(struct ofmonitor *);
+                             struct ofconn *, struct ofmonitor **)
+    OVS_REQUIRES(ofproto_mutex);
+struct ofmonitor *ofmonitor_lookup(struct ofconn *, uint32_t id)
+    OVS_REQUIRES(ofproto_mutex);
+void ofmonitor_destroy(struct ofmonitor *)
+    OVS_REQUIRES(ofproto_mutex);
 
 void ofmonitor_report(struct connmgr *, struct rule *,
                       enum nx_flow_update_event, enum ofp_flow_removed_reason,
-                      const struct ofconn *abbrev_ofconn, ovs_be32 abbrev_xid);
-void ofmonitor_flush(struct connmgr *);
+                      const struct ofconn *abbrev_ofconn, ovs_be32 abbrev_xid)
+    OVS_REQUIRES(ofproto_mutex);
+void ofmonitor_flush(struct connmgr *) OVS_REQUIRES(ofproto_mutex);
 
+
+struct rule_collection;
 void ofmonitor_collect_resume_rules(struct ofmonitor *, uint64_t seqno,
-                                    struct list *rules);
-void ofmonitor_compose_refresh_updates(struct list *rules, struct list *msgs);
+                                    struct rule_collection *)
+    OVS_REQUIRES(ofproto_mutex);
+void ofmonitor_compose_refresh_updates(struct rule_collection *rules,
+                                       struct list *msgs)
+    OVS_REQUIRES(ofproto_mutex);
 
 #endif /* connmgr.h */

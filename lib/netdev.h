@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,23 +26,48 @@
 extern "C" {
 #endif
 
-/* Generic interface to network devices.
+/* Generic interface to network devices ("netdev"s).
  *
- * Currently, there is a single implementation of this interface that supports
- * Linux.  The interface should be generic enough to be implementable on other
- * operating systems as well. */
+ * Every port on a switch must have a corresponding netdev that must minimally
+ * support a few operations, such as the ability to read the netdev's MTU.
+ * The PORTING file at the top of the source tree has more information in the
+ * "Writing a netdev Provider" section.
+ *
+ * Thread-safety
+ * =============
+ *
+ * Most of the netdev functions are fully thread-safe: they may be called from
+ * any number of threads on the same or different netdev objects.  The
+ * exceptions are:
+ *
+ *    netdev_rx_recv()
+ *    netdev_rx_wait()
+ *    netdev_rx_drain()
+ *
+ *      These functions are conditionally thread-safe: they may be called from
+ *      different threads only on different netdev_rx objects.  (The client may
+ *      create multiple netdev_rx objects for a single netdev and access each
+ *      of those from a different thread.)
+ *
+ *    NETDEV_FOR_EACH_QUEUE
+ *    netdev_queue_dump_next()
+ *    netdev_queue_dump_done()
+ *
+ *      These functions are conditionally thread-safe: they may be called from
+ *      different threads only on different netdev_queue_dump objects.  (The
+ *      client may create multiple netdev_queue_dump objects for a single
+ *      netdev and access each of those from a different thread.)
+ */
 
+struct netdev;
+struct netdev_class;
+struct netdev_rx;
+struct netdev_saved_flags;
 struct ofpbuf;
 struct in_addr;
 struct in6_addr;
 struct smap;
 struct sset;
-
-enum netdev_flags {
-    NETDEV_UP = 0x0001,         /* Device enabled? */
-    NETDEV_PROMISC = 0x0002,    /* Promiscuous mode? */
-    NETDEV_LOOPBACK = 0x0004    /* This is a loopback device. */
-};
 
 /* Network device statistics.
  *
@@ -75,40 +100,72 @@ struct netdev_stats {
     uint64_t tx_window_errors;
 };
 
-struct netdev;
-struct netdev_class;
+/* Configuration specific to tunnels. */
+struct netdev_tunnel_config {
+    bool in_key_present;
+    bool in_key_flow;
+    ovs_be64 in_key;
+
+    bool out_key_present;
+    bool out_key_flow;
+    ovs_be64 out_key;
+
+    ovs_be16 dst_port;
+
+    bool ip_src_flow;
+    bool ip_dst_flow;
+    ovs_be32 ip_src;
+    ovs_be32 ip_dst;
+
+    uint8_t ttl;
+    bool ttl_inherit;
+
+    uint8_t tos;
+    bool tos_inherit;
+
+    bool csum;
+    bool ipsec;
+    bool dont_fragment;
+};
 
 void netdev_run(void);
 void netdev_wait(void);
 
 void netdev_enumerate_types(struct sset *types);
+bool netdev_is_reserved_name(const char *name);
 
 /* Open and close. */
 int netdev_open(const char *name, const char *type, struct netdev **);
+struct netdev *netdev_ref(const struct netdev *);
 void netdev_close(struct netdev *);
-
-bool netdev_exists(const char *name);
-bool netdev_is_open(const char *name);
 
 void netdev_parse_name(const char *netdev_name, char **name, char **type);
 
 /* Options. */
 int netdev_set_config(struct netdev *, const struct smap *args);
 int netdev_get_config(const struct netdev *, struct smap *);
+const struct netdev_tunnel_config *
+    netdev_get_tunnel_config(const struct netdev *);
 
 /* Basic properties. */
 const char *netdev_get_name(const struct netdev *);
 const char *netdev_get_type(const struct netdev *);
+const char *netdev_get_type_from_name(const char *);
 int netdev_get_mtu(const struct netdev *, int *mtup);
 int netdev_set_mtu(const struct netdev *, int mtu);
 int netdev_get_ifindex(const struct netdev *);
 
-/* Packet send and receive. */
-int netdev_listen(struct netdev *);
-int netdev_recv(struct netdev *, struct ofpbuf *);
-void netdev_recv_wait(struct netdev *);
-int netdev_drain(struct netdev *);
+/* Packet reception. */
+int netdev_rx_open(struct netdev *, struct netdev_rx **);
+void netdev_rx_close(struct netdev_rx *);
 
+const char *netdev_rx_get_name(const struct netdev_rx *);
+
+int netdev_rx_recv(struct netdev_rx *, struct ofpbuf *);
+void netdev_rx_wait(struct netdev_rx *);
+int netdev_rx_drain(struct netdev_rx *);
+
+/* Packet transmission. */
 int netdev_send(struct netdev *, const struct ofpbuf *);
 void netdev_send_wait(struct netdev *);
 
@@ -146,9 +203,27 @@ int netdev_get_features(const struct netdev *,
                         enum netdev_features *advertised,
                         enum netdev_features *supported,
                         enum netdev_features *peer);
-uint64_t netdev_features_to_bps(enum netdev_features features);
+uint64_t netdev_features_to_bps(enum netdev_features features,
+                                uint64_t default_bps);
 bool netdev_features_is_full_duplex(enum netdev_features features);
 int netdev_set_advertisements(struct netdev *, enum netdev_features advertise);
+
+/* Flags. */
+enum netdev_flags {
+    NETDEV_UP = 0x0001,         /* Device enabled? */
+    NETDEV_PROMISC = 0x0002,    /* Promiscuous mode? */
+    NETDEV_LOOPBACK = 0x0004    /* This is a loopback device. */
+};
+
+int netdev_get_flags(const struct netdev *, enum netdev_flags *);
+int netdev_set_flags(struct netdev *, enum netdev_flags,
+                     struct netdev_saved_flags **);
+int netdev_turn_flags_on(struct netdev *, enum netdev_flags,
+                         struct netdev_saved_flags **);
+int netdev_turn_flags_off(struct netdev *, enum netdev_flags,
+                          struct netdev_saved_flags **);
+
+void netdev_restore_flags(struct netdev_saved_flags *);
 
 /* TCP/IP stack interface. */
 int netdev_get_in4(const struct netdev *, struct in_addr *address,
@@ -159,13 +234,9 @@ int netdev_get_in6(const struct netdev *, struct in6_addr *);
 int netdev_add_router(struct netdev *, struct in_addr router);
 int netdev_get_next_hop(const struct netdev *, const struct in_addr *host,
                         struct in_addr *next_hop, char **);
-int netdev_get_drv_info(const struct netdev *, struct smap *);
+int netdev_get_status(const struct netdev *, struct smap *);
 int netdev_arp_lookup(const struct netdev *, ovs_be32 ip, uint8_t mac[6]);
 
-int netdev_get_flags(const struct netdev *, enum netdev_flags *);
-int netdev_set_flags(struct netdev *, enum netdev_flags, bool permanent);
-int netdev_turn_flags_on(struct netdev *, enum netdev_flags, bool permanent);
-int netdev_turn_flags_off(struct netdev *, enum netdev_flags, bool permanent);
 struct netdev *netdev_find_dev_by_in4(const struct in_addr *);
 
 /* Statistics. */
@@ -182,6 +253,9 @@ struct netdev_queue_stats {
     uint64_t tx_bytes;
     uint64_t tx_packets;
     uint64_t tx_errors;
+
+    /* Time at which the queue was created, in msecs, LLONG_MIN if unknown. */
+    long long int created;
 };
 
 int netdev_set_policing(struct netdev *, uint32_t kbits_rate,
@@ -207,18 +281,37 @@ int netdev_delete_queue(struct netdev *, unsigned int queue_id);
 int netdev_get_queue_stats(const struct netdev *, unsigned int queue_id,
                            struct netdev_queue_stats *);
 
-typedef void netdev_dump_queues_cb(unsigned int queue_id,
-                                   const struct smap *details, void *aux);
-int netdev_dump_queues(const struct netdev *,
-                       netdev_dump_queues_cb *, void *aux);
+struct netdev_queue_dump {
+    struct netdev *netdev;
+    int error;
+    void *state;
+};
+void netdev_queue_dump_start(struct netdev_queue_dump *,
+                             const struct netdev *);
+bool netdev_queue_dump_next(struct netdev_queue_dump *,
+                            unsigned int *queue_id, struct smap *details);
+int netdev_queue_dump_done(struct netdev_queue_dump *);
+
+/* Iterates through each queue in NETDEV, using DUMP as state.  Fills QUEUE_ID
+ * and DETAILS with information about queues.  The client must initialize and
+ * destroy DETAILS.
+ *
+ * Arguments all have pointer type.
+ *
+ * If you break out of the loop, then you need to free the dump structure by
+ * hand using netdev_queue_dump_done(). */
+#define NETDEV_QUEUE_FOR_EACH(QUEUE_ID, DETAILS, DUMP, NETDEV)  \
+    for (netdev_queue_dump_start(DUMP, NETDEV);                 \
+         (netdev_queue_dump_next(DUMP, QUEUE_ID, DETAILS)       \
+          ? true                                                \
+          : (netdev_queue_dump_done(DUMP), false));             \
+        )
 
 typedef void netdev_dump_queue_stats_cb(unsigned int queue_id,
                                         struct netdev_queue_stats *,
                                         void *aux);
 int netdev_dump_queue_stats(const struct netdev *,
                             netdev_dump_queue_stats_cb *, void *aux);
-
-unsigned int netdev_change_seq(const struct netdev *netdev);
 
 #ifdef  __cplusplus
 }

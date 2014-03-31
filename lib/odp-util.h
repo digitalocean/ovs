@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,48 +23,66 @@
 #include <string.h>
 #include <linux/openvswitch.h>
 #include "hash.h"
+#include "hmap.h"
 #include "openflow/openflow.h"
 #include "util.h"
 
 struct ds;
 struct flow;
+struct flow_tnl;
+struct flow_wildcards;
 struct nlattr;
 struct ofpbuf;
 struct simap;
 
-#define OVSP_NONE UINT16_MAX
+#define SLOW_PATH_REASONS                                               \
+    /* These reasons are mutually exclusive. */                         \
+    SPR(SLOW_CFM,        "cfm",        "Consists of CFM packets")       \
+    SPR(SLOW_BFD,        "bfd",        "Consists of BFD packets")       \
+    SPR(SLOW_LACP,       "lacp",       "Consists of LACP packets")      \
+    SPR(SLOW_STP,        "stp",        "Consists of STP packets")       \
+    SPR(SLOW_CONTROLLER, "controller",                                  \
+        "Sends \"packet-in\" messages to the OpenFlow controller")      \
+    SPR(SLOW_ACTION,     "action",                                      \
+        "Uses action(s) not supported by datapath")
 
-static inline uint16_t
-ofp_port_to_odp_port(uint16_t ofp_port)
-{
-    switch (ofp_port) {
-    case OFPP_LOCAL:
-        return OVSP_LOCAL;
-    case OFPP_NONE:
-        return OVSP_NONE;
-    default:
-        return ofp_port;
-    }
-}
+/* Indexes for slow-path reasons.  Client code uses "enum slow_path_reason"
+ * values instead of these, these are just a way to construct those. */
+enum {
+#define SPR(ENUM, STRING, EXPLANATION) ENUM##_INDEX,
+    SLOW_PATH_REASONS
+#undef SPR
+};
 
-static inline uint16_t
-odp_port_to_ofp_port(uint16_t odp_port)
-{
-    switch (odp_port) {
-    case OVSP_LOCAL:
-        return OFPP_LOCAL;
-    case OVSP_NONE:
-        return OFPP_NONE;
-    default:
-        return odp_port;
-    }
-}
+/* Reasons why a subfacet might not be fast-pathable.
+ *
+ * Each reason is a separate bit to allow reasons to be combined. */
+enum slow_path_reason {
+#define SPR(ENUM, STRING, EXPLANATION) ENUM = 1 << ENUM##_INDEX,
+    SLOW_PATH_REASONS
+#undef SPR
+};
+
+const char *slow_path_reason_to_explanation(enum slow_path_reason);
+
+#define ODPP_LOCAL ODP_PORT_C(OVSP_LOCAL)
+#define ODPP_NONE  ODP_PORT_C(UINT32_MAX)
 
 void format_odp_actions(struct ds *, const struct nlattr *odp_actions,
                         size_t actions_len);
 int odp_actions_from_string(const char *, const struct simap *port_names,
                             struct ofpbuf *odp_actions);
 
+/* A map from odp port number to its name. */
+struct odp_portno_names {
+    struct hmap_node hmap_node; /* A node in a port number to name hmap. */
+    odp_port_t port_no;         /* Port number in the datapath. */
+    char *name;                 /* Name associated with the above 'port_no'. */
+};
+
+void odp_portno_names_set(struct hmap *portno_names, odp_port_t port_no,
+                          char *port_name);
+void odp_portno_names_destroy(struct hmap *portno_names);
 /* The maximum number of bytes that odp_flow_key_from_flow() appends to a
  * buffer.  This is the upper bound on the length of a nlattr-formatted flow
  * key that ovs-vswitchd fully understands.
@@ -79,7 +97,6 @@ int odp_actions_from_string(const char *, const struct simap *port_names,
  *                                     struct  pad  nl hdr  total
  *                                     ------  ---  ------  -----
  *  OVS_KEY_ATTR_PRIORITY                4    --     4      8
- *  OVS_KEY_ATTR_TUN_ID                  8    --     4     12
  *  OVS_KEY_ATTR_TUNNEL                  0    --     4      4
  *  - OVS_TUNNEL_KEY_ATTR_ID             8    --     4     12
  *  - OVS_TUNNEL_KEY_ATTR_IPV4_SRC       4    --     4      8
@@ -99,7 +116,7 @@ int odp_actions_from_string(const char *, const struct simap *port_names,
  *  OVS_KEY_ATTR_ICMPV6                  2     2     4      8
  *  OVS_KEY_ATTR_ND                     28    --     4     32
  *  ----------------------------------------------------------
- *  total                                                 220
+ *  total                                                 208
  *
  * We include some slack space in case the calculation isn't quite right or we
  * add another field and forget to adjust this value.
@@ -113,11 +130,22 @@ struct odputil_keybuf {
     uint32_t keybuf[DIV_ROUND_UP(ODPUTIL_FLOW_KEY_BYTES, 4)];
 };
 
-void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
-int odp_flow_key_from_string(const char *s, const struct simap *port_names,
-                             struct ofpbuf *);
+enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *,
+                                           struct flow_tnl *);
 
-void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *);
+void odp_flow_format(const struct nlattr *key, size_t key_len,
+                     const struct nlattr *mask, size_t mask_len,
+                     const struct hmap *portno_names, struct ds *,
+                     bool verbose);
+void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
+int odp_flow_from_string(const char *s,
+                         const struct simap *port_names,
+                         struct ofpbuf *, struct ofpbuf *);
+
+void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *,
+                            odp_port_t odp_in_port);
+void odp_flow_key_from_mask(struct ofpbuf *, const struct flow *mask,
+                            const struct flow *flow, uint32_t odp_in_port);
 
 uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
 
@@ -136,10 +164,18 @@ enum odp_key_fitness {
 };
 enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
                                           struct flow *);
+enum odp_key_fitness odp_flow_key_to_mask(const struct nlattr *key, size_t len,
+                                          struct flow *mask,
+                                          const struct flow *flow);
 const char *odp_key_fitness_to_string(enum odp_key_fitness);
 
-void commit_odp_actions(const struct flow *, struct flow *base,
-                        struct ofpbuf *odp_actions);
+void commit_odp_tunnel_action(const struct flow *, struct flow *base,
+                              struct ofpbuf *odp_actions);
+enum slow_path_reason commit_odp_actions(const struct flow *,
+                                         struct flow *base,
+                                         struct ofpbuf *odp_actions,
+                                         struct flow_wildcards *wc,
+                                         int *mpls_depth_delta);
 
 /* ofproto-dpif interface.
  *
@@ -150,8 +186,10 @@ void commit_odp_actions(const struct flow *, struct flow *base,
 
 enum user_action_cookie_type {
     USER_ACTION_COOKIE_UNSPEC,
-    USER_ACTION_COOKIE_SFLOW,        /* Packet for sFlow sampling. */
-    USER_ACTION_COOKIE_SLOW_PATH     /* Userspace must process this flow. */
+    USER_ACTION_COOKIE_SFLOW,        /* Packet for per-bridge sFlow sampling. */
+    USER_ACTION_COOKIE_SLOW_PATH,    /* Userspace must process this flow. */
+    USER_ACTION_COOKIE_FLOW_SAMPLE,  /* Packet for per-flow sampling. */
+    USER_ACTION_COOKIE_IPFIX,        /* Packet for per-bridge IPFIX sampling. */
 };
 
 /* user_action_cookie is passed as argument to OVS_ACTION_ATTR_USERSPACE.
@@ -170,28 +208,27 @@ union user_action_cookie {
         uint16_t unused;
         uint32_t reason;        /* enum slow_path_reason. */
     } slow_path;
+
+    struct {
+        uint16_t type;          /* USER_ACTION_COOKIE_FLOW_SAMPLE. */
+        uint16_t probability;   /* Sampling probability. */
+        uint32_t collector_set_id; /* ID of IPFIX collector set. */
+        uint32_t obs_domain_id; /* Observation Domain ID. */
+        uint32_t obs_point_id;  /* Observation Point ID. */
+    } flow_sample;
+
+    struct {
+        uint16_t type;          /* USER_ACTION_COOKIE_IPFIX. */
+    } ipfix;
 };
-BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 8);
+BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 16);
 
 size_t odp_put_userspace_action(uint32_t pid,
-                                const union user_action_cookie *,
+                                const void *userdata, size_t userdata_size,
                                 struct ofpbuf *odp_actions);
-
-/* Reasons why a subfacet might not be fast-pathable. */
-enum slow_path_reason {
-    /* These reasons are mutually exclusive. */
-    SLOW_CFM = 1 << 0,          /* CFM packets need per-packet processing. */
-    SLOW_LACP = 1 << 1,         /* LACP packets need per-packet processing. */
-    SLOW_STP = 1 << 2,          /* STP packets need per-packet processing. */
-    SLOW_IN_BAND = 1 << 3,      /* In-band control needs every packet. */
-
-    /* Mutually exclusive with SLOW_CFM, SLOW_LACP, SLOW_STP.
-     * Could possibly appear with SLOW_IN_BAND. */
-    SLOW_CONTROLLER = 1 << 4,   /* Packets must go to OpenFlow controller. */
-
-    /* This can appear on its own, or, theoretically at least, along with any
-     * other combination of reasons. */
-    SLOW_MATCH = 1 << 5,        /* Datapath can't match specifically enough. */
-};
+void odp_put_tunnel_action(const struct flow_tnl *tunnel,
+                           struct ofpbuf *odp_actions);
+void odp_put_pkt_mark_action(const uint32_t pkt_mark,
+                             struct ofpbuf *odp_actions);
 
 #endif /* odp-util.h */

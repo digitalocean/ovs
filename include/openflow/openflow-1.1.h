@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2011, 2012 The Board of Trustees of The Leland Stanford
+/* Copyright (c) 2008, 2011, 2012, 2013 The Board of Trustees of The Leland Stanford
  * Junior University
  *
  * We are making the OpenFlow specification and associated documentation
@@ -67,8 +67,16 @@
  * an OpenFlow 1.0 reserved port number to or from, respectively, the
  * corresponding OpenFlow 1.1 reserved port number.
  */
-#define OFPP11_MAX    0xffffff00
-#define OFPP11_OFFSET (OFPP11_MAX - OFPP_MAX)
+#define OFPP11_MAX    OFP11_PORT_C(0xffffff00)
+#define OFPP11_OFFSET 0xffff0000    /* OFPP11_MAX - OFPP_MAX */
+
+/* Reserved wildcard port used only for flow mod (delete) and flow stats
+ * requests. Selects all flows regardless of output port
+ * (including flows with no output port)
+ *
+ * Define it via OFPP_NONE (0xFFFF) so that OFPP_ANY is still an enum ofp_port
+ */
+#define OFPP_ANY OFPP_NONE
 
 /* OpenFlow 1.1 port config flags are just the common flags. */
 #define OFPPC11_ALL \
@@ -119,6 +127,7 @@ struct ofp11_port {
     ovs_be32 curr_speed;    /* Current port bitrate in kbps. */
     ovs_be32 max_speed;     /* Max port bitrate in kbps */
 };
+OFP_ASSERT(sizeof(struct ofp11_port) == 64);
 
 /* Modify behavior of the physical port */
 struct ofp11_port_mod {
@@ -141,8 +150,8 @@ OFP_ASSERT(sizeof(struct ofp11_port_mod) == 32);
 
 /* Group setup and teardown (controller -> datapath). */
 struct ofp11_group_mod {
-    ovs_be16 command;             /* One of OFPGC_*. */
-    uint8_t type;                 /* One of OFPGT_*. */
+    ovs_be16 command;             /* One of OFPGC11_*. */
+    uint8_t type;                 /* One of OFPGT11_*. */
     uint8_t pad;                  /* Pad to 64 bits. */
     ovs_be32 group_id;            /* Group identifier. */
     /* struct ofp11_bucket buckets[0]; The bucket length is inferred from the
@@ -195,8 +204,8 @@ enum ofp11_action_type {
 
     OFPAT11_PUSH_VLAN,        /* Push a new VLAN tag */
     OFPAT11_POP_VLAN,         /* Pop the outer VLAN tag */
-    OFPAT11_PUSH_MPLS,        /* Push a new MPLS tag */
-    OFPAT11_POP_MPLS,         /* Pop the outer MPLS tag */
+    OFPAT11_PUSH_MPLS,        /* Push a new MPLS Label Stack Entry */
+    OFPAT11_POP_MPLS,         /* Pop the outer MPLS Label Stack Entry */
     OFPAT11_SET_QUEUE,        /* Set queue id when outputting to a port */
     OFPAT11_GROUP,            /* Apply group. */
     OFPAT11_SET_NW_TTL,       /* IP TTL. */
@@ -434,18 +443,6 @@ struct ofp11_table_mod {
 };
 OFP_ASSERT(sizeof(struct ofp11_table_mod) == 8);
 
-/* Flags to indicate behavior of the flow table for unmatched packets.
-   These flags are used in ofp_table_stats messages to describe the current
-   configuration and in ofp_table_mod messages to configure table behavior.  */
-enum ofp11_table_config {
-    OFPTC11_TABLE_MISS_CONTROLLER = 0,    /* Send to controller. */
-    OFPTC11_TABLE_MISS_CONTINUE = 1 << 0, /* Continue to the next table in the
-                                             pipeline (OpenFlow 1.0
-                                             behavior). */
-    OFPTC11_TABLE_MISS_DROP = 1 << 1,     /* Drop the packet. */
-    OFPTC11_TABLE_MISS_MASK = 3
-};
-
 /* Flow setup and teardown (controller -> datapath). */
 struct ofp11_flow_mod {
     ovs_be64 cookie;             /* Opaque controller-issued identifier. */
@@ -580,7 +577,8 @@ struct ofp11_flow_stats {
                                   when this is not an exact-match entry. */
     ovs_be16 idle_timeout;     /* Number of seconds idle before expiration. */
     ovs_be16 hard_timeout;     /* Number of seconds before expiration. */
-    uint8_t pad2[6];           /* Align to 64-bits. */
+    ovs_be16 flags;            /* OF 1.3: Set of OFPFF*. */
+    uint8_t  pad2[4];          /* Align to 64-bits. */
     ovs_be64 cookie;           /* Opaque controller-issued identifier. */
     ovs_be64 packet_count;     /* Number of packets in flow. */
     ovs_be64 byte_count;       /* Number of bytes in flow. */
@@ -715,7 +713,7 @@ OFP_ASSERT(sizeof(struct ofp11_bucket_counter) == 16);
 /* Body of reply to OFPST11_GROUP_DESC request. */
 struct ofp11_group_desc_stats {
     ovs_be16 length;            /* Length of this entry. */
-    uint8_t type;               /* One of OFPGT_*. */
+    uint8_t type;               /* One of OFPGT11_*. */
     uint8_t pad;                /* Pad to 64 bits. */
     ovs_be32 group_id;          /* Group identifier. */
     /* struct ofp11_bucket buckets[0]; */
@@ -743,12 +741,7 @@ struct ofp11_packet_in {
     ovs_be16 total_len;     /* Full length of frame. */
     uint8_t reason;         /* Reason packet is being sent (one of OFPR_*) */
     uint8_t table_id;       /* ID of the table that was looked up */
-    uint8_t data[0];        /* Ethernet frame, halfway through 32-bit word,
-                               so the IP header is 32-bit aligned. The
-                               amount of data is inferred from the length
-                               field in the header. Because of padding,
-                               offsetof(struct ofp_packet_in, data) ==
-                               sizeof(struct ofp_packet_in) - 2. */
+    /* Followed by Ethernet frame. */
 };
 OFP_ASSERT(sizeof(struct ofp11_packet_in) == 16);
 

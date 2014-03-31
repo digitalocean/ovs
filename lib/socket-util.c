@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <config.h>
 #include "socket-util.h"
 #include <arpa/inet.h>
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <net/if.h>
@@ -27,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -60,6 +60,10 @@ VLOG_DEFINE_THIS_MODULE(socket_util);
 #define O_DIRECTORY 0
 #endif
 
+/* Maximum length of the sun_path member in a struct sockaddr_un, excluding
+ * space for a null terminator. */
+#define MAX_UN_LEN (sizeof(((struct sockaddr_un *) 0)->sun_path) - 1)
+
 static int getsockopt_int(int fd, int level, int option, const char *optname,
                           int *valuep);
 
@@ -73,11 +77,11 @@ set_nonblocking(int fd)
         if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != -1) {
             return 0;
         } else {
-            VLOG_ERR("fcntl(F_SETFL) failed: %s", strerror(errno));
+            VLOG_ERR("fcntl(F_SETFL) failed: %s", ovs_strerror(errno));
             return errno;
         }
     } else {
-        VLOG_ERR("fcntl(F_GETFL) failed: %s", strerror(errno));
+        VLOG_ERR("fcntl(F_GETFL) failed: %s", ovs_strerror(errno));
         return errno;
     }
 }
@@ -133,8 +137,10 @@ rlim_is_finite(rlim_t limit)
 int
 get_max_fds(void)
 {
-    static int max_fds = -1;
-    if (max_fds < 0) {
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    static int max_fds;
+
+    if (ovsthread_once_start(&once)) {
         struct rlimit r;
         if (!getrlimit(RLIMIT_NOFILE, &r) && rlim_is_finite(r.rlim_cur)) {
             max_fds = r.rlim_cur;
@@ -142,7 +148,9 @@ get_max_fds(void)
             VLOG_WARN("failed to obtain fd limit, defaulting to 1024");
             max_fds = 1024;
         }
+        ovsthread_once_done(&once);
     }
+
     return max_fds;
 }
 
@@ -179,48 +187,68 @@ lookup_ipv6(const char *host_name, struct in6_addr *addr)
  * successful, otherwise a positive errno value.
  *
  * Most Open vSwitch code should not use this because it causes deadlocks:
- * gethostbyname() sends out a DNS request but that starts a new flow for which
+ * getaddrinfo() sends out a DNS request but that starts a new flow for which
  * OVS must set up a flow, but it can't because it's waiting for a DNS reply.
  * The synchronous lookup also delays other activity.  (Of course we can solve
  * this but it doesn't seem worthwhile quite yet.)  */
 int
 lookup_hostname(const char *host_name, struct in_addr *addr)
 {
-    struct hostent *h;
+    struct addrinfo *result;
+    struct addrinfo hints;
 
     if (inet_aton(host_name, addr)) {
         return 0;
     }
 
-    h = gethostbyname(host_name);
-    if (h) {
-        *addr = *(struct in_addr *) h->h_addr;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+
+    switch (getaddrinfo(host_name, NULL, &hints, &result)) {
+    case 0:
+        *addr = ALIGNED_CAST(struct sockaddr_in *,
+                             result->ai_addr)->sin_addr;
+        freeaddrinfo(result);
         return 0;
+
+#ifdef EAI_ADDRFAMILY
+    case EAI_ADDRFAMILY:
+#endif
+    case EAI_NONAME:
+    case EAI_SERVICE:
+        return ENOENT;
+
+    case EAI_AGAIN:
+        return EAGAIN;
+
+    case EAI_BADFLAGS:
+    case EAI_FAMILY:
+    case EAI_SOCKTYPE:
+        return EINVAL;
+
+    case EAI_FAIL:
+        return EIO;
+
+    case EAI_MEMORY:
+        return ENOMEM;
+
+#ifdef EAI_NODATA
+    case EAI_NODATA:
+        return ENXIO;
+#endif
+
+    case EAI_SYSTEM:
+        return errno;
+
+    default:
+        return EPROTO;
     }
-
-    return (h_errno == HOST_NOT_FOUND ? ENOENT
-            : h_errno == TRY_AGAIN ? EAGAIN
-            : h_errno == NO_RECOVERY ? EIO
-            : h_errno == NO_ADDRESS ? ENXIO
-            : EINVAL);
-}
-
-/* Returns the error condition associated with socket 'fd' and resets the
- * socket's error status. */
-int
-get_socket_error(int fd)
-{
-    int error;
-
-    if (getsockopt_int(fd, SOL_SOCKET, SO_ERROR, "SO_ERROR", &error)) {
-        error = errno;
-    }
-    return error;
 }
 
 int
 check_connection_completion(int fd)
 {
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 10);
     struct pollfd pfd;
     int retval;
 
@@ -230,10 +258,18 @@ check_connection_completion(int fd)
         retval = poll(&pfd, 1, 0);
     } while (retval < 0 && errno == EINTR);
     if (retval == 1) {
-        return get_socket_error(fd);
+        if (pfd.revents & POLLERR) {
+            ssize_t n = send(fd, "", 1, MSG_DONTWAIT);
+            if (n < 0) {
+                return errno;
+            } else {
+                VLOG_ERR_RL(&rl, "poll return POLLERR but send succeeded");
+                return EPROTO;
+            }
+        }
+        return 0;
     } else if (retval < 0) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 10);
-        VLOG_ERR_RL(&rl, "poll: %s", strerror(errno));
+        VLOG_ERR_RL(&rl, "poll: %s", ovs_strerror(errno));
         return errno;
     } else {
         return EAGAIN;
@@ -305,78 +341,161 @@ drain_fd(int fd, size_t n_packets)
     }
 }
 
-/* Stores in '*un' a sockaddr_un that refers to file 'name'.  Stores in
- * '*un_len' the size of the sockaddr_un. */
-static void
-make_sockaddr_un__(const char *name, struct sockaddr_un *un, socklen_t *un_len)
+/* Attempts to shorten 'name' by opening a file descriptor for the directory
+ * part of the name and indirecting through /proc/self/fd/<dirfd>/<basename>.
+ * On systems with Linux-like /proc, this works as long as <basename> isn't too
+ * long.
+ *
+ * On success, returns 0 and stores the short name in 'short_name' and a
+ * directory file descriptor to eventually be closed in '*dirfpd'. */
+static int
+shorten_name_via_proc(const char *name, char short_name[MAX_UN_LEN + 1],
+                      int *dirfdp)
 {
-    un->sun_family = AF_UNIX;
-    ovs_strzcpy(un->sun_path, name, sizeof un->sun_path);
-    *un_len = (offsetof(struct sockaddr_un, sun_path)
-                + strlen (un->sun_path) + 1);
+    char *dir, *base;
+    int dirfd;
+    int len;
+
+    if (!LINUX_DATAPATH) {
+        return ENAMETOOLONG;
+    }
+
+    dir = dir_name(name);
+    dirfd = open(dir, O_DIRECTORY | O_RDONLY);
+    if (dirfd < 0) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        int error = errno;
+
+        VLOG_WARN_RL(&rl, "%s: open failed (%s)", dir, ovs_strerror(error));
+        free(dir);
+
+        return error;
+    }
+    free(dir);
+
+    base = base_name(name);
+    len = snprintf(short_name, MAX_UN_LEN + 1,
+                   "/proc/self/fd/%d/%s", dirfd, base);
+    free(base);
+
+    if (len >= 0 && len <= MAX_UN_LEN) {
+        *dirfdp = dirfd;
+        return 0;
+    } else {
+        close(dirfd);
+        return ENAMETOOLONG;
+    }
+}
+
+/* Attempts to shorten 'name' by creating a symlink for the directory part of
+ * the name and indirecting through <symlink>/<basename>.  This works on
+ * systems that support symlinks, as long as <basename> isn't too long.
+ *
+ * On success, returns 0 and stores the short name in 'short_name' and the
+ * symbolic link to eventually delete in 'linkname'. */
+static int
+shorten_name_via_symlink(const char *name, char short_name[MAX_UN_LEN + 1],
+                         char linkname[MAX_UN_LEN + 1])
+{
+    char *abs, *dir, *base;
+    const char *tmpdir;
+    int error;
+    int i;
+
+    abs = abs_file_name(NULL, name);
+    dir = dir_name(abs);
+    base = base_name(abs);
+    free(abs);
+
+    tmpdir = getenv("TMPDIR");
+    if (tmpdir == NULL) {
+        tmpdir = "/tmp";
+    }
+
+    for (i = 0; i < 1000; i++) {
+        int len;
+
+        len = snprintf(linkname, MAX_UN_LEN + 1,
+                       "%s/ovs-un-c-%"PRIu32, tmpdir, random_uint32());
+        error = (len < 0 || len > MAX_UN_LEN ? ENAMETOOLONG
+                 : symlink(dir, linkname) ? errno
+                 : 0);
+        if (error != EEXIST) {
+            break;
+        }
+    }
+
+    if (!error) {
+        int len;
+
+        fatal_signal_add_file_to_unlink(linkname);
+
+        len = snprintf(short_name, MAX_UN_LEN + 1, "%s/%s", linkname, base);
+        if (len < 0 || len > MAX_UN_LEN) {
+            fatal_signal_unlink_file_now(linkname);
+            error = ENAMETOOLONG;
+        }
+    }
+
+    if (error) {
+        linkname[0] = '\0';
+    }
+    free(dir);
+    free(base);
+
+    return error;
 }
 
 /* Stores in '*un' a sockaddr_un that refers to file 'name'.  Stores in
  * '*un_len' the size of the sockaddr_un.
  *
- * Returns 0 on success, otherwise a positive errno value.  On success,
- * '*dirfdp' is either -1 or a nonnegative file descriptor that the caller
- * should close after using '*un' to bind or connect.  On failure, '*dirfdp' is
- * -1. */
+ * Returns 0 on success, otherwise a positive errno value.
+ *
+ * Uses '*dirfdp' and 'linkname' to store references to data when the caller no
+ * longer needs to use 'un'.  On success, freeing these references with
+ * free_sockaddr_un() is mandatory to avoid a leak; on failure, freeing them is
+ * unnecessary but harmless. */
 static int
 make_sockaddr_un(const char *name, struct sockaddr_un *un, socklen_t *un_len,
-                 int *dirfdp)
+                 int *dirfdp, char linkname[MAX_UN_LEN + 1])
 {
-    enum { MAX_UN_LEN = sizeof un->sun_path - 1 };
+    char short_name[MAX_UN_LEN + 1];
 
     *dirfdp = -1;
+    linkname[0] = '\0';
     if (strlen(name) > MAX_UN_LEN) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-
-        if (LINUX_DATAPATH) {
-            /* 'name' is too long to fit in a sockaddr_un, but we have a
-             * workaround for that on Linux: shorten it by opening a file
-             * descriptor for the directory part of the name and indirecting
-             * through /proc/self/fd/<dirfd>/<basename>. */
-            char *dir, *base;
-            char *short_name;
-            int dirfd;
-
-            dir = dir_name(name);
-            base = base_name(name);
-
-            dirfd = open(dir, O_DIRECTORY | O_RDONLY);
-            if (dirfd < 0) {
-                free(base);
-                free(dir);
-                return errno;
-            }
-
-            short_name = xasprintf("/proc/self/fd/%d/%s", dirfd, base);
-            free(dir);
-            free(base);
-
-            if (strlen(short_name) <= MAX_UN_LEN) {
-                make_sockaddr_un__(short_name, un, un_len);
-                free(short_name);
-                *dirfdp = dirfd;
-                return 0;
-            }
-            free(short_name);
-            close(dirfd);
+        /* 'name' is too long to fit in a sockaddr_un.  Try a workaround. */
+        int error = shorten_name_via_proc(name, short_name, dirfdp);
+        if (error == ENAMETOOLONG) {
+            error = shorten_name_via_symlink(name, short_name, linkname);
+        }
+        if (error) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
 
             VLOG_WARN_RL(&rl, "Unix socket name %s is longer than maximum "
-                         "%d bytes (even shortened)", name, MAX_UN_LEN);
-        } else {
-            /* 'name' is too long and we have no workaround. */
-            VLOG_WARN_RL(&rl, "Unix socket name %s is longer than maximum "
-                         "%d bytes", name, MAX_UN_LEN);
+                         "%"PRIuSIZE" bytes", name, MAX_UN_LEN);
+            return error;
         }
 
-        return ENAMETOOLONG;
-    } else {
-        make_sockaddr_un__(name, un, un_len);
-        return 0;
+        name = short_name;
+    }
+
+    un->sun_family = AF_UNIX;
+    ovs_strzcpy(un->sun_path, name, sizeof un->sun_path);
+    *un_len = (offsetof(struct sockaddr_un, sun_path)
+                + strlen (un->sun_path) + 1);
+    return 0;
+}
+
+/* Clean up after make_sockaddr_un(). */
+static void
+free_sockaddr_un(int dirfd, const char *linkname)
+{
+    if (dirfd >= 0) {
+        close(dirfd);
+    }
+    if (linkname[0]) {
+        fatal_signal_unlink_file_now(linkname);
     }
 }
 
@@ -414,53 +533,49 @@ make_unix_socket(int style, bool nonblock,
      * it will only happen if style is SOCK_STREAM or SOCK_SEQPACKET, and only
      * if a backlog of un-accepted connections has built up in the kernel.)  */
     if (nonblock) {
-        int flags = fcntl(fd, F_GETFL, 0);
-        if (flags == -1) {
-            error = errno;
-            goto error;
-        }
-        if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-            error = errno;
+        error = set_nonblocking(fd);
+        if (error) {
             goto error;
         }
     }
 
     if (bind_path) {
+        char linkname[MAX_UN_LEN + 1];
         struct sockaddr_un un;
         socklen_t un_len;
         int dirfd;
 
         if (unlink(bind_path) && errno != ENOENT) {
-            VLOG_WARN("unlinking \"%s\": %s\n", bind_path, strerror(errno));
+            VLOG_WARN("unlinking \"%s\": %s\n",
+                      bind_path, ovs_strerror(errno));
         }
         fatal_signal_add_file_to_unlink(bind_path);
 
-        error = make_sockaddr_un(bind_path, &un, &un_len, &dirfd);
+        error = make_sockaddr_un(bind_path, &un, &un_len, &dirfd, linkname);
         if (!error) {
             error = bind_unix_socket(fd, (struct sockaddr *) &un, un_len);
         }
-        if (dirfd >= 0) {
-            close(dirfd);
-        }
+        free_sockaddr_un(dirfd, linkname);
+
         if (error) {
             goto error;
         }
     }
 
     if (connect_path) {
+        char linkname[MAX_UN_LEN + 1];
         struct sockaddr_un un;
         socklen_t un_len;
         int dirfd;
 
-        error = make_sockaddr_un(connect_path, &un, &un_len, &dirfd);
+        error = make_sockaddr_un(connect_path, &un, &un_len, &dirfd, linkname);
         if (!error
             && connect(fd, (struct sockaddr*) &un, un_len)
             && errno != EINPROGRESS) {
             error = errno;
         }
-        if (dirfd >= 0) {
-            close(dirfd);
-        }
+        free_sockaddr_un(dirfd, linkname);
+
         if (error) {
             goto error;
         }
@@ -581,7 +696,7 @@ inet_open_active(int style, const char *target, uint16_t default_port,
     /* Create non-blocking socket. */
     fd = socket(AF_INET, style, 0);
     if (fd < 0) {
-        VLOG_ERR("%s: socket: %s", target, strerror(errno));
+        VLOG_ERR("%s: socket: %s", target, ovs_strerror(errno));
         error = errno;
         goto exit;
     }
@@ -595,7 +710,7 @@ inet_open_active(int style, const char *target, uint16_t default_port,
      * connect(), the handshake SYN frames will be sent with a TOS of 0. */
     error = set_dscp(fd, dscp);
     if (error) {
-        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        VLOG_ERR("%s: socket: %s", target, ovs_strerror(error));
         goto exit;
     }
 
@@ -694,6 +809,7 @@ int
 inet_open_passive(int style, const char *target, int default_port,
                   struct sockaddr_in *sinp, uint8_t dscp)
 {
+    bool kernel_chooses_port;
     struct sockaddr_in sin;
     int fd = 0, error;
     unsigned int yes = 1;
@@ -706,7 +822,7 @@ inet_open_passive(int style, const char *target, int default_port,
     fd = socket(AF_INET, style, 0);
     if (fd < 0) {
         error = errno;
-        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        VLOG_ERR("%s: socket: %s", target, ovs_strerror(error));
         return -error;
     }
     error = set_nonblocking(fd);
@@ -716,14 +832,15 @@ inet_open_passive(int style, const char *target, int default_port,
     if (style == SOCK_STREAM
         && setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0) {
         error = errno;
-        VLOG_ERR("%s: setsockopt(SO_REUSEADDR): %s", target, strerror(error));
+        VLOG_ERR("%s: setsockopt(SO_REUSEADDR): %s",
+                 target, ovs_strerror(error));
         goto error;
     }
 
     /* Bind. */
     if (bind(fd, (struct sockaddr *) &sin, sizeof sin) < 0) {
         error = errno;
-        VLOG_ERR("%s: bind: %s", target, strerror(error));
+        VLOG_ERR("%s: bind: %s", target, ovs_strerror(error));
         goto error;
     }
 
@@ -732,22 +849,23 @@ inet_open_passive(int style, const char *target, int default_port,
      * connect(), the handshake SYN frames will be sent with a TOS of 0. */
     error = set_dscp(fd, dscp);
     if (error) {
-        VLOG_ERR("%s: socket: %s", target, strerror(error));
+        VLOG_ERR("%s: socket: %s", target, ovs_strerror(error));
         goto error;
     }
 
     /* Listen. */
     if (style == SOCK_STREAM && listen(fd, 10) < 0) {
         error = errno;
-        VLOG_ERR("%s: listen: %s", target, strerror(error));
+        VLOG_ERR("%s: listen: %s", target, ovs_strerror(error));
         goto error;
     }
 
-    if (sinp) {
+    kernel_chooses_port = sin.sin_port == htons(0);
+    if (sinp || kernel_chooses_port) {
         socklen_t sin_len = sizeof sin;
-        if (getsockname(fd, (struct sockaddr *) &sin, &sin_len) < 0){
+        if (getsockname(fd, (struct sockaddr *) &sin, &sin_len) < 0) {
             error = errno;
-            VLOG_ERR("%s: getsockname: %s", target, strerror(error));
+            VLOG_ERR("%s: getsockname: %s", target, ovs_strerror(error));
             goto error;
         }
         if (sin.sin_family != AF_INET || sin_len != sizeof sin) {
@@ -755,7 +873,13 @@ inet_open_passive(int style, const char *target, int default_port,
             VLOG_ERR("%s: getsockname: invalid socket name", target);
             goto error;
         }
-        *sinp = sin;
+        if (sinp) {
+            *sinp = sin;
+        }
+        if (kernel_chooses_port) {
+            VLOG_INFO("%s: listening on port %"PRIu16,
+                      target, ntohs(sin.sin_port));
+        }
     }
 
     return fd;
@@ -771,15 +895,19 @@ error:
 int
 get_null_fd(void)
 {
-    static int null_fd = -1;
-    if (null_fd < 0) {
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    static int null_fd;
+
+    if (ovsthread_once_start(&once)) {
         null_fd = open("/dev/null", O_RDWR);
         if (null_fd < 0) {
             int error = errno;
-            VLOG_ERR("could not open /dev/null: %s", strerror(error));
-            return -error;
+            VLOG_ERR("could not open /dev/null: %s", ovs_strerror(error));
+            null_fd = -error;
         }
+        ovsthread_once_done(&once);
     }
+
     return null_fd;
 }
 
@@ -844,13 +972,13 @@ fsync_parent_dir(const char *file_name)
                  * really an error. */
             } else {
                 error = errno;
-                VLOG_ERR("%s: fsync failed (%s)", dir, strerror(error));
+                VLOG_ERR("%s: fsync failed (%s)", dir, ovs_strerror(error));
             }
         }
         close(fd);
     } else {
         error = errno;
-        VLOG_ERR("%s: open failed (%s)", dir, strerror(error));
+        VLOG_ERR("%s: open failed (%s)", dir, ovs_strerror(error));
     }
     free(dir);
 
@@ -888,7 +1016,7 @@ void
 xpipe(int fds[2])
 {
     if (pipe(fds)) {
-        VLOG_FATAL("failed to create pipe (%s)", strerror(errno));
+        VLOG_FATAL("failed to create pipe (%s)", ovs_strerror(errno));
     }
 }
 
@@ -904,7 +1032,7 @@ void
 xsocketpair(int domain, int type, int protocol, int fds[2])
 {
     if (socketpair(domain, type, protocol, fds)) {
-        VLOG_FATAL("failed to create socketpair (%s)", strerror(errno));
+        VLOG_FATAL("failed to create socketpair (%s)", ovs_strerror(errno));
     }
 }
 
@@ -919,10 +1047,10 @@ getsockopt_int(int fd, int level, int option, const char *optname, int *valuep)
     len = sizeof value;
     if (getsockopt(fd, level, option, &value, &len)) {
         error = errno;
-        VLOG_ERR_RL(&rl, "getsockopt(%s): %s", optname, strerror(error));
+        VLOG_ERR_RL(&rl, "getsockopt(%s): %s", optname, ovs_strerror(error));
     } else if (len != sizeof value) {
         error = EINVAL;
-        VLOG_ERR_RL(&rl, "getsockopt(%s): value is %u bytes (expected %zu)",
+        VLOG_ERR_RL(&rl, "getsockopt(%s): value is %u bytes (expected %"PRIuSIZE")",
                     optname, (unsigned int) len, sizeof value);
     } else {
         error = 0;
@@ -945,7 +1073,7 @@ describe_sockaddr(struct ds *string, int fd,
 
             memcpy(&sin, &ss, sizeof sin);
             ds_put_format(string, IP_FMT":%"PRIu16,
-                          IP_ARGS(&sin.sin_addr.s_addr), ntohs(sin.sin_port));
+                          IP_ARGS(sin.sin_addr.s_addr), ntohs(sin.sin_port));
         } else if (ss.ss_family == AF_UNIX) {
             struct sockaddr_un sun;
             const char *null;
@@ -1047,7 +1175,7 @@ describe_fd(int fd)
 
     ds_init(&string);
     if (fstat(fd, &s)) {
-        ds_put_format(&string, "fstat failed (%s)", strerror(errno));
+        ds_put_format(&string, "fstat failed (%s)", ovs_strerror(errno));
     } else if (S_ISSOCK(s.st_mode)) {
         describe_sockaddr(&string, fd, getsockname);
         ds_put_cstr(&string, "<->");
@@ -1105,7 +1233,7 @@ send_iovec_and_fds(int sock,
                    const struct iovec *iovs, size_t n_iovs,
                    const int fds[], size_t n_fds)
 {
-    assert(sock >= 0);
+    ovs_assert(sock >= 0);
     if (n_fds > 0) {
         union {
             struct cmsghdr cm;
@@ -1113,8 +1241,8 @@ send_iovec_and_fds(int sock,
         } cmsg;
         struct msghdr msg;
 
-        assert(!iovec_is_empty(iovs, n_iovs));
-        assert(n_fds <= SOUTIL_MAX_FDS);
+        ovs_assert(!iovec_is_empty(iovs, n_iovs));
+        ovs_assert(n_fds <= SOUTIL_MAX_FDS);
 
         memset(&cmsg, 0, sizeof cmsg);
         cmsg.cm.cmsg_len = CMSG_LEN(n_fds * sizeof *fds);
@@ -1124,7 +1252,7 @@ send_iovec_and_fds(int sock,
 
         msg.msg_name = NULL;
         msg.msg_namelen = 0;
-        msg.msg_iov = (struct iovec *) iovs;
+        msg.msg_iov = CONST_CAST(struct iovec *, iovs);
         msg.msg_iovlen = n_iovs;
         msg.msg_control = &cmsg.cm;
         msg.msg_controllen = CMSG_SPACE(n_fds * sizeof *fds);
@@ -1287,11 +1415,11 @@ recv_data_and_fds(int sock,
             goto error;
         } else {
             size_t n_fds = (p->cmsg_len - CMSG_LEN(0)) / sizeof *fds;
-            const int *fds_data = (const int *) CMSG_DATA(p);
+            const int *fds_data = ALIGNED_CAST(const int *, CMSG_DATA(p));
 
-            assert(n_fds > 0);
+            ovs_assert(n_fds > 0);
             if (n_fds > SOUTIL_MAX_FDS) {
-                VLOG_ERR("%zu fds received but only %d supported",
+                VLOG_ERR("%"PRIuSIZE" fds received but only %d supported",
                          n_fds, SOUTIL_MAX_FDS);
                 for (i = 0; i < n_fds; i++) {
                     close(fds_data[i]);
@@ -1313,3 +1441,42 @@ error:
     *n_fdsp = 0;
     return EPROTO;
 }
+
+/* Calls ioctl() on an AF_INET sock, passing the specified 'command' and
+ * 'arg'.  Returns 0 if successful, otherwise a positive errno value. */
+int
+af_inet_ioctl(unsigned long int command, const void *arg)
+{
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    static int sock;
+
+    if (ovsthread_once_start(&once)) {
+        sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock < 0) {
+            sock = -errno;
+            VLOG_ERR("failed to create inet socket: %s", ovs_strerror(errno));
+        }
+        ovsthread_once_done(&once);
+    }
+
+    return (sock < 0 ? -sock
+            : ioctl(sock, command, arg) == -1 ? errno
+            : 0);
+}
+
+int
+af_inet_ifreq_ioctl(const char *name, struct ifreq *ifr, unsigned long int cmd,
+                    const char *cmd_name)
+{
+    int error;
+
+    ovs_strzcpy(ifr->ifr_name, name, sizeof ifr->ifr_name);
+    error = af_inet_ioctl(cmd, ifr);
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
+        VLOG_DBG_RL(&rl, "%s: ioctl(%s) failed: %s", name, cmd_name,
+                    ovs_strerror(error));
+    }
+    return error;
+}
+

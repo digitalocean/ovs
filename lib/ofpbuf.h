@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ struct ofpbuf {
     size_t size;                /* Number of bytes in use. */
 
     void *l2;                   /* Link-level header. */
+    void *l2_5;                 /* MPLS label stack */
     void *l3;                   /* Network-level header. */
     void *l4;                   /* Transport-level header. */
     void *l7;                   /* Application data. */
@@ -50,10 +51,6 @@ struct ofpbuf {
     struct list list_node;      /* Private list element for use by owner. */
     void *private_p;            /* Private pointer for use by owner. */
 };
-
-/* Declares NAME as a SIZE-byte array aligned properly for storing any kind of
- * data.  For use with ofpbuf_use_stack(). */
-#define OFPBUF_STACK_BUFFER(NAME, SIZE) uint64_t NAME[DIV_ROUND_UP(SIZE, 8)]
 
 void ofpbuf_use(struct ofpbuf *, void *, size_t);
 void ofpbuf_use_stack(struct ofpbuf *, void *, size_t);
@@ -85,6 +82,8 @@ void *ofpbuf_put_zeros(struct ofpbuf *, size_t);
 void *ofpbuf_put(struct ofpbuf *, const void *, size_t);
 char *ofpbuf_put_hex(struct ofpbuf *, const char *s, size_t *n);
 void ofpbuf_reserve(struct ofpbuf *, size_t);
+void ofpbuf_reserve_with_tailroom(struct ofpbuf *b, size_t headroom,
+                                  size_t tailroom);
 void *ofpbuf_push_uninit(struct ofpbuf *b, size_t);
 void *ofpbuf_push_zeros(struct ofpbuf *, size_t);
 void *ofpbuf_push(struct ofpbuf *b, const void *, size_t);
@@ -95,6 +94,7 @@ void ofpbuf_prealloc_headroom(struct ofpbuf *, size_t);
 void ofpbuf_prealloc_tailroom(struct ofpbuf *, size_t);
 void ofpbuf_trim(struct ofpbuf *);
 void ofpbuf_padto(struct ofpbuf *, size_t);
+void ofpbuf_shift(struct ofpbuf *, int);
 
 void ofpbuf_clear(struct ofpbuf *);
 void *ofpbuf_pull(struct ofpbuf *, size_t);
@@ -109,6 +109,12 @@ static inline struct ofpbuf *ofpbuf_from_list(const struct list *list)
     return CONTAINER_OF(list, struct ofpbuf, list_node);
 }
 void ofpbuf_list_delete(struct list *);
+
+static inline bool
+ofpbuf_equal(const struct ofpbuf *a, const struct ofpbuf *b)
+{
+    return a->size == b->size && memcmp(a->data, b->data, a->size) == 0;
+}
 
 #ifdef  __cplusplus
 }

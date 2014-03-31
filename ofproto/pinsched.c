@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "flow.h"
 #include "hash.h"
 #include "hmap.h"
 #include "ofpbuf.h"
@@ -35,7 +36,7 @@
 
 struct pinqueue {
     struct hmap_node node;      /* In struct pinsched's 'queues' hmap. */
-    uint16_t port_no;           /* Port number. */
+    ofp_port_t port_no;           /* Port number. */
     struct list packets;        /* Contains "struct ofpbuf"s. */
     int n;                      /* Number of packets in 'packets'. */
 };
@@ -101,9 +102,9 @@ pinqueue_destroy(struct pinsched *ps, struct pinqueue *q)
 }
 
 static struct pinqueue *
-pinqueue_get(struct pinsched *ps, uint16_t port_no)
+pinqueue_get(struct pinsched *ps, ofp_port_t port_no)
 {
-    uint32_t hash = hash_int(port_no, 0);
+    uint32_t hash = hash_ofp_port(port_no);
     struct pinqueue *q;
 
     HMAP_FOR_EACH_IN_BUCKET (q, node, hash, &ps->queues) {
@@ -184,16 +185,17 @@ get_token(struct pinsched *ps)
 }
 
 void
-pinsched_send(struct pinsched *ps, uint16_t port_no,
-              struct ofpbuf *packet, pinsched_tx_cb *cb, void *aux)
+pinsched_send(struct pinsched *ps, ofp_port_t port_no,
+              struct ofpbuf *packet, struct list *txq)
 {
+    list_init(txq);
     if (!ps) {
-        cb(packet, aux);
+        list_push_back(txq, &packet->list_node);
     } else if (!ps->n_queued && get_token(ps)) {
         /* In the common case where we are not constrained by the rate limit,
          * let the packet take the normal path. */
         ps->n_normal++;
-        cb(packet, aux);
+        list_push_back(txq, &packet->list_node);
     } else {
         /* Otherwise queue it up for the periodic callback to drain out. */
         struct pinqueue *q;
@@ -216,15 +218,17 @@ pinsched_send(struct pinsched *ps, uint16_t port_no,
 }
 
 void
-pinsched_run(struct pinsched *ps, pinsched_tx_cb *cb, void *aux)
+pinsched_run(struct pinsched *ps, struct list *txq)
 {
+    list_init(txq);
     if (ps) {
         int i;
 
         /* Drain some packets out of the bucket if possible, but limit the
          * number of iterations to allow other code to get work done too. */
         for (i = 0; ps->n_queued && get_token(ps) && i < 50; i++) {
-            cb(get_tx_packet(ps), aux);
+            struct ofpbuf *packet = get_tx_packet(ps);
+            list_push_back(txq, &packet->list_node);
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <config.h>
 #include "stream-provider.h"
-#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
@@ -27,6 +26,7 @@
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "flow.h"
+#include "jsonrpc.h"
 #include "ofp-print.h"
 #include "ofpbuf.h"
 #include "openflow/nicira-ext.h"
@@ -74,14 +74,14 @@ check_stream_classes(void)
 
     for (i = 0; i < ARRAY_SIZE(stream_classes); i++) {
         const struct stream_class *class = stream_classes[i];
-        assert(class->name != NULL);
-        assert(class->open != NULL);
+        ovs_assert(class->name != NULL);
+        ovs_assert(class->open != NULL);
         if (class->close || class->recv || class->send || class->run
             || class->run_wait || class->wait) {
-            assert(class->close != NULL);
-            assert(class->recv != NULL);
-            assert(class->send != NULL);
-            assert(class->wait != NULL);
+            ovs_assert(class->close != NULL);
+            ovs_assert(class->recv != NULL);
+            ovs_assert(class->send != NULL);
+            ovs_assert(class->wait != NULL);
         } else {
             /* This class delegates to another one. */
         }
@@ -89,12 +89,12 @@ check_stream_classes(void)
 
     for (i = 0; i < ARRAY_SIZE(pstream_classes); i++) {
         const struct pstream_class *class = pstream_classes[i];
-        assert(class->name != NULL);
-        assert(class->listen != NULL);
+        ovs_assert(class->name != NULL);
+        ovs_assert(class->listen != NULL);
         if (class->close || class->accept || class->wait) {
-            assert(class->close != NULL);
-            assert(class->accept != NULL);
-            assert(class->wait != NULL);
+            ovs_assert(class->close != NULL);
+            ovs_assert(class->accept != NULL);
+            ovs_assert(class->wait != NULL);
         } else {
             /* This class delegates to another one. */
         }
@@ -250,7 +250,7 @@ stream_open_block(int error, struct stream **streamp)
             stream_connect_wait(stream);
             poll_block();
         }
-        assert(error != EINPROGRESS);
+        ovs_assert(error != EINPROGRESS);
     }
 
     if (error) {
@@ -281,43 +281,11 @@ stream_get_name(const struct stream *stream)
     return stream ? stream->name : "(null)";
 }
 
-/* Returns the IP address of the peer, or 0 if the peer is not connected over
- * an IP-based protocol or if its IP address is not yet known. */
-ovs_be32
-stream_get_remote_ip(const struct stream *stream)
-{
-    return stream->remote_ip;
-}
-
-/* Returns the transport port of the peer, or 0 if the connection does not
- * contain a port or if the port is not yet known. */
-ovs_be16
-stream_get_remote_port(const struct stream *stream)
-{
-    return stream->remote_port;
-}
-
-/* Returns the IP address used to connect to the peer, or 0 if the connection
- * is not an IP-based protocol or if its IP address is not yet known. */
-ovs_be32
-stream_get_local_ip(const struct stream *stream)
-{
-    return stream->local_ip;
-}
-
-/* Returns the transport port used to connect to the peer, or 0 if the
- * connection does not contain a port or if the port is not yet known. */
-ovs_be16
-stream_get_local_port(const struct stream *stream)
-{
-    return stream->local_port;
-}
-
 static void
 scs_connecting(struct stream *stream)
 {
     int retval = (stream->class->connect)(stream);
-    assert(retval != EINPROGRESS);
+    ovs_assert(retval != EINPROGRESS);
     if (!retval) {
         stream->state = SCS_CONNECTED;
     } else if (retval != EAGAIN) {
@@ -349,7 +317,7 @@ stream_connect(struct stream *stream)
             return stream->error;
 
         default:
-            NOT_REACHED();
+            OVS_NOT_REACHED();
         }
     } while (stream->state != last_state);
 
@@ -419,8 +387,8 @@ stream_run_wait(struct stream *stream)
 void
 stream_wait(struct stream *stream, enum stream_wait_type wait)
 {
-    assert(wait == STREAM_CONNECT || wait == STREAM_RECV
-           || wait == STREAM_SEND);
+    ovs_assert(wait == STREAM_CONNECT || wait == STREAM_RECV
+               || wait == STREAM_SEND);
 
     switch (stream->state) {
     case SCS_CONNECTING:
@@ -580,8 +548,8 @@ pstream_accept(struct pstream *pstream, struct stream **new_stream)
     if (retval) {
         *new_stream = NULL;
     } else {
-        assert((*new_stream)->state != SCS_CONNECTING
-               || (*new_stream)->class->connect);
+        ovs_assert((*new_stream)->state != SCS_CONNECTING
+                   || (*new_stream)->class->connect);
     }
     return retval;
 }
@@ -622,6 +590,14 @@ pstream_set_dscp(struct pstream *pstream, uint8_t dscp)
     }
     return 0;
 }
+
+/* Returns the transport port on which 'pstream' is listening, or 0 if the
+ * concept doesn't apply. */
+ovs_be16
+pstream_get_bound_port(const struct pstream *pstream)
+{
+    return pstream->bound_port;
+}
 
 /* Initializes 'stream' as a new stream named 'name', implemented via 'class'.
  * The initial connection status, supplied as 'connect_status', is interpreted
@@ -651,39 +627,22 @@ stream_init(struct stream *stream, const struct stream_class *class,
                     : SCS_DISCONNECTED);
     stream->error = connect_status;
     stream->name = xstrdup(name);
-    assert(stream->state != SCS_CONNECTING || class->connect);
-}
-
-void
-stream_set_remote_ip(struct stream *stream, ovs_be32 ip)
-{
-    stream->remote_ip = ip;
-}
-
-void
-stream_set_remote_port(struct stream *stream, ovs_be16 port)
-{
-    stream->remote_port = port;
-}
-
-void
-stream_set_local_ip(struct stream *stream, ovs_be32 ip)
-{
-    stream->local_ip = ip;
-}
-
-void
-stream_set_local_port(struct stream *stream, ovs_be16 port)
-{
-    stream->local_port = port;
+    ovs_assert(stream->state != SCS_CONNECTING || class->connect);
 }
 
 void
 pstream_init(struct pstream *pstream, const struct pstream_class *class,
             const char *name)
 {
+    memset(pstream, 0, sizeof *pstream);
     pstream->class = class;
     pstream->name = xstrdup(name);
+}
+
+void
+pstream_set_bound_port(struct pstream *pstream, ovs_be16 port)
+{
+    pstream->bound_port = port;
 }
 
 static int
@@ -703,23 +662,29 @@ count_fields(const char *s_)
     return n;
 }
 
-/* Like stream_open(), but for tcp streams the port defaults to
- * 'default_tcp_port' if no port number is given and for SSL streams the port
- * defaults to 'default_ssl_port' if no port number is given. */
+/* Like stream_open(), but the port defaults to 'default_port' if no port
+ * number is given. */
 int
-stream_open_with_default_ports(const char *name_,
-                               uint16_t default_tcp_port,
-                               uint16_t default_ssl_port,
-                               struct stream **streamp,
-                               uint8_t dscp)
+stream_open_with_default_port(const char *name_,
+                              uint16_t default_port,
+                              struct stream **streamp,
+                              uint8_t dscp)
 {
     char *name;
     int error;
 
-    if (!strncmp(name_, "tcp:", 4) && count_fields(name_) < 3) {
-        name = xasprintf("%s:%d", name_, default_tcp_port);
-    } else if (!strncmp(name_, "ssl:", 4) && count_fields(name_) < 3) {
-        name = xasprintf("%s:%d", name_, default_ssl_port);
+    if ((!strncmp(name_, "tcp:", 4) || !strncmp(name_, "ssl:", 4))
+        && count_fields(name_) < 3) {
+        if (default_port == OFP_OLD_PORT) {
+            VLOG_WARN_ONCE("The default OpenFlow port number will change "
+                           "from %d to %d in a future release",
+                           OFP_OLD_PORT, OFP_PORT);
+        } else if (default_port == OVSDB_OLD_PORT) {
+            VLOG_WARN_ONCE("The default OVSDB port number will change "
+                           "from %d to %d in a future release",
+                           OVSDB_OLD_PORT, OVSDB_PORT);
+        }
+        name = xasprintf("%s:%d", name_, default_port);
     } else {
         name = xstrdup(name_);
     }
@@ -729,23 +694,20 @@ stream_open_with_default_ports(const char *name_,
     return error;
 }
 
-/* Like pstream_open(), but for ptcp streams the port defaults to
- * 'default_ptcp_port' if no port number is given and for passive SSL streams
- * the port defaults to 'default_pssl_port' if no port number is given. */
+/* Like pstream_open(), but port defaults to 'default_port' if no port
+ * number is given. */
 int
-pstream_open_with_default_ports(const char *name_,
-                                uint16_t default_ptcp_port,
-                                uint16_t default_pssl_port,
-                                struct pstream **pstreamp,
-                                uint8_t dscp)
+pstream_open_with_default_port(const char *name_,
+                               uint16_t default_port,
+                               struct pstream **pstreamp,
+                               uint8_t dscp)
 {
     char *name;
     int error;
 
-    if (!strncmp(name_, "ptcp:", 5) && count_fields(name_) < 2) {
-        name = xasprintf("%s%d", name_, default_ptcp_port);
-    } else if (!strncmp(name_, "pssl:", 5) && count_fields(name_) < 2) {
-        name = xasprintf("%s%d", name_, default_pssl_port);
+    if ((!strncmp(name_, "ptcp:", 5) || !strncmp(name_, "pssl:", 5))
+        && count_fields(name_) < 2) {
+        name = xasprintf("%s%d", name_, default_port);
     } else {
         name = xstrdup(name_);
     }
@@ -764,15 +726,12 @@ pstream_open_with_default_ports(const char *name_,
  *     - On error, function returns false and *sin contains garbage.
  */
 bool
-stream_parse_target_with_default_ports(const char *target,
-                                       uint16_t default_tcp_port,
-                                       uint16_t default_ssl_port,
-                                       struct sockaddr_in *sin)
+stream_parse_target_with_default_port(const char *target,
+                                      uint16_t default_port,
+                                      struct sockaddr_in *sin)
 {
-    return (!strncmp(target, "tcp:", 4)
-             && inet_parse_active(target + 4, default_tcp_port, sin)) ||
-            (!strncmp(target, "ssl:", 4)
-             && inet_parse_active(target + 4, default_ssl_port, sin));
+    return ((!strncmp(target, "tcp:", 4) || !strncmp(target, "ssl:", 4))
+             && inet_parse_active(target + 4, default_port, sin));
 }
 
 /* Attempts to guess the content type of a stream whose first few bytes were

@@ -5,17 +5,6 @@
 
 #include <linux/version.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-/* In version 2.6.24 the return type of skb_headroom() changed from 'int' to
- * 'unsigned int'.  We use skb_headroom() as one arm of a min(a,b) invocation
- * in make_writable() in actions.c, so we need the correct type. */
-#define skb_headroom rpl_skb_headroom
-static inline unsigned int rpl_skb_headroom(const struct sk_buff *skb)
-{
-	return skb->data - skb->head;
-}
-#endif
-
 #ifndef HAVE_SKB_COPY_FROM_LINEAR_DATA_OFFSET
 static inline void skb_copy_from_linear_data_offset(const struct sk_buff *skb,
 						    const int offset, void *to,
@@ -82,13 +71,6 @@ static inline int skb_cow_head(struct sk_buff *skb, unsigned int headroom)
 }
 #endif	/* !HAVE_SKB_COW_HEAD */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,23)
-static inline int skb_clone_writable(struct sk_buff *skb, int len)
-{
-	return false;
-}
-#endif
-
 #ifndef HAVE_SKB_DST_ACCESSOR_FUNCS
 static inline struct dst_entry *skb_dst(const struct sk_buff *skb)
 {
@@ -106,29 +88,11 @@ static inline struct rtable *skb_rtable(const struct sk_buff *skb)
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,17)
-/* Emulate Linux 2.6.17 and later behavior, in which kfree_skb silently ignores
- * null pointer arguments. */
-#define kfree_skb(skb) kfree_skb_maybe_null(skb)
-static inline void kfree_skb_maybe_null(struct sk_buff *skb)
-{
-	if (likely(skb != NULL))
-		(kfree_skb)(skb);
-}
-#endif
-
-
 #ifndef CHECKSUM_PARTIAL
 #define CHECKSUM_PARTIAL CHECKSUM_HW
 #endif
 #ifndef CHECKSUM_COMPLETE
 #define CHECKSUM_COMPLETE CHECKSUM_HW
-#endif
-
-#ifdef HAVE_MAC_RAW
-#define mac_header mac.raw
-#define network_header nh.raw
-#define transport_header h.raw
 #endif
 
 #ifndef HAVE_SKBUFF_HEADER_HELPERS
@@ -196,21 +160,6 @@ static inline void skb_copy_to_linear_data(struct sk_buff *skb,
 }
 #endif	/* !HAVE_SKBUFF_HEADER_HELPERS */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
-#warning "TSO/UFO not supported on kernels earlier than 2.6.18"
-
-static inline int skb_is_gso(const struct sk_buff *skb)
-{
-	return 0;
-}
-
-static inline struct sk_buff *skb_gso_segment(struct sk_buff *skb,
-					      int features)
-{
-	return NULL;
-}
-#endif	/* before 2.6.18 */
-
 #ifndef HAVE_SKB_WARN_LRO
 #ifndef NETIF_F_LRO
 static inline bool skb_warn_if_lro(const struct sk_buff *skb)
@@ -239,10 +188,40 @@ static inline bool skb_warn_if_lro(const struct sk_buff *skb)
 #endif
 
 #ifndef HAVE_SKB_FRAG_PAGE
+#include <linux/mm.h>
+
 static inline struct page *skb_frag_page(const skb_frag_t *frag)
 {
 	return frag->page;
 }
+
+static inline void __skb_frag_set_page(skb_frag_t *frag, struct page *page)
+{
+	frag->page = page;
+}
+static inline void skb_frag_size_set(skb_frag_t *frag, unsigned int size)
+{
+	frag->size = size;
+}
+static inline void __skb_frag_ref(skb_frag_t *frag)
+{
+	get_page(skb_frag_page(frag));
+}
+static inline void __skb_frag_unref(skb_frag_t *frag)
+{
+	put_page(skb_frag_page(frag));
+}
+
+static inline void skb_frag_ref(struct sk_buff *skb, int f)
+{
+	__skb_frag_ref(&skb_shinfo(skb)->frags[f]);
+}
+
+static inline void skb_frag_unref(struct sk_buff *skb, int f)
+{
+	__skb_frag_unref(&skb_shinfo(skb)->frags[f]);
+}
+
 #endif
 
 #ifndef HAVE_SKB_RESET_MAC_LEN
@@ -251,4 +230,55 @@ static inline void skb_reset_mac_len(struct sk_buff *skb)
 	skb->mac_len = skb->network_header - skb->mac_header;
 }
 #endif
+
+#ifndef HAVE_SKB_UNCLONE
+static inline int skb_unclone(struct sk_buff *skb, gfp_t pri)
+{
+	might_sleep_if(pri & __GFP_WAIT);
+
+	if (skb_cloned(skb))
+		return pskb_expand_head(skb, 0, 0, pri);
+
+	return 0;
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+#define __skb_get_rxhash rpl__skb_get_rxhash
+#define skb_get_rxhash rpl_skb_get_rxhash
+
+extern u32 __skb_get_rxhash(struct sk_buff *skb);
+static inline __u32 skb_get_rxhash(struct sk_buff *skb)
+{
+#ifdef HAVE_RXHASH
+	if (skb->rxhash)
+		return skb->rxhash;
+#endif
+	return __skb_get_rxhash(skb);
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
+unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
+void skb_zerocopy(struct sk_buff *to, const struct sk_buff *from, int len, 
+		  int hlen);
+#endif
+
+
+#ifndef HAVE_SKB_HAS_FRAG_LIST
+#define skb_has_frag_list skb_has_frags
+#endif
+
+#ifndef HAVE___SKB_FILL_PAGE_DESC
+static inline void __skb_fill_page_desc(struct sk_buff *skb, int i,
+					struct page *page, int off, int size)
+{
+	skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+
+	__skb_frag_set_page(frag, page);
+	frag->page_offset	= off;
+	skb_frag_size_set(frag, size);
+}
+#endif
+
 #endif

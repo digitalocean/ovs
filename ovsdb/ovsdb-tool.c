@@ -40,12 +40,10 @@
 #include "util.h"
 #include "vlog.h"
 
-VLOG_DEFINE_THIS_MODULE(ovsdb_tool);
-
 /* -m, --more: Verbosity level for "show-log" command output. */
 static int show_log_verbosity;
 
-static const struct command all_commands[];
+static const struct command *get_all_commands(void);
 
 static void usage(void) NO_RETURN;
 static void parse_options(int argc, char *argv[]);
@@ -59,14 +57,14 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_options(argc, argv);
     signal(SIGPIPE, SIG_IGN);
-    run_command(argc - optind, argv + optind, all_commands);
+    run_command(argc - optind, argv + optind, get_all_commands());
     return 0;
 }
 
 static void
 parse_options(int argc, char *argv[])
 {
-    static struct option long_options[] = {
+    static const struct option long_options[] = {
         {"more", no_argument, NULL, 'm'},
         {"verbose", optional_argument, NULL, 'v'},
         {"help", no_argument, NULL, 'h'},
@@ -518,11 +516,17 @@ do_show_log(int argc, char *argv[])
 
             date = shash_find_data(json_object(json), "_date");
             if (date && date->type == JSON_INTEGER) {
-                time_t t = json_integer(date);
-                char s[128];
+                long long int t = json_integer(date);
+                char *s;
 
-                strftime(s, sizeof s, "%Y-%m-%d %H:%M:%S", gmtime(&t));
-                printf(" %s", s);
+                if (t < INT32_MAX) {
+                    /* Older versions of ovsdb wrote timestamps in seconds. */
+                    t *= 1000;
+                }
+
+                s = xastrftime_msec(" %Y-%m-%d %H:%M:%S.###", t, true);
+                fputs(s, stdout);
+                free(s);
             }
 
             comment = shash_find_data(json_object(json), "_comment");
@@ -565,3 +569,8 @@ static const struct command all_commands[] = {
     { "help", 0, INT_MAX, do_help },
     { NULL, 0, 0, NULL },
 };
+
+static const struct command *get_all_commands(void)
+{
+    return all_commands;
+}

@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -610,6 +610,8 @@ class Row(object):
         assert self._changes is not None
         if self._data is None:
             del self._idl.txn._txn_rows[self.uuid]
+        else:
+            self._idl.txn._txn_rows[self.uuid] = self
         self.__dict__["_changes"] = None
         del self._table.rows[self.uuid]
 
@@ -731,7 +733,6 @@ class Transaction(object):
         self._status = Transaction.UNCOMMITTED
         self._error = None
         self._comments = []
-        self._commit_seqno = self.idl.change_seqno
 
         self._inc_row = None
         self._inc_column = None

@@ -224,7 +224,7 @@ statement, that is, write "return 0;" and not "return(0);"
         break;
 
     default:
-        NOT_REACHED();
+        OVS_NOT_REACHED();
     }
 
   "switch" statements with very short, uniform cases may use an
@@ -247,6 +247,18 @@ documentation.  It also places the most important code in sequential
 order without forcing the reader to visually skip past less important
 details.  (Some compilers also assume that the "if" branch is the more
 common case, so this can be a real form of optimization as well.)
+
+
+RETURN VALUES
+
+  For functions that return a success or failure indication, prefer
+one of the following return value conventions:
+
+    * An "int" where 0 indicates success and a positive errno value
+      indicates a reason for failure.
+
+    * A "bool" where true indicates success and false indicates
+      failure.
 
 
 MACROS
@@ -284,6 +296,21 @@ the name of each enum.  For example:
         VLOG_LEVELS
     #undef VLOG_LEVEL
     };
+
+
+THREAD SAFETY ANNOTATIONS
+
+  Use the macros in lib/compiler.h to annotate locking requirements.
+For example:
+
+    static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
+    static struct ovs_rwlock rwlock = OVS_RWLOCK_INITIALIZER;
+
+    void function_require_plain_mutex(void) OVS_REQUIRES(mutex);
+    void function_require_rwlock(void) OVS_REQ_RDLOCK(rwlock);
+
+  Pass lock objects, not their addresses, to the annotation macros.
+(Thus we have OVS_REQUIRES(mutex) above, not OVS_REQUIRES(&mutex).)
 
 
 SOURCE FILES
@@ -367,7 +394,21 @@ from <stdint.h>.
 integer types.  Use the PRId<N>, PRIu<N>, and PRIx<N> macros from
 <inttypes.h> for formatting them with printf() and related functions.
 
-  Use %zu to format size_t with printf().
+  For compatibility with antique printf() implementations:
+
+    - Instead of "%zu", use "%"PRIuSIZE.
+
+    - Instead of "%td", use "%"PRIdPTR.
+
+    - Instead of "%ju", use "%"PRIuMAX.
+
+Other variants exist for different radixes.  For example, use
+"%"PRIxSIZE instead of "%zx" or "%x" instead of "%hhx".
+
+  Also, instead of "%hhd", use "%d".  Be cautious substituting "%u",
+"%x", and "%o" for the corresponding versions with "hh": cast the
+argument to unsigned char if necessary, because printf("%hhu", -1)
+prints 255 but printf("%u", -1) prints 4294967295.
 
   Use bit-fields sparingly.  Do not use bit-fields for layout of
 network protocol fields or in other circumstances where the exact
@@ -432,8 +473,8 @@ precedence makes it necessary, or unless the operands are themselves
 expressions that use && and ||.  Thus:
 
     if (!isdigit((unsigned char)s[0])
-            || !isdigit((unsigned char)s[1])
-            || !isdigit((unsigned char)s[2])) {
+        || !isdigit((unsigned char)s[1])
+        || !isdigit((unsigned char)s[2])) {
         printf("string %s does not start with 3-digit code\n", s);
     }
 
@@ -506,7 +547,8 @@ older compilers:
 
   As a matter of style, avoid // comments.
 
-  Avoid using GCC extensions unless you also add a fallback for
-non-GCC compilers.  You can, however, use GCC extensions and C99
-features in code that compiles only on GNU/Linux (such as
-lib/netdev-linux.c), because GCC is the system compiler there.
+  Avoid using GCC or Clang extensions unless you also add a fallback
+for other compilers.  You can, however, use C99 features or GCC
+extensions also supported by Clang in code that compiles only on
+GNU/Linux (such as lib/netdev-linux.c), because GCC is the system
+compiler there.

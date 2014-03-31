@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -134,14 +134,16 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 3; then
-       : # Linux 3.x
-    elif test "$version" = 2 && test "$patchlevel" -ge 6; then
-       : # Linux 2.6.x
-    else
-       if test "$KBUILD" = "$KSRC"; then
-         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version 2.6 or later is required])
+       if test "$version" = 3 && test "$patchlevel" -le 11; then
+          : # Linux 3.x
        else
-         AC_ERROR([Linux kernel in build tree $KBUILD (source tree $KSRC) is version $kversion, but version 2.6 or later is required])
+         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 3.11.x is not supported])
+       fi
+    else
+       if test "$version" -le 1 || test "$patchlevel" -le 5 || test "$sublevel" -le 31; then
+         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version 2.6.32 or later is required])
+       else
+         : # Linux 2.6.x
        fi
     fi
     if (test ! -e "$KBUILD"/include/linux/version.h && \
@@ -224,11 +226,14 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_disable_lro])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_stats])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_by_index_rcu])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [__skb_gso_segment])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [can_checksum_protocol])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [netdev_features_t])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/rcupdate.h], [rcu_read_lock_held], [],
                   [OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h],
                                    [rcu_read_lock_held])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h], [lockdep_rtnl_is_held])
   
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
   # is necessary because some versions of this header remove the
@@ -237,8 +242,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   # quoting rules.
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [[[^@]]proto_data_valid],
                   [OVS_DEFINE([HAVE_PROTO_DATA_VALID])])
-  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [raw],
-                  [OVS_DEFINE([HAVE_MAC_RAW])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [rxhash])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_dst(],
                   [OVS_DEFINE([HAVE_SKB_DST_ACCESSOR_FUNCS])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], 
@@ -254,10 +258,10 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_SKB_WARN_LRO])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [consume_skb])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_frag_page])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_has_frag_list])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [__skb_fill_page_desc])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_reset_mac_len])
-
-  OVS_GREP_IFELSE([$KSRC/include/linux/string.h], [kmemdup], [],
-                  [OVS_GREP_IFELSE([$KSRC/include/linux/slab.h], [kmemdup])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_unclone])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [bool],
                   [OVS_DEFINE([HAVE_BOOL_TYPE])])
@@ -269,15 +273,20 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_replace4])
   OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_unfold])
 
-  OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [NLA_NUL_STRING])
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [parallel_ops])
+  OVS_GREP_IFELSE([$KSRC/include/net/gre.h], [gre_cisco_register])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_get_be16])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be16])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be32])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be64])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_find_nested])
 
+  OVS_GREP_IFELSE([$KSRC/include/net/sctp/checksum.h], [sctp_compute_cksum])
+
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
                   [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
+
+  OVS_GREP_IFELSE([$KSRC/include/linux/percpu.h], [this_cpu_ptr])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/openvswitch.h], [openvswitch_handle_frame_hook],
                   [OVS_DEFINE([HAVE_RHEL_OVS_HOOK])])
@@ -304,6 +313,9 @@ AC_DEFUN([OVS_CHECK_IF_PACKET],
    fi])
 
 dnl Checks for net/if_dl.h.
+dnl
+dnl (We use this as a proxy for checking whether we're building on FreeBSD
+dnl or NetBSD.)
 AC_DEFUN([OVS_CHECK_IF_DL],
   [AC_CHECK_HEADER([net/if_dl.h],
                    [HAVE_IF_DL=yes],
@@ -312,6 +324,9 @@ AC_DEFUN([OVS_CHECK_IF_DL],
    if test "$HAVE_IF_DL" = yes; then
       AC_DEFINE([HAVE_IF_DL], [1],
                 [Define to 1 if net/if_dl.h is available.])
+
+      # On these platforms we use libpcap to access network devices.
+      AC_SEARCH_LIBS([pcap_open_live], [pcap])
    fi])
 
 dnl Checks for buggy strtok_r.
@@ -353,15 +368,15 @@ dnl This file is free software; the Free Software Foundation
 dnl gives unlimited permission to copy and/or distribute it,
 dnl with or without modifications, as long as this notice is preserved.
 
-dnl OVS_CHECK_CC_OPTION([OPTION], [ACTION-IF-ACCEPTED], [ACTION-IF-REJECTED])
-dnl Check whether the given C compiler OPTION is accepted.
-dnl If so, execute ACTION-IF-ACCEPTED, otherwise ACTION-IF-REJECTED.
-AC_DEFUN([OVS_CHECK_CC_OPTION],
-[
+AC_DEFUN([_OVS_CHECK_CC_OPTION], [dnl
   m4_define([ovs_cv_name], [ovs_cv_[]m4_translit([$1], [-], [_])])dnl
   AC_CACHE_CHECK([whether $CC accepts $1], [ovs_cv_name], 
     [ovs_save_CFLAGS="$CFLAGS"
-     CFLAGS="$CFLAGS $1"
+     dnl Include -Werror in the compiler options, because without -Werror
+     dnl clang's GCC-compatible compiler driver does not return a failure
+     dnl exit status even though it complains about options it does not
+     dnl understand.
+     CFLAGS="$CFLAGS $WERROR $1"
      AC_COMPILE_IFELSE([AC_LANG_PROGRAM(,)], [ovs_cv_name[]=yes], [ovs_cv_name[]=no])
      CFLAGS="$ovs_save_CFLAGS"])
   if test $ovs_cv_name = yes; then
@@ -370,6 +385,21 @@ AC_DEFUN([OVS_CHECK_CC_OPTION],
     m4_if([$3], [], [:], [$3])
   fi
 ])
+
+dnl OVS_CHECK_WERROR
+dnl
+dnl Check whether the C compiler accepts -Werror.
+dnl Sets $WERROR to "-Werror", if so, and otherwise to the empty string.
+AC_DEFUN([OVS_CHECK_WERROR],
+  [WERROR=
+   _OVS_CHECK_CC_OPTION([-Werror], [WERROR=-Werror])])
+
+dnl OVS_CHECK_CC_OPTION([OPTION], [ACTION-IF-ACCEPTED], [ACTION-IF-REJECTED])
+dnl Check whether the given C compiler OPTION is accepted.
+dnl If so, execute ACTION-IF-ACCEPTED, otherwise ACTION-IF-REJECTED.
+AC_DEFUN([OVS_CHECK_CC_OPTION],
+  [AC_REQUIRE([OVS_CHECK_WERROR])
+   _OVS_CHECK_CC_OPTION([$1], [$2], [$3])])
 
 dnl OVS_ENABLE_OPTION([OPTION])
 dnl Check whether the given C compiler OPTION is accepted.
@@ -482,13 +512,70 @@ AC_DEFUN([OVS_CHECK_SPARSE_TARGET],
    AC_SUBST([SPARSEFLAGS])
    AC_SUBST([CGCCFLAGS])])
 
+dnl OVS_SPARSE_EXTRA_INCLUDES
+dnl
+dnl The cgcc script from "sparse" does not search gcc's default
+dnl search path. Get the default search path from GCC and pass
+dnl them to sparse.
+AC_DEFUN([OVS_SPARSE_EXTRA_INCLUDES],
+    AC_SUBST([SPARSE_EXTRA_INCLUDES],
+           [`$CC -v -E - </dev/null 2>&1 >/dev/null | sed -n -e '/^#include.*search.*starts.*here:/,/^End.*of.*search.*list\./s/^ \(.*\)/-I \1/p' |grep -v /usr/lib | grep -x -v '\-I /usr/include' | tr \\\n ' ' `] ))
+
 dnl OVS_ENABLE_SPARSE
 AC_DEFUN([OVS_ENABLE_SPARSE],
   [AC_REQUIRE([OVS_CHECK_SPARSE_TARGET])
    AC_REQUIRE([OVS_CHECK_MAKE_IF])
+   AC_REQUIRE([OVS_SPARSE_EXTRA_INCLUDES])
    : ${SPARSE=sparse}
    AC_SUBST([SPARSE])
    AC_CONFIG_COMMANDS_PRE(
      [if test $ovs_cv_gnu_make_if = yes; then
-        CC='$(if $(C),REAL_CC="'"$CC"'" CHECK="$(SPARSE) -I $(top_srcdir)/include/sparse $(SPARSEFLAGS)" cgcc $(CGCCFLAGS),'"$CC"')'
+        CC='$(if $(C),env REAL_CC="'"$CC"'" CHECK="$(SPARSE) -I $(top_srcdir)/include/sparse $(SPARSEFLAGS) $(SPARSE_EXTRA_INCLUDES) " cgcc $(CGCCFLAGS),'"$CC"')'
       fi])])
+
+dnl OVS_PTHREAD_SET_NAME
+dnl
+dnl This checks for three known variants of pthreads functions for setting
+dnl the name of the current thread:
+dnl
+dnl   glibc: int pthread_setname_np(pthread_t, const char *name);
+dnl   NetBSD: int pthread_setname_np(pthread_t, const char *format, void *arg);
+dnl   FreeBSD: int pthread_set_name_np(pthread_t, const char *name);
+dnl
+dnl For glibc and FreeBSD, the arguments are just a thread and its name.  For
+dnl NetBSD, 'format' is a printf() format string and 'arg' is an argument to
+dnl provide to it.
+dnl
+dnl This macro defines:
+dnl
+dnl    glibc: HAVE_GLIBC_PTHREAD_SETNAME_NP
+dnl    NetBSD: HAVE_NETBSD_PTHREAD_SETNAME_NP
+dnl    FreeBSD: HAVE_PTHREAD_SET_NAME_NP
+AC_DEFUN([OVS_CHECK_PTHREAD_SET_NAME],
+  [AC_CHECK_FUNCS([pthread_set_name_np])
+   if test $ac_cv_func_pthread_set_name_np != yes; then
+     AC_CACHE_CHECK(
+       [for pthread_setname_np() variant],
+       [ovs_cv_pthread_setname_np],
+       [AC_LINK_IFELSE(
+	 [AC_LANG_PROGRAM([#include <pthread.h>
+  ], [pthread_setname_np(pthread_self(), "name");])],
+	 [ovs_cv_pthread_setname_np=glibc],
+         [AC_LINK_IFELSE(
+	   [AC_LANG_PROGRAM([#include <pthread.h>
+], [pthread_setname_np(pthread_self(), "%s", "name");])],
+           [ovs_cv_pthread_setname_np=netbsd],
+	   [ovs_cv_pthread_setname_np=none])])])
+     case $ovs_cv_pthread_setname_np in # (
+       glibc)
+	  AC_DEFINE(
+	    [HAVE_GLIBC_PTHREAD_SETNAME_NP], [1],
+	    [Define to 1 if pthread_setname_np() is available and takes 2 parameters (like glibc).])
+	  ;; # (
+       netbsd)
+	  AC_DEFINE(
+	    [HAVE_NETBSD_PTHREAD_SETNAME_NP], [1],
+	    [Define to 1 if pthread_setname_np() is available and takes 3 parameters (like NetBSD).])
+	  ;;
+     esac
+   fi])
