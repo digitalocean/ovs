@@ -674,9 +674,6 @@ HAVE_DOT_FALSE
 HAVE_DOT_TRUE
 INCLUDE_PYTHON_COMPAT_FALSE
 INCLUDE_PYTHON_COMPAT_TRUE
-BUILD_OVSDBMONITOR_FALSE
-BUILD_OVSDBMONITOR_TRUE
-PYUIC4
 HAVE_PYTHON_FALSE
 HAVE_PYTHON_TRUE
 PYTHON
@@ -12991,188 +12988,6 @@ else
   HAVE_PYTHON_FALSE=
 fi
 
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for pyuic4" >&5
-$as_echo_n "checking for pyuic4... " >&6; }
-if ${ovs_cv_pyuic4+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  if (pyuic4 --version) >/dev/null 2>&1; then
-       ovs_cv_pyuic4=pyuic4
-     else
-       ovs_cv_pyuic4=no
-     fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_pyuic4" >&5
-$as_echo "$ovs_cv_pyuic4" >&6; }
-
-PYUIC4=${PYUIC4-"${am_missing_run}pyuic4"}
-
-   if test $ovs_cv_pyuic4 != no; then
-     PYUIC4=$ovs_cv_pyuic4
-   fi
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PySide.QtCore Python module" >&5
-$as_echo_n "checking for PySide.QtCore Python module... " >&6; }
-if ${ovs_cv_py_PySide_QtCore+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_PySide_QtCore=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import PySide.QtCore
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import PySide.QtCore
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_PySide_QtCore=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_PySide_QtCore" >&5
-$as_echo "$ovs_cv_py_PySide_QtCore" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PyQt4.QtCore Python module" >&5
-$as_echo_n "checking for PyQt4.QtCore Python module... " >&6; }
-if ${ovs_cv_py_PyQt4_QtCore+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_PyQt4_QtCore=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import PyQt4.QtCore
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import PyQt4.QtCore
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_PyQt4_QtCore=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_PyQt4_QtCore" >&5
-$as_echo "$ovs_cv_py_PyQt4_QtCore" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for twisted.conch.ssh Python module" >&5
-$as_echo_n "checking for twisted.conch.ssh Python module... " >&6; }
-if ${ovs_cv_py_twisted_conch_ssh+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_twisted_conch_ssh=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import twisted.conch.ssh
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import twisted.conch.ssh
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_twisted_conch_ssh=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_twisted_conch_ssh" >&5
-$as_echo "$ovs_cv_py_twisted_conch_ssh" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for twisted.internet Python module" >&5
-$as_echo_n "checking for twisted.internet Python module... " >&6; }
-if ${ovs_cv_py_twisted_internet+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_twisted_internet=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import twisted.internet
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import twisted.internet
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_twisted_internet=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_twisted_internet" >&5
-$as_echo "$ovs_cv_py_twisted_internet" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for twisted.application Python module" >&5
-$as_echo_n "checking for twisted.application Python module... " >&6; }
-if ${ovs_cv_py_twisted_application+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_twisted_application=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import twisted.application
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import twisted.application
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_twisted_application=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_twisted_application" >&5
-$as_echo "$ovs_cv_py_twisted_application" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for json Python module" >&5
-$as_echo_n "checking for json Python module... " >&6; }
-if ${ovs_cv_py_json+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_json=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import json
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import json
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_json=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_json" >&5
-$as_echo "$ovs_cv_py_json" >&6; }
-
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for zope.interface Python module" >&5
-$as_echo_n "checking for zope.interface Python module... " >&6; }
-if ${ovs_cv_py_zope_interface+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ovs_cv_py_zope_interface=no
-      if test $HAVE_PYTHON = yes; then
-        $as_echo "running $PYTHON -c 'import zope.interface
-import sys
-sys.exit(0)'..." >&5 2>&1
-        if $PYTHON -c 'import zope.interface
-import sys
-sys.exit(0)' >&5 2>&1; then
-          ovs_cv_py_zope_interface=yes
-        fi
-      fi
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ovs_cv_py_zope_interface" >&5
-$as_echo "$ovs_cv_py_zope_interface" >&6; }
-   if (test $ovs_cv_py_PySide_QtCore = yes \
-       || test $ovs_cv_py_PyQt4_QtCore = yes) \
-      && test $ovs_cv_py_twisted_conch_ssh = yes \
-      && test $ovs_cv_py_twisted_internet = yes \
-      && test $ovs_cv_py_twisted_application = yes \
-      && test $ovs_cv_py_json = yes \
-      && test $ovs_cv_py_zope_interface = yes; then
-     BUILD_OVSDBMONITOR=yes
-   else
-     BUILD_OVSDBMONITOR=no
-   fi
-   { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build ovsdbmonitor" >&5
-$as_echo_n "checking whether to build ovsdbmonitor... " >&6; }
-   { $as_echo "$as_me:${as_lineno-$LINENO}: result: $BUILD_OVSDBMONITOR" >&5
-$as_echo "$BUILD_OVSDBMONITOR" >&6; }
-    if test $BUILD_OVSDBMONITOR = yes; then
-  BUILD_OVSDBMONITOR_TRUE=
-  BUILD_OVSDBMONITOR_FALSE='#'
-else
-  BUILD_OVSDBMONITOR_TRUE='#'
-  BUILD_OVSDBMONITOR_FALSE=
-fi
-
 
    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for uuid Python module" >&5
 $as_echo_n "checking for uuid Python module... " >&6; }
@@ -16768,8 +16583,6 @@ ac_config_files="$ac_config_files tests/atlocal"
 ac_config_commands="$ac_config_commands include/openflow/openflow.h.stamp"
 
 
-ac_config_commands="$ac_config_commands ovsdb/ovsdbmonitor/dummy"
-
 ac_config_commands="$ac_config_commands utilities/bugtool/dummy"
 
 
@@ -16935,10 +16748,6 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${HAVE_PYTHON_TRUE}" && test -z "${HAVE_PYTHON_FALSE}"; then
   as_fn_error $? "conditional \"HAVE_PYTHON\" was never defined.
-Usually this means the macro was only invoked conditionally." "$LINENO" 5
-fi
-if test -z "${BUILD_OVSDBMONITOR_TRUE}" && test -z "${BUILD_OVSDBMONITOR_FALSE}"; then
-  as_fn_error $? "conditional \"BUILD_OVSDBMONITOR\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${INCLUDE_PYTHON_COMPAT_TRUE}" && test -z "${INCLUDE_PYTHON_COMPAT_FALSE}"; then
@@ -17873,7 +17682,6 @@ do
     "datapath/linux/Makefile.main") CONFIG_FILES="$CONFIG_FILES datapath/linux/Makefile.main" ;;
     "tests/atlocal") CONFIG_FILES="$CONFIG_FILES tests/atlocal" ;;
     "include/openflow/openflow.h.stamp") CONFIG_COMMANDS="$CONFIG_COMMANDS include/openflow/openflow.h.stamp" ;;
-    "ovsdb/ovsdbmonitor/dummy") CONFIG_COMMANDS="$CONFIG_COMMANDS ovsdb/ovsdbmonitor/dummy" ;;
     "utilities/bugtool/dummy") CONFIG_COMMANDS="$CONFIG_COMMANDS utilities/bugtool/dummy" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
@@ -19218,7 +19026,6 @@ fi
   chmod +x "$ofile"
 
  ;;
-    "ovsdb/ovsdbmonitor/dummy":C) : ;;
     "utilities/bugtool/dummy":C) : ;;
 
   esac

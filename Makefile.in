@@ -15,7 +15,7 @@
 
 @SET_MAKE@
 
-# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+# Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -150,7 +150,6 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 	$(srcdir)/include/sparse/automake.mk $(srcdir)/lib/automake.mk \
 	$(srcdir)/m4/automake.mk $(srcdir)/manpages.mk \
 	$(srcdir)/ofproto/automake.mk $(srcdir)/ovsdb/automake.mk \
-	$(srcdir)/ovsdb/ovsdbmonitor/automake.mk \
 	$(srcdir)/python/automake.mk \
 	$(srcdir)/python/compat/automake.mk $(srcdir)/rhel/automake.mk \
 	$(srcdir)/tests/automake.mk $(srcdir)/third-party/automake.mk \
@@ -222,13 +221,7 @@ DIST_COMMON = README $(am__configure_deps) $(am__noinst_HEADERS_DIST) \
 @HAVE_PYTHON_TRUE@am__append_32 = $(HSTAMP_FILES)
 @HAVE_PYTHON_TRUE@am__append_33 = $(HSTAMP_FILES)
 @HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_34 = vswitchd/vswitch.gv vswitchd/vswitch.pic
-@BUILD_OVSDBMONITOR_TRUE@am__append_35 = ovsdb/ovsdbmonitor/ovsdbmonitor
-@BUILD_OVSDBMONITOR_TRUE@am__append_36 = \
-@BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor \
-@BUILD_OVSDBMONITOR_TRUE@	ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
-
-@BUILD_OVSDBMONITOR_TRUE@am__append_37 = ovsdb/ovsdbmonitor/ovsdbmonitor.1
-@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_38 = vtep/vtep.gv vtep/vtep.pic
+@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_35 = vtep/vtep.gv vtep/vtep.pic
 subdir = .
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/absolute-header.m4 \
@@ -281,9 +274,8 @@ am__installdirs = "$(DESTDIR)$(libdir)" "$(DESTDIR)$(bindir)" \
 	"$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(sbindir)" \
 	"$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(man1dir)" \
 	"$(DESTDIR)$(man5dir)" "$(DESTDIR)$(man8dir)" \
-	"$(DESTDIR)$(desktopdir)" "$(DESTDIR)$(pkgdatadir)" \
-	"$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(pkgdatadir)" \
-	"$(DESTDIR)$(ovsdbmonitordir)" "$(DESTDIR)$(pkgdatadir)" \
+	"$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)" \
+	"$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(pkgdatadir)" \
 	"$(DESTDIR)$(scriptsdir)"
 LTLIBRARIES = $(lib_LTLIBRARIES)
 am__DEPENDENCIES_1 =
@@ -748,9 +740,9 @@ man5dir = $(mandir)/man5
 man8dir = $(mandir)/man8
 NROFF = nroff
 MANS = $(dist_man_MANS) $(man_MANS)
-DATA = $(desktop_DATA) $(dist_pkgdata_DATA) $(dist_scripts_DATA) \
-	$(nobase_pkgdata_DATA) $(noinst_DATA) $(ovsdbmonitor_DATA) \
-	$(pkgdata_DATA) $(scripts_DATA)
+DATA = $(dist_pkgdata_DATA) $(dist_scripts_DATA) \
+	$(nobase_pkgdata_DATA) $(noinst_DATA) $(pkgdata_DATA) \
+	$(scripts_DATA)
 am__noinst_HEADERS_DIST = BUILD.Windows CodingStyle DESIGN FAQ INSTALL \
 	INSTALL.Debian INSTALL.Fedora INSTALL.KVM INSTALL.Libvirt \
 	INSTALL.RHEL INSTALL.SSL INSTALL.XenServer INSTALL.userspace \
@@ -778,10 +770,10 @@ am__noinst_HEADERS_DIST = BUILD.Windows CodingStyle DESIGN FAQ INSTALL \
 	utilities/bugtool/ovs-bugtool.8.in tests/test-controller.8.in \
 	vswitchd/ovs-vswitchd.8.in ovsdb/ovsdb-tool.1.in \
 	ovsdb/ovsdb-client.1.in ovsdb/ovsdb-server.1.in \
-	ovsdb/ovsdb-idlc.1 ovsdb/ovsdbmonitor/ovsdbmonitor.1 \
-	vtep/vtep-ctl.8.in build-aux/thread-safety-blacklist \
-	m4/absolute-header.m4 m4/include_next.m4 lib/string.h.in \
-	lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
+	ovsdb/ovsdb-idlc.1 vtep/vtep-ctl.8.in \
+	build-aux/thread-safety-blacklist m4/absolute-header.m4 \
+	m4/include_next.m4 lib/string.h.in lib/dh1024.pem \
+	lib/dh2048.pem lib/dh4096.pem lib/dirs.c.in \
 	$(srcdir)/lib/vswitch-idl.ann $(srcdir)/lib/vtep-idl.ann \
 	build-aux/extract-ofp-errors lib/ofp-errors.inc \
 	build-aux/extract-ofp-msgs lib/ofp-msgs.inc ofproto/ipfix.xml \
@@ -873,8 +865,7 @@ am__noinst_HEADERS_DIST = BUILD.Windows CodingStyle DESIGN FAQ INSTALL \
 	debian/openvswitch-test.manpages \
 	debian/openvswitch-vtep.default debian/openvswitch-vtep.dirs \
 	debian/openvswitch-vtep.init debian/openvswitch-vtep.install \
-	debian/openvswitch-vtep.manpages debian/ovsdbmonitor.install \
-	debian/ovsdbmonitor.manpages debian/ovs-monitor-ipsec \
+	debian/openvswitch-vtep.manpages debian/ovs-monitor-ipsec \
 	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install debian/rules \
 	debian/rules.modules debian/ifupdown.sh debian/source/format \
@@ -885,32 +876,7 @@ am__noinst_HEADERS_DIST = BUILD.Windows CodingStyle DESIGN FAQ INSTALL \
 	$(srcdir)/lib/vtep-idl.h $(srcdir)/lib/vtep-idl.ovsidl \
 	tests/idltest.c tests/idltest.h tests/idltest.ovsidl \
 	ovsdb/ovsdb-doc ovsdb/ovsdb-dot.in ovsdb/dot2pic \
-	ovsdb/ovsdbmonitor/OVEApp.py \
-	ovsdb/ovsdbmonitor/OVECommonWindow.py \
-	ovsdb/ovsdbmonitor/OVEConfig.py \
-	ovsdb/ovsdbmonitor/OVEConfigWindow.py \
-	ovsdb/ovsdbmonitor/OVEFetch.py \
-	ovsdb/ovsdbmonitor/OVEFlowWindow.py \
-	ovsdb/ovsdbmonitor/OVEHostWindow.py \
-	ovsdb/ovsdbmonitor/OVELogWindow.py \
-	ovsdb/ovsdbmonitor/OVELogger.py \
-	ovsdb/ovsdbmonitor/OVEMainWindow.py \
-	ovsdb/ovsdbmonitor/OVEStandard.py \
-	ovsdb/ovsdbmonitor/OVEUtil.py \
-	ovsdb/ovsdbmonitor/Ui_ConfigWindow.py \
-	ovsdb/ovsdbmonitor/Ui_FlowWindow.py \
-	ovsdb/ovsdbmonitor/Ui_HostWindow.py \
-	ovsdb/ovsdbmonitor/Ui_LogWindow.py \
-	ovsdb/ovsdbmonitor/Ui_MainWindow.py \
-	ovsdb/ovsdbmonitor/qt4reactor.py ovsdb/ovsdbmonitor/COPYING \
-	ovsdb/ovsdbmonitor/ConfigWindow.ui \
-	ovsdb/ovsdbmonitor/FlowWindow.ui \
-	ovsdb/ovsdbmonitor/HostWindow.ui \
-	ovsdb/ovsdbmonitor/LogWindow.ui \
-	ovsdb/ovsdbmonitor/MainWindow.ui \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.in \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.desktop rhel/README.RHEL \
-	rhel/automake.mk rhel/etc_init.d_openvswitch \
+	rhel/README.RHEL rhel/automake.mk rhel/etc_init.d_openvswitch \
 	rhel/etc_logrotate.d_openvswitch \
 	rhel/etc_sysconfig_network-scripts_ifdown-ovs \
 	rhel/etc_sysconfig_network-scripts_ifup-ovs \
@@ -1094,7 +1060,6 @@ PKIDIR = @PKIDIR@
 PRAGMA_COLUMNS = @PRAGMA_COLUMNS@
 PRAGMA_SYSTEM_HEADER = @PRAGMA_SYSTEM_HEADER@
 PYTHON = @PYTHON@
-PYUIC4 = @PYUIC4@
 RANLIB = @RANLIB@
 RUNDIR = @RUNDIR@
 SED = @SED@
@@ -1225,8 +1190,7 @@ DISTCLEANFILES = utilities/ovs-appctl.8 utilities/ovs-ctl \
 	vswitchd/ovs-vswitchd.8 $(am__append_34) \
 	vswitchd/ovs-vswitchd.conf.db.5 ovsdb/ovsdb-tool.1 \
 	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 ovsdb/ovsdb-idlc \
-	ovsdb/ovsdb-dot $(am__append_36) vtep/vtep-ctl.8 \
-	$(am__append_38) vtep/vtep.5
+	ovsdb/ovsdb-dot vtep/vtep-ctl.8 $(am__append_35) vtep/vtep.5
 PYCOV_CLEAN_FILES = build-aux/check-structs,cover \
 	$(CHECK_PYFILES:.py=.py,cover) .coverage \
 	$(PYFILES:.py=.py,cover)
@@ -1302,24 +1266,15 @@ EXTRA_DIST = BUILD.Windows CodingStyle DESIGN FAQ INSTALL \
 	debian/openvswitch-test.manpages \
 	debian/openvswitch-vtep.default debian/openvswitch-vtep.dirs \
 	debian/openvswitch-vtep.init debian/openvswitch-vtep.install \
-	debian/openvswitch-vtep.manpages debian/ovsdbmonitor.install \
-	debian/ovsdbmonitor.manpages debian/ovs-monitor-ipsec \
+	debian/openvswitch-vtep.manpages debian/ovs-monitor-ipsec \
 	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install debian/rules \
 	debian/rules.modules debian/ifupdown.sh debian/source/format \
 	vswitchd/INTERNALS vswitchd/vswitch.ovsschema \
 	vswitchd/vswitch.xml ovsdb/SPECS ovsdb/ovsdb-idlc.in \
 	$(OVSIDL_BUILT) ovsdb/ovsdb-doc ovsdb/ovsdb-dot.in \
-	ovsdb/dot2pic $(ovsdbmonitor_pyfiles) \
-	ovsdb/ovsdbmonitor/COPYING ovsdb/ovsdbmonitor/ConfigWindow.ui \
-	ovsdb/ovsdbmonitor/FlowWindow.ui \
-	ovsdb/ovsdbmonitor/HostWindow.ui \
-	ovsdb/ovsdbmonitor/LogWindow.ui \
-	ovsdb/ovsdbmonitor/MainWindow.ui \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.in \
-	ovsdb/ovsdbmonitor/ovsdbmonitor.desktop rhel/README.RHEL \
-	rhel/automake.mk rhel/etc_init.d_openvswitch \
-	rhel/etc_logrotate.d_openvswitch \
+	ovsdb/dot2pic rhel/README.RHEL rhel/automake.mk \
+	rhel/etc_init.d_openvswitch rhel/etc_logrotate.d_openvswitch \
 	rhel/etc_sysconfig_network-scripts_ifdown-ovs \
 	rhel/etc_sysconfig_network-scripts_ifup-ovs \
 	rhel/openvswitch-kmod-rhel6.spec \
@@ -1361,8 +1316,7 @@ dist_sbin_SCRIPTS =
 dist_scripts_SCRIPTS = 
 dist_scripts_DATA = 
 INSTALL_DATA_LOCAL = lib-install-data-local $(am__append_26)
-UNINSTALL_LOCAL = $(am__append_27) ovsdbmonitor-uninstall-local \
-	ovs-uninstall-local
+UNINSTALL_LOCAL = $(am__append_27) ovs-uninstall-local
 # ovsdb-tool.1
 # ovsdb-client.1
 # ovsdb-server.1
@@ -1375,8 +1329,7 @@ man_MANS = utilities/ovs-appctl.8 utilities/ovs-benchmark.1 \
 	utilities/ovs-vlan-test.8 utilities/ovs-vsctl.8 \
 	$(am__append_22) vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-vswitchd.conf.db.5 ovsdb/ovsdb-tool.1 \
-	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 $(am__append_37) \
-	vtep/vtep-ctl.8
+	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 vtep/vtep-ctl.8
 MAN_FRAGMENTS = lib/common.man lib/common-syn.man \
 	lib/coverage-unixctl.man lib/daemon.man lib/daemon-syn.man \
 	lib/memory-unixctl.man lib/ofp-version.man lib/ovs.tmac \
@@ -1399,8 +1352,7 @@ MAN_ROOTS = utilities/ovs-appctl.8.in utilities/ovs-benchmark.1.in \
 	$(am__append_23) tests/test-controller.8.in \
 	vswitchd/ovs-vswitchd.8.in ovsdb/ovsdb-tool.1.in \
 	ovsdb/ovsdb-client.1.in ovsdb/ovsdb-server.1.in \
-	ovsdb/ovsdb-idlc.1 ovsdb/ovsdbmonitor/ovsdbmonitor.1 \
-	vtep/vtep-ctl.8.in
+	ovsdb/ovsdb-idlc.1 vtep/vtep-ctl.8.in
 noinst_DATA = 
 
 # This ensures that files added to EXTRA_DIST are always distributed,
@@ -1425,7 +1377,7 @@ noinst_HEADERS = $(EXTRA_DIST) include/linux/if_ether.h \
 lib_LTLIBRARIES = lib/libopenvswitch.la lib/libsflow.la \
 	ofproto/libofproto.la ovsdb/libovsdb.la
 noinst_man_MANS = tests/test-controller.8
-noinst_SCRIPTS = ovsdb/ovsdb-idlc ovsdb/ovsdb-dot $(am__append_35)
+noinst_SCRIPTS = ovsdb/ovsdb-idlc ovsdb/ovsdb-dot
 
 # vswitch IDL
 
@@ -1441,7 +1393,7 @@ sbin_SCRIPTS = $(am__append_20)
 scripts_SCRIPTS = utilities/ovs-check-dead-ifs utilities/ovs-ctl \
 	utilities/ovs-save $(am__append_25) vtep/ovs-vtep
 scripts_DATA = utilities/ovs-lib
-SUFFIXES = .in $(am__append_31) .ovsidl .ovsschema .ui .py
+SUFFIXES = .in $(am__append_31) .ovsidl .ovsschema
 check_DATA = $(am__append_28)
 scriptsdir = $(pkgdatadir)/scripts
 ro_c = echo '/* -*- mode: c; buffer-read-only: t -*- */'
@@ -1875,30 +1827,6 @@ ovsdb_ovsdb_server_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la $(SSL_LIBS)
 OVSDB_IDLC = $(run_python) $(srcdir)/ovsdb/ovsdb-idlc.in
 OVSDB_DOC = $(run_python) $(srcdir)/ovsdb/ovsdb-doc
 OVSDB_DOT = $(run_python) $(srcdir)/ovsdb/ovsdb-dot.in
-ovsdbmonitor_pyfiles = \
-	ovsdb/ovsdbmonitor/OVEApp.py \
-	ovsdb/ovsdbmonitor/OVECommonWindow.py \
-	ovsdb/ovsdbmonitor/OVEConfig.py \
-	ovsdb/ovsdbmonitor/OVEConfigWindow.py \
-	ovsdb/ovsdbmonitor/OVEFetch.py \
-	ovsdb/ovsdbmonitor/OVEFlowWindow.py \
-	ovsdb/ovsdbmonitor/OVEHostWindow.py \
-	ovsdb/ovsdbmonitor/OVELogWindow.py \
-	ovsdb/ovsdbmonitor/OVELogger.py \
-	ovsdb/ovsdbmonitor/OVEMainWindow.py \
-	ovsdb/ovsdbmonitor/OVEStandard.py \
-	ovsdb/ovsdbmonitor/OVEUtil.py \
-	ovsdb/ovsdbmonitor/Ui_ConfigWindow.py \
-	ovsdb/ovsdbmonitor/Ui_FlowWindow.py \
-	ovsdb/ovsdbmonitor/Ui_HostWindow.py \
-	ovsdb/ovsdbmonitor/Ui_LogWindow.py \
-	ovsdb/ovsdbmonitor/Ui_MainWindow.py \
-	ovsdb/ovsdbmonitor/qt4reactor.py
-
-ovsdbmonitordir = ${datadir}/ovsdbmonitor
-desktopdir = ${datadir}/applications
-@BUILD_OVSDBMONITOR_TRUE@ovsdbmonitor_DATA = $(ovsdbmonitor_pyfiles)
-@BUILD_OVSDBMONITOR_TRUE@desktop_DATA = ovsdb/ovsdbmonitor/ovsdbmonitor.desktop
 update_rhel_spec = \
   ($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
     < $(srcdir)/rhel/$(@F).in > $(@F).tmp || exit 1; \
@@ -1951,10 +1879,10 @@ all: $(BUILT_SOURCES) config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 
 .SUFFIXES:
-.SUFFIXES: .in .h .hstamp .ovsidl .ovsschema .ui .py .c .lo .o .obj
+.SUFFIXES: .in .h .hstamp .ovsidl .ovsschema .c .lo .o .obj
 am--refresh: Makefile
 	@:
-$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/manpages.mk $(srcdir)/m4/automake.mk $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/automake.mk $(srcdir)/python/compat/automake.mk $(srcdir)/tutorial/automake.mk $(srcdir)/vtep/automake.mk $(am__configure_deps)
+$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/manpages.mk $(srcdir)/m4/automake.mk $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/automake.mk $(srcdir)/python/compat/automake.mk $(srcdir)/tutorial/automake.mk $(srcdir)/vtep/automake.mk $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
 	    *$$dep*) \
@@ -1977,7 +1905,7 @@ Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	    echo ' cd $(top_builddir) && $(SHELL) ./config.status $@ $(am__depfiles_maybe)'; \
 	    cd $(top_builddir) && $(SHELL) ./config.status $@ $(am__depfiles_maybe);; \
 	esac;
-$(srcdir)/manpages.mk $(srcdir)/m4/automake.mk $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/ovsdb/ovsdbmonitor/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/automake.mk $(srcdir)/python/compat/automake.mk $(srcdir)/tutorial/automake.mk $(srcdir)/vtep/automake.mk:
+$(srcdir)/manpages.mk $(srcdir)/m4/automake.mk $(srcdir)/lib/automake.mk $(srcdir)/ofproto/automake.mk $(srcdir)/utilities/automake.mk $(srcdir)/utilities/bugtool/automake.mk $(srcdir)/tests/automake.mk $(srcdir)/include/automake.mk $(srcdir)/include/linux/automake.mk $(srcdir)/include/openflow/automake.mk $(srcdir)/include/openvswitch/automake.mk $(srcdir)/include/sparse/automake.mk $(srcdir)/third-party/automake.mk $(srcdir)/debian/automake.mk $(srcdir)/vswitchd/automake.mk $(srcdir)/ovsdb/automake.mk $(srcdir)/rhel/automake.mk $(srcdir)/xenserver/automake.mk $(srcdir)/python/automake.mk $(srcdir)/python/compat/automake.mk $(srcdir)/tutorial/automake.mk $(srcdir)/vtep/automake.mk:
 
 $(top_builddir)/config.status: $(top_srcdir)/configure $(CONFIG_STATUS_DEPENDENCIES)
 	$(SHELL) ./config.status --recheck
@@ -3848,27 +3776,6 @@ uninstall-man8:
 	} | sed -e 's,.*/,,;h;s,.*\.,,;s,^[^8][0-9a-z]*$$,8,;x' \
 	      -e 's,\.[0-9a-z]*$$,,;$(transform);G;s,\n,.,'`; \
 	dir='$(DESTDIR)$(man8dir)'; $(am__uninstall_files_from_dir)
-install-desktopDATA: $(desktop_DATA)
-	@$(NORMAL_INSTALL)
-	@list='$(desktop_DATA)'; test -n "$(desktopdir)" || list=; \
-	if test -n "$$list"; then \
-	  echo " $(MKDIR_P) '$(DESTDIR)$(desktopdir)'"; \
-	  $(MKDIR_P) "$(DESTDIR)$(desktopdir)" || exit 1; \
-	fi; \
-	for p in $$list; do \
-	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
-	  echo "$$d$$p"; \
-	done | $(am__base_list) | \
-	while read files; do \
-	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(desktopdir)'"; \
-	  $(INSTALL_DATA) $$files "$(DESTDIR)$(desktopdir)" || exit $$?; \
-	done
-
-uninstall-desktopDATA:
-	@$(NORMAL_UNINSTALL)
-	@list='$(desktop_DATA)'; test -n "$(desktopdir)" || list=; \
-	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
-	dir='$(DESTDIR)$(desktopdir)'; $(am__uninstall_files_from_dir)
 install-dist_pkgdataDATA: $(dist_pkgdata_DATA)
 	@$(NORMAL_INSTALL)
 	@list='$(dist_pkgdata_DATA)'; test -n "$(pkgdatadir)" || list=; \
@@ -3935,27 +3842,6 @@ uninstall-nobase_pkgdataDATA:
 	@list='$(nobase_pkgdata_DATA)'; test -n "$(pkgdatadir)" || list=; \
 	$(am__nobase_strip_setup); files=`$(am__nobase_strip)`; \
 	dir='$(DESTDIR)$(pkgdatadir)'; $(am__uninstall_files_from_dir)
-install-ovsdbmonitorDATA: $(ovsdbmonitor_DATA)
-	@$(NORMAL_INSTALL)
-	@list='$(ovsdbmonitor_DATA)'; test -n "$(ovsdbmonitordir)" || list=; \
-	if test -n "$$list"; then \
-	  echo " $(MKDIR_P) '$(DESTDIR)$(ovsdbmonitordir)'"; \
-	  $(MKDIR_P) "$(DESTDIR)$(ovsdbmonitordir)" || exit 1; \
-	fi; \
-	for p in $$list; do \
-	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
-	  echo "$$d$$p"; \
-	done | $(am__base_list) | \
-	while read files; do \
-	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(ovsdbmonitordir)'"; \
-	  $(INSTALL_DATA) $$files "$(DESTDIR)$(ovsdbmonitordir)" || exit $$?; \
-	done
-
-uninstall-ovsdbmonitorDATA:
-	@$(NORMAL_UNINSTALL)
-	@list='$(ovsdbmonitor_DATA)'; test -n "$(ovsdbmonitordir)" || list=; \
-	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
-	dir='$(DESTDIR)$(ovsdbmonitordir)'; $(am__uninstall_files_from_dir)
 install-pkgdataDATA: $(pkgdata_DATA)
 	@$(NORMAL_INSTALL)
 	@list='$(pkgdata_DATA)'; test -n "$(pkgdatadir)" || list=; \
@@ -4348,7 +4234,7 @@ install-binPROGRAMS: install-libLTLIBRARIES
 
 installdirs: installdirs-recursive
 installdirs-am:
-	for dir in "$(DESTDIR)$(libdir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(man1dir)" "$(DESTDIR)$(man5dir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(desktopdir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(ovsdbmonitordir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)"; do \
+	for dir in "$(DESTDIR)$(libdir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(man1dir)" "$(DESTDIR)$(man5dir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(scriptsdir)"; do \
 	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
 	done
 install: $(BUILT_SOURCES)
@@ -4399,7 +4285,6 @@ maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
 	-test -z "$(BUILT_SOURCES)" || rm -f $(BUILT_SOURCES)
-@BUILD_OVSDBMONITOR_FALSE@install-exec-hook:
 clean: clean-recursive
 
 clean-am: clean-binPROGRAMS clean-generic clean-libLTLIBRARIES \
@@ -4425,11 +4310,10 @@ info: info-recursive
 
 info-am:
 
-install-data-am: install-data-local install-desktopDATA \
-	install-dist_pkgdataDATA install-dist_pkgdataSCRIPTS \
-	install-dist_scriptsDATA install-dist_scriptsSCRIPTS \
-	install-man install-nobase_pkgdataDATA \
-	install-ovsdbmonitorDATA install-pkgdataDATA \
+install-data-am: install-data-local install-dist_pkgdataDATA \
+	install-dist_pkgdataSCRIPTS install-dist_scriptsDATA \
+	install-dist_scriptsSCRIPTS install-man \
+	install-nobase_pkgdataDATA install-pkgdataDATA \
 	install-scriptsDATA install-scriptsSCRIPTS
 
 install-dvi: install-dvi-recursive
@@ -4439,8 +4323,7 @@ install-dvi-am:
 install-exec-am: install-binPROGRAMS install-binSCRIPTS \
 	install-dist_sbinSCRIPTS install-libLTLIBRARIES \
 	install-sbinPROGRAMS install-sbinSCRIPTS
-	@$(NORMAL_INSTALL)
-	$(MAKE) $(AM_MAKEFLAGS) install-exec-hook
+
 install-html: install-html-recursive
 
 install-html-am:
@@ -4482,11 +4365,10 @@ ps: ps-recursive
 ps-am:
 
 uninstall-am: uninstall-binPROGRAMS uninstall-binSCRIPTS \
-	uninstall-desktopDATA uninstall-dist_pkgdataDATA \
-	uninstall-dist_pkgdataSCRIPTS uninstall-dist_sbinSCRIPTS \
-	uninstall-dist_scriptsDATA uninstall-dist_scriptsSCRIPTS \
-	uninstall-libLTLIBRARIES uninstall-local uninstall-man \
-	uninstall-nobase_pkgdataDATA uninstall-ovsdbmonitorDATA \
+	uninstall-dist_pkgdataDATA uninstall-dist_pkgdataSCRIPTS \
+	uninstall-dist_sbinSCRIPTS uninstall-dist_scriptsDATA \
+	uninstall-dist_scriptsSCRIPTS uninstall-libLTLIBRARIES \
+	uninstall-local uninstall-man uninstall-nobase_pkgdataDATA \
 	uninstall-pkgdataDATA uninstall-sbinPROGRAMS \
 	uninstall-sbinSCRIPTS uninstall-scriptsDATA \
 	uninstall-scriptsSCRIPTS
@@ -4494,8 +4376,8 @@ uninstall-am: uninstall-binPROGRAMS uninstall-binSCRIPTS \
 uninstall-man: uninstall-man1 uninstall-man5 uninstall-man8
 
 .MAKE: $(RECURSIVE_CLEAN_TARGETS) $(RECURSIVE_TARGETS) all check \
-	check-am ctags-recursive install install-am install-exec-am \
-	install-strip tags-recursive
+	check-am ctags-recursive install install-am install-strip \
+	tags-recursive
 
 .PHONY: $(RECURSIVE_CLEAN_TARGETS) $(RECURSIVE_TARGETS) CTAGS GTAGS \
 	all all-am all-local am--refresh check check-am check-local \
@@ -4509,28 +4391,26 @@ uninstall-man: uninstall-man1 uninstall-man5 uninstall-man8
 	distuninstallcheck dvi dvi-am html html-am info info-am \
 	install install-am install-binPROGRAMS install-binSCRIPTS \
 	install-data install-data-am install-data-local \
-	install-desktopDATA install-dist_pkgdataDATA \
-	install-dist_pkgdataSCRIPTS install-dist_sbinSCRIPTS \
-	install-dist_scriptsDATA install-dist_scriptsSCRIPTS \
-	install-dvi install-dvi-am install-exec install-exec-am \
-	install-exec-hook install-html install-html-am install-info \
-	install-info-am install-libLTLIBRARIES install-man \
-	install-man1 install-man5 install-man8 \
-	install-nobase_pkgdataDATA install-ovsdbmonitorDATA \
-	install-pdf install-pdf-am install-pkgdataDATA install-ps \
-	install-ps-am install-sbinPROGRAMS install-sbinSCRIPTS \
-	install-scriptsDATA install-scriptsSCRIPTS install-strip \
-	installcheck installcheck-am installdirs installdirs-am \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-compile mostlyclean-generic mostlyclean-libtool \
-	pdf pdf-am ps ps-am tags tags-recursive uninstall uninstall-am \
+	install-dist_pkgdataDATA install-dist_pkgdataSCRIPTS \
+	install-dist_sbinSCRIPTS install-dist_scriptsDATA \
+	install-dist_scriptsSCRIPTS install-dvi install-dvi-am \
+	install-exec install-exec-am install-html install-html-am \
+	install-info install-info-am install-libLTLIBRARIES \
+	install-man install-man1 install-man5 install-man8 \
+	install-nobase_pkgdataDATA install-pdf install-pdf-am \
+	install-pkgdataDATA install-ps install-ps-am \
+	install-sbinPROGRAMS install-sbinSCRIPTS install-scriptsDATA \
+	install-scriptsSCRIPTS install-strip installcheck \
+	installcheck-am installdirs installdirs-am maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
+	tags tags-recursive uninstall uninstall-am \
 	uninstall-binPROGRAMS uninstall-binSCRIPTS \
-	uninstall-desktopDATA uninstall-dist_pkgdataDATA \
-	uninstall-dist_pkgdataSCRIPTS uninstall-dist_sbinSCRIPTS \
-	uninstall-dist_scriptsDATA uninstall-dist_scriptsSCRIPTS \
-	uninstall-libLTLIBRARIES uninstall-local uninstall-man \
-	uninstall-man1 uninstall-man5 uninstall-man8 \
-	uninstall-nobase_pkgdataDATA uninstall-ovsdbmonitorDATA \
+	uninstall-dist_pkgdataDATA uninstall-dist_pkgdataSCRIPTS \
+	uninstall-dist_sbinSCRIPTS uninstall-dist_scriptsDATA \
+	uninstall-dist_scriptsSCRIPTS uninstall-libLTLIBRARIES \
+	uninstall-local uninstall-man uninstall-man1 uninstall-man5 \
+	uninstall-man8 uninstall-nobase_pkgdataDATA \
 	uninstall-pkgdataDATA uninstall-sbinPROGRAMS \
 	uninstall-sbinSCRIPTS uninstall-scriptsDATA \
 	uninstall-scriptsSCRIPTS
@@ -4551,7 +4431,6 @@ uninstall-man: uninstall-man1 uninstall-man5 uninstall-man8
                 -e 's,[@]bindir[@],$(bindir),g' \
                 -e 's,[@]sbindir[@],$(sbindir),g' \
                 -e 's,[@]abs_top_srcdir[@],$(abs_top_srcdir),g' \
-                -e 's,[@]ovsdbmonitordir[@],$(ovsdbmonitordir),g' \
             > $@.tmp
 	@if head -n 1 $@.tmp | grep '#!' > /dev/null; then \
 	    echo chmod +x $@.tmp; \
@@ -5164,22 +5043,6 @@ vswitchd/vswitch.ovsschema.stamp: vswitchd/vswitch.ovsschema
 # assignments before any targets, so it doesn't seem to be a problem,
 # at least for now.
 $(OVSIDL_BUILT): ovsdb/ovsdb-idlc.in
-@BUILD_OVSDBMONITOR_TRUE@install-exec-hook:
-@BUILD_OVSDBMONITOR_TRUE@	sed -e '/NOINSTALL/d' < ovsdb/ovsdbmonitor/ovsdbmonitor > ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
-@BUILD_OVSDBMONITOR_TRUE@	chmod +x ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
-@BUILD_OVSDBMONITOR_TRUE@	$(INSTALL_PROGRAM) ovsdb/ovsdbmonitor/ovsdbmonitor.tmp $(DESTDIR)$(bindir)/ovsdbmonitor
-@BUILD_OVSDBMONITOR_TRUE@	rm ovsdb/ovsdbmonitor/ovsdbmonitor.tmp
-ovsdbmonitor-uninstall-local:
-	rm -f $(DESTDIR)$(bindir)/ovsdbmonitor
-.ui.py:
-	$(PYUIC4) $< | sed 's/from PyQt4 import QtCore, QtGui/\
-try:\
-    from OVEStandard import globalForcePySide\
-    if globalForcePySide:\
-        raise Exception()\
-    from PyQt4 import QtCore, QtGui\
-except:\
-    from PySide import QtCore, QtGui/' > $@
 
 $(srcdir)/rhel/openvswitch-kmod-rhel6.spec: rhel/openvswitch-kmod-rhel6.spec.in $(top_builddir)/config.status
 	$(update_rhel_spec)

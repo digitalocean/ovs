@@ -189,7 +189,6 @@ PKIDIR = @PKIDIR@
 PRAGMA_COLUMNS = @PRAGMA_COLUMNS@
 PRAGMA_SYSTEM_HEADER = @PRAGMA_SYSTEM_HEADER@
 PYTHON = @PYTHON@
-PYUIC4 = @PYUIC4@
 RANLIB = @RANLIB@
 RUNDIR = @RUNDIR@
 SED = @SED@
@@ -362,9 +361,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --gnu datapath/Makefile
+	  $(AUTOMAKE) --foreign datapath/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \

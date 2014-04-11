@@ -1,3 +1,13 @@
+openvswitch (2.1.0+git20140411-1) unstable; urgency=low
+
+  * New upstream release:
+    - Removed ovsdbmonitor package.  Closes: #744136.
+    - Fix misaligned data accesses that caused test failures.
+  * tests/ofproto-macros.at: Disable scanning logs for WARN and ERR messages,
+    as an experiment to see whether this fixes all the buildd test failures.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Fri, 11 Apr 2014 08:35:10 -0700
+
 openvswitch (2.1.0+git20140325-1) unstable; urgency=low
 
   * New upstream release.
