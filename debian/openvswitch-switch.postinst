@@ -20,6 +20,7 @@ set -e
 
 case "$1" in
     configure)
+        mkdir -p /var/lib/openvswitch
 	DEFAULT=/etc/default/openvswitch-switch
 	TEMPLATE=/usr/share/openvswitch/switch/default.template
 	if ! test -e $DEFAULT; then

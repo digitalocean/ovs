@@ -1,3 +1,14 @@
+openvswitch (2.1.0+git20140411-2) unstable; urgency=low
+
+  * debian/openvswitch-switch.postinst: Add back mysteriously deleted
+    "mkdir" lie.  Closes: #744769.  Thanks to Joshua Powers for reporting
+    this bug.
+  * debian/rules: Try rechecking in serial any tests that fail in
+    parallel, as an experiment to see whether this fixes remaining buildd
+    test failures.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Mon, 14 Apr 2014 08:29:33 -0700
+
 openvswitch (2.1.0+git20140411-1) unstable; urgency=low
 
   * New upstream release:
