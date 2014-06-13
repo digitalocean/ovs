@@ -1,7 +1,14 @@
+openvswitch (2.1.0+git20140411-3) unstable; urgency=low
+
+  * debian/rules: Disable some tests that tend to fail on Debian buildds
+    due to race conditions.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Fri, 13 Jun 2014 06:07:31 -0700
+
 openvswitch (2.1.0+git20140411-2) unstable; urgency=low
 
   * debian/openvswitch-switch.postinst: Add back mysteriously deleted
-    "mkdir" lie.  Closes: #744769.  Thanks to Joshua Powers for reporting
+    "mkdir" line.  Closes: #744769.  Thanks to Joshua Powers for reporting
     this bug.
   * debian/rules: Try rechecking in serial any tests that fail in
     parallel, as an experiment to see whether this fixes remaining buildd

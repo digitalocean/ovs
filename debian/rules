@@ -52,11 +52,15 @@ configure-stamp:
 #Architecture 
 build: build-arch build-indep
 
+# Skip tests 2 734 738 739 because they have races that tend to show up
+# on the Debian autobuilders
+TESTS = 1 3-733 735-737 740-
+
 build-arch: build-arch-stamp
 build-arch-stamp: configure-stamp 
 	$(MAKE) -C _debian
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL)' || \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TESTS)' || \
            $(MAKE) -C _debian check TESTSUITEFLAGS=--recheck; then :; \
 	else \
 		cat _debian/tests/testsuite.log; \
