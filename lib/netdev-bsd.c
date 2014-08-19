@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2011, 2013 Gaetano Catalli.
- * Copyright (c) 2013 YAMAMOTO Takashi.
+ * Copyright (c) 2011, 2013, 2014 Gaetano Catalli.
+ * Copyright (c) 2013, 2014 YAMAMOTO Takashi.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,8 +47,8 @@
 #endif
 
 #include "rtbsd.h"
-#include "connectivity.h"
 #include "coverage.h"
+#include "dpif-netdev.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "ofpbuf.h"
@@ -56,7 +56,6 @@
 #include "ovs-thread.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "seq.h"
 #include "shash.h"
 #include "socket-util.h"
 #include "svec.h"
@@ -66,8 +65,8 @@
 VLOG_DEFINE_THIS_MODULE(netdev_bsd);
 
 
-struct netdev_rx_bsd {
-    struct netdev_rx up;
+struct netdev_rxq_bsd {
+    struct netdev_rxq up;
 
     /* Packet capture descriptor for a system network device.
      * For a tap device this is NULL. */
@@ -151,6 +150,7 @@ static int af_link_ioctl(unsigned long command, const void *arg);
 #endif
 
 static void netdev_bsd_run(void);
+static int netdev_bsd_get_mtu(const struct netdev *netdev_, int *mtup);
 
 static bool
 is_netdev_bsd_class(const struct netdev_class *netdev_class)
@@ -165,11 +165,11 @@ netdev_bsd_cast(const struct netdev *netdev)
     return CONTAINER_OF(netdev, struct netdev_bsd, up);
 }
 
-static struct netdev_rx_bsd *
-netdev_rx_bsd_cast(const struct netdev_rx *rx)
+static struct netdev_rxq_bsd *
+netdev_rxq_bsd_cast(const struct netdev_rxq *rxq)
 {
-    ovs_assert(is_netdev_bsd_class(netdev_get_class(rx->netdev)));
-    return CONTAINER_OF(rx, struct netdev_rx_bsd, up);
+    ovs_assert(is_netdev_bsd_class(netdev_get_class(rxq->netdev)));
+    return CONTAINER_OF(rxq, struct netdev_rxq_bsd, up);
 }
 
 static const char *
@@ -215,7 +215,7 @@ netdev_bsd_cache_cb(const struct rtbsd_change *change,
             if (is_netdev_bsd_class(netdev_class)) {
                 dev = netdev_bsd_cast(base_dev);
                 dev->cache_valid = 0;
-                seq_change(connectivity_seq_get());
+                netdev_change_seq_changed(base_dev);
             }
             netdev_close(base_dev);
         }
@@ -233,7 +233,7 @@ netdev_bsd_cache_cb(const struct rtbsd_change *change,
             struct netdev *netdev = node->data;
             dev = netdev_bsd_cast(netdev);
             dev->cache_valid = 0;
-            seq_change(connectivity_seq_get());
+            netdev_change_seq_changed(netdev);
             netdev_close(netdev);
         }
         shash_destroy(&device_shash);
@@ -473,29 +473,29 @@ error:
     return error;
 }
 
-static struct netdev_rx *
-netdev_bsd_rx_alloc(void)
+static struct netdev_rxq *
+netdev_bsd_rxq_alloc(void)
 {
-    struct netdev_rx_bsd *rx = xzalloc(sizeof *rx);
-    return &rx->up;
+    struct netdev_rxq_bsd *rxq = xzalloc(sizeof *rxq);
+    return &rxq->up;
 }
 
 static int
-netdev_bsd_rx_construct(struct netdev_rx *rx_)
+netdev_bsd_rxq_construct(struct netdev_rxq *rxq_)
 {
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
-    struct netdev *netdev_ = rx->up.netdev;
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
+    struct netdev *netdev_ = rxq->up.netdev;
     struct netdev_bsd *netdev = netdev_bsd_cast(netdev_);
     int error;
 
     if (!strcmp(netdev_get_type(netdev_), "tap")) {
-        rx->pcap_handle = NULL;
-        rx->fd = netdev->tap_fd;
+        rxq->pcap_handle = NULL;
+        rxq->fd = netdev->tap_fd;
         error = 0;
     } else {
         ovs_mutex_lock(&netdev->mutex);
         error = netdev_bsd_open_pcap(netdev_get_kernel_name(netdev_),
-                                     &rx->pcap_handle, &rx->fd);
+                                     &rxq->pcap_handle, &rxq->fd);
         ovs_mutex_unlock(&netdev->mutex);
     }
 
@@ -503,21 +503,21 @@ netdev_bsd_rx_construct(struct netdev_rx *rx_)
 }
 
 static void
-netdev_bsd_rx_destruct(struct netdev_rx *rx_)
+netdev_bsd_rxq_destruct(struct netdev_rxq *rxq_)
 {
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
 
-    if (rx->pcap_handle) {
-        pcap_close(rx->pcap_handle);
+    if (rxq->pcap_handle) {
+        pcap_close(rxq->pcap_handle);
     }
 }
 
 static void
-netdev_bsd_rx_dealloc(struct netdev_rx *rx_)
+netdev_bsd_rxq_dealloc(struct netdev_rxq *rxq_)
 {
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
 
-    free(rx);
+    free(rxq);
 }
 
 /* The recv callback of the netdev class returns the number of bytes of the
@@ -548,7 +548,7 @@ struct pcap_arg {
 static void
 proc_pkt(u_char *args_, const struct pcap_pkthdr *hdr, const u_char *packet)
 {
-    struct pcap_arg *args = (struct pcap_arg *)args_;
+    struct pcap_arg *args = ALIGNED_CAST(struct pcap_arg *, args_);
 
     if (args->size < hdr->len) {
         VLOG_WARN_RL(&rl, "packet truncated");
@@ -565,23 +565,24 @@ proc_pkt(u_char *args_, const struct pcap_pkthdr *hdr, const u_char *packet)
  * This function attempts to receive a packet from the specified network
  * device. It is assumed that the network device is a system device or a tap
  * device opened as a system one. In this case the read operation is performed
- * from rx->pcap.
+ * from rxq->pcap.
  */
 static int
-netdev_rx_bsd_recv_pcap(struct netdev_rx_bsd *rx, void *data, size_t size)
+netdev_rxq_bsd_recv_pcap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
 {
     struct pcap_arg arg;
     int ret;
 
     /* prepare the pcap argument to store the packet */
-    arg.size = size;
-    arg.data = data;
+    arg.size = ofpbuf_tailroom(buffer);
+    arg.data = ofpbuf_data(buffer);
 
     for (;;) {
-        ret = pcap_dispatch(rx->pcap_handle, 1, proc_pkt, (u_char *) &arg);
+        ret = pcap_dispatch(rxq->pcap_handle, 1, proc_pkt, (u_char *) &arg);
 
         if (ret > 0) {
-            return arg.retval;	/* arg.retval < 0 is handled in the caller */
+            ofpbuf_set_size(buffer, ofpbuf_size(buffer) + arg.retval);
+            return 0;
         }
         if (ret == -1) {
             if (errno == EINTR) {
@@ -589,65 +590,87 @@ netdev_rx_bsd_recv_pcap(struct netdev_rx_bsd *rx, void *data, size_t size)
             }
         }
 
-        return -EAGAIN;
+        return EAGAIN;
     }
 }
 
 /*
  * This function attempts to receive a packet from the specified network
  * device. It is assumed that the network device is a tap device and
- * 'rx->fd' is initialized with the tap file descriptor.
+ * 'rxq->fd' is initialized with the tap file descriptor.
  */
 static int
-netdev_rx_bsd_recv_tap(struct netdev_rx_bsd *rx, void *data, size_t size)
+netdev_rxq_bsd_recv_tap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
 {
+    size_t size = ofpbuf_tailroom(buffer);
+
     for (;;) {
-        ssize_t retval = read(rx->fd, data, size);
+        ssize_t retval = read(rxq->fd, ofpbuf_data(buffer), size);
         if (retval >= 0) {
-            return retval;
+            ofpbuf_set_size(buffer, ofpbuf_size(buffer) + retval);
+            return 0;
         } else if (errno != EINTR) {
             if (errno != EAGAIN) {
                 VLOG_WARN_RL(&rl, "error receiving Ethernet packet on %s: %s",
-                             ovs_strerror(errno), netdev_rx_get_name(&rx->up));
+                             ovs_strerror(errno), netdev_rxq_get_name(&rxq->up));
             }
-            return -errno;
+            return errno;
         }
     }
 }
 
 static int
-netdev_bsd_rx_recv(struct netdev_rx *rx_, void *data, size_t size)
+netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct ofpbuf **packet, int *c)
 {
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
+    struct netdev *netdev = rxq->up.netdev;
+    struct ofpbuf *buffer;
+    ssize_t retval;
+    int mtu;
 
-    return (rx->pcap_handle
-            ? netdev_rx_bsd_recv_pcap(rx, data, size)
-            : netdev_rx_bsd_recv_tap(rx, data, size));
+    if (netdev_bsd_get_mtu(netdev, &mtu)) {
+        mtu = ETH_PAYLOAD_MAX;
+    }
+
+    buffer = ofpbuf_new_with_headroom(VLAN_ETH_HEADER_LEN + mtu, DP_NETDEV_HEADROOM);
+
+    retval = (rxq->pcap_handle
+            ? netdev_rxq_bsd_recv_pcap(rxq, buffer)
+            : netdev_rxq_bsd_recv_tap(rxq, buffer));
+
+    if (retval) {
+        ofpbuf_delete(buffer);
+    } else {
+        dp_packet_pad(buffer);
+        packet[0] = buffer;
+        *c = 1;
+    }
+    return retval;
 }
 
 /*
  * Registers with the poll loop to wake up from the next call to poll_block()
- * when a packet is ready to be received with netdev_rx_recv() on 'rx'.
+ * when a packet is ready to be received with netdev_rxq_recv() on 'rxq'.
  */
 static void
-netdev_bsd_rx_wait(struct netdev_rx *rx_)
+netdev_bsd_rxq_wait(struct netdev_rxq *rxq_)
 {
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
 
-    poll_fd_wait(rx->fd, POLLIN);
+    poll_fd_wait(rxq->fd, POLLIN);
 }
 
-/* Discards all packets waiting to be received from 'rx'. */
+/* Discards all packets waiting to be received from 'rxq'. */
 static int
-netdev_bsd_rx_drain(struct netdev_rx *rx_)
+netdev_bsd_rxq_drain(struct netdev_rxq *rxq_)
 {
     struct ifreq ifr;
-    struct netdev_rx_bsd *rx = netdev_rx_bsd_cast(rx_);
+    struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
 
-    strcpy(ifr.ifr_name, netdev_get_kernel_name(netdev_rx_get_netdev(rx_)));
-    if (ioctl(rx->fd, BIOCFLUSH, &ifr) == -1) {
+    strcpy(ifr.ifr_name, netdev_get_kernel_name(netdev_rxq_get_netdev(rxq_)));
+    if (ioctl(rxq->fd, BIOCFLUSH, &ifr) == -1) {
         VLOG_DBG_RL(&rl, "%s: ioctl(BIOCFLUSH) failed: %s",
-                    netdev_rx_get_name(rx_), ovs_strerror(errno));
+                    netdev_rxq_get_name(rxq_), ovs_strerror(errno));
         return errno;
     }
     return 0;
@@ -658,10 +681,12 @@ netdev_bsd_rx_drain(struct netdev_rx *rx_)
  * system or a tap device.
  */
 static int
-netdev_bsd_send(struct netdev *netdev_, const void *data, size_t size)
+netdev_bsd_send(struct netdev *netdev_, struct ofpbuf *pkt, bool may_steal)
 {
     struct netdev_bsd *dev = netdev_bsd_cast(netdev_);
     const char *name = netdev_get_name(netdev_);
+    const void *data = ofpbuf_data(pkt);
+    size_t size = ofpbuf_size(pkt);
     int error;
 
     ovs_mutex_lock(&dev->mutex);
@@ -689,7 +714,7 @@ netdev_bsd_send(struct netdev *netdev_, const void *data, size_t size)
                 }
             }
         } else if (retval != size) {
-            VLOG_WARN_RL(&rl, "sent partial Ethernet packet (%"PRIuSIZE"d bytes of "
+            VLOG_WARN_RL(&rl, "sent partial Ethernet packet (%"PRIuSIZE" bytes of "
                          "%"PRIuSIZE") on %s", retval, size, name);
             error = EMSGSIZE;
         } else {
@@ -698,6 +723,10 @@ netdev_bsd_send(struct netdev *netdev_, const void *data, size_t size)
     }
 
     ovs_mutex_unlock(&dev->mutex);
+    if (may_steal) {
+        ofpbuf_delete(pkt);
+    }
+
     return error;
 }
 
@@ -743,7 +772,7 @@ netdev_bsd_set_etheraddr(struct netdev *netdev_,
         if (!error) {
             netdev->cache_valid |= VALID_ETHERADDR;
             memcpy(netdev->etheraddr, mac, ETH_ADDR_LEN);
-            seq_change(connectivity_seq_get());
+            netdev_change_seq_changed(netdev_);
         }
     }
     ovs_mutex_unlock(&netdev->mutex);
@@ -859,7 +888,7 @@ netdev_bsd_get_carrier(const struct netdev *netdev_, bool *carrier)
 }
 
 static void
-convert_stats(struct netdev_stats *stats, const struct if_data *ifd)
+convert_stats_system(struct netdev_stats *stats, const struct if_data *ifd)
 {
     /*
      * note: UINT64_MAX means unsupported
@@ -885,6 +914,51 @@ convert_stats(struct netdev_stats *stats, const struct if_data *ifd)
     stats->tx_fifo_errors = UINT64_MAX;
     stats->tx_heartbeat_errors = UINT64_MAX;
     stats->tx_window_errors = UINT64_MAX;
+}
+
+static void
+convert_stats_tap(struct netdev_stats *stats, const struct if_data *ifd)
+{
+    /*
+     * Similar to convert_stats_system but swapping rxq and tx
+     * because 'ifd' is stats for the network interface side of the
+     * tap device and what the caller wants is one for the character
+     * device side.
+     *
+     * note: UINT64_MAX means unsupported
+     */
+    stats->rx_packets = ifd->ifi_opackets;
+    stats->tx_packets = ifd->ifi_ipackets;
+    stats->rx_bytes = ifd->ifi_ibytes;
+    stats->tx_bytes = ifd->ifi_obytes;
+    stats->rx_errors = ifd->ifi_oerrors;
+    stats->tx_errors = ifd->ifi_ierrors;
+    stats->rx_dropped = UINT64_MAX;
+    stats->tx_dropped = ifd->ifi_iqdrops;
+    stats->multicast = ifd->ifi_omcasts;
+    stats->collisions = UINT64_MAX;
+    stats->rx_length_errors = UINT64_MAX;
+    stats->rx_over_errors = UINT64_MAX;
+    stats->rx_crc_errors = UINT64_MAX;
+    stats->rx_frame_errors = UINT64_MAX;
+    stats->rx_fifo_errors = UINT64_MAX;
+    stats->rx_missed_errors = UINT64_MAX;
+    stats->tx_aborted_errors = UINT64_MAX;
+    stats->tx_carrier_errors = UINT64_MAX;
+    stats->tx_fifo_errors = UINT64_MAX;
+    stats->tx_heartbeat_errors = UINT64_MAX;
+    stats->tx_window_errors = UINT64_MAX;
+}
+
+static void
+convert_stats(const struct netdev *netdev, struct netdev_stats *stats,
+              const struct if_data *ifd)
+{
+    if (netdev_bsd_cast(netdev)->tap_fd == -1) {
+        convert_stats_system(stats, ifd);
+    } else {
+        convert_stats_tap(stats, ifd);
+    }
 }
 
 /* Retrieves current device stats for 'netdev'. */
@@ -922,7 +996,7 @@ netdev_bsd_get_stats(const struct netdev *netdev_, struct netdev_stats *stats)
                         netdev_get_name(netdev_), ovs_strerror(errno));
             return errno;
         } else if (!strcmp(ifmd.ifmd_name, netdev_get_name(netdev_))) {
-            convert_stats(stats, &ifmd.ifmd_data);
+            convert_stats(netdev_, stats, &ifmd.ifmd_data);
             break;
         }
     }
@@ -937,7 +1011,7 @@ netdev_bsd_get_stats(const struct netdev *netdev_, struct netdev_stats *stats)
             sizeof(ifdr.ifdr_name));
     error = af_link_ioctl(SIOCGIFDATA, &ifdr);
     if (!error) {
-        convert_stats(stats, &ifdr.ifdr_data);
+        convert_stats(netdev_, stats, &ifdr.ifdr_data);
     }
     return error;
 #else
@@ -1109,7 +1183,7 @@ netdev_bsd_get_in4(const struct netdev *netdev_, struct in_addr *in4,
         if (!error) {
             const struct sockaddr_in *sin;
 
-            sin = (struct sockaddr_in *) &ifr.ifr_addr;
+            sin = ALIGNED_CAST(struct sockaddr_in *, &ifr.ifr_addr);
             netdev->in4 = sin->sin_addr;
             netdev->cache_valid |= VALID_IN4;
             error = af_inet_ifreq_ioctl(netdev_get_kernel_name(netdev_), &ifr,
@@ -1152,7 +1226,7 @@ netdev_bsd_set_in4(struct netdev *netdev_, struct in_addr addr,
                 netdev->netmask = mask;
             }
         }
-        seq_change(connectivity_seq_get());
+        netdev_change_seq_changed(netdev_);
     }
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -1177,7 +1251,7 @@ netdev_bsd_get_in6(const struct netdev *netdev_, struct in6_addr *in6)
         for (ifa = head; ifa; ifa = ifa->ifa_next) {
             if (ifa->ifa_addr->sa_family == AF_INET6 &&
                     !strcmp(ifa->ifa_name, netdev_name)) {
-                sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+                sin6 = ALIGNED_CAST(struct sockaddr_in6 *, ifa->ifa_addr);
                 if (sin6) {
                     memcpy(&netdev->in6, &sin6->sin6_addr, sin6->sin6_len);
                     netdev->cache_valid |= VALID_IN6;
@@ -1289,14 +1363,14 @@ netdev_bsd_get_next_hop(const struct in_addr *host OVS_UNUSED,
 
             if ((i == RTA_GATEWAY) && sa->sa_family == AF_INET) {
                 const struct sockaddr_in * const sin =
-                  (const struct sockaddr_in *)sa;
+                  ALIGNED_CAST(const struct sockaddr_in *, sa);
 
                 *next_hop = sin->sin_addr;
                 gateway = true;
             }
             if ((i == RTA_IFP) && sa->sa_family == AF_LINK) {
                 const struct sockaddr_dl * const sdl =
-                  (const struct sockaddr_dl *)sa;
+                  ALIGNED_CAST(const struct sockaddr_dl *, sa);
                 char *kernel_name;
 
                 kernel_name = xmemdup0(sdl->sdl_data, sdl->sdl_nlen);
@@ -1450,138 +1524,91 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
         new_flags = (old_flags & ~nd_to_iff_flags(off)) | nd_to_iff_flags(on);
         if (new_flags != old_flags) {
             error = set_flags(netdev_get_kernel_name(netdev_), new_flags);
-            seq_change(connectivity_seq_get());
+            netdev_change_seq_changed(netdev_);
         }
     }
     return error;
 }
 
+/* Linux has also different GET_STATS, SET_STATS,
+ * GET_STATUS)
+ */
+#define NETDEV_BSD_CLASS(NAME, CONSTRUCT,            \
+                         GET_FEATURES)               \
+{                                                    \
+    NAME,                                            \
+                                                     \
+    NULL, /* init */                                 \
+    netdev_bsd_run,                                  \
+    netdev_bsd_wait,                                 \
+    netdev_bsd_alloc,                                \
+    CONSTRUCT,                                       \
+    netdev_bsd_destruct,                             \
+    netdev_bsd_dealloc,                              \
+    NULL, /* get_config */                           \
+    NULL, /* set_config */                           \
+    NULL, /* get_tunnel_config */                    \
+                                                     \
+    netdev_bsd_send,                                 \
+    netdev_bsd_send_wait,                            \
+                                                     \
+    netdev_bsd_set_etheraddr,                        \
+    netdev_bsd_get_etheraddr,                        \
+    netdev_bsd_get_mtu,                              \
+    NULL, /* set_mtu */                              \
+    netdev_bsd_get_ifindex,                          \
+    netdev_bsd_get_carrier,                          \
+    NULL, /* get_carrier_resets */                   \
+    NULL, /* set_miimon_interval */                  \
+    netdev_bsd_get_stats,                            \
+    NULL, /* set_stats */                            \
+                                                     \
+    GET_FEATURES,                                    \
+    NULL, /* set_advertisement */                    \
+    NULL, /* set_policing */                         \
+    NULL, /* get_qos_type */                         \
+    NULL, /* get_qos_capabilities */                 \
+    NULL, /* get_qos */                              \
+    NULL, /* set_qos */                              \
+    NULL, /* get_queue */                            \
+    NULL, /* set_queue */                            \
+    NULL, /* delete_queue */                         \
+    NULL, /* get_queue_stats */                      \
+    NULL, /* queue_dump_start */                     \
+    NULL, /* queue_dump_next */                      \
+    NULL, /* queue_dump_done */                      \
+    NULL, /* dump_queue_stats */                     \
+                                                     \
+    netdev_bsd_get_in4,                              \
+    netdev_bsd_set_in4,                              \
+    netdev_bsd_get_in6,                              \
+    NULL, /* add_router */                           \
+    netdev_bsd_get_next_hop,                         \
+    NULL, /* get_status */                           \
+    netdev_bsd_arp_lookup, /* arp_lookup */          \
+                                                     \
+    netdev_bsd_update_flags,                         \
+                                                     \
+    netdev_bsd_rxq_alloc,                            \
+    netdev_bsd_rxq_construct,                        \
+    netdev_bsd_rxq_destruct,                         \
+    netdev_bsd_rxq_dealloc,                          \
+    netdev_bsd_rxq_recv,                             \
+    netdev_bsd_rxq_wait,                             \
+    netdev_bsd_rxq_drain,                            \
+}
 
-const struct netdev_class netdev_bsd_class = {
-    "system",
+const struct netdev_class netdev_bsd_class =
+    NETDEV_BSD_CLASS(
+        "system",
+        netdev_bsd_construct_system,
+        netdev_bsd_get_features);
 
-    NULL, /* init */
-    netdev_bsd_run,
-    netdev_bsd_wait,
-    netdev_bsd_alloc,
-    netdev_bsd_construct_system,
-    netdev_bsd_destruct,
-    netdev_bsd_dealloc,
-    NULL, /* get_config */
-    NULL, /* set_config */
-    NULL, /* get_tunnel_config */
-
-    netdev_bsd_send,
-    netdev_bsd_send_wait,
-
-    netdev_bsd_set_etheraddr,
-    netdev_bsd_get_etheraddr,
-    netdev_bsd_get_mtu,
-    NULL, /* set_mtu */
-    netdev_bsd_get_ifindex,
-    netdev_bsd_get_carrier,
-    NULL, /* get_carrier_resets */
-    NULL, /* set_miimon_interval */
-    netdev_bsd_get_stats,
-    NULL, /* set_stats */
-
-    netdev_bsd_get_features,
-    NULL, /* set_advertisement */
-    NULL, /* set_policing */
-    NULL, /* get_qos_type */
-    NULL, /* get_qos_capabilities */
-    NULL, /* get_qos */
-    NULL, /* set_qos */
-    NULL, /* get_queue */
-    NULL, /* set_queue */
-    NULL, /* delete_queue */
-    NULL, /* get_queue_stats */
-    NULL, /* queue_dump_start */
-    NULL, /* queue_dump_next */
-    NULL, /* queue_dump_done */
-    NULL, /* dump_queue_stats */
-
-    netdev_bsd_get_in4,
-    netdev_bsd_set_in4,
-    netdev_bsd_get_in6,
-    NULL, /* add_router */
-    netdev_bsd_get_next_hop,
-    NULL, /* get_status */
-    netdev_bsd_arp_lookup, /* arp_lookup */
-
-    netdev_bsd_update_flags,
-
-    netdev_bsd_rx_alloc,
-    netdev_bsd_rx_construct,
-    netdev_bsd_rx_destruct,
-    netdev_bsd_rx_dealloc,
-    netdev_bsd_rx_recv,
-    netdev_bsd_rx_wait,
-    netdev_bsd_rx_drain,
-};
-
-const struct netdev_class netdev_tap_class = {
-    "tap",
-
-    NULL, /* init */
-    netdev_bsd_run,
-    netdev_bsd_wait,
-    netdev_bsd_alloc,
-    netdev_bsd_construct_tap,
-    netdev_bsd_destruct,
-    netdev_bsd_dealloc,
-    NULL, /* get_config */
-    NULL, /* set_config */
-    NULL, /* get_tunnel_config */
-
-    netdev_bsd_send,
-    netdev_bsd_send_wait,
-
-    netdev_bsd_set_etheraddr,
-    netdev_bsd_get_etheraddr,
-    netdev_bsd_get_mtu,
-    NULL, /* set_mtu */
-    netdev_bsd_get_ifindex,
-    netdev_bsd_get_carrier,
-    NULL, /* get_carrier_resets */
-    NULL, /* set_miimon_interval */
-    netdev_bsd_get_stats,
-    NULL, /* set_stats */
-
-    netdev_bsd_get_features,
-    NULL, /* set_advertisement */
-    NULL, /* set_policing */
-    NULL, /* get_qos_type */
-    NULL, /* get_qos_capabilities */
-    NULL, /* get_qos */
-    NULL, /* set_qos */
-    NULL, /* get_queue */
-    NULL, /* set_queue */
-    NULL, /* delete_queue */
-    NULL, /* get_queue_stats */
-    NULL, /* queue_dump_start */
-    NULL, /* queue_dump_next */
-    NULL, /* queue_dump_done */
-    NULL, /* dump_queue_stats */
-
-    netdev_bsd_get_in4,
-    netdev_bsd_set_in4,
-    netdev_bsd_get_in6,
-    NULL, /* add_router */
-    netdev_bsd_get_next_hop,
-    NULL, /* get_status */
-    netdev_bsd_arp_lookup, /* arp_lookup */
-
-    netdev_bsd_update_flags,
-
-    netdev_bsd_rx_alloc,
-    netdev_bsd_rx_construct,
-    netdev_bsd_rx_destruct,
-    netdev_bsd_rx_dealloc,
-    netdev_bsd_rx_recv,
-    netdev_bsd_rx_wait,
-    netdev_bsd_rx_drain,
-};
+const struct netdev_class netdev_tap_class =
+    NETDEV_BSD_CLASS(
+        "tap",
+        netdev_bsd_construct_tap,
+        netdev_bsd_get_features);
 
 
 static void
@@ -1652,7 +1679,7 @@ get_etheraddr(const char *netdev_name, uint8_t ea[ETH_ADDR_LEN])
     for (ifa = head; ifa; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr->sa_family == AF_LINK) {
             if (!strcmp(ifa->ifa_name, netdev_name)) {
-                sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+                sdl = ALIGNED_CAST(struct sockaddr_dl *, ifa->ifa_addr);
                 if (sdl) {
                     memcpy(ea, LLADDR(sdl), sdl->sdl_alen);
                     freeifaddrs(head);
@@ -1759,6 +1786,7 @@ ifr_set_flags(struct ifreq *ifr, int flags)
 #endif
 }
 
+#if defined(__NetBSD__)
 /* Calls ioctl() on an AF_LINK sock, passing the specified 'command' and
  * 'arg'.  Returns 0 if successful, otherwise a positive errno value. */
 int
@@ -1780,3 +1808,4 @@ af_link_ioctl(unsigned long command, const void *arg)
             : ioctl(sock, command, arg) == -1 ? errno
             : 0);
 }
+#endif

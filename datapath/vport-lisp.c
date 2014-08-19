@@ -163,9 +163,9 @@ static __be64 instance_id_to_tunnel_id(__u8 *iid)
 /* Compute source UDP port for outgoing packet.
  * Currently we use the flow hash.
  */
-static u16 get_src_port(struct sk_buff *skb)
+static u16 get_src_port(struct net *net, struct sk_buff *skb)
 {
-	u32 hash = skb_get_rxhash(skb);
+	u32 hash = skb_get_hash(skb);
 	unsigned int range;
 	int high;
 	int low;
@@ -177,7 +177,7 @@ static u16 get_src_port(struct sk_buff *skb)
 			    sizeof(*pkt_key) / sizeof(u32), 0);
 	}
 
-	inet_get_local_port_range(&low, &high);
+	inet_get_local_port_range(net, &low, &high);
 	range = (high - low) + 1;
 	return (((u64) hash * range) >> 32) + low;
 }
@@ -185,13 +185,14 @@ static u16 get_src_port(struct sk_buff *skb)
 static void lisp_build_header(const struct vport *vport,
 			      struct sk_buff *skb)
 {
+	struct net *net = ovs_dp_get_net(vport->dp);
 	struct lisp_port *lisp_port = lisp_vport(vport);
 	struct udphdr *udph = udp_hdr(skb);
 	struct lisphdr *lisph = (struct lisphdr *)(udph + 1);
 	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
 
 	udph->dest = lisp_port->dst_port;
-	udph->source = htons(get_src_port(skb));
+	udph->source = htons(get_src_port(net, skb));
 	udph->check = 0;
 	udph->len = htons(skb->len - skb_transport_offset(skb));
 
@@ -381,6 +382,8 @@ error:
 	return ERR_PTR(err);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
+
 static void lisp_fix_segment(struct sk_buff *skb)
 {
 	struct udphdr *udph = udp_hdr(skb);
@@ -388,13 +391,30 @@ static void lisp_fix_segment(struct sk_buff *skb)
 	udph->len = htons(skb->len - skb_transport_offset(skb));
 }
 
-static void handle_offloads(struct sk_buff *skb)
+static int handle_offloads(struct sk_buff *skb)
 {
 	if (skb_is_gso(skb))
 		OVS_GSO_CB(skb)->fix_segment = lisp_fix_segment;
 	else if (skb->ip_summed != CHECKSUM_PARTIAL)
 		skb->ip_summed = CHECKSUM_NONE;
+	return 0;
 }
+#else
+static int handle_offloads(struct sk_buff *skb)
+{
+	if (skb_is_gso(skb)) {
+		int err = skb_unclone(skb, GFP_ATOMIC);
+		if (unlikely(err))
+			return err;
+
+		skb_shinfo(skb)->gso_type |= SKB_GSO_UDP_TUNNEL;
+	} else if (skb->ip_summed != CHECKSUM_PARTIAL)
+		skb->ip_summed = CHECKSUM_NONE;
+
+	skb->encapsulation = 1;
+	return 0;
+}
+#endif
 
 static int lisp_send(struct vport *vport, struct sk_buff *skb)
 {
@@ -455,7 +475,10 @@ static int lisp_send(struct vport *vport, struct sk_buff *skb)
 	lisp_build_header(vport, skb);
 
 	/* Offloading */
-	handle_offloads(skb);
+	err = handle_offloads(skb);
+	if (err)
+		goto err_free_rt;
+
 	skb->local_df = 1;
 
 	df = OVS_CB(skb)->tun_key->tun_flags &
@@ -463,7 +486,7 @@ static int lisp_send(struct vport *vport, struct sk_buff *skb)
 	sent_len = iptunnel_xmit(rt, skb,
 			     saddr, OVS_CB(skb)->tun_key->ipv4_dst,
 			     IPPROTO_UDP, OVS_CB(skb)->tun_key->ipv4_tos,
-			     OVS_CB(skb)->tun_key->ipv4_ttl, df);
+			     OVS_CB(skb)->tun_key->ipv4_ttl, df, false);
 
 	return sent_len > 0 ? sent_len + network_offset : sent_len;
 

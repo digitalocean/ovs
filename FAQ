@@ -149,6 +149,7 @@ A: The following table lists the Linux kernel versions against which the
        1.11.x     2.6.18 to 3.8
        2.0.x      2.6.32 to 3.10
        2.1.x      2.6.32 to 3.11
+       2.2.x      2.6.32 to 3.14
 
    Open vSwitch userspace should also work with the Linux kernel module
    built into Linux 3.3 and later.
@@ -157,18 +158,22 @@ A: The following table lists the Linux kernel versions against which the
    It should build against almost any kernel, certainly against 2.6.32
    and later.
 
-Q: What Linux kernel versions does IPFIX flow monitoring work with?
+Q: I get an error like this when I configure Open vSwitch:
 
-A: IPFIX flow monitoring requires the Linux kernel module from Open
-   vSwitch version 1.10.90 or later.
+       configure: error: Linux kernel in <dir> is version <x>, but
+       version newer than <y> is not supported (please refer to the
+       FAQ for advice)
 
-Q: Should userspace or kernel be upgraded first to minimize downtime?
+   What should I do?
 
-   In general, the Open vSwitch userspace should be used with the
-   kernel version included in the same release or with the version
-   from upstream Linux.  However, when upgrading between two releases
-   of Open vSwitch it is best to migrate userspace first to reduce
-   the possibility of incompatibilities.
+A: If there is a newer version of Open vSwitch, consider building that
+   one, because it may support the kernel that you are building
+   against.  (To find out, consult the table in the previous answer.)
+
+   Otherwise, use the Linux kernel module supplied with the kernel
+   that you are using.  All versions of Open vSwitch userspace are
+   compatible with all versions of the Open vSwitch kernel module, so
+   this will also work.  See also the following question.
 
 Q: What features are not available in the Open vSwitch kernel datapath
    that ships as part of the upstream Linux kernel?
@@ -191,6 +196,19 @@ A: Tunnel virtual ports are not supported, as described in the
    previous answer.  It is also not possible to use queue-related
    actions.  On Linux kernels before 2.6.39, maximum-sized VLAN packets
    may not be transmitted.
+
+Q: What Linux kernel versions does IPFIX flow monitoring work with?
+
+A: IPFIX flow monitoring requires the Linux kernel module from Open
+   vSwitch version 1.10.90 or later.
+
+Q: Should userspace or kernel be upgraded first to minimize downtime?
+
+   In general, the Open vSwitch userspace should be used with the
+   kernel version included in the same release or with the version
+   from upstream Linux.  However, when upgrading between two releases
+   of Open vSwitch it is best to migrate userspace first to reduce
+   the possibility of incompatibilities.
 
 Q: What happened to the bridge compatibility feature?
 
@@ -257,8 +275,8 @@ A: The following commands configure br0 with eth0 and tap0 as trunk
        ovs-vsctl add-port br0 tap0
        ovs-vsctl add-port br0 tap1 \
            -- --id=@p get port tap1 \
-	   -- --id=@m create mirror name=m0 select-all=true output-port=@p \
-	   -- set bridge br0 mirrors=@m
+           -- --id=@m create mirror name=m0 select-all=true output-port=@p \
+           -- set bridge br0 mirrors=@m
 
    To later disable mirroring, run:
 
@@ -312,9 +330,9 @@ A: The following commands configure br0 with eth0 as a trunk port and
        ovs-vsctl add-port br0 eth0
        ovs-vsctl add-port br0 tap0 tag=10
        ovs-vsctl \
-	   -- --id=@m create mirror name=m0 select-all=true select-vlan=10 \
+           -- --id=@m create mirror name=m0 select-all=true select-vlan=10 \
                                     output-vlan=15 \
-	   -- set bridge br0 mirrors=@m
+           -- set bridge br0 mirrors=@m
 
    To later disable mirroring, run:
 
@@ -362,8 +380,8 @@ A: The following commands configure br0 with eth0 and tap0 as trunk
        ovs-vsctl add-port br0 gre0 \
            -- set interface gre0 type=gre options:remote_ip=192.168.1.10 \
            -- --id=@p get port gre0 \
-	   -- --id=@m create mirror name=m0 select-all=true output-port=@p \
-	   -- set bridge br0 mirrors=@m
+           -- --id=@m create mirror name=m0 select-all=true output-port=@p \
+           -- set bridge br0 mirrors=@m
 
    To later disable mirroring and destroy the GRE tunnel:
 
@@ -412,6 +430,12 @@ A: First, why do you want to do this?  Two connected bridges are not
    ports.  This also means that in Open vSwitch 1.9 and earlier, patch
    ports will not work with the userspace datapath, only with the
    kernel module.
+
+Q: How do I configure a bridge without an OpenFlow local port?
+   (Local port in the sense of OFPP_LOCAL)
+
+A: Open vSwitch does not support such a configuration.
+   Bridges always have their local ports.
 
 
 Implementation Details
@@ -641,6 +665,47 @@ A: In version 1.9.0, OVS switched to using a single datapath that is
    shared by all bridges of that type.  The "ovs-appctl dpif/*"
    commands provide similar functionality that is scoped by the bridge.
 
+Q: I created a GRE port using ovs-vsctl so why can't I send traffic or
+   see the port in the datapath?
+
+A: On Linux kernels before 3.11, the OVS GRE module and Linux GRE module
+   cannot be loaded at the same time. It is likely that on your system the
+   Linux GRE module is already loaded and blocking OVS (to confirm, check
+   dmesg for errors regarding GRE registration). To fix this, unload all
+   GRE modules that appear in lsmod as well as the OVS kernel module. You
+   can then reload the OVS module following the directions in INSTALL,
+   which will ensure that dependencies are satisfied.
+
+Q: Open vSwitch does not seem to obey my packet filter rules.
+
+A: It depends on mechanisms and configurations you want to use.
+
+   You cannot usefully use typical packet filters, like iptables, on
+   physical Ethernet ports that you add to an Open vSwitch bridge.
+   This is because Open vSwitch captures packets from the interface at
+   a layer lower below where typical packet-filter implementations
+   install their hooks.  (This actually applies to any interface of
+   type "system" that you might add to an Open vSwitch bridge.)
+
+   You can usefully use typical packet filters on Open vSwitch
+   internal ports as they are mostly ordinary interfaces from the point
+   of view of packet filters.
+
+   For example, suppose you create a bridge br0 and add Ethernet port
+   eth0 to it.  Then you can usefully add iptables rules to affect the
+   internal interface br0, but not the physical interface eth0.  (br0
+   is also where you would add an IP address, as discussed elsewhere
+   in the FAQ.)
+
+   For simple filtering rules, it might be possible to achieve similar
+   results by installing appropriate OpenFlow flows instead.
+
+   If the use of a particular packet filter setup is essential, Open
+   vSwitch might not be the best choice for you.  On Linux, you might
+   want to consider using the Linux Bridge.  (This is the only choice if
+   you want to use ebtables rules.)  On NetBSD, you might want to
+   consider using the bridge(4) with BRIDGE_IPF option.
+
 
 Quality of Service (QoS)
 ------------------------
@@ -655,14 +720,14 @@ A: Suppose that you want to set up bridge br0 connected to physical
 
        ovs-vsctl -- \
            add-br br0 -- \
-	   add-port br0 eth0 -- \
-	   add-port br0 vif1.0 -- set interface vif1.0 ofport_request=5 -- \
-	   add-port br0 vif2.0 -- set interface vif2.0 ofport_request=6 -- \
-	   set port eth0 qos=@newqos -- \
-	   --id=@newqos create qos type=linux-htb \
+           add-port br0 eth0 -- \
+           add-port br0 vif1.0 -- set interface vif1.0 ofport_request=5 -- \
+           add-port br0 vif2.0 -- set interface vif2.0 ofport_request=6 -- \
+           set port eth0 qos=@newqos -- \
+           --id=@newqos create qos type=linux-htb \
                other-config:max-rate=1000000000 \
-	       queues:123=@vif10queue \
-	       queues:234=@vif20queue -- \
+               queues:123=@vif10queue \
+               queues:234=@vif20queue -- \
            --id=@vif10queue create queue other-config:max-rate=10000000 -- \
            --id=@vif20queue create queue other-config:max-rate=20000000
 
@@ -762,6 +827,13 @@ A: With the Linux kernel, the Open vSwitch implementation of QoS has
    traffic control, that you consult the tc manpages (e.g. tc(8),
    tc-htb(8), tc-hfsc(8)), web resources (e.g. http://lartc.org/), or
    mailing lists (e.g. http://vger.kernel.org/vger-lists.html#netdev).
+
+Q: Does Open vSwitch support OpenFlow meters?
+
+A: Since version 2.0, Open vSwitch has OpenFlow protocol support for
+   OpenFlow meters.  There is no implementation of meters in the Open
+   vSwitch software switch (neither the kernel-based nor userspace
+   switches).
 
 
 VLANs
@@ -1072,33 +1144,76 @@ Using OpenFlow (Manually or Via Controller)
 
 Q: What versions of OpenFlow does Open vSwitch support?
 
-A: Open vSwitch 1.9 and earlier support only OpenFlow 1.0 (plus
-   extensions that bring in many of the features from later versions
-   of OpenFlow).
+A: The following table lists the versions of OpenFlow supported by
+   each version of Open vSwitch:
 
-   Open vSwitch 1.10 and later have experimental support for OpenFlow
-   1.2 and 1.3.  On these versions of Open vSwitch, the following
-   command enables OpenFlow 1.0, 1.2, and 1.3 on bridge br0:
+       Open vSwitch      OF1.0  OF1.1  OF1.2  OF1.3  OF1.4  OF1.5
+       ===============   =====  =====  =====  =====  =====  =====
+       1.9 and earlier    yes    ---    ---    ---    ---    ---
+       1.10               yes    ---    [*]    [*]    ---    ---
+       1.11               yes    ---    [*]    [*]    ---    ---
+       2.0                yes    [*]    [*]    [*]    ---    ---
+       2.1                yes    [*]    [*]    [*]    ---    ---
+       2.2                yes    [*]    [*]    [*]    [%]    [*]
+       2.3                yes    yes    yes    yes    [*]    [*]
 
-       ovs-vsctl set bridge br0 protocols=OpenFlow10,OpenFlow12,OpenFlow13
+       [*] Supported, with one or more missing features.
+       [%] Experimental, unsafe implementation.
 
-   Open vSwitch version 2.0 and later will have experimental support
-   for OpenFlow 1.1, 1.2, and 1.3.  On these versions of Open vSwitch,
-   the following command enables OpenFlow 1.0, 1.1, 1.2, and 1.3 on
-   bridge br0:
+   Open vSwitch 2.3 enables OpenFlow 1.0, 1.1, 1.2, and 1.3 by default
+   in ovs-vswitchd.  In Open vSwitch 1.10 through 2.2, OpenFlow 1.1,
+   1.2, and 1.3 must be enabled manually in ovs-vswitchd.  OpenFlow
+   1.4 and 1.5 are also supported, with missing features, in Open
+   vSwitch 2.3 and later, but not enabled by default.  In any case,
+   the user may override the default:
 
-       ovs-vsctl set bridge br0 protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13
+       - To enable OpenFlow 1.0, 1.1, 1.2, and 1.3 on bridge br0:
 
-   Use the -O option to enable support for later versions of OpenFlow
-   in ovs-ofctl.  For example:
+         ovs-vsctl set bridge br0 protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13
+
+       - To enable OpenFlow 1.0, 1.1, 1.2, 1.3, 1.4, and 1.5 on bridge br0:
+
+         ovs-vsctl set bridge br0 protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14,OpenFlow15
+
+       - To enable only OpenFlow 1.0 on bridge br0:
+
+         ovs-vsctl set bridge br0 protocols=OpenFlow10
+
+   All current versions of ovs-ofctl enable only OpenFlow 1.0 by
+   default.  Use the -O option to enable support for later versions of
+   OpenFlow in ovs-ofctl.  For example:
 
        ovs-ofctl -O OpenFlow13 dump-flows br0
 
-   Support for OpenFlow 1.1, 1.2, and 1.3 is still incomplete.  Work
-   to be done is tracked in OPENFLOW-1.1+ in the Open vSwitch sources
-   (also via http://openvswitch.org/development/openflow-1-x-plan/).
-   When support for a given OpenFlow version is solidly implemented,
-   Open vSwitch will enable that version by default.
+   (Open vSwitch 2.2 had an experimental implementation of OpenFlow
+   1.4 that could cause crashes.  We don't recommend enabling it.)
+
+   OPENFLOW-1.1+ in the Open vSwitch source tree tracks support for
+   OpenFlow 1.1 and later features.  When support for OpenFlow 1.4 and
+   1.5 is solidly implemented, Open vSwitch will enable those version
+   by default.  Also, the OpenFlow 1.5 specification is still under
+   development and thus subject to change.
+
+Q: Does Open vSwitch support MPLS?
+
+A: Before version 1.11, Open vSwitch did not support MPLS.  That is,
+   these versions can match on MPLS Ethernet types, but they cannot
+   match, push, or pop MPLS labels, nor can they look past MPLS labels
+   into the encapsulated packet.
+
+   Open vSwitch versions 1.11, 2.0, and 2.1 have very minimal support
+   for MPLS.  With the userspace datapath only, these versions can
+   match, push, or pop a single MPLS label, but they still cannot look
+   past MPLS labels (even after popping them) into the encapsulated
+   packet.  Kernel datapath support is unchanged from earlier
+   versions.
+
+   Open vSwitch version 2.2 will be able to match, push, or pop up to
+   3 MPLS labels.  Looking past MPLS labels into the encapsulated
+   packet will still be unsupported.  Both userspace and kernel
+   datapaths will be supported, but MPLS processing always happens in
+   userspace either way, so kernel datapath performance will be
+   disappointing.
 
 Q: I'm getting "error type 45250 code 0".  What's that?
 
@@ -1371,9 +1486,9 @@ A: Yes, OpenFlow requires a switch to ignore attempts to send a packet
    even be convenient, e.g. it is often the desired behavior in a flow
    that forwards a packet to several ports ("floods" the packet).
 
-   Sometimes one really needs to send a packet out its ingress port.
-   In this case, output to OFPP_IN_PORT, which in ovs-ofctl syntax is
-   expressed as just "in_port", e.g.:
+   Sometimes one really needs to send a packet out its ingress port
+   ("hairpin"). In this case, output to OFPP_IN_PORT, which in
+   ovs-ofctl syntax is expressed as just "in_port", e.g.:
 
        ovs-ofctl add-flow br0 in_port=2,actions=in_port
 
@@ -1442,6 +1557,23 @@ A: These flows drop the ARP packets that IP hosts use to establish IP
 
       priority=5,in_port=1,dl_dst=01:00:00:00:00:00/01:00:00:00:00:00,actions=2
       priority=5,in_port=2,dl_dst=01:00:00:00:00:00/01:00:00:00:00:00,actions=1
+
+
+Development
+-----------
+
+Q: How do I implement a new OpenFlow message?
+
+A: Add your new message to "enum ofpraw" and "enum ofptype" in
+   lib/ofp-msgs.h, following the existing pattern.  Then recompile and
+   fix all of the new warnings, implementing new functionality for the
+   new message as needed.  (If you configure with --enable-Werror, as
+   described in INSTALL, then it is impossible to miss any warnings.)
+
+   If you need to add an OpenFlow vendor extension message for a
+   vendor that doesn't yet have any extension messages, then you will
+   also need to edit build-aux/extract-ofp-msgs.
+
 
 Contact 
 -------

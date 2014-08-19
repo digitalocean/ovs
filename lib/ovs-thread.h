@@ -23,18 +23,34 @@
 #include "ovs-atomic.h"
 #include "util.h"
 
+struct seq;
 
 /* Mutex. */
 struct OVS_LOCKABLE ovs_mutex {
     pthread_mutex_t lock;
-    const char *where;
+    const char *where;          /* NULL if and only if uninitialized. */
+};
+
+/* Poll-block()-able barrier similar to pthread_barrier_t. */
+struct ovs_barrier {
+    uint32_t size;            /* Number of threads to wait. */
+    atomic_uint32_t count;    /* Number of threads already hit the barrier. */
+    struct seq *seq;
 };
 
 /* "struct ovs_mutex" initializer. */
 #ifdef PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP
-#define OVS_MUTEX_INITIALIZER { PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP, NULL }
+#define OVS_MUTEX_INITIALIZER { PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP, \
+                                "<unlocked>" }
 #else
-#define OVS_MUTEX_INITIALIZER { PTHREAD_MUTEX_INITIALIZER, NULL }
+#define OVS_MUTEX_INITIALIZER { PTHREAD_MUTEX_INITIALIZER, "<unlocked>" }
+#endif
+
+#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+#define OVS_ADAPTIVE_MUTEX_INITIALIZER                  \
+    { PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP, "<unlocked>" }
+#else
+#define OVS_ADAPTIVE_MUTEX_INITIALIZER OVS_MUTEX_INITIALIZER
 #endif
 
 /* ovs_mutex functions analogous to pthread_mutex_*() functions.
@@ -44,6 +60,7 @@ struct OVS_LOCKABLE ovs_mutex {
  * return value to the caller and aborts on any other error. */
 void ovs_mutex_init(const struct ovs_mutex *);
 void ovs_mutex_init_recursive(const struct ovs_mutex *);
+void ovs_mutex_init_adaptive(const struct ovs_mutex *);
 void ovs_mutex_destroy(const struct ovs_mutex *);
 void ovs_mutex_unlock(const struct ovs_mutex *mutex) OVS_RELEASES(mutex);
 void ovs_mutex_lock_at(const struct ovs_mutex *mutex, const char *where)
@@ -69,14 +86,30 @@ void xpthread_mutexattr_destroy(pthread_mutexattr_t *);
 void xpthread_mutexattr_settype(pthread_mutexattr_t *, int type);
 void xpthread_mutexattr_gettype(pthread_mutexattr_t *, int *typep);
 
-/* Read-write lock. */
+/* Read-write lock.
+ *
+ * An ovs_rwlock does not support recursive readers, because POSIX allows
+ * taking the reader lock recursively to deadlock when a thread is waiting on
+ * the write-lock.  (NetBSD does deadlock.)  glibc rwlocks in their default
+ * configuration do not deadlock, but ovs_rwlock_init() initializes rwlocks as
+ * non-recursive (which will deadlock) for two reasons:
+ *
+ *     - glibc only provides fairness to writers in this mode.
+ *
+ *     - It's better to find bugs in the primary Open vSwitch target rather
+ *       than exposing them only to porters. */
 struct OVS_LOCKABLE ovs_rwlock {
     pthread_rwlock_t lock;
-    const char *where;
+    const char *where;          /* NULL if and only if uninitialized. */
 };
 
 /* Initializer. */
-#define OVS_RWLOCK_INITIALIZER { PTHREAD_RWLOCK_INITIALIZER, NULL }
+#ifdef PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP
+#define OVS_RWLOCK_INITIALIZER \
+        { PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP, "<unlocked>" }
+#else
+#define OVS_RWLOCK_INITIALIZER { PTHREAD_RWLOCK_INITIALIZER, "<unlocked>" }
+#endif
 
 /* ovs_rwlock functions analogous to pthread_rwlock_*() functions.
  *
@@ -86,6 +119,13 @@ struct OVS_LOCKABLE ovs_rwlock {
 void ovs_rwlock_init(const struct ovs_rwlock *);
 void ovs_rwlock_destroy(const struct ovs_rwlock *);
 void ovs_rwlock_unlock(const struct ovs_rwlock *rwlock) OVS_RELEASES(rwlock);
+
+/* Wrappers for pthread_rwlockattr_*() that abort the process on any error. */
+void xpthread_rwlockattr_init(pthread_rwlockattr_t *);
+void xpthread_rwlockattr_destroy(pthread_rwlockattr_t *);
+#ifdef PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP
+void xpthread_rwlockattr_setkind_np(pthread_rwlockattr_t *, int kind);
+#endif
 
 void ovs_rwlock_wrlock_at(const struct ovs_rwlock *rwlock, const char *where)
     OVS_ACQ_WRLOCK(rwlock);
@@ -107,6 +147,11 @@ int ovs_rwlock_tryrdlock_at(const struct ovs_rwlock *rwlock, const char *where)
 #define ovs_rwlock_tryrdlock(rwlock) \
         ovs_rwlock_tryrdlock_at(rwlock, SOURCE_LOCATOR)
 
+/* ovs_barrier functions analogous to pthread_barrier_*() functions. */
+void ovs_barrier_init(struct ovs_barrier *, uint32_t count);
+void ovs_barrier_destroy(struct ovs_barrier *);
+void ovs_barrier_block(struct ovs_barrier *);
+
 /* Wrappers for xpthread_cond_*() that abort the process on any error.
  *
  * Use ovs_mutex_cond_wait() to wait for a condition. */
@@ -115,22 +160,11 @@ void xpthread_cond_destroy(pthread_cond_t *);
 void xpthread_cond_signal(pthread_cond_t *);
 void xpthread_cond_broadcast(pthread_cond_t *);
 
-#ifdef __CHECKER__
-/* Replace these functions by the macros already defined in the <pthread.h>
- * annotations, because the macro definitions have correct semantics for the
- * conditional acquisition that can't be captured in a function annotation.
- * The difference in semantics from pthread_*() to xpthread_*() does not matter
- * because sparse is not a compiler. */
-#define xpthread_mutex_trylock pthread_mutex_trylock
-#define xpthread_rwlock_tryrdlock pthread_rwlock_tryrdlock
-#define xpthread_rwlock_trywrlock pthread_rwlock_trywrlock
-#endif
-
 void xpthread_key_create(pthread_key_t *, void (*destructor)(void *));
 void xpthread_key_delete(pthread_key_t);
 void xpthread_setspecific(pthread_key_t, const void *);
 
-void xpthread_create(pthread_t *, pthread_attr_t *, void *(*)(void *), void *);
+pthread_t ovs_thread_create(const char *name, void *(*)(void *), void *);
 void xpthread_join(pthread_t, void **);
 
 /* Per-thread data.
@@ -444,9 +478,15 @@ void xpthread_join(pthread_t, void **);
  * (by recompiling).  Thus, one may more freely use this form of
  * thread-specific data.
  *
- * Compared to pthread_key_t, ovsthread_key_t has the follow limitations:
+ * ovsthread_key_t also differs from pthread_key_t in the following ways:
  *
  *    - Destructors must not access thread-specific data (via ovsthread_key).
+ *
+ *    - The pthread_key_t API allows concurrently exiting threads to start
+ *      executing the destructor after pthread_key_delete() returns.  The
+ *      ovsthread_key_t API guarantees that, when ovsthread_key_delete()
+ *      returns, all destructors have returned and no new ones will start
+ *      execution.
  */
 typedef struct ovsthread_key *ovsthread_key_t;
 
@@ -547,11 +587,47 @@ ovsthread_id_self(void)
     return *ovsthread_id_get();
 }
 
+/* Simulated global counter.
+ *
+ * Incrementing such a counter is meant to be cheaper than incrementing a
+ * global counter protected by a lock.  It is probably more expensive than
+ * incrementing a truly thread-local variable, but such a variable has no
+ * straightforward way to get the sum.
+ *
+ *
+ * Thread-safety
+ * =============
+ *
+ * Fully thread-safe. */
+
+struct ovsthread_stats {
+    struct ovs_mutex mutex;
+    void *volatile buckets[16];
+};
+
+void ovsthread_stats_init(struct ovsthread_stats *);
+void ovsthread_stats_destroy(struct ovsthread_stats *);
+
+void *ovsthread_stats_bucket_get(struct ovsthread_stats *,
+                                 void *(*new_bucket)(void));
+
+#define OVSTHREAD_STATS_FOR_EACH_BUCKET(BUCKET, IDX, STATS)             \
+    for ((IDX) = ovs_thread_stats_next_bucket(STATS, 0);                \
+         ((IDX) < ARRAY_SIZE((STATS)->buckets)                          \
+          ? ((BUCKET) = (STATS)->buckets[IDX], true)                    \
+          : false);                                                     \
+         (IDX) = ovs_thread_stats_next_bucket(STATS, (IDX) + 1))
+size_t ovs_thread_stats_next_bucket(const struct ovsthread_stats *, size_t);
+
+bool single_threaded(void);
+
 void assert_single_threaded_at(const char *where);
 #define assert_single_threaded() assert_single_threaded_at(SOURCE_LOCATOR)
 
+#ifndef _WIN32
 pid_t xfork_at(const char *where);
 #define xfork() xfork_at(SOURCE_LOCATOR)
+#endif
 
 void forbid_forking(const char *reason);
 bool may_fork(void);

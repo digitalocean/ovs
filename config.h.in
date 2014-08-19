@@ -23,6 +23,9 @@
    older version of GCC, the value does not matter. */
 #undef ATOMIC_ALWAYS_LOCK_FREE_8B
 
+/* System uses the DPDK module. */
+#undef DPDK_NETDEV
+
 /* Define to 1 if building on ESX. */
 #undef ESX
 
@@ -98,6 +101,9 @@
 /* Define to 1 if OpenSSL is installed. */
 #undef HAVE_OPENSSL
 
+/* Define to 1 if `posix_memalign' works. */
+#undef HAVE_POSIX_MEMALIGN
+
 /* Define to 1 if you have the `pthread_set_name_np' function. */
 #undef HAVE_PTHREAD_SET_NAME_NP
 
@@ -109,6 +115,9 @@
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
+
+/* Define to 1 if you have the <stdio.h> header file. */
+#undef HAVE_STDIO_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
@@ -159,9 +168,6 @@
 /* Define to 1 if the C compiler and linker supports the GCC __thread
    extenions. */
 #undef HAVE___THREAD
-
-/* System uses the linux datapath module. */
-#undef LINUX_DATAPATH
 
 /* Define to the sub-directory in which libtool stores uninstalled libraries.
    */
@@ -257,3 +263,7 @@
 
 /* Define to 1 if you need to in order for `stat' and other things to work. */
 #undef _POSIX_SOURCE
+
+#ifdef WIN32
+#include "include/windows/windefs.h"
+#endif

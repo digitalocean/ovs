@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
 #include "bitmap.h"
 #include "byte-order.h"
 #include "coverage.h"
+#include "ovs-rcu.h"
 #include "ovs-thread.h"
 #include "vlog.h"
 #ifdef HAVE_PTHREAD_SET_NAME_NP
@@ -41,7 +42,7 @@ VLOG_DEFINE_THIS_MODULE(util);
 COVERAGE_DEFINE(util_xalloc);
 
 /* argv[0] without directory names. */
-const char *program_name;
+char *program_name;
 
 /* Name for the currently running thread or process, for log messages, process
  * listings, and debuggers. */
@@ -50,10 +51,12 @@ DEFINE_PER_THREAD_MALLOCED_DATA(char *, subprogram_name);
 /* --version option output. */
 static char *program_version;
 
-/* Buffer used by ovs_strerror(). */
+/* Buffer used by ovs_strerror() and ovs_format_message(). */
 DEFINE_STATIC_PER_THREAD_DATA(struct { char s[128]; },
                               strerror_buffer,
                               { "" });
+
+static char *xreadlink(const char *filename);
 
 void
 ovs_assert_failure(const char *where, const char *function,
@@ -170,6 +173,80 @@ x2nrealloc(void *p, size_t *n, size_t s)
 {
     *n = *n == 0 ? 1 : 2 * *n;
     return xrealloc(p, *n * s);
+}
+
+/* The desired minimum alignment for an allocated block of memory. */
+#define MEM_ALIGN MAX(sizeof(void *), 8)
+BUILD_ASSERT_DECL(IS_POW2(MEM_ALIGN));
+BUILD_ASSERT_DECL(CACHE_LINE_SIZE >= MEM_ALIGN);
+
+/* Allocates and returns 'size' bytes of memory in dedicated cache lines.  That
+ * is, the memory block returned will not share a cache line with other data,
+ * avoiding "false sharing".  (The memory returned will not be at the start of
+ * a cache line, though, so don't assume such alignment.)
+ *
+ * Use free_cacheline() to free the returned memory block. */
+void *
+xmalloc_cacheline(size_t size)
+{
+#ifdef HAVE_POSIX_MEMALIGN
+    void *p;
+    int error;
+
+    COVERAGE_INC(util_xalloc);
+    error = posix_memalign(&p, CACHE_LINE_SIZE, size ? size : 1);
+    if (error != 0) {
+        out_of_memory();
+    }
+    return p;
+#else
+    void **payload;
+    void *base;
+
+    /* Allocate room for:
+     *
+     *     - Up to CACHE_LINE_SIZE - 1 bytes before the payload, so that the
+     *       start of the payload doesn't potentially share a cache line.
+     *
+     *     - A payload consisting of a void *, followed by padding out to
+     *       MEM_ALIGN bytes, followed by 'size' bytes of user data.
+     *
+     *     - Space following the payload up to the end of the cache line, so
+     *       that the end of the payload doesn't potentially share a cache line
+     *       with some following block. */
+    base = xmalloc((CACHE_LINE_SIZE - 1)
+                   + ROUND_UP(MEM_ALIGN + size, CACHE_LINE_SIZE));
+
+    /* Locate the payload and store a pointer to the base at the beginning. */
+    payload = (void **) ROUND_UP((uintptr_t) base, CACHE_LINE_SIZE);
+    *payload = base;
+
+    return (char *) payload + MEM_ALIGN;
+#endif
+}
+
+/* Like xmalloc_cacheline() but clears the allocated memory to all zero
+ * bytes. */
+void *
+xzalloc_cacheline(size_t size)
+{
+    void *p = xmalloc_cacheline(size);
+    memset(p, 0, size);
+    return p;
+}
+
+/* Frees a memory block allocated with xmalloc_cacheline() or
+ * xzalloc_cacheline(). */
+void
+free_cacheline(void *p)
+{
+#ifdef HAVE_POSIX_MEMALIGN
+    free(p);
+#else
+    if (p) {
+        free(*(void **) ((uintptr_t) p - MEM_ALIGN));
+    }
+#endif
 }
 
 char *
@@ -323,6 +400,10 @@ ovs_retval_to_string(int retval)
             : ovs_strerror(retval));
 }
 
+/* This function returns the string describing the error number in 'error'
+ * for POSIX platforms.  For Windows, this function can be used for C library
+ * calls.  For socket calls that are also used in Windows, use sock_strerror()
+ * instead.  For WINAPI calls, look at ovs_lasterror_to_string(). */
 const char *
 ovs_strerror(int error)
 {
@@ -373,12 +454,22 @@ void
 set_program_name__(const char *argv0, const char *version, const char *date,
                    const char *time)
 {
+    char *basename;
+#ifdef _WIN32
+    size_t max_len = strlen(argv0) + 1;
+
+    SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
+
+    basename = xmalloc(max_len);
+    _splitpath_s(argv0, NULL, 0, NULL, 0, basename, max_len, NULL, 0);
+#else
     const char *slash = strrchr(argv0, '/');
+    basename = xstrdup(slash ? slash + 1 : argv0);
+#endif
 
     assert_single_threaded();
-
-    program_name = slash ? slash + 1 : argv0;
-
+    free(program_name);
+    program_name = basename;
     free(program_version);
 
     if (!strcmp(version, VERSION)) {
@@ -537,6 +628,20 @@ str_to_llong(const char *s, int base, long long *x)
     }
 }
 
+bool
+str_to_uint(const char *s, int base, unsigned int *u)
+{
+    long long ll;
+    bool ok = str_to_llong(s, base, &ll);
+    if (!ok || ll < 0 || ll > UINT_MAX) {
+	*u = 0;
+	return false;
+    } else {
+	*u = ll;
+	return true;
+    }
+}
+
 /* Converts floating-point string 's' into a double.  If successful, stores
  * the double in '*d' and returns true; on failure, stores 0 in '*d' and
  * returns false.
@@ -629,7 +734,11 @@ get_cwd(void)
     size_t size;
 
     /* Get maximum path length or at least a reasonable estimate. */
+#ifndef _WIN32
     path_max = pathconf(".", _PC_PATH_MAX);
+#else
+    path_max = MAX_PATH;
+#endif
     size = (path_max < 0 ? 1024
             : path_max > 10240 ? 10240
             : path_max);
@@ -730,7 +839,7 @@ abs_file_name(const char *dir, const char *file_name)
 /* Like readlink(), but returns the link name as a null-terminated string in
  * allocated memory that the caller must eventually free (with free()).
  * Returns NULL on error, in which case errno is set appropriately. */
-char *
+static char *
 xreadlink(const char *filename)
 {
     size_t size;
@@ -762,10 +871,14 @@ xreadlink(const char *filename)
  *
  *     - Only symlinks in the final component of 'filename' are dereferenced.
  *
+ * For Windows platform, this function returns a string that has the same
+ * value as the passed string.
+ *
  * The caller must eventually free the returned string (with free()). */
 char *
 follow_symlinks(const char *filename)
 {
+#ifndef _WIN32
     struct stat s;
     char *fn;
     int i;
@@ -810,6 +923,7 @@ follow_symlinks(const char *filename)
 
     VLOG_WARN("%s: too many levels of symlinks", filename);
     free(fn);
+#endif
     return xstrdup(filename);
 }
 
@@ -1642,3 +1756,48 @@ exit:
     return ok;
 }
 
+void
+xsleep(unsigned int seconds)
+{
+    ovsrcu_quiesce_start();
+#ifdef _WIN32
+    Sleep(seconds * 1000);
+#else
+    sleep(seconds);
+#endif
+    ovsrcu_quiesce_end();
+}
+
+#ifdef _WIN32
+
+char *
+ovs_format_message(int error)
+{
+    enum { BUFSIZE = sizeof strerror_buffer_get()->s };
+    char *buffer = strerror_buffer_get()->s;
+
+    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                  NULL, error, 0, buffer, BUFSIZE, NULL);
+    return buffer;
+}
+
+/* Returns a null-terminated string that explains the last error.
+ * Use this function to get the error string for WINAPI calls. */
+char *
+ovs_lasterror_to_string(void)
+{
+    return ovs_format_message(GetLastError());
+}
+
+int
+ftruncate(int fd, off_t length)
+{
+    int error;
+
+    error = _chsize_s(fd, length);
+    if (error) {
+        return -1;
+    }
+    return 0;
+}
+#endif

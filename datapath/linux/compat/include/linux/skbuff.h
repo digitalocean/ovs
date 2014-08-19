@@ -3,6 +3,7 @@
 
 #include_next <linux/skbuff.h>
 
+#include <linux/jhash.h>
 #include <linux/version.h>
 
 #ifndef HAVE_SKB_COPY_FROM_LINEAR_DATA_OFFSET
@@ -243,27 +244,61 @@ static inline int skb_unclone(struct sk_buff *skb, gfp_t pri)
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
-#define __skb_get_rxhash rpl__skb_get_rxhash
-#define skb_get_rxhash rpl_skb_get_rxhash
-
-extern u32 __skb_get_rxhash(struct sk_buff *skb);
-static inline __u32 skb_get_rxhash(struct sk_buff *skb)
+#ifndef HAVE_SKB_ORPHAN_FRAGS
+static inline int skb_orphan_frags(struct sk_buff *skb, gfp_t gfp_mask)
 {
-#ifdef HAVE_RXHASH
-	if (skb->rxhash)
-		return skb->rxhash;
-#endif
-	return __skb_get_rxhash(skb);
+	return 0;
 }
 #endif
 
+#ifndef HAVE_SKB_GET_HASH
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+#define __skb_get_hash rpl__skb_get_rxhash
+#define skb_get_hash rpl_skb_get_rxhash
+
+extern u32 __skb_get_hash(struct sk_buff *skb);
+static inline __u32 skb_get_hash(struct sk_buff *skb)
+{
+#ifdef HAVE_RXHASH
+	if (skb->rxhash)
+#ifndef HAVE_U16_RXHASH
+		return skb->rxhash;
+#else
+		return jhash_1word(skb->rxhash, 0);
+#endif
+#endif
+	return __skb_get_hash(skb);
+}
+
+#else
+#define skb_get_hash skb_get_rxhash
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0) */
+#endif /* HAVE_SKB_GET_HASH */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+static inline void skb_tx_error(struct sk_buff *skb)
+{
+	return;
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0) */
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
 unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
-void skb_zerocopy(struct sk_buff *to, const struct sk_buff *from, int len, 
+int skb_zerocopy(struct sk_buff *to, struct sk_buff *from, int len,
 		  int hlen);
 #endif
 
+#ifndef HAVE_SKB_CLEAR_HASH
+static inline void skb_clear_hash(struct sk_buff *skb)
+{
+#ifdef HAVE_RXHASH
+	skb->rxhash = 0;
+#endif
+#ifdef HAVE_L4_RXHASH
+	skb->l4_rxhash = 0;
+#endif
+}
+#endif
 
 #ifndef HAVE_SKB_HAS_FRAG_LIST
 #define skb_has_frag_list skb_has_frags

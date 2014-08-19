@@ -31,6 +31,8 @@ ofproto_libofproto_la_SOURCES = \
 	ofproto/ofproto-dpif-mirror.h \
 	ofproto/ofproto-dpif-monitor.c \
 	ofproto/ofproto-dpif-monitor.h \
+	ofproto/ofproto-dpif-rid.c \
+	ofproto/ofproto-dpif-rid.h \
 	ofproto/ofproto-dpif-sflow.c \
 	ofproto/ofproto-dpif-sflow.h \
 	ofproto/ofproto-dpif-upcall.c \
@@ -43,10 +45,17 @@ ofproto_libofproto_la_SOURCES = \
 	ofproto/pinsched.c \
 	ofproto/pinsched.h \
 	ofproto/tunnel.c \
-	ofproto/tunnel.h
+	ofproto/tunnel.h \
+	ofproto/bundles.c \
+	ofproto/bundles.h
+
 ofproto_libofproto_la_CPPFLAGS = $(AM_CPPFLAGS)
 ofproto_libofproto_la_CFLAGS = $(AM_CFLAGS)
 ofproto_libofproto_la_LIBADD = lib/libsflow.la
+if WIN32
+ofproto_libofproto_la_LIBADD += ${PTHREAD_LIBS}
+endif
+
 
 # Distribute this generated file in order not to require Python at
 # build time if ofproto/ipfix.xml is not modified.
@@ -62,4 +71,5 @@ MAN_FRAGMENTS += ofproto/ofproto-unixctl.man ofproto/ofproto-dpif-unixctl.man
 EXTRA_DIST += ofproto/ipfix.xml
 dist_noinst_SCRIPTS = ofproto/ipfix-gen-entities
 ofproto/ipfix-entities.def: ofproto/ipfix.xml ofproto/ipfix-gen-entities
-	$(run_python) $(srcdir)/ofproto/ipfix-gen-entities $< > $@
+	$(run_python) $(srcdir)/ofproto/ipfix-gen-entities $< > $@.tmp
+	mv $@.tmp $@

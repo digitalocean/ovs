@@ -41,6 +41,45 @@ seq () {
         set `expr $1 + ${3-1}` $2 $3
     done
 }
+
+if test "$IS_WIN32" = "yes"; then
+    pwd () {
+        command pwd -W "$@"
+    }
+
+    diff () {
+        command diff --strip-trailing-cr "$@"
+    }
+
+    kill () {
+        case "$1" in
+            -0)
+                shift
+                for i in $*; do
+                    # tasklist will always have return code 0.
+                    # If pid does exist, there will be a line with the pid.
+                    if tasklist //fi "PID eq $i" | grep $i; then
+                        :
+                    else
+                        return 1
+                    fi
+                done
+                return 0
+                ;;
+            -[1-9]*)
+                shift
+                for i in $*; do
+                    taskkill //F //PID $i
+                done
+                ;;
+            [1-9][1-9]*)
+                for i in $*; do
+                    taskkill //F //PID $i
+                done
+                ;;
+        esac
+    }
+fi
 ]
 m4_divert_pop([PREPARE_TESTS])
 
@@ -52,6 +91,14 @@ ovs_wait], [0], [ignore], [ignore], [$2])])
 m4_define([OVS_WAIT_UNTIL], [OVS_WAIT([$1], [$2])])
 m4_define([OVS_WAIT_WHILE],
   [OVS_WAIT([if $1; then return 1; else return 0; fi], [$2])])
+
+dnl OVS_APP_EXIT_AND_WAIT(DAEMON)
+dnl
+dnl Ask the daemon named DAEMON to exit, via ovs-appctl, and then waits for it
+dnl to exit.
+m4_define([OVS_APP_EXIT_AND_WAIT],
+  [ovs-appctl -t $1 exit
+   OVS_WAIT_WHILE([test -e $1.pid])])
 
 dnl ON_EXIT([COMMANDS])
 dnl

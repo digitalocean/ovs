@@ -4,46 +4,13 @@ Priority: extra
 Maintainer: Open vSwitch developers <dev@openvswitch.org>
 Uploaders: Ben Pfaff <pfaffben@debian.org>, Simon Horman <horms@debian.org>
 Build-Depends:
- debhelper (>= 8), autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
+ debhelper (>= 8), dh-autoreconf, 
+ autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
  libssl-dev, bzip2, openssl, graphviz,
  python-all (>= 2.6.6-3~), procps, python-qt4,
  python-zopeinterface, python-twisted-conch, libtool
 Standards-Version: 3.9.3
 Homepage: http://openvswitch.org/
-
-Package: openvswitch-datapath-source
-Architecture: all
-Depends: module-assistant, bzip2, debhelper (>= 5.0.37), ${misc:Depends}
-Suggests: openvswitch-switch
-Description: Open vSwitch datapath module source - module-assistant version
- Open vSwitch is a production quality, multilayer, software-based,
- Ethernet virtual switch. It is designed to enable massive network
- automation through programmatic extension, while still supporting
- standard management interfaces and protocols (e.g. NetFlow, IPFIX,
- sFlow, SPAN, RSPAN, CLI, LACP, 802.1ag). In addition, it is designed
- to support distribution across multiple physical servers similar to
- VMware's vNetwork distributed vswitch or Cisco's Nexus 1000V.
- .
- This package provides the Open vSwitch datapath module source code
- that is needed by openvswitch-switch.  The kernel module can be built
- from it using module-assistant or make-kpkg.  README.Debian in this
- package provides further instructions.
-
-Package: openvswitch-datapath-dkms
-Architecture: all
-Depends: dkms (>= 1.95), make, libc6-dev, ${misc:Depends}, ${python:Depends}
-Description: Open vSwitch datapath module source - DKMS version
- Open vSwitch is a production quality, multilayer, software-based,
- Ethernet virtual switch. It is designed to enable massive network
- automation through programmatic extension, while still supporting
- standard management interfaces and protocols (e.g. NetFlow, IPFIX,
- sFlow, SPAN, RSPAN, CLI, LACP, 802.1ag). In addition, it is designed
- to support distribution across multiple physical servers similar to
- VMware's vNetwork distributed vswitch or Cisco's Nexus 1000V.
- .
- This package provides the Open vSwitch datapath module source code
- that is needed by openvswitch-switch.  DKMS can built the kernel
- module from it.
 
 Package: openvswitch-common
 Architecture: linux-any
@@ -64,7 +31,6 @@ Description: Open vSwitch common components
 
 Package: openvswitch-switch
 Architecture: linux-any
-Suggests: openvswitch-datapath-module
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), kmod, procps, uuid-runtime, netbase, python-argparse
 Description: Open vSwitch switch implementations
  Open vSwitch is a production quality, multilayer, software-based,

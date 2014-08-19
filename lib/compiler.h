@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -179,6 +179,20 @@
 #define OVS_PACKED(DECL) __pragma(pack(push, 1)) DECL __pragma(pack(pop))
 #endif
 
+/* For defining a structure whose instances should aligned on an N-byte
+ * boundary.
+ *
+ * e.g. The following:
+ *     OVS_ALIGNED_STRUCT(64, mystruct) { ... };
+ * is equivalent to the following except that it specifies 64-byte alignment:
+ *     struct mystruct { ... };
+ */
+#ifndef _MSC_VER
+#define OVS_ALIGNED_STRUCT(N, TAG) struct __attribute__((aligned(N))) TAG
+#else
+#define OVS_ALIGNED_STRUCT(N, TAG) __declspec(align(N)) struct TAG
+#endif
+
 #ifdef _MSC_VER
 #define CCALL __cdecl
 #pragma section(".CRT$XCU",read)
@@ -190,6 +204,20 @@
 #define OVS_CONSTRUCTOR(f) \
     static void f(void) __attribute__((constructor)); \
     static void f(void)
+#endif
+
+/* OVS_PREFETCH() can be used to instruct the CPU to fetch the cache
+ * line containing the given address to a CPU cache.
+ * OVS_PREFETCH_WRITE() should be used when the memory is going to be
+ * written to.  Depending on the target CPU, this can generate the same
+ * instruction as OVS_PREFETCH(), or bring the data into the cache in an
+ * exclusive state. */
+#if __GNUC__
+#define OVS_PREFETCH(addr) __builtin_prefetch((addr))
+#define OVS_PREFETCH_WRITE(addr) __builtin_prefetch((addr), 1)
+#else
+#define OVS_PREFETCH(addr)
+#define OVS_PREFETCH_WRITE(addr)
 #endif
 
 #endif /* compiler.h */

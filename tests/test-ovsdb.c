@@ -51,17 +51,16 @@
 #include "util.h"
 #include "vlog.h"
 
-static struct command all_commands[];
-
 static void usage(void) NO_RETURN;
 static void parse_options(int argc, char *argv[]);
+static struct command *get_all_commands(void);
 
 int
 main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     parse_options(argc, argv);
-    run_command(argc - optind, argv + optind, all_commands);
+    run_command(argc - optind, argv + optind, get_all_commands());
     return 0;
 }
 
@@ -218,16 +217,13 @@ unbox_json(struct json *json)
     }
 }
 
-static size_t
+static void
 print_and_free_json(struct json *json)
 {
     char *string = json_to_string(json, JSSF_SORT);
-    size_t length = strlen(string);
     json_destroy(json);
     puts(string);
     free(string);
-
-    return length;
 }
 
 static void
@@ -445,10 +441,7 @@ do_parse_atoms(int argc, char *argv[])
         if (error) {
             print_and_free_ovsdb_error(error);
         } else {
-            size_t length;
-
-            length = print_and_free_json(ovsdb_atom_to_json(&atom, base.type));
-            ovs_assert(length == ovsdb_atom_json_length(&atom, base.type));
+            print_and_free_json(ovsdb_atom_to_json(&atom, base.type));
             ovsdb_atom_destroy(&atom, base.type);
         }
     }
@@ -500,14 +493,12 @@ do_parse_data__(int argc, char *argv[],
 
     for (i = 2; i < argc; i++) {
         struct ovsdb_datum datum;
-        size_t length;
 
         json = unbox_json(parse_json(argv[i]));
         check_ovsdb_error(parse(&datum, &type, json, NULL));
         json_destroy(json);
 
-        length = print_and_free_json(ovsdb_datum_to_json(&datum, &type));
-        ovs_assert(length == ovsdb_datum_json_length(&datum, &type));
+        print_and_free_json(ovsdb_datum_to_json(&datum, &type));
 
         ovsdb_datum_destroy(&datum, &type);
     }
@@ -1902,7 +1893,7 @@ do_idl(int argc, char *argv[])
         rpc = NULL;
     }
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     symtab = ovsdb_symbol_table_create();
     for (i = 2; i < argc; i++) {
@@ -2001,3 +1992,9 @@ static struct command all_commands[] = {
     { "help", 0, INT_MAX, do_help },
     { NULL, 0, 0, NULL },
 };
+
+static struct command *
+get_all_commands(void)
+{
+    return all_commands;
+}

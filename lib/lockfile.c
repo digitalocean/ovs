@@ -1,4 +1,4 @@
- /* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ /* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ struct lockfile {
     dev_t device;
     ino_t inode;
     int fd;
+    HANDLE lock_handle;
 };
 
 /* Lock table.
@@ -59,7 +60,10 @@ static struct hmap *const lock_table OVS_GUARDED_BY(lock_table_mutex)
 
 static void lockfile_unhash(struct lockfile *);
 static int lockfile_try_lock(const char *name, pid_t *pidp,
-                             struct lockfile **lockfilep);
+                             struct lockfile **lockfilep)
+    OVS_REQUIRES(&lock_table_mutex);
+static void lockfile_do_unlock(struct lockfile * lockfile)
+    OVS_REQUIRES(&lock_table_mutex);
 
 /* Returns the name of the lockfile that would be created for locking a file
  * named 'filename_'.  The caller is responsible for freeing the returned name,
@@ -118,7 +122,10 @@ lockfile_lock(const char *file, struct lockfile **lockfilep)
         if (error == EACCES) {
             error = EAGAIN;
         }
-        if (pid) {
+        if (pid == getpid()) {
+            VLOG_WARN("%s: cannot lock file because this process has already "
+                      "locked it", lock_name);
+        } else if (pid) {
             VLOG_WARN("%s: cannot lock file because it is already locked by "
                       "pid %ld", lock_name, (long int) pid);
         } else {
@@ -138,7 +145,7 @@ lockfile_unlock(struct lockfile *lockfile)
 {
     if (lockfile) {
         ovs_mutex_lock(&lock_table_mutex);
-        lockfile_unhash(lockfile);
+        lockfile_do_unlock(lockfile);
         ovs_mutex_unlock(&lock_table_mutex);
 
         COVERAGE_INC(lockfile_unlock);
@@ -218,6 +225,76 @@ lockfile_register(const char *name, dev_t device, ino_t inode, int fd)
     return lockfile;
 }
 
+#ifdef _WIN32
+static void
+lockfile_do_unlock(struct lockfile *lockfile)
+    OVS_REQUIRES(&lock_table_mutex)
+{
+    if (lockfile->fd >= 0) {
+        OVERLAPPED overl;
+        overl.hEvent = 0;
+        overl.Offset = 0;
+        overl.OffsetHigh = 0;
+        UnlockFileEx(lockfile->lock_handle, 0, 1, 0, &overl);
+
+        close(lockfile->fd);
+        lockfile->fd = -1;
+    }
+}
+
+static int
+lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
+    OVS_REQUIRES(&lock_table_mutex)
+{
+    HANDLE lock_handle;
+    BOOL retval;
+    OVERLAPPED overl;
+    struct lockfile *lockfile;
+    int fd;
+
+    *pidp = 0;
+
+    fd = open(name, O_RDWR | O_CREAT, 0600);
+    if (fd < 0) {
+        VLOG_WARN("%s: failed to open lock file: %s",
+                   name, ovs_strerror(errno));
+        return errno;
+    }
+
+    lock_handle = (HANDLE)_get_osfhandle(fd);
+    if (lock_handle < 0) {
+        VLOG_WARN("%s: failed to get the file handle: %s",
+                   name, ovs_strerror(errno));
+        return errno;
+    }
+
+    /* Lock the file 'name' for the region that includes just the first
+     * byte. */
+    overl.hEvent = 0;
+    overl.Offset = 0;
+    overl.OffsetHigh = 0;
+    retval = LockFileEx(lock_handle, LOCKFILE_EXCLUSIVE_LOCK
+                        | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overl);
+    if (!retval) {
+        VLOG_WARN("Failed to lock file : %s", ovs_lasterror_to_string());
+        return EEXIST;
+    }
+
+    lockfile = xmalloc(sizeof *lockfile);
+    lockfile->name = xstrdup(name);
+    lockfile->fd = fd;
+    lockfile->lock_handle = lock_handle;
+
+    *lockfilep = lockfile;
+    return 0;
+}
+#else /* !_WIN32 */
+static void
+lockfile_do_unlock(struct lockfile *lockfile)
+{
+    lockfile_unhash(lockfile);
+}
+
 static int
 lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
     OVS_REQUIRES(&lock_table_mutex)
@@ -233,6 +310,7 @@ lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
     /* Check whether we've already got a lock on that file. */
     if (!stat(name, &s)) {
         if (lockfile_find(s.st_dev, s.st_ino)) {
+            *pidp = getpid();
             return EDEADLK;
         }
     } else if (errno != ENOENT) {
@@ -276,4 +354,4 @@ lockfile_try_lock(const char *name, pid_t *pidp, struct lockfile **lockfilep)
     }
     return error;
 }
-
+#endif

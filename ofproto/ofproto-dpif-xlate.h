@@ -31,6 +31,13 @@ struct lacp;
 struct dpif_ipfix;
 struct dpif_sflow;
 struct mac_learning;
+struct xlate_cache;
+
+struct xlate_recirc {
+    uint32_t recirc_id;  /* !0 Use recirculation instead of output. */
+    uint8_t  hash_alg;   /* !0 Compute hash for recirc before. */
+    uint32_t hash_basis;  /* Compute hash for recirc before. */
+};
 
 struct xlate_out {
     /* Wildcards relevant in translation.  Any fields that were used to
@@ -118,6 +125,15 @@ struct xlate_in {
      * This is normally null so the client has to set it manually after
      * calling xlate_in_init(). */
     const struct dpif_flow_stats *resubmit_stats;
+
+    /* If nonnull, flow translation populates this cache with references to all
+     * modules that are affected by translation. This 'xlate_cache' may be
+     * passed to xlate_push_stats() to perform the same function as
+     * xlate_actions() without the full cost of translation.
+     *
+     * This is normally null so the client has to set it manually after
+     * calling xlate_in_init(). */
+    struct xlate_cache *xcache;
 };
 
 extern struct ovs_rwlock xlate_rwlock;
@@ -129,7 +145,9 @@ void xlate_ofproto_set(struct ofproto_dpif *, const char *name,
                        const struct mbridge *, const struct dpif_sflow *,
                        const struct dpif_ipfix *, const struct netflow *,
                        enum ofp_config_flags, bool forward_bpdu,
-                       bool has_in_band)
+                       bool has_in_band, bool enable_recirc,
+                       bool variable_length_userdata,
+                       size_t mpls_label_stack_length)
     OVS_REQ_WRLOCK(xlate_rwlock);
 void xlate_remove_ofproto(struct ofproto_dpif *) OVS_REQ_WRLOCK(xlate_rwlock);
 
@@ -152,8 +170,7 @@ void xlate_ofport_remove(struct ofport_dpif *) OVS_REQ_WRLOCK(xlate_rwlock);
 
 int xlate_receive(const struct dpif_backer *, struct ofpbuf *packet,
                   const struct nlattr *key, size_t key_len,
-                  struct flow *, enum odp_key_fitness *,
-                  struct ofproto_dpif **, struct dpif_ipfix **,
+                  struct flow *, struct ofproto_dpif **, struct dpif_ipfix **,
                   struct dpif_sflow **, struct netflow **,
                   odp_port_t *odp_in_port)
     OVS_EXCLUDED(xlate_rwlock);
@@ -161,12 +178,18 @@ int xlate_receive(const struct dpif_backer *, struct ofpbuf *packet,
 void xlate_actions(struct xlate_in *, struct xlate_out *)
     OVS_EXCLUDED(xlate_rwlock);
 void xlate_in_init(struct xlate_in *, struct ofproto_dpif *,
-                   const struct flow *, struct rule_dpif *, uint16_t tcp_flags,
-                   const struct ofpbuf *packet);
+                   const struct flow *, struct rule_dpif *,
+                   uint16_t tcp_flags, const struct ofpbuf *packet);
 void xlate_out_uninit(struct xlate_out *);
 void xlate_actions_for_side_effects(struct xlate_in *);
 void xlate_out_copy(struct xlate_out *dst, const struct xlate_out *src);
 
 int xlate_send_packet(const struct ofport_dpif *, struct ofpbuf *);
+
+struct xlate_cache *xlate_cache_new(void);
+void xlate_push_stats(struct xlate_cache *, bool may_learn,
+                      const struct dpif_flow_stats *);
+void xlate_cache_clear(struct xlate_cache *);
+void xlate_cache_delete(struct xlate_cache *);
 
 #endif /* ofproto-dpif-xlate.h */

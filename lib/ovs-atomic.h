@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Nicira, Inc.
+ * Copyright (c) 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -69,23 +69,25 @@
  *     int8_t                   atomic_int8_t      (*)
  *     int16_t                  atomic_int16_t     (*)
  *     int32_t                  atomic_int32_t     (*)
- *     uint64_t                 atomic_uint64_t    (*)
- *     int64_t                  atomic_int64_t     (*)
  *
  *     (*) Not specified by C11.
  *
+ * Atomic types may also be obtained via ATOMIC(TYPE), e.g. ATOMIC(void *).
+ * Only basic integer types and pointer types can be made atomic this way,
+ * e.g. atomic structs are not supported.
+ *
  * The atomic version of a type doesn't necessarily have the same size or
  * representation as the ordinary version; for example, atomic_int might be a
- * typedef for a struct that also includes a mutex.  The range of an atomic
- * type does match the range of the corresponding ordinary type.
+ * typedef for a struct.  The range of an atomic type does match the range of
+ * the corresponding ordinary type.
  *
  * C11 says that one may use the _Atomic keyword in place of the typedef name,
  * e.g. "_Atomic int" instead of "atomic_int".  This library doesn't support
  * that.
  *
  *
- * Initialization
- * ==============
+ * Life Cycle
+ * ==========
  *
  * To initialize an atomic variable at its point of definition, use
  * ATOMIC_VAR_INIT:
@@ -204,8 +206,18 @@
  * atomic_flag is a typedef for a type with two states, set and clear, that
  * provides atomic test-and-set functionality.
  *
+ *
+ * Life Cycle
+ * ----------
+ *
  * ATOMIC_FLAG_INIT is an initializer for atomic_flag.  The initial state is
  * "clear".
+ *
+ * An atomic_flag may also be initialized at runtime with atomic_flag_clear().
+ *
+ *
+ * Operations
+ * ----------
  *
  * The following functions are available.
  *
@@ -248,5 +260,97 @@
         #include "ovs-atomic-pthreads.h"
     #endif
 #undef IN_OVS_ATOMIC_H
+
+#ifndef OMIT_STANDARD_ATOMIC_TYPES
+typedef ATOMIC(bool)               atomic_bool;
+
+typedef ATOMIC(char)               atomic_char;
+typedef ATOMIC(signed char)        atomic_schar;
+typedef ATOMIC(unsigned char)      atomic_uchar;
+
+typedef ATOMIC(short)              atomic_short;
+typedef ATOMIC(unsigned short)     atomic_ushort;
+
+typedef ATOMIC(int)                atomic_int;
+typedef ATOMIC(unsigned int)       atomic_uint;
+
+typedef ATOMIC(long)               atomic_long;
+typedef ATOMIC(unsigned long)      atomic_ulong;
+
+typedef ATOMIC(long long)          atomic_llong;
+typedef ATOMIC(unsigned long long) atomic_ullong;
+
+typedef ATOMIC(size_t)             atomic_size_t;
+typedef ATOMIC(ptrdiff_t)          atomic_ptrdiff_t;
+
+typedef ATOMIC(intmax_t)           atomic_intmax_t;
+typedef ATOMIC(uintmax_t)          atomic_uintmax_t;
+
+typedef ATOMIC(intptr_t)           atomic_intptr_t;
+typedef ATOMIC(uintptr_t)          atomic_uintptr_t;
+#endif  /* !OMIT_STANDARD_ATOMIC_TYPES */
+
+/* Nonstandard atomic types. */
+typedef ATOMIC(uint8_t)   atomic_uint8_t;
+typedef ATOMIC(uint16_t)  atomic_uint16_t;
+typedef ATOMIC(uint32_t)  atomic_uint32_t;
+
+typedef ATOMIC(int8_t)    atomic_int8_t;
+typedef ATOMIC(int16_t)   atomic_int16_t;
+typedef ATOMIC(int32_t)   atomic_int32_t;
+
+/* Reference count. */
+struct ovs_refcount {
+    atomic_uint count;
+};
+
+/* Initializes 'refcount'.  The reference count is initially 1. */
+static inline void
+ovs_refcount_init(struct ovs_refcount *refcount)
+{
+    atomic_init(&refcount->count, 1);
+}
+
+/* Increments 'refcount'. */
+static inline void
+ovs_refcount_ref(struct ovs_refcount *refcount)
+{
+    unsigned int old_refcount;
+
+    atomic_add(&refcount->count, 1, &old_refcount);
+    ovs_assert(old_refcount > 0);
+}
+
+/* Decrements 'refcount' and returns the previous reference count.  Often used
+ * in this form:
+ *
+ * if (ovs_refcount_unref(&object->ref_cnt) == 1) {
+ *     // ...uninitialize object...
+ *     free(object);
+ * }
+ */
+static inline unsigned int
+ovs_refcount_unref(struct ovs_refcount *refcount)
+{
+    unsigned int old_refcount;
+
+    atomic_sub(&refcount->count, 1, &old_refcount);
+    ovs_assert(old_refcount > 0);
+    return old_refcount;
+}
+
+/* Reads and returns 'ref_count_''s current reference count.
+ *
+ * Rarely useful. */
+static inline unsigned int
+ovs_refcount_read(const struct ovs_refcount *refcount_)
+{
+    struct ovs_refcount *refcount
+        = CONST_CAST(struct ovs_refcount *, refcount_);
+    unsigned int count;
+
+    atomic_read(&refcount->count, &count);
+    return count;
+}
 
 #endif /* ovs-atomic.h */

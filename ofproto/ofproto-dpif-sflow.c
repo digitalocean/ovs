@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  * Copyright (c) 2009 InMon Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,7 +59,7 @@ struct dpif_sflow {
     size_t n_flood, n_all;
     struct hmap ports;          /* Contains "struct dpif_sflow_port"s. */
     uint32_t probability;
-    atomic_int ref_cnt;
+    struct ovs_refcount ref_cnt;
 };
 
 static void dpif_sflow_del_port__(struct dpif_sflow *,
@@ -253,13 +253,16 @@ sflow_choose_agent_address(const char *agent_device,
     }
 
     SSET_FOR_EACH (target, targets) {
-        struct sockaddr_in sin;
+        struct sockaddr_storage ss;
         char name[IFNAMSIZ];
 
-        if (inet_parse_active(target, SFL_DEFAULT_COLLECTOR_PORT, &sin)
-            && route_table_get_name(sin.sin_addr.s_addr, name)
-            && !netdev_get_in4_by_name(name, &in4)) {
-            goto success;
+        if (inet_parse_active(target, SFL_DEFAULT_COLLECTOR_PORT, &ss)
+            && ss.ss_family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *) &ss;
+            if (route_table_get_name(sin->sin_addr.s_addr, name)
+                && !netdev_get_in4_by_name(name, &in4)) {
+                goto success;
+            }
         }
     }
 
@@ -327,7 +330,7 @@ dpif_sflow_create(void)
     hmap_init(&ds->ports);
     ds->probability = 0;
     route_table_register();
-    atomic_init(&ds->ref_cnt, 1);
+    ovs_refcount_init(&ds->ref_cnt);
 
     return ds;
 }
@@ -337,9 +340,7 @@ dpif_sflow_ref(const struct dpif_sflow *ds_)
 {
     struct dpif_sflow *ds = CONST_CAST(struct dpif_sflow *, ds_);
     if (ds) {
-        int orig;
-        atomic_add(&ds->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&ds->ref_cnt);
     }
     return ds;
 }
@@ -360,15 +361,7 @@ dpif_sflow_get_probability(const struct dpif_sflow *ds) OVS_EXCLUDED(mutex)
 void
 dpif_sflow_unref(struct dpif_sflow *ds) OVS_EXCLUDED(mutex)
 {
-    int orig;
-
-    if (!ds) {
-        return;
-    }
-
-    atomic_sub(&ds->ref_cnt, 1, &orig);
-    ovs_assert(orig > 0);
-    if (orig == 1) {
+    if (ds && ovs_refcount_unref(&ds->ref_cnt) == 1) {
         struct dpif_sflow_port *dsp, *next;
 
         route_table_unregister();
@@ -609,12 +602,12 @@ dpif_sflow_received(struct dpif_sflow *ds, struct ofpbuf *packet,
     header->header_protocol = SFLHEADER_ETHERNET_ISO8023;
     /* The frame_length should include the Ethernet FCS (4 bytes),
      * but it has already been stripped,  so we need to add 4 here. */
-    header->frame_length = packet->size + 4;
+    header->frame_length = ofpbuf_size(packet) + 4;
     /* Ethernet FCS stripped off. */
     header->stripped = 4;
-    header->header_length = MIN(packet->size,
+    header->header_length = MIN(ofpbuf_size(packet),
                                 sampler->sFlowFsMaximumHeaderSize);
-    header->header_bytes = packet->data;
+    header->header_bytes = ofpbuf_data(packet);
 
     /* Add extended switch element. */
     memset(&switchElem, 0, sizeof(switchElem));

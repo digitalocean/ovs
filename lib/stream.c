@@ -31,9 +31,11 @@
 #include "ofpbuf.h"
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
+#include "ovs-thread.h"
 #include "packets.h"
 #include "poll-loop.h"
 #include "random.h"
+#include "socket-util.h"
 #include "util.h"
 #include "vlog.h"
 
@@ -51,7 +53,11 @@ enum stream_state {
 
 static const struct stream_class *stream_classes[] = {
     &tcp_stream_class,
+#ifndef _WIN32
     &unix_stream_class,
+#else
+    &windows_stream_class,
+#endif
 #ifdef HAVE_OPENSSL
     &ssl_stream_class,
 #endif
@@ -59,11 +65,36 @@ static const struct stream_class *stream_classes[] = {
 
 static const struct pstream_class *pstream_classes[] = {
     &ptcp_pstream_class,
+#ifndef _WIN32
     &punix_pstream_class,
+#else
+    &pwindows_pstream_class,
+#endif
 #ifdef HAVE_OPENSSL
     &pssl_pstream_class,
 #endif
 };
+
+#ifdef _WIN32
+static void
+do_winsock_start(void)
+{
+    WSADATA wsaData;
+    int error;
+
+    error = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (error != 0) {
+        VLOG_FATAL("WSAStartup failed: %s", sock_strerror(sock_errno()));
+    }
+}
+
+static void
+winsock_start(void)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, do_winsock_start);
+}
+#endif
 
 /* Check the validity of the stream class structures. */
 static void
@@ -202,6 +233,10 @@ stream_open(const char *name, struct stream **streamp, uint8_t dscp)
     int error;
 
     COVERAGE_INC(stream_open);
+
+#ifdef _WIN32
+    winsock_start();
+#endif
 
     /* Look up the class. */
     error = stream_lookup_class(name, &class);
@@ -493,6 +528,10 @@ pstream_open(const char *name, struct pstream **pstreamp, uint8_t dscp)
 
     COVERAGE_INC(pstream_open);
 
+#ifdef _WIN32
+    winsock_start();
+#endif
+
     /* Look up the class. */
     error = pstream_lookup_class(name, &class);
     if (!class) {
@@ -720,18 +759,18 @@ pstream_open_with_default_port(const char *name_,
 /*
  * This function extracts IP address and port from the target string.
  *
- *     - On success, function returns true and fills *sin structure with port
+ *     - On success, function returns true and fills *ss structure with port
  *       and IP address. If port was absent in target string then it will use
  *       corresponding default port value.
- *     - On error, function returns false and *sin contains garbage.
+ *     - On error, function returns false and *ss contains garbage.
  */
 bool
 stream_parse_target_with_default_port(const char *target,
                                       uint16_t default_port,
-                                      struct sockaddr_in *sin)
+                                      struct sockaddr_storage *ss)
 {
     return ((!strncmp(target, "tcp:", 4) || !strncmp(target, "ssl:", 4))
-             && inet_parse_active(target + 4, default_port, sin));
+            && inet_parse_active(target + 4, default_port, ss));
 }
 
 /* Attempts to guess the content type of a stream whose first few bytes were

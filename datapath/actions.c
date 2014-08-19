@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Nicira, Inc.
+ * Copyright (c) 2007-2014 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -39,7 +39,7 @@
 #include "vport.h"
 
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
-			      const struct nlattr *attr, int len, bool keep_skb);
+			      const struct nlattr *attr, int len);
 
 static int make_writable(struct sk_buff *skb, int write_len)
 {
@@ -135,8 +135,8 @@ static int set_eth_addr(struct sk_buff *skb,
 
 	skb_postpull_rcsum(skb, eth_hdr(skb), ETH_ALEN * 2);
 
-	memcpy(eth_hdr(skb)->h_source, eth_key->eth_src, ETH_ALEN);
-	memcpy(eth_hdr(skb)->h_dest, eth_key->eth_dst, ETH_ALEN);
+	ether_addr_copy(eth_hdr(skb)->h_source, eth_key->eth_src);
+	ether_addr_copy(eth_hdr(skb)->h_dest, eth_key->eth_dst);
 
 	ovs_skb_postpush_rcsum(skb, eth_hdr(skb), ETH_ALEN * 2);
 
@@ -166,7 +166,7 @@ static void set_ip_addr(struct sk_buff *skb, struct iphdr *nh,
 	}
 
 	csum_replace4(&nh->check, *addr, new_addr);
-	skb_clear_rxhash(skb);
+	skb_clear_hash(skb);
 	*addr = new_addr;
 }
 
@@ -200,7 +200,7 @@ static void set_ipv6_addr(struct sk_buff *skb, u8 l4_proto,
 	if (recalculate_csum)
 		update_ipv6_checksum(skb, l4_proto, addr, new_addr);
 
-	skb_clear_rxhash(skb);
+	skb_clear_hash(skb);
 	memcpy(addr, new_addr, sizeof(__be32[4]));
 }
 
@@ -297,7 +297,7 @@ static void set_tp_port(struct sk_buff *skb, __be16 *port,
 {
 	inet_proto_csum_replace2(check, skb, *port, new_port, 0);
 	*port = new_port;
-	skb_clear_rxhash(skb);
+	skb_clear_hash(skb);
 }
 
 static void set_udp_port(struct sk_buff *skb, __be16 *port, __be16 new_port)
@@ -311,7 +311,7 @@ static void set_udp_port(struct sk_buff *skb, __be16 *port, __be16 new_port)
 			uh->check = CSUM_MANGLED_0;
 	} else {
 		*port = new_port;
-		skb_clear_rxhash(skb);
+		skb_clear_hash(skb);
 	}
 }
 
@@ -382,7 +382,7 @@ static int set_sctp(struct sk_buff *skb,
 		/* Carry any checksum errors through. */
 		sh->checksum = old_csum ^ old_correct_csum ^ new_csum;
 
-		skb_clear_rxhash(skb);
+		skb_clear_hash(skb);
 	}
 
 	return 0;
@@ -435,18 +435,24 @@ static int output_userspace(struct datapath *dp, struct sk_buff *skb,
 	return ovs_dp_upcall(dp, skb, &upcall);
 }
 
+static bool last_action(const struct nlattr *a, int rem)
+{
+	return a->nla_len == rem;
+}
+
 static int sample(struct datapath *dp, struct sk_buff *skb,
 		  const struct nlattr *attr)
 {
 	const struct nlattr *acts_list = NULL;
 	const struct nlattr *a;
+	struct sk_buff *sample_skb;
 	int rem;
 
 	for (a = nla_data(attr), rem = nla_len(attr); rem > 0;
 		 a = nla_next(a, &rem)) {
 		switch (nla_type(a)) {
 		case OVS_SAMPLE_ATTR_PROBABILITY:
-			if (net_random() >= nla_get_u32(a))
+			if (prandom_u32() >= nla_get_u32(a))
 				return 0;
 			break;
 
@@ -456,8 +462,46 @@ static int sample(struct datapath *dp, struct sk_buff *skb,
 		}
 	}
 
-	return do_execute_actions(dp, skb, nla_data(acts_list),
-				  nla_len(acts_list), true);
+	rem = nla_len(acts_list);
+	a = nla_data(acts_list);
+
+	/* Actions list is either empty or only contains a single user-space
+	 * action, the latter being a special case as it is the only known
+	 * usage of the sample action.
+	 * In these special cases don't clone the skb as there are no
+	 * side-effects in the nested actions.
+	 * Otherwise, clone in case the nested actions have side effects. */
+	if (likely(rem == 0 ||
+		   (nla_type(a) == OVS_ACTION_ATTR_USERSPACE &&
+		    last_action(a, rem)))) {
+		sample_skb = skb;
+		skb_get(skb);
+	} else {
+		sample_skb = skb_clone(skb, GFP_ATOMIC);
+	}
+
+	/* Note that do_execute_actions() never consumes skb.
+	 * In the case where skb has been cloned above it is the clone that
+	 * is consumed.  Otherwise the skb_get(skb) call prevents
+	 * consumption by do_execute_actions(). Thus, it is safe to simply
+	 * return the error code and let the caller (also
+	 * do_execute_actions()) free skb on error. */
+	return do_execute_actions(dp, sample_skb, a, rem);
+}
+
+static void execute_hash(struct sk_buff *skb, const struct nlattr *attr)
+{
+	struct sw_flow_key *key = OVS_CB(skb)->pkt_key;
+	struct ovs_action_hash *hash_act = nla_data(attr);
+	u32 hash = 0;
+
+	/* OVS_HASH_ALG_L4 is the only possible hash algorithm.  */
+	hash = skb_get_hash(skb);
+	hash = jhash_1word(hash, hash_act->hash_basis);
+	if (!hash)
+		hash = 0x1;
+
+	key->ovs_flow_hash = hash;
 }
 
 static int execute_set_action(struct sk_buff *skb,
@@ -506,9 +550,31 @@ static int execute_set_action(struct sk_buff *skb,
 	return err;
 }
 
+static int execute_recirc(struct datapath *dp, struct sk_buff *skb,
+				 const struct nlattr *a)
+{
+	struct sw_flow_key recirc_key;
+	const struct vport *p = OVS_CB(skb)->input_vport;
+	uint32_t hash = OVS_CB(skb)->pkt_key->ovs_flow_hash;
+	int err;
+
+	err = ovs_flow_extract(skb, p->port_no, &recirc_key);
+	if (err) {
+		kfree_skb(skb);
+		return err;
+	}
+
+	recirc_key.ovs_flow_hash = hash;
+	recirc_key.recirc_id = nla_get_u32(a);
+
+	ovs_dp_process_packet_with_key(skb, &recirc_key, true);
+
+	return 0;
+}
+
 /* Execute a list of actions against 'skb'. */
 static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
-			const struct nlattr *attr, int len, bool keep_skb)
+			const struct nlattr *attr, int len)
 {
 	/* Every output action needs a separate clone of 'skb', but the common
 	 * case is just a single output action, so that doing a clone and
@@ -536,6 +602,10 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 			output_userspace(dp, skb, a);
 			break;
 
+		case OVS_ACTION_ATTR_HASH:
+			execute_hash(skb, a);
+			break;
+
 		case OVS_ACTION_ATTR_PUSH_VLAN:
 			err = push_vlan(skb, nla_data(a));
 			if (unlikely(err)) /* skb already freed. */
@@ -545,6 +615,24 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		case OVS_ACTION_ATTR_POP_VLAN:
 			err = pop_vlan(skb);
 			break;
+
+		case OVS_ACTION_ATTR_RECIRC: {
+			struct sk_buff *recirc_skb;
+
+			if (last_action(a, rem))
+				return execute_recirc(dp, skb, a);
+
+			/* Recirc action is the not the last action
+			 * of the action list. */
+			recirc_skb = skb_clone(skb, GFP_ATOMIC);
+
+			/* Skip the recirc action when out of memory, but
+			 * continue on with the rest of the action list. */
+			if (recirc_skb)
+				err = execute_recirc(dp, recirc_skb, a);
+
+			break;
+		}
 
 		case OVS_ACTION_ATTR_SET:
 			err = execute_set_action(skb, nla_data(a));
@@ -561,23 +649,27 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		}
 	}
 
-	if (prev_port != -1) {
-		if (keep_skb)
-			skb = skb_clone(skb, GFP_ATOMIC);
-
+	if (prev_port != -1)
 		do_output(dp, skb, prev_port);
-	} else if (!keep_skb)
+	else
 		consume_skb(skb);
 
 	return 0;
 }
 
 /* We limit the number of times that we pass into execute_actions()
- * to avoid blowing out the stack in the event that we have a loop. */
-#define MAX_LOOPS 4
+ * to avoid blowing out the stack in the event that we have a loop.
+ *
+ * Each loop adds some (estimated) cost to the kernel stack.
+ * The loop terminates when the max cost is exceeded.
+ * */
+#define RECIRC_STACK_COST 1
+#define DEFAULT_STACK_COST 4
+/* Allow up to 4 regular services, and up to 3 recirculations */
+#define MAX_STACK_COST (DEFAULT_STACK_COST * 4 + RECIRC_STACK_COST * 3)
 
 struct loop_counter {
-	u8 count;		/* Count. */
+	u8 stack_cost;		/* loop stack cost. */
 	bool looping;		/* Loop detected? */
 };
 
@@ -586,22 +678,24 @@ static DEFINE_PER_CPU(struct loop_counter, loop_counters);
 static int loop_suppress(struct datapath *dp, struct sw_flow_actions *actions)
 {
 	if (net_ratelimit())
-		pr_warn("%s: flow looped %d times, dropping\n",
-				ovs_dp_name(dp), MAX_LOOPS);
+		pr_warn("%s: flow loop detected, dropping\n",
+				ovs_dp_name(dp));
 	actions->actions_len = 0;
 	return -ELOOP;
 }
 
 /* Execute a list of actions against 'skb'. */
-int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
+int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb, bool recirc)
 {
 	struct sw_flow_actions *acts = rcu_dereference(OVS_CB(skb)->flow->sf_acts);
+	const u8 stack_cost = recirc ? RECIRC_STACK_COST : DEFAULT_STACK_COST;
 	struct loop_counter *loop;
 	int error;
 
 	/* Check whether we've looped too much. */
 	loop = &__get_cpu_var(loop_counters);
-	if (unlikely(++loop->count > MAX_LOOPS))
+	loop->stack_cost += stack_cost;
+	if (unlikely(loop->stack_cost > MAX_STACK_COST))
 		loop->looping = true;
 	if (unlikely(loop->looping)) {
 		error = loop_suppress(dp, acts);
@@ -610,16 +704,16 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb)
 	}
 
 	OVS_CB(skb)->tun_key = NULL;
-	error = do_execute_actions(dp, skb, acts->actions,
-					 acts->actions_len, false);
+	error = do_execute_actions(dp, skb, acts->actions, acts->actions_len);
 
 	/* Check whether sub-actions looped too much. */
 	if (unlikely(loop->looping))
 		error = loop_suppress(dp, acts);
 
 out_loop:
-	/* Decrement loop counter. */
-	if (!--loop->count)
+	/* Decrement loop stack cost. */
+	loop->stack_cost -= stack_cost;
+	if (!loop->stack_cost)
 		loop->looping = false;
 
 	return error;

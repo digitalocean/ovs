@@ -32,7 +32,6 @@ openvswitch_headers += \
 	linux/compat/include/linux/if.h \
 	linux/compat/include/linux/if_arp.h \
 	linux/compat/include/linux/if_ether.h \
-	linux/compat/include/linux/if_tunnel.h \
 	linux/compat/include/linux/if_vlan.h \
 	linux/compat/include/linux/in.h \
 	linux/compat/include/linux/ip.h \
@@ -43,12 +42,14 @@ openvswitch_headers += \
 	linux/compat/include/linux/list.h \
 	linux/compat/include/linux/log2.h \
 	linux/compat/include/linux/net.h \
+	linux/compat/include/linux/random.h \
 	linux/compat/include/linux/netdevice.h \
 	linux/compat/include/linux/netdev_features.h \
 	linux/compat/include/linux/netlink.h \
 	linux/compat/include/linux/poison.h \
 	linux/compat/include/linux/rculist.h \
 	linux/compat/include/linux/rcupdate.h \
+	linux/compat/include/linux/reciprocal_div.h \
 	linux/compat/include/linux/rtnetlink.h \
 	linux/compat/include/linux/sctp.h \
 	linux/compat/include/linux/skbuff.h \

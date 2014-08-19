@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2012 Nicira, Inc.
+# Copyright (c) 2010, 2012, 2014 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -177,24 +177,44 @@ def check_connection_completion(sock):
         return errno.EAGAIN
 
 
+def is_valid_ipv4_address(address):
+    try:
+        socket.inet_pton(socket.AF_INET, address)
+    except AttributeError:
+        try:
+            socket.inet_aton(address)
+        except socket.error:
+            return False
+    except socket.error:
+        return False
+
+    return True
+
+
 def inet_parse_active(target, default_port):
     address = target.split(":")
-    host_name = address[0]
+    if len(address) >= 2:
+        host_name = ":".join(address[0:-1]).lstrip('[').rstrip(']')
+        port = int(address[-1])
+    else:
+        if default_port:
+            port = default_port
+        else:
+            raise ValueError("%s: port number must be specified" % target)
+        host_name = address[0]
     if not host_name:
         raise ValueError("%s: bad peer name format" % target)
-    if len(address) >= 2:
-        port = int(address[1])
-    elif default_port:
-        port = default_port
-    else:
-        raise ValueError("%s: port number must be specified" % target)
     return (host_name, port)
 
 
 def inet_open_active(style, target, default_port, dscp):
     address = inet_parse_active(target, default_port)
     try:
-        sock = socket.socket(socket.AF_INET, style, 0)
+        is_addr_inet = is_valid_ipv4_address(address[0])
+        if is_addr_inet:
+            sock = socket.socket(socket.AF_INET, style, 0)
+        else:
+            sock = socket.socket(socket.AF_INET6, style, 0)
     except socket.error, e:
         return get_exception_errno(e), None
 
@@ -275,5 +295,18 @@ def set_nonblocking(sock):
 def set_dscp(sock, dscp):
     if dscp > 63:
         raise ValueError("Invalid dscp %d" % dscp)
+
+    # Note: this function is used for both of IPv4 and IPv6 sockets
+    success = False
     val = dscp << 2
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, val)
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, val)
+    except socket.error, e:
+        if get_exception_errno(e) != errno.ENOPROTOOPT:
+            raise
+    success = True
+    try:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_TCLASS, val)
+    except socket.error, e:
+        if get_exception_errno(e) != errno.ENOPROTOOPT or not success:
+            raise

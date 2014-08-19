@@ -11,9 +11,6 @@
 # build-arch and build-indep targets  by Bill Allombert 2001
 
 PACKAGE=openvswitch
-pdkms=openvswitch-datapath-dkms
-DEB_UPSTREAM_VERSION=$(shell dpkg-parsechangelog | sed -rne 's,^Version: ([0-9]:)*([^-]+).*,\2,p')
-srcfiles := $(filter-out debian, $(wildcard * .[^.]*))
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 PARALLEL = -j$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -38,7 +35,7 @@ buildflags := $(shell if dpkg-buildflags --export=configure >/dev/null 2>&1; \
 configure: configure-stamp
 configure-stamp:
 	dh_testdir
-	test -e configure || ./boot.sh
+	dh_autoreconf
 	test -d _debian || mkdir _debian
 	echo $(DEB_BUILD_OPTIONS)
 	echo $$CC
@@ -46,22 +43,17 @@ configure-stamp:
 		test -e Makefile || \
 		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
 			--sysconfdir=/etc CFLAGS="$(CFLAGS)" \
-			$(buildflags) $(DATAPATH_CONFIGURE_OPTS))
+			$(buildflags))
 	touch configure-stamp
 
 #Architecture 
 build: build-arch build-indep
 
-# Skip tests 2 734 738 739 because they have races that tend to show up
-# on the Debian autobuilders
-TESTS = 1 3-733 735-737 740-
-
 build-arch: build-arch-stamp
 build-arch-stamp: configure-stamp 
 	$(MAKE) -C _debian
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TESTS)' || \
-           $(MAKE) -C _debian check TESTSUITEFLAGS=--recheck; then :; \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL)'; then :; \
 	else \
 		cat _debian/tests/testsuite.log; \
 		exit 1; \
@@ -80,6 +72,7 @@ clean:
 	rm -f build-arch-stamp build-indep-stamp configure-stamp
 	rm -rf _debian
 	[ ! -f Makefile ] || $(MAKE) distclean
+	dh_autoreconf_clean
 	dh_clean 
 	rm -f python/ovs/*.pyc python/ovs/db/*.pyc
 
@@ -91,28 +84,6 @@ install-indep: build-indep
 	dh_installdirs -i
 	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/tmp install
 	dh_install -i
-	cp debian/rules.modules debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
-	chmod 755 debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
-	cd debian/openvswitch-datapath-source/usr/src && tar -c modules | bzip2 -9 > openvswitch-datapath.tar.bz2 && rm -rf modules
-
-	#dkms stuff
-	# setup the dirs
-	dh_installdirs -p$(pdkms) usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)
-
-	# copy the source
-	cd debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION) && tar xvzf $(CURDIR)/_debian/openvswitch.tar.gz && mv openvswitch/* . && rmdir openvswitch
-
-	# Prepare dkms.conf from the dkms.conf.in template
-	sed "s/__VERSION__/$(DEB_UPSTREAM_VERSION)/g" debian/dkms.conf.in > debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)/dkms.conf
-
-	# We don't need the debian folder in there, just upstream sources...
-	rm -rf debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)/debian
-	# We don't need the rhel stuff in there either
-	rm -rf debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)/rhel
-	# And we should also clean useless license files, which are already
-	# descriped in our debian/copyright anyway.
-	rm -f debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)/COPYING \
-		debian/$(pdkms)/usr/src/$(PACKAGE)-$(DEB_UPSTREAM_VERSION)/xenserver/LICENSE
 
 install-arch: build-arch
 	dh_testdir

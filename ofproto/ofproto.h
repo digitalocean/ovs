@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -214,13 +214,7 @@ int ofproto_port_dump_done(struct ofproto_port_dump *);
         )
 
 #define OFPROTO_FLOW_LIMIT_DEFAULT 200000
-
-/* How flow misses should be handled in ofproto-dpif */
-enum ofproto_flow_miss_model {
-    OFPROTO_HANDLE_MISS_AUTO,           /* Based on flow eviction threshold. */
-    OFPROTO_HANDLE_MISS_WITH_FACETS,    /* Always create facets. */
-    OFPROTO_HANDLE_MISS_WITHOUT_FACETS  /* Always handle without facets.*/
-};
+#define OFPROTO_MAX_IDLE_DEFAULT 1500
 
 const char *ofproto_port_open_type(const char *datapath_type,
                                    const char *port_type);
@@ -243,11 +237,11 @@ void ofproto_set_extra_in_band_remotes(struct ofproto *,
                                        const struct sockaddr_in *, size_t n);
 void ofproto_set_in_band_queue(struct ofproto *, int queue_id);
 void ofproto_set_flow_limit(unsigned limit);
-void ofproto_set_flow_miss_model(unsigned model);
+void ofproto_set_max_idle(unsigned max_idle);
 void ofproto_set_forward_bpdu(struct ofproto *, bool forward_bpdu);
 void ofproto_set_mac_table_config(struct ofproto *, unsigned idle_time,
                                   size_t max_entries);
-void ofproto_set_threads(size_t n_handlers, size_t n_revalidators);
+void ofproto_set_threads(int n_handlers, int n_revalidators);
 void ofproto_set_dp_desc(struct ofproto *, const char *dp_desc);
 int ofproto_set_snoops(struct ofproto *, const struct sset *snoops);
 int ofproto_set_netflow(struct ofproto *,
@@ -271,7 +265,7 @@ void ofproto_port_set_cfm(struct ofproto *, ofp_port_t ofp_port,
 void ofproto_port_set_bfd(struct ofproto *, ofp_port_t ofp_port,
                           const struct smap *cfg);
 int ofproto_port_get_bfd_status(struct ofproto *, ofp_port_t ofp_port,
-                                struct smap *);
+                                bool force, struct smap *);
 int ofproto_port_is_lacp_current(struct ofproto *, ofp_port_t ofp_port);
 int ofproto_port_set_stp(struct ofproto *, ofp_port_t ofp_port,
                          const struct ofproto_port_stp_settings *);
@@ -388,6 +382,7 @@ struct ofproto_table_settings {
 };
 
 int ofproto_get_n_tables(const struct ofproto *);
+uint8_t ofproto_get_n_visible_tables(const struct ofproto *);
 void ofproto_configure_table(struct ofproto *, int table_id,
                              const struct ofproto_table_settings *);
 
@@ -424,9 +419,9 @@ struct ofproto_cfm_status {
     size_t n_rmps;
 };
 
-bool ofproto_port_get_cfm_status(const struct ofproto *,
-                                 ofp_port_t ofp_port,
-                                 struct ofproto_cfm_status *);
+int ofproto_port_get_cfm_status(const struct ofproto *,
+                                ofp_port_t ofp_port, bool force,
+                                struct ofproto_cfm_status *);
 
 /* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
  *
@@ -439,6 +434,27 @@ void ofproto_get_vlan_usage(struct ofproto *, unsigned long int *vlan_bitmap);
 bool ofproto_has_vlan_usage_changed(const struct ofproto *);
 int ofproto_port_set_realdev(struct ofproto *, ofp_port_t vlandev_ofp_port,
                              ofp_port_t realdev_ofp_port, int vid);
+
+/* Table configuration */
+
+enum ofproto_table_config {
+    /* Send to controller. */
+    OFPROTO_TABLE_MISS_CONTROLLER = OFPTC11_TABLE_MISS_CONTROLLER,
+
+    /* Continue to the next table in the pipeline (OpenFlow 1.0 behavior). */
+    OFPROTO_TABLE_MISS_CONTINUE   = OFPTC11_TABLE_MISS_CONTINUE,
+
+    /* Drop the packet. */
+    OFPROTO_TABLE_MISS_DROP       = OFPTC11_TABLE_MISS_DROP,
+
+    /* The default miss behaviour for the OpenFlow version of the controller a
+     * packet_in message would be sent to..  For pre-OF1.3 controllers, send
+     * packet_in to controller.  For OF1.3+ controllers, drop. */
+    OFPROTO_TABLE_MISS_DEFAULT    = 3,
+};
+
+enum ofproto_table_config ofproto_table_get_config(const struct ofproto *,
+                                                   uint8_t table_id);
 
 #ifdef  __cplusplus
 }

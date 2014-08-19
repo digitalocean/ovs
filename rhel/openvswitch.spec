@@ -7,19 +7,26 @@
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without warranty of any kind.
+#
+# If tests have to be skipped while building, specify the '--without check'
+# option. For example:
+# rpmbuild -bb --without check rhel/openvswitch.spec
 
 Name: openvswitch
 Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: Nicira, Inc.
-Version: 2.1.0
+Version: 2.3.0
 
 License: ASL 2.0
 Release: 1
 Source: openvswitch-%{version}.tar.gz
 Buildroot: /tmp/openvswitch-rpm
 Requires: openvswitch-kmod, logrotate, python
+BuildRequires: openssl-devel
+
+%bcond_without check
 
 %description
 Open vSwitch provides standard network bridging functions and
@@ -66,6 +73,16 @@ rm \
 (cd "$RPM_BUILD_ROOT" && rm -rf usr/lib)
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
+
+%check
+%if %{with check}
+    if make check TESTSUITEFLAGS='%{_smp_mflags}' ||
+       make check TESTSUITEFLAGS='--recheck'; then :;
+    else
+        cat tests/testsuite.log
+        exit 1
+    fi
+%endif
 
 %clean
 rm -rf $RPM_BUILD_ROOT

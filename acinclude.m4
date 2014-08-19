@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,8 +35,8 @@ AC_DEFUN([OVS_CHECK_LINUX], [
   AC_ARG_WITH([linux-source],
               [AC_HELP_STRING([--with-linux-source=/path/to/linux-source],
                               [Specify the Linux kernel source directory
-			       (usually figured out automatically from build
-			       directory)])])
+                               (usually figured out automatically from build
+                               directory)])])
 
   # Deprecated equivalents to --with-linux, --with-linux-source.
   AC_ARG_WITH([l26])
@@ -75,11 +75,11 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     # Make sure that it exists.
     AC_MSG_CHECKING([for Linux build directory])
     if test -d "$KBUILD"; then
-	AC_MSG_RESULT([$KBUILD])
-	AC_SUBST(KBUILD)
+        AC_MSG_RESULT([$KBUILD])
+        AC_SUBST(KBUILD)
     else
-	AC_MSG_RESULT([no])
-	AC_ERROR([source dir $KBUILD doesn't exist])
+        AC_MSG_RESULT([no])
+        AC_ERROR([source dir $KBUILD doesn't exist])
     fi
 
     # Debian breaks kernel headers into "source" header and "build" headers.
@@ -134,10 +134,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 3; then
-       if test "$version" = 3 && test "$patchlevel" -le 11; then
+       if test "$version" = 3 && test "$patchlevel" -le 14; then
           : # Linux 3.x
        else
-         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 3.11.x is not supported])
+         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 3.14.x is not supported (please refer to the FAQ for advice)])
        fi
     else
        if test "$version" -le 1 || test "$patchlevel" -le 5 || test "$sublevel" -le 31; then
@@ -150,11 +150,37 @@ AC_DEFUN([OVS_CHECK_LINUX], [
         test ! -e "$KBUILD"/include/generated/uapi/linux/version.h)|| \
        (test ! -e "$KBUILD"/include/linux/autoconf.h && \
         test ! -e "$KBUILD"/include/generated/autoconf.h); then
-	AC_MSG_ERROR([Linux kernel source in $KBUILD is not configured])
+        AC_MSG_ERROR([Linux kernel source in $KBUILD is not configured])
     fi
     OVS_CHECK_LINUX_COMPAT
   fi
   AM_CONDITIONAL(LINUX_ENABLED, test -n "$KBUILD")
+])
+
+dnl OVS_CHECK_DPDK
+dnl
+dnl Configure DPDK source tree
+AC_DEFUN([OVS_CHECK_DPDK], [
+  AC_ARG_WITH([dpdk],
+              [AC_HELP_STRING([--with-dpdk=/path/to/dpdk],
+                              [Specify the DPDK build directory])])
+
+  if test X"$with_dpdk" != X; then
+    RTE_SDK=$with_dpdk
+
+    DPDK_INCLUDE=$RTE_SDK/include
+    DPDK_LIB_DIR=$RTE_SDK/lib
+    DPDK_LIBS="$DPDK_LIB_DIR/libintel_dpdk.a"
+
+    LIBS="$DPDK_LIBS $LIBS"
+    CPPFLAGS="-I$DPDK_INCLUDE $CPPFLAGS"
+
+    AC_DEFINE([DPDK_NETDEV], [1], [System uses the DPDK module.])
+  else
+    RTE_SDK=
+  fi
+
+  AM_CONDITIONAL([DPDK_NETDEV], test -n "$RTE_SDK")
 ])
 
 dnl OVS_GREP_IFELSE(FILE, REGEX, [IF-MATCH], [IF-NO-MATCH])
@@ -218,6 +244,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [ERR_CAST])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [eth_hw_addr_random])
+  OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [ether_addr_copy])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [vlan_set_encap_proto])
 
@@ -229,6 +256,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [__skb_gso_segment])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [can_checksum_protocol])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [netdev_features_t])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [pcpu_sw_netstats])
+
+  OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/rcupdate.h], [rcu_read_lock_held], [],
                   [OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h],
@@ -243,6 +273,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [[[^@]]proto_data_valid],
                   [OVS_DEFINE([HAVE_PROTO_DATA_VALID])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [rxhash])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [u16.*rxhash],
+                  [OVS_DEFINE([HAVE_U16_RXHASH])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_dst(],
                   [OVS_DEFINE([HAVE_SKB_DST_ACCESSOR_FUNCS])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], 
@@ -262,6 +294,10 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [__skb_fill_page_desc])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_reset_mac_len])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_unclone])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_orphan_frags])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_get_hash])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_clear_hash])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [l4_rxhash])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [bool],
                   [OVS_DEFINE([HAVE_BOOL_TYPE])])
@@ -287,6 +323,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/percpu.h], [this_cpu_ptr])
+
+  OVS_GREP_IFELSE([$KSRC/include/linux/u64_stats_sync.h], [u64_stats_fetch_begin_irq])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/openvswitch.h], [openvswitch_handle_frame_hook],
                   [OVS_DEFINE([HAVE_RHEL_OVS_HOOK])])
@@ -558,24 +596,39 @@ AC_DEFUN([OVS_CHECK_PTHREAD_SET_NAME],
        [for pthread_setname_np() variant],
        [ovs_cv_pthread_setname_np],
        [AC_LINK_IFELSE(
-	 [AC_LANG_PROGRAM([#include <pthread.h>
+         [AC_LANG_PROGRAM([#include <pthread.h>
   ], [pthread_setname_np(pthread_self(), "name");])],
-	 [ovs_cv_pthread_setname_np=glibc],
+         [ovs_cv_pthread_setname_np=glibc],
          [AC_LINK_IFELSE(
-	   [AC_LANG_PROGRAM([#include <pthread.h>
+           [AC_LANG_PROGRAM([#include <pthread.h>
 ], [pthread_setname_np(pthread_self(), "%s", "name");])],
            [ovs_cv_pthread_setname_np=netbsd],
-	   [ovs_cv_pthread_setname_np=none])])])
+           [ovs_cv_pthread_setname_np=none])])])
      case $ovs_cv_pthread_setname_np in # (
        glibc)
-	  AC_DEFINE(
-	    [HAVE_GLIBC_PTHREAD_SETNAME_NP], [1],
-	    [Define to 1 if pthread_setname_np() is available and takes 2 parameters (like glibc).])
-	  ;; # (
+          AC_DEFINE(
+            [HAVE_GLIBC_PTHREAD_SETNAME_NP], [1],
+            [Define to 1 if pthread_setname_np() is available and takes 2 parameters (like glibc).])
+          ;; # (
        netbsd)
-	  AC_DEFINE(
-	    [HAVE_NETBSD_PTHREAD_SETNAME_NP], [1],
-	    [Define to 1 if pthread_setname_np() is available and takes 3 parameters (like NetBSD).])
-	  ;;
+          AC_DEFINE(
+            [HAVE_NETBSD_PTHREAD_SETNAME_NP], [1],
+            [Define to 1 if pthread_setname_np() is available and takes 3 parameters (like NetBSD).])
+          ;;
      esac
    fi])
+
+dnl OVS_CHECK_LINUX_HOST.
+dnl
+dnl Checks whether we're building for a Linux host, based on the presence of
+dnl the __linux__ preprocessor symbol, and sets up an Automake conditional
+dnl LINUX based on the result.
+AC_DEFUN([OVS_CHECK_LINUX_HOST],
+  [AC_CACHE_CHECK(
+     [whether __linux__ is defined],
+     [ovs_cv_linux],
+     [AC_COMPILE_IFELSE(
+        [AC_LANG_PROGRAM([enum { LINUX = __linux__};], [])],
+        [ovs_cv_linux=true],
+        [ovs_cv_linux=false])])
+   AM_CONDITIONAL([LINUX], [$ovs_cv_linux])])

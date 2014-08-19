@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2011, 2012, 2013 The Board of Trustees of The Leland Stanford
+/* Copyright (c) 2008, 2011, 2012, 2013, 2014 The Board of Trustees of The Leland Stanford
  * Junior University
  *
  * We are making the OpenFlow specification and associated documentation
@@ -32,7 +32,7 @@
  */
 
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
+ * Copyright (c) 2008-2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,7 +75,9 @@ enum ofp_version {
     OFP10_VERSION = 0x01,
     OFP11_VERSION = 0x02,
     OFP12_VERSION = 0x03,
-    OFP13_VERSION = 0x04
+    OFP13_VERSION = 0x04,
+    OFP14_VERSION = 0x05,
+    OFP15_VERSION = 0x06
 };
 
 /* Vendor (aka experimenter) IDs.
@@ -381,7 +383,8 @@ enum ofp_port_reason {
 struct ofp_port_status {
     uint8_t reason;          /* One of OFPPR_*. */
     uint8_t pad[7];          /* Align to 64-bits. */
-    /* Followed by struct ofp10_phy_port or struct ofp11_port.  */
+    /* Followed by struct ofp10_phy_port, struct ofp11_port, or struct
+     * ofp14_port.  */
 };
 OFP_ASSERT(sizeof(struct ofp_port_status) == 8);
 

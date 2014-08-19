@@ -115,6 +115,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_bridge_columns[OVSREC_BRIDGE_N_COLUMNS];
 
+const struct ovsrec_bridge *ovsrec_bridge_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_bridge *ovsrec_bridge_first(const struct ovsdb_idl *);
 const struct ovsrec_bridge *ovsrec_bridge_next(const struct ovsrec_bridge *);
 #define OVSREC_BRIDGE_FOR_EACH(ROW, IDL) \
@@ -280,6 +281,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_controller_columns[OVSREC_CONTROLLER_N_COLUMNS];
 
+const struct ovsrec_controller *ovsrec_controller_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_controller *ovsrec_controller_first(const struct ovsdb_idl *);
 const struct ovsrec_controller *ovsrec_controller_next(const struct ovsrec_controller *);
 #define OVSREC_CONTROLLER_FOR_EACH(ROW, IDL) \
@@ -379,6 +381,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_flow_sample_collector_set_columns[OVSREC_FLOW_SAMPLE_COLLECTOR_SET_N_COLUMNS];
 
+const struct ovsrec_flow_sample_collector_set *ovsrec_flow_sample_collector_set_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_flow_sample_collector_set *ovsrec_flow_sample_collector_set_first(const struct ovsdb_idl *);
 const struct ovsrec_flow_sample_collector_set *ovsrec_flow_sample_collector_set_next(const struct ovsrec_flow_sample_collector_set *);
 #define OVSREC_FLOW_SAMPLE_COLLECTOR_SET_FOR_EACH(ROW, IDL) \
@@ -417,6 +420,9 @@ void ovsrec_flow_sample_collector_set_set_ipfix(const struct ovsrec_flow_sample_
 struct ovsrec_flow_table {
 	struct ovsdb_idl_row header_;
 
+	/* external_ids column. */
+	struct smap external_ids;
+
 	/* flow_limit column. */
 	int64_t *flow_limit;
 	size_t n_flow_limit;
@@ -437,6 +443,7 @@ struct ovsrec_flow_table {
 };
 
 enum {
+    OVSREC_FLOW_TABLE_COL_EXTERNAL_IDS,
     OVSREC_FLOW_TABLE_COL_FLOW_LIMIT,
     OVSREC_FLOW_TABLE_COL_GROUPS,
     OVSREC_FLOW_TABLE_COL_NAME,
@@ -446,13 +453,15 @@ enum {
 };
 
 #define ovsrec_flow_table_col_overflow_policy (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_OVERFLOW_POLICY])
-#define ovsrec_flow_table_col_prefixes (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_PREFIXES])
-#define ovsrec_flow_table_col_flow_limit (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_FLOW_LIMIT])
-#define ovsrec_flow_table_col_groups (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_GROUPS])
 #define ovsrec_flow_table_col_name (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_NAME])
+#define ovsrec_flow_table_col_flow_limit (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_FLOW_LIMIT])
+#define ovsrec_flow_table_col_prefixes (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_PREFIXES])
+#define ovsrec_flow_table_col_groups (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_GROUPS])
+#define ovsrec_flow_table_col_external_ids (ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_EXTERNAL_IDS])
 
 extern struct ovsdb_idl_column ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_N_COLUMNS];
 
+const struct ovsrec_flow_table *ovsrec_flow_table_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_flow_table *ovsrec_flow_table_first(const struct ovsdb_idl *);
 const struct ovsrec_flow_table *ovsrec_flow_table_next(const struct ovsrec_flow_table *);
 #define OVSREC_FLOW_TABLE_FOR_EACH(ROW, IDL) \
@@ -468,6 +477,7 @@ void ovsrec_flow_table_init(struct ovsrec_flow_table *);
 void ovsrec_flow_table_delete(const struct ovsrec_flow_table *);
 struct ovsrec_flow_table *ovsrec_flow_table_insert(struct ovsdb_idl_txn *);
 
+void ovsrec_flow_table_verify_external_ids(const struct ovsrec_flow_table *);
 void ovsrec_flow_table_verify_flow_limit(const struct ovsrec_flow_table *);
 void ovsrec_flow_table_verify_groups(const struct ovsrec_flow_table *);
 void ovsrec_flow_table_verify_name(const struct ovsrec_flow_table *);
@@ -477,12 +487,14 @@ void ovsrec_flow_table_verify_prefixes(const struct ovsrec_flow_table *);
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
    the members of ovsrec_flow_table directly.) */
+const struct ovsdb_datum *ovsrec_flow_table_get_external_ids(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *ovsrec_flow_table_get_flow_limit(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_flow_table_get_groups(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_flow_table_get_name(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_flow_table_get_overflow_policy(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_flow_table_get_prefixes(const struct ovsrec_flow_table *, enum ovsdb_atomic_type key_type);
 
+void ovsrec_flow_table_set_external_ids(const struct ovsrec_flow_table *, const struct smap *);
 void ovsrec_flow_table_set_flow_limit(const struct ovsrec_flow_table *, const int64_t *flow_limit, size_t n_flow_limit);
 void ovsrec_flow_table_set_groups(const struct ovsrec_flow_table *, char **groups, size_t n_groups);
 void ovsrec_flow_table_set_name(const struct ovsrec_flow_table *, const char *name);
@@ -543,6 +555,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_ipfix_columns[OVSREC_IPFIX_N_COLUMNS];
 
+const struct ovsrec_ipfix *ovsrec_ipfix_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_ipfix *ovsrec_ipfix_first(const struct ovsdb_idl *);
 const struct ovsrec_ipfix *ovsrec_ipfix_next(const struct ovsrec_ipfix *);
 #define OVSREC_IPFIX_FOR_EACH(ROW, IDL) \
@@ -763,6 +776,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_interface_columns[OVSREC_INTERFACE_N_COLUMNS];
 
+const struct ovsrec_interface *ovsrec_interface_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_interface *ovsrec_interface_first(const struct ovsdb_idl *);
 const struct ovsrec_interface *ovsrec_interface_next(const struct ovsrec_interface *);
 #define OVSREC_INTERFACE_FOR_EACH(ROW, IDL) \
@@ -929,6 +943,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_manager_columns[OVSREC_MANAGER_N_COLUMNS];
 
+const struct ovsrec_manager *ovsrec_manager_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_manager *ovsrec_manager_first(const struct ovsdb_idl *);
 const struct ovsrec_manager *ovsrec_manager_next(const struct ovsrec_manager *);
 #define OVSREC_MANAGER_FOR_EACH(ROW, IDL) \
@@ -1038,6 +1053,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_mirror_columns[OVSREC_MIRROR_N_COLUMNS];
 
+const struct ovsrec_mirror *ovsrec_mirror_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_mirror *ovsrec_mirror_first(const struct ovsdb_idl *);
 const struct ovsrec_mirror *ovsrec_mirror_next(const struct ovsrec_mirror *);
 #define OVSREC_MIRROR_FOR_EACH(ROW, IDL) \
@@ -1132,6 +1148,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_netflow_columns[OVSREC_NETFLOW_N_COLUMNS];
 
+const struct ovsrec_netflow *ovsrec_netflow_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_netflow *ovsrec_netflow_first(const struct ovsdb_idl *);
 const struct ovsrec_netflow *ovsrec_netflow_next(const struct ovsrec_netflow *);
 #define OVSREC_NETFLOW_FOR_EACH(ROW, IDL) \
@@ -1246,6 +1263,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_open_vswitch_columns[OVSREC_OPEN_VSWITCH_N_COLUMNS];
 
+const struct ovsrec_open_vswitch *ovsrec_open_vswitch_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_open_vswitch *ovsrec_open_vswitch_first(const struct ovsdb_idl *);
 const struct ovsrec_open_vswitch *ovsrec_open_vswitch_next(const struct ovsrec_open_vswitch *);
 #define OVSREC_OPEN_VSWITCH_FOR_EACH(ROW, IDL) \
@@ -1406,6 +1424,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_port_columns[OVSREC_PORT_N_COLUMNS];
 
+const struct ovsrec_port *ovsrec_port_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_port *ovsrec_port_first(const struct ovsdb_idl *);
 const struct ovsrec_port *ovsrec_port_next(const struct ovsrec_port *);
 #define OVSREC_PORT_FOR_EACH(ROW, IDL) \
@@ -1513,6 +1532,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_qos_columns[OVSREC_QOS_N_COLUMNS];
 
+const struct ovsrec_qos *ovsrec_qos_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_qos *ovsrec_qos_first(const struct ovsdb_idl *);
 const struct ovsrec_qos *ovsrec_qos_next(const struct ovsrec_qos *);
 #define OVSREC_QOS_FOR_EACH(ROW, IDL) \
@@ -1575,6 +1595,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_queue_columns[OVSREC_QUEUE_N_COLUMNS];
 
+const struct ovsrec_queue *ovsrec_queue_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_queue *ovsrec_queue_first(const struct ovsdb_idl *);
 const struct ovsrec_queue *ovsrec_queue_next(const struct ovsrec_queue *);
 #define OVSREC_QUEUE_FOR_EACH(ROW, IDL) \
@@ -1643,6 +1664,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_ssl_columns[OVSREC_SSL_N_COLUMNS];
 
+const struct ovsrec_ssl *ovsrec_ssl_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_ssl *ovsrec_ssl_first(const struct ovsdb_idl *);
 const struct ovsrec_ssl *ovsrec_ssl_next(const struct ovsrec_ssl *);
 #define OVSREC_SSL_FOR_EACH(ROW, IDL) \
@@ -1726,6 +1748,7 @@ enum {
 
 extern struct ovsdb_idl_column ovsrec_sflow_columns[OVSREC_SFLOW_N_COLUMNS];
 
+const struct ovsrec_sflow *ovsrec_sflow_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct ovsrec_sflow *ovsrec_sflow_first(const struct ovsdb_idl *);
 const struct ovsrec_sflow *ovsrec_sflow_next(const struct ovsrec_sflow *);
 #define OVSREC_SFLOW_FOR_EACH(ROW, IDL) \
@@ -1806,5 +1829,7 @@ extern struct ovsdb_idl_table_class ovsrec_table_classes[OVSREC_N_TABLES];
 extern struct ovsdb_idl_class ovsrec_idl_class;
 
 void ovsrec_init(void);
+
+const char * ovsrec_get_db_version(void);
 
 #endif /* OVSREC_IDL_HEADER */

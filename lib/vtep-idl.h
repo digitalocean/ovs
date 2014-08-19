@@ -33,6 +33,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_arp_sources_local_columns[VTEPREC_ARP_SOURCES_LOCAL_N_COLUMNS];
 
+const struct vteprec_arp_sources_local *vteprec_arp_sources_local_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_arp_sources_local *vteprec_arp_sources_local_first(const struct ovsdb_idl *);
 const struct vteprec_arp_sources_local *vteprec_arp_sources_local_next(const struct vteprec_arp_sources_local *);
 #define VTEPREC_ARP_SOURCES_LOCAL_FOR_EACH(ROW, IDL) \
@@ -83,6 +84,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_arp_sources_remote_columns[VTEPREC_ARP_SOURCES_REMOTE_N_COLUMNS];
 
+const struct vteprec_arp_sources_remote *vteprec_arp_sources_remote_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_arp_sources_remote *vteprec_arp_sources_remote_first(const struct ovsdb_idl *);
 const struct vteprec_arp_sources_remote *vteprec_arp_sources_remote_next(const struct vteprec_arp_sources_remote *);
 #define VTEPREC_ARP_SOURCES_REMOTE_FOR_EACH(ROW, IDL) \
@@ -135,6 +137,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_global_columns[VTEPREC_GLOBAL_N_COLUMNS];
 
+const struct vteprec_global *vteprec_global_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_global *vteprec_global_first(const struct ovsdb_idl *);
 const struct vteprec_global *vteprec_global_next(const struct vteprec_global *);
 #define VTEPREC_GLOBAL_FOR_EACH(ROW, IDL) \
@@ -195,6 +198,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_logical_binding_stats_columns[VTEPREC_LOGICAL_BINDING_STATS_N_COLUMNS];
 
+const struct vteprec_logical_binding_stats *vteprec_logical_binding_stats_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_logical_binding_stats *vteprec_logical_binding_stats_first(const struct ovsdb_idl *);
 const struct vteprec_logical_binding_stats *vteprec_logical_binding_stats_next(const struct vteprec_logical_binding_stats *);
 #define VTEPREC_LOGICAL_BINDING_STATS_FOR_EACH(ROW, IDL) \
@@ -263,6 +267,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_logical_router_columns[VTEPREC_LOGICAL_ROUTER_N_COLUMNS];
 
+const struct vteprec_logical_router *vteprec_logical_router_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_logical_router *vteprec_logical_router_first(const struct ovsdb_idl *);
 const struct vteprec_logical_router *vteprec_logical_router_next(const struct vteprec_logical_router *);
 #define VTEPREC_LOGICAL_ROUTER_FOR_EACH(ROW, IDL) \
@@ -325,6 +330,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_logical_switch_columns[VTEPREC_LOGICAL_SWITCH_N_COLUMNS];
 
+const struct vteprec_logical_switch *vteprec_logical_switch_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_logical_switch *vteprec_logical_switch_first(const struct ovsdb_idl *);
 const struct vteprec_logical_switch *vteprec_logical_switch_next(const struct vteprec_logical_switch *);
 #define VTEPREC_LOGICAL_SWITCH_FOR_EACH(ROW, IDL) \
@@ -400,6 +406,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_manager_columns[VTEPREC_MANAGER_N_COLUMNS];
 
+const struct vteprec_manager *vteprec_manager_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_manager *vteprec_manager_first(const struct ovsdb_idl *);
 const struct vteprec_manager *vteprec_manager_next(const struct vteprec_manager *);
 #define VTEPREC_MANAGER_FOR_EACH(ROW, IDL) \
@@ -472,6 +479,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_mcast_macs_local_columns[VTEPREC_MCAST_MACS_LOCAL_N_COLUMNS];
 
+const struct vteprec_mcast_macs_local *vteprec_mcast_macs_local_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_mcast_macs_local *vteprec_mcast_macs_local_first(const struct ovsdb_idl *);
 const struct vteprec_mcast_macs_local *vteprec_mcast_macs_local_next(const struct vteprec_mcast_macs_local *);
 #define VTEPREC_MCAST_MACS_LOCAL_FOR_EACH(ROW, IDL) \
@@ -538,6 +546,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_mcast_macs_remote_columns[VTEPREC_MCAST_MACS_REMOTE_N_COLUMNS];
 
+const struct vteprec_mcast_macs_remote *vteprec_mcast_macs_remote_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_mcast_macs_remote *vteprec_mcast_macs_remote_first(const struct ovsdb_idl *);
 const struct vteprec_mcast_macs_remote *vteprec_mcast_macs_remote_next(const struct vteprec_mcast_macs_remote *);
 #define VTEPREC_MCAST_MACS_REMOTE_FOR_EACH(ROW, IDL) \
@@ -576,12 +585,6 @@ void vteprec_mcast_macs_remote_set_logical_switch(const struct vteprec_mcast_mac
 struct vteprec_physical_locator {
 	struct ovsdb_idl_row header_;
 
-	/* bfd column. */
-	struct smap bfd;
-
-	/* bfd_status column. */
-	struct smap bfd_status;
-
 	/* dst_ip column. */
 	char *dst_ip;	/* Always nonnull. */
 
@@ -590,20 +593,17 @@ struct vteprec_physical_locator {
 };
 
 enum {
-    VTEPREC_PHYSICAL_LOCATOR_COL_BFD,
-    VTEPREC_PHYSICAL_LOCATOR_COL_BFD_STATUS,
     VTEPREC_PHYSICAL_LOCATOR_COL_DST_IP,
     VTEPREC_PHYSICAL_LOCATOR_COL_ENCAPSULATION_TYPE,
     VTEPREC_PHYSICAL_LOCATOR_N_COLUMNS
 };
 
 #define vteprec_physical_locator_col_dst_ip (vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_DST_IP])
-#define vteprec_physical_locator_col_bfd_status (vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD_STATUS])
-#define vteprec_physical_locator_col_bfd (vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD])
 #define vteprec_physical_locator_col_encapsulation_type (vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_ENCAPSULATION_TYPE])
 
 extern struct ovsdb_idl_column vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_N_COLUMNS];
 
+const struct vteprec_physical_locator *vteprec_physical_locator_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_physical_locator *vteprec_physical_locator_first(const struct ovsdb_idl *);
 const struct vteprec_physical_locator *vteprec_physical_locator_next(const struct vteprec_physical_locator *);
 #define VTEPREC_PHYSICAL_LOCATOR_FOR_EACH(ROW, IDL) \
@@ -619,21 +619,15 @@ void vteprec_physical_locator_init(struct vteprec_physical_locator *);
 void vteprec_physical_locator_delete(const struct vteprec_physical_locator *);
 struct vteprec_physical_locator *vteprec_physical_locator_insert(struct ovsdb_idl_txn *);
 
-void vteprec_physical_locator_verify_bfd(const struct vteprec_physical_locator *);
-void vteprec_physical_locator_verify_bfd_status(const struct vteprec_physical_locator *);
 void vteprec_physical_locator_verify_dst_ip(const struct vteprec_physical_locator *);
 void vteprec_physical_locator_verify_encapsulation_type(const struct vteprec_physical_locator *);
 
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
    the members of vteprec_physical_locator directly.) */
-const struct ovsdb_datum *vteprec_physical_locator_get_bfd(const struct vteprec_physical_locator *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
-const struct ovsdb_datum *vteprec_physical_locator_get_bfd_status(const struct vteprec_physical_locator *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
 const struct ovsdb_datum *vteprec_physical_locator_get_dst_ip(const struct vteprec_physical_locator *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *vteprec_physical_locator_get_encapsulation_type(const struct vteprec_physical_locator *, enum ovsdb_atomic_type key_type);
 
-void vteprec_physical_locator_set_bfd(const struct vteprec_physical_locator *, const struct smap *);
-void vteprec_physical_locator_set_bfd_status(const struct vteprec_physical_locator *, const struct smap *);
 void vteprec_physical_locator_set_dst_ip(const struct vteprec_physical_locator *, const char *dst_ip);
 void vteprec_physical_locator_set_encapsulation_type(const struct vteprec_physical_locator *, const char *encapsulation_type);
 
@@ -656,6 +650,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_physical_locator_set_columns[VTEPREC_PHYSICAL_LOCATOR_SET_N_COLUMNS];
 
+const struct vteprec_physical_locator_set *vteprec_physical_locator_set_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_physical_locator_set *vteprec_physical_locator_set_first(const struct ovsdb_idl *);
 const struct vteprec_physical_locator_set *vteprec_physical_locator_set_next(const struct vteprec_physical_locator_set *);
 #define VTEPREC_PHYSICAL_LOCATOR_SET_FOR_EACH(ROW, IDL) \
@@ -723,6 +718,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_physical_port_columns[VTEPREC_PHYSICAL_PORT_N_COLUMNS];
 
+const struct vteprec_physical_port *vteprec_physical_port_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_physical_port *vteprec_physical_port_first(const struct ovsdb_idl *);
 const struct vteprec_physical_port *vteprec_physical_port_next(const struct vteprec_physical_port *);
 #define VTEPREC_PHYSICAL_PORT_FOR_EACH(ROW, IDL) \
@@ -785,6 +781,10 @@ struct vteprec_physical_switch {
 	/* tunnel_ips column. */
 	char **tunnel_ips;
 	size_t n_tunnel_ips;
+
+	/* tunnels column. */
+	struct vteprec_tunnel **tunnels;
+	size_t n_tunnels;
 };
 
 enum {
@@ -794,6 +794,7 @@ enum {
     VTEPREC_PHYSICAL_SWITCH_COL_PORTS,
     VTEPREC_PHYSICAL_SWITCH_COL_SWITCH_FAULT_STATUS,
     VTEPREC_PHYSICAL_SWITCH_COL_TUNNEL_IPS,
+    VTEPREC_PHYSICAL_SWITCH_COL_TUNNELS,
     VTEPREC_PHYSICAL_SWITCH_N_COLUMNS
 };
 
@@ -802,10 +803,12 @@ enum {
 #define vteprec_physical_switch_col_tunnel_ips (vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNEL_IPS])
 #define vteprec_physical_switch_col_switch_fault_status (vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_SWITCH_FAULT_STATUS])
 #define vteprec_physical_switch_col_ports (vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_PORTS])
+#define vteprec_physical_switch_col_tunnels (vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNELS])
 #define vteprec_physical_switch_col_name (vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_NAME])
 
 extern struct ovsdb_idl_column vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_N_COLUMNS];
 
+const struct vteprec_physical_switch *vteprec_physical_switch_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_physical_switch *vteprec_physical_switch_first(const struct ovsdb_idl *);
 const struct vteprec_physical_switch *vteprec_physical_switch_next(const struct vteprec_physical_switch *);
 #define VTEPREC_PHYSICAL_SWITCH_FOR_EACH(ROW, IDL) \
@@ -827,6 +830,7 @@ void vteprec_physical_switch_verify_name(const struct vteprec_physical_switch *)
 void vteprec_physical_switch_verify_ports(const struct vteprec_physical_switch *);
 void vteprec_physical_switch_verify_switch_fault_status(const struct vteprec_physical_switch *);
 void vteprec_physical_switch_verify_tunnel_ips(const struct vteprec_physical_switch *);
+void vteprec_physical_switch_verify_tunnels(const struct vteprec_physical_switch *);
 
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
@@ -837,6 +841,7 @@ const struct ovsdb_datum *vteprec_physical_switch_get_name(const struct vteprec_
 const struct ovsdb_datum *vteprec_physical_switch_get_ports(const struct vteprec_physical_switch *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *vteprec_physical_switch_get_switch_fault_status(const struct vteprec_physical_switch *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *vteprec_physical_switch_get_tunnel_ips(const struct vteprec_physical_switch *, enum ovsdb_atomic_type key_type);
+const struct ovsdb_datum *vteprec_physical_switch_get_tunnels(const struct vteprec_physical_switch *, enum ovsdb_atomic_type key_type);
 
 void vteprec_physical_switch_set_description(const struct vteprec_physical_switch *, const char *description);
 void vteprec_physical_switch_set_management_ips(const struct vteprec_physical_switch *, char **management_ips, size_t n_management_ips);
@@ -844,6 +849,90 @@ void vteprec_physical_switch_set_name(const struct vteprec_physical_switch *, co
 void vteprec_physical_switch_set_ports(const struct vteprec_physical_switch *, struct vteprec_physical_port **ports, size_t n_ports);
 void vteprec_physical_switch_set_switch_fault_status(const struct vteprec_physical_switch *, char **switch_fault_status, size_t n_switch_fault_status);
 void vteprec_physical_switch_set_tunnel_ips(const struct vteprec_physical_switch *, char **tunnel_ips, size_t n_tunnel_ips);
+void vteprec_physical_switch_set_tunnels(const struct vteprec_physical_switch *, struct vteprec_tunnel **tunnels, size_t n_tunnels);
+
+
+/* Tunnel table. */
+struct vteprec_tunnel {
+	struct ovsdb_idl_row header_;
+
+	/* bfd_config_local column. */
+	struct smap bfd_config_local;
+
+	/* bfd_config_remote column. */
+	struct smap bfd_config_remote;
+
+	/* bfd_params column. */
+	struct smap bfd_params;
+
+	/* bfd_status column. */
+	struct smap bfd_status;
+
+	/* local column. */
+	struct vteprec_physical_locator *local;
+
+	/* remote column. */
+	struct vteprec_physical_locator *remote;
+};
+
+enum {
+    VTEPREC_TUNNEL_COL_BFD_CONFIG_LOCAL,
+    VTEPREC_TUNNEL_COL_BFD_CONFIG_REMOTE,
+    VTEPREC_TUNNEL_COL_BFD_PARAMS,
+    VTEPREC_TUNNEL_COL_BFD_STATUS,
+    VTEPREC_TUNNEL_COL_LOCAL,
+    VTEPREC_TUNNEL_COL_REMOTE,
+    VTEPREC_TUNNEL_N_COLUMNS
+};
+
+#define vteprec_tunnel_col_remote (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_REMOTE])
+#define vteprec_tunnel_col_bfd_config_local (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_LOCAL])
+#define vteprec_tunnel_col_bfd_params (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_PARAMS])
+#define vteprec_tunnel_col_bfd_status (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_STATUS])
+#define vteprec_tunnel_col_local (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_LOCAL])
+#define vteprec_tunnel_col_bfd_config_remote (vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_REMOTE])
+
+extern struct ovsdb_idl_column vteprec_tunnel_columns[VTEPREC_TUNNEL_N_COLUMNS];
+
+const struct vteprec_tunnel *vteprec_tunnel_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
+const struct vteprec_tunnel *vteprec_tunnel_first(const struct ovsdb_idl *);
+const struct vteprec_tunnel *vteprec_tunnel_next(const struct vteprec_tunnel *);
+#define VTEPREC_TUNNEL_FOR_EACH(ROW, IDL) \
+        for ((ROW) = vteprec_tunnel_first(IDL); \
+             (ROW); \
+             (ROW) = vteprec_tunnel_next(ROW))
+#define VTEPREC_TUNNEL_FOR_EACH_SAFE(ROW, NEXT, IDL) \
+        for ((ROW) = vteprec_tunnel_first(IDL); \
+             (ROW) ? ((NEXT) = vteprec_tunnel_next(ROW), 1) : 0; \
+             (ROW) = (NEXT))
+
+void vteprec_tunnel_init(struct vteprec_tunnel *);
+void vteprec_tunnel_delete(const struct vteprec_tunnel *);
+struct vteprec_tunnel *vteprec_tunnel_insert(struct ovsdb_idl_txn *);
+
+void vteprec_tunnel_verify_bfd_config_local(const struct vteprec_tunnel *);
+void vteprec_tunnel_verify_bfd_config_remote(const struct vteprec_tunnel *);
+void vteprec_tunnel_verify_bfd_params(const struct vteprec_tunnel *);
+void vteprec_tunnel_verify_bfd_status(const struct vteprec_tunnel *);
+void vteprec_tunnel_verify_local(const struct vteprec_tunnel *);
+void vteprec_tunnel_verify_remote(const struct vteprec_tunnel *);
+
+/* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
+   rarely useful.  More often, it is easier to access columns by using
+   the members of vteprec_tunnel directly.) */
+const struct ovsdb_datum *vteprec_tunnel_get_bfd_config_local(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
+const struct ovsdb_datum *vteprec_tunnel_get_bfd_config_remote(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
+const struct ovsdb_datum *vteprec_tunnel_get_bfd_params(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
+const struct ovsdb_datum *vteprec_tunnel_get_bfd_status(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type, enum ovsdb_atomic_type value_type);
+const struct ovsdb_datum *vteprec_tunnel_get_local(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type);
+const struct ovsdb_datum *vteprec_tunnel_get_remote(const struct vteprec_tunnel *, enum ovsdb_atomic_type key_type);
+
+void vteprec_tunnel_set_bfd_config_local(const struct vteprec_tunnel *, const struct smap *);
+void vteprec_tunnel_set_bfd_config_remote(const struct vteprec_tunnel *, const struct smap *);
+void vteprec_tunnel_set_bfd_params(const struct vteprec_tunnel *, const struct smap *);
+void vteprec_tunnel_set_bfd_status(const struct vteprec_tunnel *, const struct smap *);
+void vteprec_tunnel_set_local(const struct vteprec_tunnel *, const struct vteprec_physical_locator *local);
+void vteprec_tunnel_set_remote(const struct vteprec_tunnel *, const struct vteprec_physical_locator *remote);
 
 
 /* Ucast_Macs_Local table. */
@@ -878,6 +967,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_ucast_macs_local_columns[VTEPREC_UCAST_MACS_LOCAL_N_COLUMNS];
 
+const struct vteprec_ucast_macs_local *vteprec_ucast_macs_local_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_ucast_macs_local *vteprec_ucast_macs_local_first(const struct ovsdb_idl *);
 const struct vteprec_ucast_macs_local *vteprec_ucast_macs_local_next(const struct vteprec_ucast_macs_local *);
 #define VTEPREC_UCAST_MACS_LOCAL_FOR_EACH(ROW, IDL) \
@@ -944,6 +1034,7 @@ enum {
 
 extern struct ovsdb_idl_column vteprec_ucast_macs_remote_columns[VTEPREC_UCAST_MACS_REMOTE_N_COLUMNS];
 
+const struct vteprec_ucast_macs_remote *vteprec_ucast_macs_remote_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct vteprec_ucast_macs_remote *vteprec_ucast_macs_remote_first(const struct ovsdb_idl *);
 const struct vteprec_ucast_macs_remote *vteprec_ucast_macs_remote_next(const struct vteprec_ucast_macs_remote *);
 #define VTEPREC_UCAST_MACS_REMOTE_FOR_EACH(ROW, IDL) \
@@ -992,16 +1083,18 @@ enum {
     VTEPREC_TABLE_PHYSICAL_LOCATOR_SET,
     VTEPREC_TABLE_PHYSICAL_PORT,
     VTEPREC_TABLE_PHYSICAL_SWITCH,
+    VTEPREC_TABLE_TUNNEL,
     VTEPREC_TABLE_UCAST_MACS_LOCAL,
     VTEPREC_TABLE_UCAST_MACS_REMOTE,
     VTEPREC_N_TABLES
 };
 
 #define vteprec_table_mcast_macs_remote (vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_REMOTE])
-#define vteprec_table_mcast_macs_local (vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_LOCAL])
+#define vteprec_table_global (vteprec_table_classes[VTEPREC_TABLE_GLOBAL])
 #define vteprec_table_physical_locator (vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR])
 #define vteprec_table_physical_locator_set (vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR_SET])
-#define vteprec_table_global (vteprec_table_classes[VTEPREC_TABLE_GLOBAL])
+#define vteprec_table_tunnel (vteprec_table_classes[VTEPREC_TABLE_TUNNEL])
+#define vteprec_table_mcast_macs_local (vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_LOCAL])
 #define vteprec_table_physical_switch (vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_SWITCH])
 #define vteprec_table_logical_router (vteprec_table_classes[VTEPREC_TABLE_LOGICAL_ROUTER])
 #define vteprec_table_manager (vteprec_table_classes[VTEPREC_TABLE_MANAGER])
@@ -1018,5 +1111,7 @@ extern struct ovsdb_idl_table_class vteprec_table_classes[VTEPREC_N_TABLES];
 extern struct ovsdb_idl_class vteprec_idl_class;
 
 void vteprec_init(void);
+
+const char * vteprec_get_db_version(void);
 
 #endif /* VTEPREC_IDL_HEADER */

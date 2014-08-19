@@ -138,6 +138,12 @@ idltest_link1_init(struct idltest_link1 *row)
 }
 
 const struct idltest_link1 *
+idltest_link1_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return idltest_link1_cast(ovsdb_idl_get_row_for_uuid(idl, &idltest_table_classes[IDLTEST_TABLE_LINK1], uuid));
+}
+
+const struct idltest_link1 *
 idltest_link1_first(const struct ovsdb_idl *idl)
 {
     return idltest_link1_cast(ovsdb_idl_first_row(idl, &idltest_table_classes[IDLTEST_TABLE_LINK1]));
@@ -454,6 +460,12 @@ void
 idltest_link2_init(struct idltest_link2 *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct idltest_link2 *
+idltest_link2_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return idltest_link2_cast(ovsdb_idl_get_row_for_uuid(idl, &idltest_table_classes[IDLTEST_TABLE_LINK2], uuid));
 }
 
 const struct idltest_link2 *
@@ -849,6 +861,12 @@ void
 idltest_simple_init(struct idltest_simple *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct idltest_simple *
+idltest_simple_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return idltest_simple_cast(ovsdb_idl_get_row_for_uuid(idl, &idltest_table_classes[IDLTEST_TABLE_SIMPLE], uuid));
 }
 
 const struct idltest_simple *
@@ -1482,3 +1500,11 @@ idltest_init(void)
     idltest_link2_columns_init();
     idltest_simple_columns_init();
 }
+
+/* Return the schema version.  The caller must not free the returned value. */
+const char *
+idltest_get_db_version(void)
+{
+    return "1.2.3";
+}
+

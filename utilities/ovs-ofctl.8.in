@@ -58,6 +58,10 @@ information on its flow tables and ports.
 \fBdump\-tables \fIswitch\fR
 Prints to the console statistics for each of the flow tables used by
 \fIswitch\fR.
+.TP
+\fBdump\-table\-features \fIswitch\fR
+Prints to the console features for each of the flow tables used by
+\fIswitch\fR.
 .
 .TP
 \fBdump\-ports \fIswitch\fR [\fInetdev\fR]
@@ -66,11 +70,19 @@ Prints to the console statistics for network devices associated with
 associated with that device will be printed.  \fInetdev\fR can be an
 OpenFlow assigned port number or device name, e.g. \fBeth0\fR.
 .
-.TP
-\fBdump\-ports\-desc \fIswitch\fR
+.IP "\fBdump\-ports\-desc \fIswitch\fR [\fIport\fR]"
 Prints to the console detailed information about network devices
-associated with \fIswitch\fR (version 1.7 or later).  This is a subset
-of the information provided by the \fBshow\fR command.
+associated with \fIswitch\fR.  To dump only a specific port, specify
+its number as \fIport\fR.  Otherwise, if \fIport\fR is omitted, or if
+it is specified as \fBANY\fR, then all ports are printed.  This is a
+subset of the information provided by the \fBshow\fR command.
+.IP
+If the connection to \fIswitch\fR negotiates OpenFlow 1.0, 1.2, or
+1.2, this command uses an OpenFlow extension only implemented in Open
+vSwitch (version 1.7 and later).
+.IP
+Only OpenFlow 1.5 and later support dumping a specific port.  Earlier
+versions of OpenFlow always dump all ports.
 .
 .IP "\fBmod\-port \fIswitch\fR \fIport\fR \fIaction\fR"
 Modify characteristics of port \fBport\fR in \fIswitch\fR.  \fIport\fR
@@ -200,9 +212,15 @@ the switch itself (with the \fBprotocols\fR column in the \fBBridge\fR
 table).  For more information, see ``Q: What versions of OpenFlow does
 Open vSwitch support?'' in the Open vSwitch FAQ.
 .
-.IP "\fBdump\-groups \fIswitch"
-Prints to the console all group entries in \fIswitch\fR's tables. Each line
-of output is a group entry as described in \fBGroup Syntax\fR below.
+.IP "\fBdump\-groups \fIswitch\fR [\fIgroup\fR]"
+Prints group entries in \fIswitch\fR's tables to console.  To dump
+only a specific group, specify its number as \fIgroup\fR.  Otherwise,
+if \fIgroup\fR is omitted, or if it is specified as \fBALL\fR, then
+all groups are printed.  Each line of output is a group entry as
+described in \fBGroup Syntax\fR below.
+.IP
+Only OpenFlow 1.5 and later support dumping a specific group.  Earlier
+versions of OpenFlow always dump all groups.
 .
 .IP "\fBdump\-group\-features \fIswitch"
 Prints to the console the group features of the \fIswitch\fR.
@@ -949,7 +967,7 @@ command, above, for more details.
 .IP \fBarp_spa=\fIip\fR[\fB/\fInetmask\fR]
 .IQ \fBarp_tpa=\fIip\fR[\fB/\fInetmask\fR]
 When \fBdl_type\fR specifies either ARP or RARP, \fBarp_spa\fR and
-\fBarp_tha\fR match the source and target IPv4 address, respectively.
+\fBarp_tpa\fR match the source and target IPv4 address, respectively.
 An address may be specified as an IP address or host name
 (e.g. \fB192.168.1.1\fR or \fBwww.example.com\fR).  The optional
 \fInetmask\fR allows restricting a match to an IPv4 address prefix.
@@ -1826,7 +1844,7 @@ of each field is honoured.
 .PP
 .IP \fBgroup_id=\fIid\fR
 The integer group id of group.
-When this field is specified in \fBdel-groups\fR or \fBdump-groups\fR,
+When this field is specified in \fBdel\-groups\fR or \fBdump\-groups\fR,
 the keyword "all" may be used to designate all groups.
 .
 This field is required.
@@ -1973,8 +1991,9 @@ format.
 .
 .IP "\fBOXM-OpenFlow12\fR"
 .IQ "\fBOXM-OpenFlow13\fR"
+.IQ "\fBOXM-OpenFlow14\fR"
 These are the standard OXM (OpenFlow Extensible Match) flow format in
-OpenFlow 1.2 and 1.3, respectively.
+OpenFlow 1.2, 1.3, and 1.4, respectively.
 .RE
 .
 .IP
@@ -1988,7 +2007,7 @@ Any supported flow format.
 .IP "\fBNXM\fR"
 \fBNXM\-table_id\fR or \fBNXM+table_id\fR.
 .IP "\fBOXM\fR"
-\fBOXM-OpenFlow12\fR or \fBOXM-OpenFlow13\fR.
+\fBOXM-OpenFlow12\fR, \fBOXM-OpenFlow13\fR, or \fBOXM-OpenFlow14\fR.
 .RE
 .
 .IP
@@ -2066,6 +2085,7 @@ These options currently affect only \fBdump\-flows\fR output.
 \fBovs\-ofctl\fR detaches only when executing the \fBmonitor\fR or \
 \fBsnoop\fR commands.
 .so lib/daemon.man
+.so lib/unixctl.man
 .SS "Public Key Infrastructure Options"
 .so lib/ssl.man
 .so lib/vlog.man

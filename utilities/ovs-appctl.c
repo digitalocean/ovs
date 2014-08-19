@@ -63,6 +63,7 @@ main(int argc, char *argv[])
     }
 
     if (cmd_error) {
+        jsonrpc_close(client);
         fputs(cmd_error, stderr);
         ovs_error(0, "%s: server returned an error", target);
         exit(2);
@@ -180,6 +181,7 @@ connect_to_target(const char *target)
     char *socket_name;
     int error;
 
+#ifndef _WIN32
     if (target[0] != '/') {
         char *pidfile_name;
         pid_t pid;
@@ -192,6 +194,12 @@ connect_to_target(const char *target)
         free(pidfile_name);
         socket_name = xasprintf("%s/%s.%ld.ctl",
                                 ovs_rundir(), target, (long int) pid);
+#else
+    /* On windows, if the 'target' contains ':', we make an assumption that
+     * it is an absolute path. */
+    if (!strchr(target, ':')) {
+        socket_name = xasprintf("%s/%s.ctl", ovs_rundir(), target);
+#endif
     } else {
         socket_name = xstrdup(target);
     }

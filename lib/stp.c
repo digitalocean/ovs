@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -143,7 +143,7 @@ struct stp {
     void (*send_bpdu)(struct ofpbuf *bpdu, int port_no, void *aux);
     void *aux;
 
-    atomic_int ref_cnt;
+    struct ovs_refcount ref_cnt;
 };
 
 static struct ovs_mutex mutex;
@@ -306,7 +306,7 @@ stp_create(const char *name, stp_identifier bridge_id,
         p->path_cost = 19;      /* Recommended default for 100 Mb/s link. */
         stp_initialize_port(p, STP_DISABLED);
     }
-    atomic_init(&stp->ref_cnt, 1);
+    ovs_refcount_init(&stp->ref_cnt);
 
     list_push_back(all_stps, &stp->node);
     ovs_mutex_unlock(&mutex);
@@ -318,9 +318,7 @@ stp_ref(const struct stp *stp_)
 {
     struct stp *stp = CONST_CAST(struct stp *, stp_);
     if (stp) {
-        int orig;
-        atomic_add(&stp->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&stp->ref_cnt);
     }
     return stp;
 }
@@ -329,15 +327,7 @@ stp_ref(const struct stp *stp_)
 void
 stp_unref(struct stp *stp)
 {
-    int orig;
-
-    if (!stp) {
-        return;
-    }
-
-    atomic_sub(&stp->ref_cnt, 1, &orig);
-    ovs_assert(orig > 0);
-    if (orig == 1) {
+    if (stp && ovs_refcount_unref(&stp->ref_cnt) == 1) {
         ovs_mutex_lock(&mutex);
         list_remove(&stp->node);
         ovs_mutex_unlock(&mutex);
@@ -694,13 +684,18 @@ stp_learn_in_state(enum stp_state state)
     return (state & (STP_DISABLED | STP_LEARNING | STP_FORWARDING)) != 0;
 }
 
-/* Returns true if 'state' is one in which rx&tx bpdu should be done on
- * on a port, false otherwise. */
+/* Returns true if 'state' is one in which bpdus should be forwarded on a
+ * port, false otherwise.
+ *
+ * Returns true if 'state' is STP_DISABLED, since in that case the port does
+ * not generate the bpdu and should just forward it (e.g. patch port on pif
+ * bridge). */
 bool
-stp_listen_in_state(enum stp_state state)
+stp_should_forward_bpdu(enum stp_state state)
 {
     return (state &
-            (STP_LISTENING | STP_LEARNING | STP_FORWARDING)) != 0;
+            ( STP_DISABLED | STP_LISTENING | STP_LEARNING
+              | STP_FORWARDING)) != 0;
 }
 
 /* Returns the name for the given 'role' (for use in debugging and log
@@ -1545,14 +1540,15 @@ stp_send_bpdu(struct stp_port *p, const void *bpdu, size_t bpdu_size)
 
     /* Skeleton. */
     pkt = ofpbuf_new(ETH_HEADER_LEN + LLC_HEADER_LEN + bpdu_size);
-    pkt->l2 = eth = ofpbuf_put_zeros(pkt, sizeof *eth);
+    eth = ofpbuf_put_zeros(pkt, sizeof *eth);
     llc = ofpbuf_put_zeros(pkt, sizeof *llc);
-    pkt->l3 = ofpbuf_put(pkt, bpdu, bpdu_size);
+    ofpbuf_set_frame(pkt, eth);
+    ofpbuf_set_l3(pkt, ofpbuf_put(pkt, bpdu, bpdu_size));
 
     /* 802.2 header. */
     memcpy(eth->eth_dst, eth_addr_stp, ETH_ADDR_LEN);
     /* p->stp->send_bpdu() must fill in source address. */
-    eth->eth_type = htons(pkt->size - ETH_HEADER_LEN);
+    eth->eth_type = htons(ofpbuf_size(pkt) - ETH_HEADER_LEN);
 
     /* LLC header. */
     llc->llc_dsap = STP_LLC_DSAP;

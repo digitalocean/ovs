@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.64)
-AC_INIT(openvswitch, 2.1.0, ovs-bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.3.0, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -41,6 +41,8 @@ AC_C_BIGENDIAN
 AC_SYS_LARGEFILE
 
 LT_INIT([disable-shared])
+m4_pattern_forbid([LT_INIT]) dnl Make autoconf fail if libtool is missing.
+
 AC_SEARCH_LIBS([pow], [m])
 AC_SEARCH_LIBS([clock_gettime], [rt])
 AC_SEARCH_LIBS([timer_create], [rt])
@@ -88,9 +90,11 @@ OVS_CHECK_ATOMIC_ALWAYS_LOCK_FREE(4)
 OVS_CHECK_ATOMIC_ALWAYS_LOCK_FREE(8)
 OVS_CHECK_POSIX_AIO
 OVS_CHECK_PTHREAD_SET_NAME
+OVS_CHECK_LINUX_HOST
+AX_FUNC_POSIX_MEMALIGN
 
-OVS_CHECK_INCLUDE_NEXT([string.h])
-AC_CONFIG_FILES([lib/string.h])
+OVS_CHECK_INCLUDE_NEXT([stdio.h string.h])
+AC_CONFIG_FILES([lib/stdio.h lib/string.h])
 
 OVS_ENABLE_OPTION([-Wall])
 OVS_ENABLE_OPTION([-Wextra])
@@ -117,6 +121,7 @@ OVS_ENABLE_SPARSE
 AC_ARG_VAR(KARCH, [Kernel Architecture String])
 AC_SUBST(KARCH)
 OVS_CHECK_LINUX
+OVS_CHECK_DPDK
 
 AC_CONFIG_FILES(Makefile)
 AC_CONFIG_FILES(datapath/Makefile)
@@ -130,9 +135,6 @@ AC_CONFIG_COMMANDS([include/openflow/openflow.h.stamp])
 
 AC_CONFIG_COMMANDS([utilities/bugtool/dummy], [:])
 
-AM_CONDITIONAL([LINUX_DATAPATH], [test "$HAVE_NETLINK" = yes && test "$ESX" = no])
-if test "$HAVE_NETLINK" = yes && test "$ESX" = no; then
-    AC_DEFINE([LINUX_DATAPATH], [1], [System uses the linux datapath module.])
-fi
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES])
 
 AC_OUTPUT

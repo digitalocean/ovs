@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
  */
 
 #include <config.h>
-#include "classifier.h"
 #include <errno.h>
 #include <limits.h>
 #include "byte-order.h"
@@ -36,9 +35,14 @@
 #include "packets.h"
 #include "random.h"
 #include "unaligned.h"
-
+#include "ovstest.h"
 #undef NDEBUG
 #include <assert.h>
+
+/* We need access to classifier internal definitions to be able to fully
+ * test them.  The alternative would be to expose them all in the classifier
+ * API. */
+#include "classifier.c"
 
 /* Fields in a rule. */
 #define CLS_FIELDS                                                  \
@@ -471,8 +475,8 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
     int found_dups = 0;
     int found_rules2 = 0;
 
-    HMAP_FOR_EACH (table, hmap_node, &cls->subtables) {
-        const struct cls_rule *head;
+    HMAP_FOR_EACH (table, hmap_node, &cls->cls->subtables) {
+        const struct cls_match *head;
         unsigned int max_priority = 0;
         unsigned int max_count = 0;
 
@@ -481,7 +485,7 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
         found_tables++;
         HMAP_FOR_EACH (head, hmap_node, &table->rules) {
             unsigned int prev_priority = UINT_MAX;
-            const struct cls_rule *rule;
+            const struct cls_match *rule;
 
             if (head->priority > max_priority) {
                 max_priority = head->priority;
@@ -498,15 +502,16 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
                 prev_priority = rule->priority;
                 found_rules++;
                 found_dups++;
-                assert(classifier_find_rule_exactly(cls, rule) == rule);
+                assert(classifier_find_rule_exactly(cls, rule->cls_rule)
+                       == rule->cls_rule);
             }
         }
         assert(table->max_priority == max_priority);
         assert(table->max_count == max_count);
     }
 
-    assert(found_tables == hmap_count(&cls->subtables));
-    assert(n_tables == -1 || n_tables == hmap_count(&cls->subtables));
+    assert(found_tables == hmap_count(&cls->cls->subtables));
+    assert(n_tables == -1 || n_tables == hmap_count(&cls->cls->subtables));
     assert(n_rules == -1 || found_rules == n_rules);
     assert(n_dups == -1 || found_dups == n_dups);
 
@@ -850,13 +855,16 @@ test_many_rules_in_one_list (int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
                 compare_classifiers(&cls, &tcls);
             }
 
+            for (i = 0; i < N_RULES; i++) {
+                if (rules[i]->cls_rule.cls_match) {
+                    classifier_remove(&cls, &rules[i]->cls_rule);
+                }
+                free_rule(rules[i]);
+            }
+
             fat_rwlock_unlock(&cls.rwlock);
             classifier_destroy(&cls);
             tcls_destroy(&tcls);
-
-            for (i = 0; i < N_RULES; i++) {
-                free_rule(rules[i]);
-            }
         } while (next_permutation(ops, ARRAY_SIZE(ops)));
         assert(n_permutations == (factorial(N_RULES * 2) >> N_RULES));
     }
@@ -1203,7 +1211,8 @@ test_miniflow(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         /* Check that the flow equals its miniflow. */
         assert(miniflow_get_vid(&miniflow) == vlan_tci_to_vid(flow.vlan_tci));
         for (i = 0; i < FLOW_U32S; i++) {
-            assert(miniflow_get(&miniflow, i) == flow_u32[i]);
+            assert(MINIFLOW_GET_TYPE(&miniflow, uint32_t, i * 4)
+                   == flow_u32[i]);
         }
 
         /* Check that the miniflow equals itself. */
@@ -1340,17 +1349,18 @@ static const struct command commands[] = {
 
     /* Miniflow and minimask tests. */
     {"miniflow", 0, 0, test_miniflow},
-	{"minimask_has_extra", 0, 0, test_minimask_has_extra},
-	{"minimask_combine", 0, 0, test_minimask_combine},
+    {"minimask_has_extra", 0, 0, test_minimask_has_extra},
+    {"minimask_combine", 0, 0, test_minimask_combine},
 
     {NULL, 0, 0, NULL},
 };
 
-int
-main(int argc, char *argv[])
+static void
+test_classifier_main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     init_values();
     run_command(argc - 1, argv + 1, commands);
-    return 0;
 }
+
+OVSTEST_REGISTER("test-classifier", test_classifier_main);

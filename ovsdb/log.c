@@ -91,6 +91,7 @@ ovsdb_log_open(const char *name, enum ovsdb_log_open_mode open_mode,
     } else if (open_mode == OVSDB_LOG_READ_WRITE) {
         flags = O_RDWR;
     } else if (open_mode == OVSDB_LOG_CREATE) {
+#ifndef _WIN32
         if (stat(name, &s) == -1 && errno == ENOENT
             && lstat(name, &s) == 0 && S_ISLNK(s.st_mode)) {
             /* 'name' is a dangling symlink.  We want to create the file that
@@ -101,9 +102,15 @@ ovsdb_log_open(const char *name, enum ovsdb_log_open_mode open_mode,
         } else {
             flags = O_RDWR | O_CREAT | O_EXCL;
         }
+#else
+        flags = O_RDWR | O_CREAT | O_EXCL;
+#endif
     } else {
         OVS_NOT_REACHED();
     }
+#ifdef _WIN32
+    flags = flags | O_BINARY;
+#endif
     fd = open(name, flags, 0666);
     if (fd < 0) {
         const char *op = open_mode == OVSDB_LOG_CREATE ? "create" : "open";

@@ -10,9 +10,19 @@ ACLOCAL_AMFLAGS = -I m4
 SUBDIRS = datapath
 
 AM_CPPFLAGS = $(SSL_CFLAGS)
+AM_LDFLAGS = $(SSL_LDFLAGS)
+
+if WIN32
+AM_CPPFLAGS += -I $(top_srcdir)/include/windows
+AM_CPPFLAGS += $(PTHREAD_INCLUDES)
+AM_LDFLAGS += $(PTHREAD_LDFLAGS)
+endif
+
 AM_CPPFLAGS += -I $(top_srcdir)/include
 AM_CPPFLAGS += -I $(top_srcdir)/lib
 AM_CPPFLAGS += -I $(top_builddir)/lib
+
+AM_CPPFLAGS += $(SSL_INCLUDES)
 
 AM_CFLAGS = -Wstrict-prototypes
 AM_CFLAGS += $(WARNING_FLAGS)
@@ -48,14 +58,17 @@ DISTCLEANFILES =
 PYCOV_CLEAN_FILES = build-aux/check-structs,cover
 EXTRA_DIST = \
 	BUILD.Windows \
+	CONTRIBUTING \
 	CodingStyle \
 	DESIGN \
 	FAQ \
 	INSTALL \
 	INSTALL.Debian \
+        INSTALL.DPDK \
 	INSTALL.Fedora \
 	INSTALL.KVM \
 	INSTALL.Libvirt \
+	INSTALL.NetBSD \
 	INSTALL.RHEL \
 	INSTALL.SSL \
 	INSTALL.XenServer \
@@ -64,11 +77,9 @@ EXTRA_DIST = \
 	NOTICE \
 	OPENFLOW-1.1+ \
 	PORTING \
-	README-OFTest \
-	README-gcov \
 	README-lisp \
 	REPORTING-BUGS \
-	SubmittingPatches \
+	TODO \
 	WHY-OVS \
 	boot.sh \
 	build-aux/cccl \
@@ -135,10 +146,9 @@ SUFFIXES += .in
                 -e 's,[@]abs_top_srcdir[@],$(abs_top_srcdir),g' \
             > $@.tmp
 	@if head -n 1 $@.tmp | grep '#!' > /dev/null; then \
-	    echo chmod +x $@.tmp; \
 	    chmod +x $@.tmp; \
 	fi
-	mv $@.tmp $@
+	$(AM_V_GEN) mv $@.tmp $@
 
 .PHONY: clean-pycov
 clean-pycov:
@@ -157,10 +167,10 @@ dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
 	  (cd datapath && $(MAKE) distfiles);				    \
 	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) |	    \
-	    sort -u > all-distfiles;					    \
+	    LC_ALL=C sort -u > all-distfiles;				    \
 	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' |	    \
-	    sort -u > all-gitfiles;					    \
-	  comm -1 -3 all-distfiles all-gitfiles > missing-distfiles;	    \
+	    LC_ALL=C sort -u > all-gitfiles;				    \
+	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
 	  if test -s missing-distfiles; then				    \
 	    echo "The distribution is missing the following files:";	    \
 	    cat missing-distfiles;					    \
@@ -175,7 +185,8 @@ distfiles: Makefile
 	list='$(DISTFILES)'; \
 	for file in $$list; do echo $$file; done | \
 	  sed -e "s|^$$srcdirstrip/||;t" \
-	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | sort -u > $@
+	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | \
+          LC_ALL=C sort -u > $@
 CLEANFILES += distfiles
 endif
 .PHONY: dist-hook-git
@@ -237,7 +248,7 @@ thread-safety-check:
 	@if test -e '$(srcdir)'/.git && (git --version) >/dev/null 2>&1 && \
 	   grep -n -f '$(srcdir)'/build-aux/thread-safety-blacklist \
 	       `git ls-files '$(srcdir)' | grep '\.[ch]$$' \
-                | $(EGREP) -v '^datapath|^lib/sflow|^third-party'` \
+                | $(EGREP) -v '^datapath|^lib/sflow|^third-party'` /dev/null \
 	       | $(EGREP) -v ':[ 	]*/?\*'; \
 	then \
 	    echo "See above for list of calls to functions that are"; \
@@ -255,7 +266,8 @@ manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
 		if grep warning: $@.tmp; then error=:; fi; \
 		rm -f $@.tmp; \
 	done; \
-	if $$error; then exit 1; else echo touch $@; touch $@; fi
+	if $$error; then exit 1; else touch $@; fi
+	$(AM_V_GEN) touch -c $@
 CLEANFILES += manpage-check
 endif
 

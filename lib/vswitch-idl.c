@@ -529,6 +529,12 @@ ovsrec_bridge_init(struct ovsrec_bridge *row)
 }
 
 const struct ovsrec_bridge *
+ovsrec_bridge_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_bridge_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_BRIDGE], uuid));
+}
+
+const struct ovsrec_bridge *
 ovsrec_bridge_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_bridge_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_BRIDGE]));
@@ -1591,12 +1597,14 @@ ovsrec_bridge_columns_init(void)
     c->name = "protocols";
     ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
     c->type.key.enum_ = xmalloc(sizeof *c->type.key.enum_);
-    c->type.key.enum_->n = 4;
-    c->type.key.enum_->keys = xmalloc(4 * sizeof *c->type.key.enum_->keys);
+    c->type.key.enum_->n = 6;
+    c->type.key.enum_->keys = xmalloc(6 * sizeof *c->type.key.enum_->keys);
     c->type.key.enum_->keys[0].string = xstrdup("OpenFlow10");
     c->type.key.enum_->keys[1].string = xstrdup("OpenFlow11");
     c->type.key.enum_->keys[2].string = xstrdup("OpenFlow12");
     c->type.key.enum_->keys[3].string = xstrdup("OpenFlow13");
+    c->type.key.enum_->keys[4].string = xstrdup("OpenFlow14");
+    c->type.key.enum_->keys[5].string = xstrdup("OpenFlow15");
     c->type.key.enum_->values = NULL;
     ovsdb_datum_sort_assert(c->type.key.enum_, OVSDB_TYPE_STRING);
     c->type.key.u.string.minLen = 0;
@@ -2005,6 +2013,12 @@ ovsrec_controller_init(struct ovsrec_controller *row)
     smap_init(&row->external_ids);
     smap_init(&row->other_config);
     smap_init(&row->status);
+}
+
+const struct ovsrec_controller *
+ovsrec_controller_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_controller_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_CONTROLLER], uuid));
 }
 
 const struct ovsrec_controller *
@@ -3099,6 +3113,12 @@ ovsrec_flow_sample_collector_set_init(struct ovsrec_flow_sample_collector_set *r
 }
 
 const struct ovsrec_flow_sample_collector_set *
+ovsrec_flow_sample_collector_set_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_flow_sample_collector_set_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_FLOW_SAMPLE_COLLECTOR_SET], uuid));
+}
+
+const struct ovsrec_flow_sample_collector_set *
 ovsrec_flow_sample_collector_set_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_flow_sample_collector_set_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_FLOW_SAMPLE_COLLECTOR_SET]));
@@ -3386,6 +3406,21 @@ ovsrec_flow_sample_collector_set_columns_init(void)
 /* Flow_Table table. */
 
 static void
+ovsrec_flow_table_parse_external_ids(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_flow_table *row = ovsrec_flow_table_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    smap_init(&row->external_ids);
+    for (i = 0; i < datum->n; i++) {
+        smap_add(&row->external_ids,
+                 datum->keys[i].string,
+                 datum->values[i].string);
+    }
+}
+
+static void
 ovsrec_flow_table_parse_flow_limit(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_flow_table *row = ovsrec_flow_table_cast(row_);
@@ -3468,6 +3503,15 @@ ovsrec_flow_table_parse_prefixes(struct ovsdb_idl_row *row_, const struct ovsdb_
 }
 
 static void
+ovsrec_flow_table_unparse_external_ids(struct ovsdb_idl_row *row_)
+{
+    struct ovsrec_flow_table *row = ovsrec_flow_table_cast(row_);
+
+    ovs_assert(inited);
+    smap_destroy(&row->external_ids);
+}
+
+static void
 ovsrec_flow_table_unparse_flow_limit(struct ovsdb_idl_row *row_)
 {
     struct ovsrec_flow_table *row = ovsrec_flow_table_cast(row_);
@@ -3516,6 +3560,13 @@ void
 ovsrec_flow_table_init(struct ovsrec_flow_table *row)
 {
     memset(row, 0, sizeof *row); 
+    smap_init(&row->external_ids);
+}
+
+const struct ovsrec_flow_table *
+ovsrec_flow_table_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_flow_table_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_FLOW_TABLE], uuid));
 }
 
 const struct ovsrec_flow_table *
@@ -3542,6 +3593,13 @@ ovsrec_flow_table_insert(struct ovsdb_idl_txn *txn)
     return ovsrec_flow_table_cast(ovsdb_idl_txn_insert(txn, &ovsrec_table_classes[OVSREC_TABLE_FLOW_TABLE], NULL));
 }
 
+
+void
+ovsrec_flow_table_verify_external_ids(const struct ovsrec_flow_table *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_EXTERNAL_IDS]);
+}
 
 void
 ovsrec_flow_table_verify_flow_limit(const struct ovsrec_flow_table *row)
@@ -3576,6 +3634,32 @@ ovsrec_flow_table_verify_prefixes(const struct ovsrec_flow_table *row)
 {
     ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_PREFIXES]);
+}
+
+/* Returns the external_ids column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes external_ids's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_flow_table_get_external_ids(const struct ovsrec_flow_table *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_flow_table_col_external_ids);
 }
 
 /* Returns the flow_limit column's value in 'row' as a struct ovsdb_datum.
@@ -3694,6 +3778,36 @@ ovsrec_flow_table_get_prefixes(const struct ovsrec_flow_table *row,
 }
 
 void
+ovsrec_flow_table_set_external_ids(const struct ovsrec_flow_table *row, const struct smap *smap)
+{
+    struct ovsdb_datum datum;
+
+    ovs_assert(inited);
+    if (smap) {
+        struct smap_node *node;
+        size_t i;
+
+        datum.n = smap_count(smap);
+        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
+        datum.values = xmalloc(datum.n * sizeof *datum.values);
+
+        i = 0;
+        SMAP_FOR_EACH (node, smap) {
+            datum.keys[i].string = xstrdup(node->key);
+            datum.values[i].string = xstrdup(node->value);
+            i++;
+        }
+        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_datum_init_empty(&datum);
+    }
+    ovsdb_idl_txn_write(&row->header_,
+                        &ovsrec_flow_table_columns[OVSREC_FLOW_TABLE_COL_EXTERNAL_IDS],
+                        &datum);
+}
+
+
+void
 ovsrec_flow_table_set_flow_limit(const struct ovsrec_flow_table *row, const int64_t *flow_limit, size_t n_flow_limit)
 {
     struct ovsdb_datum datum;
@@ -3790,6 +3904,19 @@ static void
 ovsrec_flow_table_columns_init(void)
 {
     struct ovsdb_idl_column *c;
+
+    /* Initialize ovsrec_flow_table_col_external_ids. */
+    c = &ovsrec_flow_table_col_external_ids;
+    c->name = "external_ids";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = ovsrec_flow_table_parse_external_ids;
+    c->unparse = ovsrec_flow_table_unparse_external_ids;
 
     /* Initialize ovsrec_flow_table_col_flow_limit. */
     c = &ovsrec_flow_table_col_flow_limit;
@@ -4063,6 +4190,12 @@ ovsrec_ipfix_init(struct ovsrec_ipfix *row)
 {
     memset(row, 0, sizeof *row); 
     smap_init(&row->external_ids);
+}
+
+const struct ovsrec_ipfix *
+ovsrec_ipfix_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_ipfix_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_IPFIX], uuid));
 }
 
 const struct ovsrec_ipfix *
@@ -5288,6 +5421,12 @@ ovsrec_interface_init(struct ovsrec_interface *row)
     smap_init(&row->options);
     smap_init(&row->other_config);
     smap_init(&row->status);
+}
+
+const struct ovsrec_interface *
+ovsrec_interface_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_interface_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_INTERFACE], uuid));
 }
 
 const struct ovsrec_interface *
@@ -7446,6 +7585,12 @@ ovsrec_manager_init(struct ovsrec_manager *row)
 }
 
 const struct ovsrec_manager *
+ovsrec_manager_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_manager_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_MANAGER], uuid));
+}
+
+const struct ovsrec_manager *
 ovsrec_manager_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_manager_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_MANAGER]));
@@ -8250,6 +8395,12 @@ ovsrec_mirror_init(struct ovsrec_mirror *row)
 }
 
 const struct ovsrec_mirror *
+ovsrec_mirror_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_mirror_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_MIRROR], uuid));
+}
+
+const struct ovsrec_mirror *
 ovsrec_mirror_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_mirror_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_MIRROR]));
@@ -8997,6 +9148,12 @@ ovsrec_netflow_init(struct ovsrec_netflow *row)
 }
 
 const struct ovsrec_netflow *
+ovsrec_netflow_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_netflow_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_NETFLOW], uuid));
+}
+
+const struct ovsrec_netflow *
 ovsrec_netflow_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_netflow_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_NETFLOW]));
@@ -9679,6 +9836,12 @@ ovsrec_open_vswitch_init(struct ovsrec_open_vswitch *row)
     smap_init(&row->external_ids);
     smap_init(&row->other_config);
     smap_init(&row->statistics);
+}
+
+const struct ovsrec_open_vswitch *
+ovsrec_open_vswitch_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_open_vswitch_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_OPEN_VSWITCH], uuid));
 }
 
 const struct ovsrec_open_vswitch *
@@ -10872,6 +11035,12 @@ ovsrec_port_init(struct ovsrec_port *row)
     smap_init(&row->external_ids);
     smap_init(&row->other_config);
     smap_init(&row->status);
+}
+
+const struct ovsrec_port *
+ovsrec_port_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_port_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_PORT], uuid));
 }
 
 const struct ovsrec_port *
@@ -12105,6 +12274,12 @@ ovsrec_qos_init(struct ovsrec_qos *row)
 }
 
 const struct ovsrec_qos *
+ovsrec_qos_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_qos_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_QOS], uuid));
+}
+
+const struct ovsrec_qos *
 ovsrec_qos_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_qos_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_QOS]));
@@ -12504,6 +12679,12 @@ ovsrec_queue_init(struct ovsrec_queue *row)
 }
 
 const struct ovsrec_queue *
+ovsrec_queue_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_queue_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_QUEUE], uuid));
+}
+
+const struct ovsrec_queue *
 ovsrec_queue_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_queue_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_QUEUE]));
@@ -12863,6 +13044,12 @@ ovsrec_ssl_init(struct ovsrec_ssl *row)
 {
     memset(row, 0, sizeof *row); 
     smap_init(&row->external_ids);
+}
+
+const struct ovsrec_ssl *
+ovsrec_ssl_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_ssl_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_SSL], uuid));
 }
 
 const struct ovsrec_ssl *
@@ -13367,6 +13554,12 @@ ovsrec_sflow_init(struct ovsrec_sflow *row)
 }
 
 const struct ovsrec_sflow *
+ovsrec_sflow_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return ovsrec_sflow_cast(ovsdb_idl_get_row_for_uuid(idl, &ovsrec_table_classes[OVSREC_TABLE_SFLOW], uuid));
+}
+
+const struct ovsrec_sflow *
 ovsrec_sflow_first(const struct ovsdb_idl *idl)
 {
     return ovsrec_sflow_cast(ovsdb_idl_first_row(idl, &ovsrec_table_classes[OVSREC_TABLE_SFLOW]));
@@ -13852,3 +14045,11 @@ ovsrec_init(void)
     ovsrec_ssl_columns_init();
     ovsrec_sflow_columns_init();
 }
+
+/* Return the schema version.  The caller must not free the returned value. */
+const char *
+ovsrec_get_db_version(void)
+{
+    return "7.6.0";
+}
+

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "column.h"
@@ -27,6 +28,7 @@
 #include "dirs.h"
 #include "dummy.h"
 #include "dynamic-string.h"
+#include "fatal-signal.h"
 #include "file.h"
 #include "hash.h"
 #include "json.h"
@@ -136,7 +138,8 @@ main(int argc, char *argv[])
 
     proctitle_init(argc, argv);
     set_program_name(argv[0]);
-    signal(SIGPIPE, SIG_IGN);
+    service_start(&argc, &argv);
+    fatal_ignore_sigpipe();
     process_init();
 
     parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
@@ -302,6 +305,9 @@ main(int argc, char *argv[])
         }
         poll_timer_wait_until(status_timer);
         poll_block();
+        if (should_service_stop()) {
+            exiting = true;
+        }
     }
     ovsdb_jsonrpc_server_destroy(jsonrpc);
     SHASH_FOR_EACH(node, &all_dbs) {
@@ -319,7 +325,38 @@ main(int argc, char *argv[])
         }
     }
 
+    service_stop();
     return 0;
+}
+
+/* Returns true if 'filename' is known to be already open as a database,
+ * false if not.
+ *
+ * "False negatives" are possible. */
+static bool
+is_already_open(struct server_config *config OVS_UNUSED,
+                const char *filename OVS_UNUSED)
+{
+#ifndef _WIN32
+    struct stat s;
+
+    if (!stat(filename, &s)) {
+        struct shash_node *node;
+
+        SHASH_FOR_EACH (node, config->all_dbs) {
+            struct db *db = node->data;
+            struct stat s2;
+
+            if (!stat(db->filename, &s2)
+                && s.st_dev == s2.st_dev
+                && s.st_ino == s2.st_ino) {
+                return true;
+            }
+        }
+    }
+#endif  /* !_WIN32 */
+
+    return false;
 }
 
 static char *
@@ -328,6 +365,13 @@ open_db(struct server_config *config, const char *filename)
     struct ovsdb_error *db_error;
     struct db *db;
     char *error;
+
+    /* If we know that the file is already open, return a good error message.
+     * Otherwise, if the file is open, we'll fail later on with a harder to
+     * interpret file locking error. */
+    if (is_already_open(config, filename)) {
+        return xasprintf("%s: already open", filename);
+    }
 
     db = xzalloc(sizeof *db);
     db->filename = xstrdup(filename);
@@ -475,6 +519,7 @@ query_db_string(const struct shash *all_dbs, const char *name,
                                         &db, &table, &column);
         if (retval) {
             ds_put_format(errors, "%s\n", retval);
+            free(retval);
             return NULL;
         }
 
@@ -1167,7 +1212,9 @@ parse_options(int *argcp, char **argvp[],
     static const struct option long_options[] = {
         {"remote",      required_argument, NULL, OPT_REMOTE},
         {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
+#ifndef _WIN32
         {"run",         required_argument, NULL, OPT_RUN},
+#endif
         {"help",        no_argument, NULL, 'h'},
         {"version",     no_argument, NULL, 'V'},
         DAEMON_LONG_OPTIONS,

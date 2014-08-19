@@ -50,6 +50,10 @@ ofperr_domain_from_version(enum ofp_version version)
         return &ofperr_of12;
     case OFP13_VERSION:
         return &ofperr_of13;
+    case OFP14_VERSION:
+        return &ofperr_of14;
+    case OFP15_VERSION:
+        return &ofperr_of15;
     default:
         return NULL;
     }
@@ -323,8 +327,8 @@ ofperr_decode_msg(const struct ofp_header *oh, struct ofpbuf *payload)
     /* Translate the error type and code into an ofperr. */
     error = ofperr_decode(oh->version, vendor, type, code);
     if (error && payload) {
-        ofpbuf_init(payload, b.size);
-        ofpbuf_push(payload, b.data, b.size);
+        ofpbuf_init(payload, ofpbuf_size(&b));
+        ofpbuf_push(payload, ofpbuf_data(&b), ofpbuf_size(&b));
     }
     return error;
 }

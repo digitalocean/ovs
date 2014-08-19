@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@
 #include "fatal-signal.h"
 #include "hash.h"
 #include "hmap.h"
+#include "ovs-rcu.h"
 #include "ovs-thread.h"
 #include "signals.h"
 #include "seq.h"
@@ -39,6 +40,21 @@
 #include "vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(timeval);
+
+#ifdef _WIN32
+typedef unsigned int clockid_t;
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 2
+#endif
+
+/* Number of 100 ns intervals from January 1, 1601 till January 1, 1970. */
+static ULARGE_INTEGER unix_epoch;
+#endif /* _WIN32 */
 
 struct clock {
     clockid_t id;               /* CLOCK_MONOTONIC or CLOCK_REALTIME. */
@@ -95,6 +111,16 @@ static void
 do_init_time(void)
 {
     struct timespec ts;
+
+#ifdef _WIN32
+    /* Calculate number of 100-nanosecond intervals till 01/01/1970. */
+    SYSTEMTIME unix_epoch_st = { 1970, 1, 0, 1, 0, 0, 0, 0};
+    FILETIME unix_epoch_ft;
+
+    SystemTimeToFileTime(&unix_epoch_st, &unix_epoch_ft);
+    unix_epoch.LowPart = unix_epoch_ft.dwLowDateTime;
+    unix_epoch.HighPart = unix_epoch_ft.dwHighDateTime;
+#endif
 
     coverage_init();
 
@@ -232,12 +258,13 @@ time_alarm(unsigned int secs)
  *
  * Stores the number of milliseconds elapsed during poll in '*elapsed'. */
 int
-time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
-          int *elapsed)
+time_poll(struct pollfd *pollfds, int n_pollfds, HANDLE *handles OVS_UNUSED,
+          long long int timeout_when, int *elapsed)
 {
     long long int *last_wakeup = last_wakeup_get();
     long long int start;
-    int retval;
+    bool quiescent;
+    int retval = 0;
 
     time_init();
     coverage_clear();
@@ -248,6 +275,7 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
     start = time_msec();
 
     timeout_when = MIN(timeout_when, deadline);
+    quiescent = ovsrcu_is_quiescent();
 
     for (;;) {
         long long int now = time_msec();
@@ -261,13 +289,45 @@ time_poll(struct pollfd *pollfds, int n_pollfds, long long int timeout_when,
             time_left = timeout_when - now;
         }
 
+        if (!quiescent) {
+            if (!time_left) {
+                ovsrcu_quiesce();
+            } else {
+                ovsrcu_quiesce_start();
+            }
+        }
+
+#ifndef _WIN32
         retval = poll(pollfds, n_pollfds, time_left);
         if (retval < 0) {
             retval = -errno;
         }
+#else
+        if (n_pollfds > MAXIMUM_WAIT_OBJECTS) {
+            VLOG_ERR("Cannot handle more than maximum wait objects\n");
+        } else if (n_pollfds != 0) {
+            retval = WaitForMultipleObjects(n_pollfds, handles, FALSE,
+                                            time_left);
+        }
+        if (retval < 0) {
+            /* XXX This will be replace by a win error to errno
+               conversion function */
+            retval = -WSAGetLastError();
+            retval = -EINVAL;
+        }
+#endif
+
+        if (!quiescent && time_left) {
+            ovsrcu_quiesce_end();
+        }
 
         if (deadline <= time_msec()) {
+#ifndef _WIN32
             fatal_signal_handler(SIGALRM);
+#else
+            VLOG_ERR("wake up from WaitForMultipleObjects after deadline");
+            fatal_signal_handler(SIGTERM);
+#endif
             if (retval < 0) {
                 retval = 0;
             }
@@ -305,12 +365,69 @@ time_boot_msec(void)
     return boot_time;
 }
 
+#ifdef _WIN32
+static ULARGE_INTEGER
+xgetfiletime(void)
+{
+    ULARGE_INTEGER current_time;
+    FILETIME current_time_ft;
+
+    /* Returns current time in UTC as a 64-bit value representing the number
+     * of 100-nanosecond intervals since January 1, 1601 . */
+    GetSystemTimePreciseAsFileTime(&current_time_ft);
+    current_time.LowPart = current_time_ft.dwLowDateTime;
+    current_time.HighPart = current_time_ft.dwHighDateTime;
+
+    return current_time;
+}
+
+static int
+clock_gettime(clock_t id, struct timespec *ts)
+{
+    if (id == CLOCK_MONOTONIC) {
+        static LARGE_INTEGER freq;
+        LARGE_INTEGER count;
+        long long int ns;
+
+        if (!freq.QuadPart) {
+            /* Number of counts per second. */
+            QueryPerformanceFrequency(&freq);
+        }
+        /* Total number of counts from a starting point. */
+        QueryPerformanceCounter(&count);
+
+        /* Total nano seconds from a starting point. */
+        ns = (double) count.QuadPart / freq.QuadPart * 1000000000;
+
+        ts->tv_sec = count.QuadPart / freq.QuadPart;
+        ts->tv_nsec = ns % 1000000000;
+    } else if (id == CLOCK_REALTIME) {
+        ULARGE_INTEGER current_time = xgetfiletime();
+
+        /* Time from Epoch to now. */
+        ts->tv_sec = (current_time.QuadPart - unix_epoch.QuadPart) / 10000000;
+        ts->tv_nsec = ((current_time.QuadPart - unix_epoch.QuadPart) %
+                       10000000) * 100;
+    } else {
+        return -1;
+    }
+}
+#endif /* _WIN32 */
+
 void
 xgettimeofday(struct timeval *tv)
 {
+#ifndef _WIN32
     if (gettimeofday(tv, NULL) == -1) {
         VLOG_FATAL("gettimeofday failed (%s)", ovs_strerror(errno));
     }
+#else
+    ULARGE_INTEGER current_time = xgetfiletime();
+
+    tv->tv_sec = (current_time.QuadPart - unix_epoch.QuadPart) / 10000000;
+    tv->tv_usec = ((current_time.QuadPart - unix_epoch.QuadPart) %
+                   10000000) / 10;
+#endif
 }
 
 void
@@ -535,7 +652,12 @@ timeval_warp_cb(struct unixctl_conn *conn,
     timespec_add(&monotonic_clock.warp, &monotonic_clock.warp, &ts);
     ovs_mutex_unlock(&monotonic_clock.mutex);
     seq_change(timewarp_seq);
-    poll(NULL, 0, 10); /* give threads (eg. monitor) some chances to run */
+    /* give threads (eg. monitor) some chances to run */
+#ifndef _WIN32
+    poll(NULL, 0, 10);
+#else
+    Sleep(10);
+#endif
     unixctl_command_reply(conn, "warped");
 }
 
@@ -559,7 +681,9 @@ strftime_msec(char *s, size_t max, const char *format,
 {
     size_t n;
 
-    n = strftime(s, max, format, &tm->tm);
+    /* Visual Studio 2013's behavior is to crash when 0 is passed as second
+     * argument to strftime. */
+    n = max ? strftime(s, max, format, &tm->tm) : 0;
     if (n) {
         char decimals[4];
         char *p;

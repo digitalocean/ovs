@@ -1,15 +1,14 @@
 README.Debian for openvswitch-switch
 ---------------------------------
 
-* To use the Linux kernel-based switch implementation, you will need
-  to build and install the Open vSwitch kernel module.  To do so, install
-  the openvswitch-datapath-source package, then follow the instructions
-  given in /usr/share/doc/openvswitch-datapath-source/README.Debian
+The Linux kernel 3.3 or later has an integrated Open vSwitch kernel
+module.  Theis Linux kernel module lacks a few features that are in
+the third-party module.  For details, please see the FAQ, "What
+features are not available in the Open vSwitch kernel datapath that
+ships as part of the upstream Linux kernel?".  If you need the
+additional features, you will need to build and install a Linux kernel
+module by hand from the openvswitch source package.
 
-* This package does not yet support the userspace datapath-based
-  switch implementation.
-
- -- Ben Pfaff <blp@nicira.com>, Fri,  6 Jul 2012 15:12:38 -0700
 
 Debian network scripts integration
 ----------------------------------
@@ -148,4 +147,4 @@ ex 7: Create and destroy bridges.
 ifup --allow=ovs $list_of_bridges
 ifdown --allow=ovs $list_of_bridges
 
--- Gurucharan Shetty <gshetty@nicira.com>, Fri, 04 May 2012 12:58:19 -0700
+ -- Ben Pfaff <pfaffben@debian.org>, Tue, 19 Aug 2014 08:29:32 -0700

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -162,8 +162,10 @@ enum ofpraw {
 
     /* OFPT 1.0 (12): struct ofp_port_status, struct ofp10_phy_port. */
     OFPRAW_OFPT10_PORT_STATUS,
-    /* OFPT 1.1+ (12): struct ofp_port_status, struct ofp11_port. */
+    /* OFPT 1.1-1.3 (12): struct ofp_port_status, struct ofp11_port. */
     OFPRAW_OFPT11_PORT_STATUS,
+    /* OFPT 1.4+ (12): struct ofp_port_status, struct ofp14_port, uint8_t[8][]. */
+    OFPRAW_OFPT14_PORT_STATUS,
 
     /* OFPT 1.0 (13): struct ofp10_packet_out, uint8_t[]. */
     OFPRAW_OFPT10_PACKET_OUT,
@@ -182,11 +184,15 @@ enum ofpraw {
 
     /* OFPT 1.0 (15): struct ofp10_port_mod. */
     OFPRAW_OFPT10_PORT_MOD,
-    /* OFPT 1.1+ (16): struct ofp11_port_mod. */
+    /* OFPT 1.1-1.3 (16): struct ofp11_port_mod. */
     OFPRAW_OFPT11_PORT_MOD,
+    /* OFPT 1.4+ (16): struct ofp14_port_mod, uint8_t[8][]. */
+    OFPRAW_OFPT14_PORT_MOD,
 
-    /* OFPT 1.1+ (17): struct ofp11_table_mod. */
+    /* OFPT 1.1-1.3 (17): struct ofp11_table_mod. */
     OFPRAW_OFPT11_TABLE_MOD,
+    /* OFPT 1.4+ (17): struct ofp14_table_mod, uint8_t[8][]. */
+    OFPRAW_OFPT14_TABLE_MOD,
 
     /* OFPT 1.0 (18): void. */
     OFPRAW_OFPT10_BARRIER_REQUEST,
@@ -198,12 +204,12 @@ enum ofpraw {
     /* OFPT 1.1+ (21): void. */
     OFPRAW_OFPT11_BARRIER_REPLY,
 
-    /* OFPT 1.0 (22): struct ofp10_queue_get_config_request. */
+    /* OFPT 1.0 (20): struct ofp10_queue_get_config_request. */
     OFPRAW_OFPT10_QUEUE_GET_CONFIG_REQUEST,
     /* OFPT 1.1+ (22): struct ofp11_queue_get_config_request. */
     OFPRAW_OFPT11_QUEUE_GET_CONFIG_REQUEST,
 
-    /* OFPT 1.0 (23): struct ofp10_queue_get_config_reply, uint8_t[8][]. */
+    /* OFPT 1.0 (21): struct ofp10_queue_get_config_reply, uint8_t[8][]. */
     OFPRAW_OFPT10_QUEUE_GET_CONFIG_REPLY,
     /* OFPT 1.1+ (23): struct ofp11_queue_get_config_reply, uint8_t[8][]. */
     OFPRAW_OFPT11_QUEUE_GET_CONFIG_REPLY,
@@ -232,6 +238,12 @@ enum ofpraw {
 
     /* OFPT 1.4+ (30): struct ofp14_role_status, uint8_t[8][]. */
     OFPRAW_OFPT14_ROLE_STATUS,
+
+    /* OFPT 1.4+ (33): struct ofp14_bundle_ctrl_msg, uint8_t[8][]. */
+    OFPRAW_OFPT14_BUNDLE_CONTROL,
+
+    /* OFPT 1.4+ (34): struct ofp14_bundle_ctrl_msg, uint8_t[]. */
+    OFPRAW_OFPT14_BUNDLE_ADD_MESSAGE,
 
 /* Standard statistics. */
 
@@ -278,7 +290,7 @@ enum ofpraw {
     OFPRAW_OFPST11_TABLE_REPLY,
     /* OFPST 1.2 (3): struct ofp12_table_stats[]. */
     OFPRAW_OFPST12_TABLE_REPLY,
-    /* OFPST 1.3 (3): struct ofp13_table_stats[]. */
+    /* OFPST 1.3+ (3): struct ofp13_table_stats[]. */
     OFPRAW_OFPST13_TABLE_REPLY,
 
     /* OFPST 1.0 (4): struct ofp10_port_stats_request. */
@@ -290,8 +302,10 @@ enum ofpraw {
     OFPRAW_OFPST10_PORT_REPLY,
     /* OFPST 1.1-1.2 (4): struct ofp11_port_stats[]. */
     OFPRAW_OFPST11_PORT_REPLY,
-    /* OFPST 1.3+ (4): struct ofp13_port_stats[]. */
+    /* OFPST 1.3 (4): struct ofp13_port_stats[]. */
     OFPRAW_OFPST13_PORT_REPLY,
+    /* OFPST 1.4+ (4): uint8_t[8][]. */
+    OFPRAW_OFPST14_PORT_REPLY,
 
     /* OFPST 1.0 (5): struct ofp10_queue_stats_request. */
     OFPRAW_OFPST10_QUEUE_REQUEST,
@@ -302,19 +316,23 @@ enum ofpraw {
     OFPRAW_OFPST10_QUEUE_REPLY,
     /* OFPST 1.1-1.2 (5): struct ofp11_queue_stats[]. */
     OFPRAW_OFPST11_QUEUE_REPLY,
-    /* OFPST 1.3+ (5): struct ofp13_queue_stats[]. */
+    /* OFPST 1.3 (5): struct ofp13_queue_stats[]. */
     OFPRAW_OFPST13_QUEUE_REPLY,
+    /* OFPST 1.4+ (5): uint8_t[8][]. */
+    OFPRAW_OFPST14_QUEUE_REPLY,
 
     /* OFPST 1.1+ (6): struct ofp11_group_stats_request. */
     OFPRAW_OFPST11_GROUP_REQUEST,
 
     /* OFPST 1.1-1.2 (6): uint8_t[8][]. */
     OFPRAW_OFPST11_GROUP_REPLY,
-    /* OFPST 1.3 (6): uint8_t[8][]. */
+    /* OFPST 1.3+ (6): uint8_t[8][]. */
     OFPRAW_OFPST13_GROUP_REPLY,
 
-    /* OFPST 1.1+ (7): void. */
+    /* OFPST 1.1-1.4 (7): void. */
     OFPRAW_OFPST11_GROUP_DESC_REQUEST,
+    /* OFPST 1.5+ (7): ovs_be32. */
+    OFPRAW_OFPST15_GROUP_DESC_REQUEST,
 
     /* OFPST 1.1+ (7): uint8_t[8][]. */
     OFPRAW_OFPST11_GROUP_DESC_REPLY,
@@ -349,13 +367,17 @@ enum ofpraw {
     /* OFPST 1.3+ (12): struct ofp13_table_features, uint8_t[8][]. */
     OFPRAW_OFPST13_TABLE_FEATURES_REPLY,
 
-    /* OFPST 1.0+ (13): void. */
-    OFPRAW_OFPST_PORT_DESC_REQUEST,
+    /* OFPST 1.0-1.4 (13): void. */
+    OFPRAW_OFPST10_PORT_DESC_REQUEST,
+    /* OFPST 1.5+ (13): ovs_be32. */
+    OFPRAW_OFPST15_PORT_DESC_REQUEST,
 
     /* OFPST 1.0 (13): struct ofp10_phy_port[]. */
     OFPRAW_OFPST10_PORT_DESC_REPLY,
-    /* OFPST 1.1+ (13): struct ofp11_port[]. */
+    /* OFPST 1.1-1.3 (13): struct ofp11_port[]. */
     OFPRAW_OFPST11_PORT_DESC_REPLY,
+    /* OFPST 1.4+ (13): uint8_t[8][]. */
+    OFPRAW_OFPST14_PORT_DESC_REPLY,
 
 /* Nicira extension messages.
  *
@@ -465,7 +487,8 @@ enum ofptype {
                                   * OFPRAW_OFPT11_FLOW_REMOVED.
                                   * OFPRAW_NXT_FLOW_REMOVED. */
     OFPTYPE_PORT_STATUS,         /* OFPRAW_OFPT10_PORT_STATUS.
-                                  * OFPRAW_OFPT11_PORT_STATUS. */
+                                  * OFPRAW_OFPT11_PORT_STATUS.
+                                  * OFPRAW_OFPT14_PORT_STATUS. */
 
     /* Controller command messages. */
     OFPTYPE_PACKET_OUT,          /* OFPRAW_OFPT10_PACKET_OUT.
@@ -475,8 +498,10 @@ enum ofptype {
                                   * OFPRAW_NXT_FLOW_MOD. */
     OFPTYPE_GROUP_MOD,           /* OFPRAW_OFPT11_GROUP_MOD. */
     OFPTYPE_PORT_MOD,            /* OFPRAW_OFPT10_PORT_MOD.
-                                  * OFPRAW_OFPT11_PORT_MOD. */
-    OFPTYPE_TABLE_MOD,           /* OFPRAW_OFPT11_TABLE_MOD. */
+                                  * OFPRAW_OFPT11_PORT_MOD.
+                                  * OFPRAW_OFPT14_PORT_MOD. */
+    OFPTYPE_TABLE_MOD,           /* OFPRAW_OFPT11_TABLE_MOD.
+                                  * OFPRAW_OFPT14_TABLE_MOD. */
 
     /* Barrier messages. */
     OFPTYPE_BARRIER_REQUEST,     /* OFPRAW_OFPT10_BARRIER_REQUEST.
@@ -508,6 +533,10 @@ enum ofptype {
     /* Controller role change event messages. */
     OFPTYPE_ROLE_STATUS,          /* OFPRAW_OFPT14_ROLE_STATUS. */
 
+    OFPTYPE_BUNDLE_CONTROL,       /* OFPRAW_OFPT14_BUNDLE_CONTROL. */
+
+    OFPTYPE_BUNDLE_ADD_MESSAGE,   /* OFPRAW_OFPT14_BUNDLE_ADD_MESSAGE. */
+
     /* Statistics. */
     OFPTYPE_DESC_STATS_REQUEST,      /* OFPRAW_OFPST_DESC_REQUEST. */
     OFPTYPE_DESC_STATS_REPLY,        /* OFPRAW_OFPST_DESC_REPLY. */
@@ -532,19 +561,22 @@ enum ofptype {
                                       * OFPRAW_OFPST11_PORT_REQUEST. */
     OFPTYPE_PORT_STATS_REPLY,        /* OFPRAW_OFPST10_PORT_REPLY.
                                       * OFPRAW_OFPST11_PORT_REPLY.
-                                      * OFPRAW_OFPST13_PORT_REPLY. */
+                                      * OFPRAW_OFPST13_PORT_REPLY.
+                                      * OFPRAW_OFPST14_PORT_REPLY. */
     OFPTYPE_QUEUE_STATS_REQUEST,     /* OFPRAW_OFPST10_QUEUE_REQUEST.
                                       * OFPRAW_OFPST11_QUEUE_REQUEST. */
     OFPTYPE_QUEUE_STATS_REPLY,       /* OFPRAW_OFPST10_QUEUE_REPLY.
                                       * OFPRAW_OFPST11_QUEUE_REPLY.
-                                      * OFPRAW_OFPST13_QUEUE_REPLY. */
+                                      * OFPRAW_OFPST13_QUEUE_REPLY.
+                                      * OFPRAW_OFPST14_QUEUE_REPLY. */
 
     OFPTYPE_GROUP_STATS_REQUEST,     /* OFPRAW_OFPST11_GROUP_REQUEST. */
 
     OFPTYPE_GROUP_STATS_REPLY,       /* OFPRAW_OFPST11_GROUP_REPLY.
                                       * OFPRAW_OFPST13_GROUP_REPLY. */
 
-    OFPTYPE_GROUP_DESC_STATS_REQUEST, /* OFPRAW_OFPST11_GROUP_DESC_REQUEST. */
+    OFPTYPE_GROUP_DESC_STATS_REQUEST, /* OFPRAW_OFPST11_GROUP_DESC_REQUEST.
+                                       * OFPRAW_OFPST15_GROUP_DESC_REQUEST. */
 
     OFPTYPE_GROUP_DESC_STATS_REPLY,  /* OFPRAW_OFPST11_GROUP_DESC_REPLY. */
 
@@ -568,10 +600,12 @@ enum ofptype {
 
     OFPTYPE_TABLE_FEATURES_STATS_REPLY, /* OFPRAW_OFPST13_TABLE_FEATURES_REPLY. */
 
-    OFPTYPE_PORT_DESC_STATS_REQUEST, /* OFPRAW_OFPST_PORT_DESC_REQUEST. */
+    OFPTYPE_PORT_DESC_STATS_REQUEST, /* OFPRAW_OFPST10_PORT_DESC_REQUEST.
+                                      * OFPRAW_OFPST15_PORT_DESC_REQUEST. */
 
     OFPTYPE_PORT_DESC_STATS_REPLY,   /* OFPRAW_OFPST10_PORT_DESC_REPLY.
-                                      * OFPRAW_OFPST11_PORT_DESC_REPLY. */
+                                      * OFPRAW_OFPST11_PORT_DESC_REPLY.
+                                      * OFPRAW_OFPST14_PORT_DESC_REPLY. */
 
     /* Nicira extensions. */
     OFPTYPE_SET_FLOW_FORMAT,      /* OFPRAW_NXT_SET_FLOW_FORMAT. */
@@ -628,6 +662,9 @@ void ofpmp_init(struct list *, const struct ofp_header *request);
 struct ofpbuf *ofpmp_reserve(struct list *, size_t len);
 void *ofpmp_append(struct list *, size_t len);
 void ofpmp_postappend(struct list *, size_t start_ofs);
+
+enum ofp_version ofpmp_version(struct list *);
+enum ofpraw ofpmp_decode_raw(struct list *);
 
 /* Decoding multipart replies. */
 uint16_t ofpmp_flags(const struct ofp_header *);

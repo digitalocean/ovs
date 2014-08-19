@@ -40,13 +40,13 @@ extern "C" {
  * any number of threads on the same or different netdev objects.  The
  * exceptions are:
  *
- *    netdev_rx_recv()
- *    netdev_rx_wait()
- *    netdev_rx_drain()
+ *    netdev_rxq_recv()
+ *    netdev_rxq_wait()
+ *    netdev_rxq_drain()
  *
  *      These functions are conditionally thread-safe: they may be called from
- *      different threads only on different netdev_rx objects.  (The client may
- *      create multiple netdev_rx objects for a single netdev and access each
+ *      different threads only on different netdev_rxq objects.  (The client may
+ *      create multiple netdev_rxq objects for a single netdev and access each
  *      of those from a different thread.)
  *
  *    NETDEV_FOR_EACH_QUEUE
@@ -61,7 +61,7 @@ extern "C" {
 
 struct netdev;
 struct netdev_class;
-struct netdev_rx;
+struct netdev_rxq;
 struct netdev_saved_flags;
 struct ofpbuf;
 struct in_addr;
@@ -134,8 +134,12 @@ void netdev_wait(void);
 void netdev_enumerate_types(struct sset *types);
 bool netdev_is_reserved_name(const char *name);
 
+int netdev_n_rxq(const struct netdev *netdev);
+bool netdev_is_pmd(const struct netdev *netdev);
+
 /* Open and close. */
-int netdev_open(const char *name, const char *type, struct netdev **);
+int netdev_open(const char *name, const char *type, struct netdev **netdevp);
+
 struct netdev *netdev_ref(const struct netdev *);
 void netdev_close(struct netdev *);
 
@@ -156,17 +160,17 @@ int netdev_set_mtu(const struct netdev *, int mtu);
 int netdev_get_ifindex(const struct netdev *);
 
 /* Packet reception. */
-int netdev_rx_open(struct netdev *, struct netdev_rx **);
-void netdev_rx_close(struct netdev_rx *);
+int netdev_rxq_open(struct netdev *, struct netdev_rxq **, int id);
+void netdev_rxq_close(struct netdev_rxq *);
 
-const char *netdev_rx_get_name(const struct netdev_rx *);
+const char *netdev_rxq_get_name(const struct netdev_rxq *);
 
-int netdev_rx_recv(struct netdev_rx *, struct ofpbuf *);
-void netdev_rx_wait(struct netdev_rx *);
-int netdev_rx_drain(struct netdev_rx *);
+int netdev_rxq_recv(struct netdev_rxq *rx, struct ofpbuf **buffers, int *cnt);
+void netdev_rxq_wait(struct netdev_rxq *);
+int netdev_rxq_drain(struct netdev_rxq *);
 
 /* Packet transmission. */
-int netdev_send(struct netdev *, const struct ofpbuf *);
+int netdev_send(struct netdev *, struct ofpbuf *, bool may_steal);
 void netdev_send_wait(struct netdev *);
 
 /* Hardware address. */
@@ -280,6 +284,7 @@ int netdev_set_queue(struct netdev *,
 int netdev_delete_queue(struct netdev *, unsigned int queue_id);
 int netdev_get_queue_stats(const struct netdev *, unsigned int queue_id,
                            struct netdev_queue_stats *);
+uint64_t netdev_get_change_seq(const struct netdev *);
 
 struct netdev_queue_dump {
     struct netdev *netdev;
@@ -312,6 +317,8 @@ typedef void netdev_dump_queue_stats_cb(unsigned int queue_id,
                                         void *aux);
 int netdev_dump_queue_stats(const struct netdev *,
                             netdev_dump_queue_stats_cb *, void *aux);
+
+enum { NETDEV_MAX_RX_BATCH = 256 };     /* Maximum number packets in rx_recv() batch. */
 
 #ifdef  __cplusplus
 }

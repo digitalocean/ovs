@@ -124,7 +124,7 @@ static struct vport *vxlan_tnl_create(const struct vport_parms *parms)
 	vxlan_port = vxlan_vport(vport);
 	strncpy(vxlan_port->name, parms->name, IFNAMSIZ);
 
-	vs = vxlan_sock_add(net, htons(dst_port), vxlan_rcv, vport, true);
+	vs = vxlan_sock_add(net, htons(dst_port), vxlan_rcv, vport, true, false);
 	if (IS_ERR(vs)) {
 		ovs_vport_free(vport);
 		return (void *)vs;
@@ -139,6 +139,7 @@ error:
 
 static int vxlan_tnl_send(struct vport *vport, struct sk_buff *skb)
 {
+	struct net *net = ovs_dp_get_net(vport->dp);
 	struct vxlan_port *vxlan_port = vxlan_vport(vport);
 	__be16 dst_port = inet_sport(vxlan_port->vs->sock->sk);
 	struct rtable *rt;
@@ -172,7 +173,7 @@ static int vxlan_tnl_send(struct vport *vport, struct sk_buff *skb)
 
 	skb->local_df = 1;
 
-	inet_get_local_port_range(&port_min, &port_max);
+	inet_get_local_port_range(net, &port_min, &port_max);
 	src_port = vxlan_src_port(port_min, port_max, skb);
 
 	err = vxlan_xmit_skb(vxlan_port->vs, rt, skb,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ struct pcaprec_hdr {
 BUILD_ASSERT_DECL(sizeof(struct pcaprec_hdr) == 16);
 
 FILE *
-pcap_open(const char *file_name, const char *mode)
+ovs_pcap_open(const char *file_name, const char *mode)
 {
     struct stat s;
     FILE *file;
@@ -75,7 +75,7 @@ pcap_open(const char *file_name, const char *mode)
 
     switch (mode[0]) {
     case 'r':
-        error = pcap_read_header(file);
+        error = ovs_pcap_read_header(file);
         if (error) {
             errno = error;
             fclose(file);
@@ -84,12 +84,12 @@ pcap_open(const char *file_name, const char *mode)
         break;
 
     case 'w':
-        pcap_write_header(file);
+        ovs_pcap_write_header(file);
         break;
 
     case 'a':
         if (!fstat(fileno(file), &s) && !s.st_size) {
-            pcap_write_header(file);
+            ovs_pcap_write_header(file);
         }
         break;
 
@@ -100,7 +100,7 @@ pcap_open(const char *file_name, const char *mode)
 }
 
 int
-pcap_read_header(FILE *file)
+ovs_pcap_read_header(FILE *file)
 {
     struct pcap_hdr ph;
     if (fread(&ph, sizeof ph, 1, file) != 1) {
@@ -117,7 +117,7 @@ pcap_read_header(FILE *file)
 }
 
 void
-pcap_write_header(FILE *file)
+ovs_pcap_write_header(FILE *file)
 {
     /* The pcap reader is responsible for figuring out endianness based on the
      * magic number, so the lack of htonX calls here is intentional. */
@@ -133,7 +133,7 @@ pcap_write_header(FILE *file)
 }
 
 int
-pcap_read(FILE *file, struct ofpbuf **bufp, long long int *when)
+ovs_pcap_read(FILE *file, struct ofpbuf **bufp, long long int *when)
 {
     struct pcaprec_hdr prh;
     struct ofpbuf *buf;
@@ -190,7 +190,7 @@ pcap_read(FILE *file, struct ofpbuf **bufp, long long int *when)
 }
 
 void
-pcap_write(FILE *file, struct ofpbuf *buf)
+ovs_pcap_write(FILE *file, struct ofpbuf *buf)
 {
     struct pcaprec_hdr prh;
     struct timeval tv;
@@ -198,10 +198,10 @@ pcap_write(FILE *file, struct ofpbuf *buf)
     xgettimeofday(&tv);
     prh.ts_sec = tv.tv_sec;
     prh.ts_usec = tv.tv_usec;
-    prh.incl_len = buf->size;
-    prh.orig_len = buf->size;
+    prh.incl_len = ofpbuf_size(buf);
+    prh.orig_len = ofpbuf_size(buf);
     ignore(fwrite(&prh, sizeof prh, 1, file));
-    ignore(fwrite(buf->data, buf->size, 1, file));
+    ignore(fwrite(ofpbuf_data(buf), ofpbuf_size(buf), 1, file));
 }
 
 struct tcp_key {
@@ -254,28 +254,27 @@ tcp_reader_close(struct tcp_reader *r)
 }
 
 static struct tcp_stream *
-tcp_stream_lookup(struct tcp_reader *r, const struct flow *flow)
+tcp_stream_lookup(struct tcp_reader *r,
+                  const struct tcp_key *key, uint32_t hash)
 {
     struct tcp_stream *stream;
-    struct tcp_key key;
-    uint32_t hash;
-
-    memset(&key, 0, sizeof key);
-    key.nw_src = flow->nw_src;
-    key.nw_dst = flow->nw_dst;
-    key.tp_src = flow->tp_src;
-    key.tp_dst = flow->tp_dst;
-    hash = hash_bytes(&key, sizeof key, 0);
 
     HMAP_FOR_EACH_WITH_HASH (stream, hmap_node, hash, &r->streams) {
-        if (!memcmp(&stream->key, &key, sizeof key)) {
+        if (!memcmp(&stream->key, key, sizeof *key)) {
             return stream;
         }
     }
+    return NULL;
+}
+
+static struct tcp_stream *
+tcp_stream_new(struct tcp_reader *r, const struct tcp_key *key, uint32_t hash)
+{
+    struct tcp_stream *stream;
 
     stream = xmalloc(sizeof *stream);
     hmap_insert(&r->streams, &stream->hmap_node, hash);
-    memcpy(&stream->key, &key, sizeof key);
+    memcpy(&stream->key, key, sizeof *key);
     stream->seq_no = 0;
     ofpbuf_init(&stream->payload, 2048);
     return stream;
@@ -299,22 +298,44 @@ tcp_reader_run(struct tcp_reader *r, const struct flow *flow,
     struct tcp_stream *stream;
     struct tcp_header *tcp;
     struct ofpbuf *payload;
+    unsigned int l7_length;
+    struct tcp_key key;
+    uint32_t hash;
     uint32_t seq;
     uint8_t flags;
+    const char *l7 = ofpbuf_get_tcp_payload(packet);
 
     if (flow->dl_type != htons(ETH_TYPE_IP)
         || flow->nw_proto != IPPROTO_TCP
-        || !packet->l7) {
+        || !l7) {
         return NULL;
     }
-
-    stream = tcp_stream_lookup(r, flow);
-    payload = &stream->payload;
-
-    tcp = packet->l4;
+    tcp = ofpbuf_l4(packet);
     flags = TCP_FLAGS(tcp->tcp_ctl);
+    l7_length = (char *) ofpbuf_tail(packet) - l7;
     seq = ntohl(get_16aligned_be32(&tcp->tcp_seq));
-    if (flags & TCP_SYN) {
+
+    /* Construct key. */
+    memset(&key, 0, sizeof key);
+    key.nw_src = flow->nw_src;
+    key.nw_dst = flow->nw_dst;
+    key.tp_src = flow->tp_src;
+    key.tp_dst = flow->tp_dst;
+    hash = hash_bytes(&key, sizeof key, 0);
+
+    /* Find existing stream or start a new one for a SYN or if there's data. */
+    stream = tcp_stream_lookup(r, &key, hash);
+    if (!stream) {
+        if (flags & TCP_SYN || l7_length) {
+            stream = tcp_stream_new(r, &key, hash);
+            stream->seq_no = flags & TCP_SYN ? seq + 1 : seq;
+        } else {
+            return NULL;
+        }
+    }
+
+    payload = &stream->payload;
+    if (flags & TCP_SYN || !stream->seq_no) {
         ofpbuf_clear(payload);
         stream->seq_no = seq + 1;
         return NULL;
@@ -322,16 +343,13 @@ tcp_reader_run(struct tcp_reader *r, const struct flow *flow,
         tcp_stream_destroy(r, stream);
         return NULL;
     } else if (seq == stream->seq_no) {
-        size_t length;
-
         /* Shift all of the existing payload to the very beginning of the
          * allocated space, so that we reuse allocated space instead of
          * continually expanding it. */
-        ofpbuf_shift(payload, (char *) payload->base - (char *) payload->data);
+        ofpbuf_shift(payload, (char *) ofpbuf_base(payload) - (char *) ofpbuf_data(payload));
 
-        length = (char *) ofpbuf_tail(packet) - (char *) packet->l7;
-        ofpbuf_put(payload, packet->l7, length);
-        stream->seq_no += length;
+        ofpbuf_put(payload, l7, l7_length);
+        stream->seq_no += l7_length;
         return payload;
     } else {
         return NULL;

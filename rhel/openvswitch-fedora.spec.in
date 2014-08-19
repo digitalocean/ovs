@@ -1,11 +1,15 @@
 # Spec file for Open vSwitch.
 
-# Copyright (C) 2009, 2010, 2013 Nicira Networks, Inc.
+# Copyright (C) 2009, 2010, 2013, 2014 Nicira Networks, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
 # notice and this notice are preserved.  This file is offered as-is,
 # without warranty of any kind.
+#
+# If tests have to be skipped while building, specify the '--without check'
+# option. For example:
+# rpmbuild -bb --without check rhel/openvswitch-fedora.spec
 
 #%define kernel 2.6.40.4-5.fc15.x86_64
 
@@ -26,6 +30,8 @@ Requires(post):  systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
 
+%bcond_without check
+
 %description
 Open vSwitch provides standard network bridging functions augmented with
 support for the OpenFlow protocol for remote per-flow control of
@@ -45,6 +51,8 @@ install -d -m 755 $RPM_BUILD_ROOT/etc
 install -d -m 755 $RPM_BUILD_ROOT/etc/openvswitch
 install -p -D -m 0644 rhel/usr_lib_systemd_system_openvswitch.service \
         $RPM_BUILD_ROOT%{_unitdir}/openvswitch.service
+install -p -D -m 0644 rhel/usr_lib_systemd_system_openvswitch-nonetwork.service \
+        $RPM_BUILD_ROOT%{_unitdir}/openvswitch-nonetwork.service
 install -m 755 rhel/etc_init.d_openvswitch \
         $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/openvswitch.init
 install -d -m 755 $RPM_BUILD_ROOT/etc/sysconfig
@@ -60,7 +68,7 @@ install -p -m 0755 rhel/etc_sysconfig_network-scripts_ifdown-ovs \
         $RPM_BUILD_ROOT/etc/sysconfig/network-scripts/ifdown-ovs
 install -p -m 0755 rhel/etc_sysconfig_network-scripts_ifup-ovs \
         $RPM_BUILD_ROOT/etc/sysconfig/network-scripts/ifup-ovs
-install -p -D -m 0644 rhel/usr_share_openvswitch_scripts_sysconfig.template \
+install -p -D -m 0644 rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/etc/sysconfig/openvswitch
 install -d -m 755 $RPM_BUILD_ROOT/usr/share/openvswitch/scripts
 
@@ -71,6 +79,16 @@ install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
 
 # Get rid of stuff we don't want to make RPM happy.
 (cd "$RPM_BUILD_ROOT" && rm -f usr/lib/lib*)
+
+%check
+%if %{with check}
+    if make check TESTSUITEFLAGS='%{_smp_mflags}' ||
+       make check TESTSUITEFLAGS='--recheck'; then :;
+    else
+        cat tests/testsuite.log
+        exit 1
+    fi
+%endif
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -104,6 +122,7 @@ systemctl start openvswitch.service
 %config /etc/sysconfig/openvswitch
 %config /etc/logrotate.d/openvswitch
 %{_unitdir}/openvswitch.service
+%{_unitdir}/openvswitch-nonetwork.service
 %{_datadir}/openvswitch/scripts/openvswitch.init
 %{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
@@ -172,6 +191,7 @@ systemctl start openvswitch.service
 %doc /usr/share/man/man5/vtep.5.gz
 %doc /usr/share/man/man8/ovs-appctl.8.gz
 %doc /usr/share/man/man8/ovs-bugtool.8.gz
+%doc /usr/share/man/man8/ovs-ctl.8.gz
 %doc /usr/share/man/man8/ovs-dpctl.8.gz
 %doc /usr/share/man/man8/ovs-dpctl-top.8.gz
 %doc /usr/share/man/man8/ovs-ofctl.8.gz
@@ -194,7 +214,6 @@ systemctl start openvswitch.service
 %exclude /usr/share/man/man1/ovs-benchmark.1.gz
 %exclude /usr/share/man/man1/ovs-pcap.1.gz
 %exclude /usr/share/man/man1/ovs-tcpundump.1.gz
-%exclude /usr/share/man/man8/ovs-ctl.8.gz
 %exclude /usr/share/man/man8/ovs-vlan-bug-workaround.8.gz
 %exclude /usr/share/man/man8/ovs-vlan-test.8.gz
 %exclude /usr/share/openvswitch/scripts/ovs-save

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,7 +61,8 @@
  *      "internal" (for a simulated port used to connect to the TCP/IP stack),
  *      and "gre" (for a GRE tunnel).
  *
- *    - A Netlink PID (see "Upcall Queuing and Ordering" below).
+ *    - A Netlink PID for each upcall reading thread (see "Upcall Queuing and
+ *      Ordering" below).
  *
  * The dpif interface has functions for adding and deleting ports.  When a
  * datapath implements these (e.g. as the Linux and netdev datapaths do), then
@@ -205,10 +206,10 @@
  * connection consists of two flows with 1-ms latency to set up each one.
  *
  * To receive upcalls, a client has to enable them with dpif_recv_set().  A
- * datapath should generally support multiple clients at once (e.g. so that one
- * may run "ovs-dpctl show" or "ovs-dpctl dump-flows" while "ovs-vswitchd" is
- * also running) but need not support multiple clients enabling upcalls at
- * once.
+ * datapath should generally support being opened multiple times (e.g. so that
+ * one may run "ovs-dpctl show" or "ovs-dpctl dump-flows" while "ovs-vswitchd"
+ * is also running) but need not support more than one of these clients
+ * enabling upcalls at once.
  *
  *
  * Upcall Queuing and Ordering
@@ -261,7 +262,7 @@
  * PID in "action" upcalls is that dpif_port_get_pid() returns a constant value
  * and all upcalls are appended to a single queue.
  *
- * The ideal behavior is:
+ * The preferred behavior is:
  *
  *    - Each port has a PID that identifies the queue used for "miss" upcalls
  *      on that port.  (Thus, if each port has its own queue for "miss"
@@ -274,6 +275,18 @@
  *      upcalls.
  *
  *    - Upcalls that specify the "special" Netlink PID are queued separately.
+ *
+ * Multiple threads may want to read upcalls simultaneously from a single
+ * datapath.  To support multiple threads well, one extends the above preferred
+ * behavior:
+ *
+ *    - Each port has multiple PIDs.  The datapath distributes "miss" upcalls
+ *      across the PIDs, ensuring that a given flow is mapped in a stable way
+ *      to a single PID.
+ *
+ *    - For "action" upcalls, the thread can specify its own Netlink PID or
+ *      other threads' Netlink PID of the same port for offloading purpose
+ *      (e.g. in a "round robin" manner).
  *
  *
  * Packet Format
@@ -356,11 +369,19 @@
  *      thread-safe: they may be called from different threads only on
  *      different dpif objects.
  *
- *    - Functions that operate on struct dpif_port_dump or struct
- *      dpif_flow_dump are conditionally thread-safe with respect to those
- *      objects.  That is, one may dump ports or flows from any number of
- *      threads at once, but each thread must use its own struct dpif_port_dump
- *      or dpif_flow_dump.
+ *    - dpif_flow_dump_next() is conditionally thread-safe: It may be called
+ *      from different threads with the same 'struct dpif_flow_dump', but all
+ *      other parameters must be different for each thread.
+ *
+ *    - dpif_flow_dump_done() is conditionally thread-safe: All threads that
+ *      share the same 'struct dpif_flow_dump' must have finished using it.
+ *      This function must then be called exactly once for a particular
+ *      dpif_flow_dump to finish the corresponding flow dump operation.
+ *
+ *    - Functions that operate on 'struct dpif_port_dump' are conditionally
+ *      thread-safe with respect to those objects.  That is, one may dump ports
+ *      from any number of threads at once, but each thread must use its own
+ *      struct dpif_port_dump.
  */
 #ifndef DPIF_H
 #define DPIF_H 1
@@ -368,9 +389,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "netdev.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
-#include "netdev.h"
+#include "packets.h"
 #include "util.h"
 
 #ifdef  __cplusplus
@@ -444,7 +466,8 @@ int dpif_port_query_by_name(const struct dpif *, const char *devname,
                             struct dpif_port *);
 int dpif_port_get_name(struct dpif *, odp_port_t port_no,
                        char *name, size_t name_size);
-uint32_t dpif_port_get_pid(const struct dpif *, odp_port_t port_no);
+uint32_t dpif_port_get_pid(const struct dpif *, odp_port_t port_no,
+                           uint32_t hash);
 
 struct dpif_port_dump {
     const struct dpif *dpif;
@@ -501,27 +524,26 @@ int dpif_flow_del(struct dpif *,
                   struct dpif_flow_stats *);
 int dpif_flow_get(const struct dpif *,
                   const struct nlattr *key, size_t key_len,
-                  struct ofpbuf **actionsp, struct dpif_flow_stats *);
+                  struct ofpbuf **bufp,
+                  struct nlattr **maskp, size_t *mask_len,
+                  struct nlattr **actionsp, size_t *acts_len,
+                  struct dpif_flow_stats *stats);
 
 struct dpif_flow_dump {
     const struct dpif *dpif;
-    int error;
-    void *state;
+    void *iter;
 };
-void dpif_flow_dump_start(struct dpif_flow_dump *, const struct dpif *);
-bool dpif_flow_dump_next(struct dpif_flow_dump *,
+void dpif_flow_dump_state_init(const struct dpif *, void **statep);
+int dpif_flow_dump_start(struct dpif_flow_dump *, const struct dpif *);
+bool dpif_flow_dump_next(struct dpif_flow_dump *, void *state,
                          const struct nlattr **key, size_t *key_len,
                          const struct nlattr **mask, size_t *mask_len,
                          const struct nlattr **actions, size_t *actions_len,
                          const struct dpif_flow_stats **);
+bool dpif_flow_dump_next_may_destroy_keys(struct dpif_flow_dump *dump,
+                                          void *state);
 int dpif_flow_dump_done(struct dpif_flow_dump *);
-
-/* Packet operations. */
-
-int dpif_execute(struct dpif *,
-                 const struct nlattr *key, size_t key_len,
-                 const struct nlattr *actions, size_t actions_len,
-                 struct ofpbuf *, bool needs_help);
+void dpif_flow_dump_state_uninit(const struct dpif *, void *state);
 
 /* Operation batching interface.
  *
@@ -560,11 +582,10 @@ struct dpif_flow_del {
 
 struct dpif_execute {
     /* Raw support for execute passed along to the provider. */
-    const struct nlattr *key;       /* Partial flow key (only for metadata). */
-    size_t key_len;                 /* Length of 'key' in bytes. */
     const struct nlattr *actions;   /* Actions to execute on packet. */
     size_t actions_len;             /* Length of 'actions' in bytes. */
     struct ofpbuf *packet;          /* Packet to execute. */
+    struct pkt_metadata md;         /* Packet metadata. */
 
     /* Some dpif providers do not implement every action.  The Linux kernel
      * datapath, in particular, does not implement ARP field modification.
@@ -575,6 +596,8 @@ struct dpif_execute {
      * dpif implementation. */
     bool needs_help;
 };
+
+int dpif_execute(struct dpif *, struct dpif_execute *);
 
 struct dpif_op {
     enum dpif_op_type type;
@@ -619,9 +642,11 @@ struct dpif_upcall {
 };
 
 int dpif_recv_set(struct dpif *, bool enable);
-int dpif_recv(struct dpif *, struct dpif_upcall *, struct ofpbuf *);
+int dpif_handlers_set(struct dpif *, uint32_t n_handlers);
+int dpif_recv(struct dpif *, uint32_t handler_id, struct dpif_upcall *,
+              struct ofpbuf *);
 void dpif_recv_purge(struct dpif *);
-void dpif_recv_wait(struct dpif *);
+void dpif_recv_wait(struct dpif *, uint32_t handler_id);
 
 /* Miscellaneous. */
 

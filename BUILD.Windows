@@ -30,9 +30,58 @@ to have the $PATH inside the bash to point to the proper compiler and linker.
 One easy way to achieve this is to get into the "Developer Command prompt for
 visual studio" and through it enter into the bash shell available from msys.
 
+If after the above step, a 'which link' inside MSYS's bash says,
+"/bin/link.exe", rename /bin/link.exe to something else so that the
+Visual studio's linker is used.
+
+* For pthread support, install the library, dll and includes of pthreads-win32
+project from
+ftp://sourceware.org/pub/pthreads-win32/prebuilt-dll-2-9-1-release to a
+directory (e.g.: C:/pthread).
+
 * Get the Open vSwitch sources from either cloning the repo using git
 or from a distribution tar ball.
 
-* Run ./boot.sh; ./configure CC=./build-aux/cccl; make
-(cccl is a wrapper script that provides the right options to Visual c++
-'cl' compiler.)
+* If you pulled the sources directly from an Open vSwitch Git tree,
+  run boot.sh in the top source directory:
+
+  % ./boot.sh
+
+* In the top source directory, configure the package by running the
+  configure script.  You should provide some configure options to choose
+  the right compiler, linker, libraries, Open vSwitch component installation
+  directories, etc. For example,
+
+  % ./configure CC=./build-aux/cccl LD="`which link`" LIBS="-lws2_32" \
+    --prefix="C:/openvswitch/usr" --localstatedir="C:/openvswitch/var" \
+    --sysconfdir="C:/openvswitch/etc" --with-pthread="C:/pthread"
+
+* Run make for the ported executables in the top source directory, e.g.:
+
+  % make lib/vswitch-idl.h lib/vtep-idl.h ofproto/ipfix-entities.def
+  % make ovsdb/ovsdb-server.exe ovsdb/ovsdb-tool.exe ovsdb/ovsdb-client.exe \
+         utilities/ovs-vsctl.exe utilities/ovs-ofctl.exe \
+         utilities/ovs-dpctl.exe vswitchd/ovs-vswitchd.exe \
+         utilities/ovs-appctl.exe
+
+OpenSSL, Open vSwitch and Visual C++
+------------------------------------
+To get SSL support for Open vSwitch on Windows, do the following:
+
+* Install OpenSSL for Windows as suggested at
+http://www.openssl.org/related/binaries.html.
+The link as of this writing suggests to download it from
+http://slproweb.com/products/Win32OpenSSL.html and the latest version is
+"Win32 OpenSSL v1.0.1f".
+
+Note down the directory where OpenSSL is installed (e.g.: C:/OpenSSL-Win32).
+
+* While configuring the package, specify the OpenSSL directory path.
+For example,
+
+  % ./configure CC=./build-aux/cccl LD="`which link`" LIBS="-lws2_32 ..." \
+  --prefix="C:/openvswitch/usr" --localstatedir="C:/openvswitch/var" \
+  --sysconfdir="C:/openvswitch/etc" --enable-ssl \
+  --with-openssl="C:/OpenSSL-Win32"
+
+* Run make for the ported executables.

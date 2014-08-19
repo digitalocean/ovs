@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "ofpbuf.h"
 #include "util.h"
 #include "vlog.h"
+#include "ovstest.h"
 
 static int
 parse_keys(bool wc_keys)
@@ -55,7 +56,7 @@ parse_keys(bool wc_keys)
 
         if (!wc_keys) {
             /* Convert odp_key to flow. */
-            fitness = odp_flow_key_to_flow(odp_key.data, odp_key.size, &flow);
+            fitness = odp_flow_key_to_flow(ofpbuf_data(&odp_key), ofpbuf_size(&odp_key), &flow);
             switch (fitness) {
                 case ODP_FIT_PERFECT:
                     break;
@@ -75,11 +76,12 @@ parse_keys(bool wc_keys)
             /* Convert cls_rule back to odp_key. */
             ofpbuf_uninit(&odp_key);
             ofpbuf_init(&odp_key, 0);
-            odp_flow_key_from_flow(&odp_key, &flow, flow.in_port.odp_port);
+            odp_flow_key_from_flow(&odp_key, &flow, NULL,
+                                   flow.in_port.odp_port);
 
-            if (odp_key.size > ODPUTIL_FLOW_KEY_BYTES) {
-                printf ("too long: %"PRIuSIZE" > %d\n",
-                        odp_key.size, ODPUTIL_FLOW_KEY_BYTES);
+            if (ofpbuf_size(&odp_key) > ODPUTIL_FLOW_KEY_BYTES) {
+                printf ("too long: %"PRIu32" > %d\n",
+                        ofpbuf_size(&odp_key), ODPUTIL_FLOW_KEY_BYTES);
                 exit_code = 1;
             }
         }
@@ -87,10 +89,10 @@ parse_keys(bool wc_keys)
         /* Convert odp_key to string. */
         ds_init(&out);
         if (wc_keys) {
-            odp_flow_format(odp_key.data, odp_key.size,
-                            odp_mask.data, odp_mask.size, NULL, &out, false);
+            odp_flow_format(ofpbuf_data(&odp_key), ofpbuf_size(&odp_key),
+                            ofpbuf_data(&odp_mask), ofpbuf_size(&odp_mask), NULL, &out, false);
         } else {
-            odp_flow_key_format(odp_key.data, odp_key.size, &out);
+            odp_flow_key_format(ofpbuf_data(&odp_key), ofpbuf_size(&odp_key), &out);
         }
         puts(ds_cstr(&out));
         ds_destroy(&out);
@@ -125,7 +127,7 @@ parse_actions(void)
 
         /* Convert odp_actions back to string. */
         ds_init(&out);
-        format_odp_actions(&out, odp_actions.data, odp_actions.size);
+        format_odp_actions(&out, ofpbuf_data(&odp_actions), ofpbuf_size(&odp_actions));
         puts(ds_cstr(&out));
         ds_destroy(&out);
 
@@ -183,8 +185,8 @@ parse_filter(char *filter_parse)
             struct match match, match_filter;
             struct minimatch minimatch;
 
-            odp_flow_key_to_flow(odp_key.data, odp_key.size, &flow);
-            odp_flow_key_to_mask(odp_mask.data, odp_mask.size, &wc.masks,
+            odp_flow_key_to_flow(ofpbuf_data(&odp_key), ofpbuf_size(&odp_key), &flow);
+            odp_flow_key_to_mask(ofpbuf_data(&odp_mask), ofpbuf_size(&odp_mask), &wc.masks,
                                  &flow);
             match_init(&match, &flow, &wc);
 
@@ -200,8 +202,8 @@ parse_filter(char *filter_parse)
         }
         /* Convert odp_key to string. */
         ds_init(&out);
-        odp_flow_format(odp_key.data, odp_key.size,
-                        odp_mask.data, odp_mask.size, NULL, &out, false);
+        odp_flow_format(ofpbuf_data(&odp_key), ofpbuf_size(&odp_key),
+                        ofpbuf_data(&odp_mask), ofpbuf_size(&odp_mask), NULL, &out, false);
         puts(ds_cstr(&out));
         ds_destroy(&out);
 
@@ -215,19 +217,25 @@ parse_filter(char *filter_parse)
     return 0;
 }
 
-int
-main(int argc, char *argv[])
+static void
+test_odp_main(int argc, char *argv[])
 {
+    int exit_code = 0;
+
     set_program_name(argv[0]);
     if (argc == 2 &&!strcmp(argv[1], "parse-keys")) {
-        return parse_keys(false);
+        exit_code =parse_keys(false);
     } else if (argc == 2 &&!strcmp(argv[1], "parse-wc-keys")) {
-        return parse_keys(true);
+        exit_code =parse_keys(true);
     } else if (argc == 2 && !strcmp(argv[1], "parse-actions")) {
-        return parse_actions();
+        exit_code = parse_actions();
     } else if (argc == 3 && !strcmp(argv[1], "parse-filter")) {
-        return parse_filter(argv[2]);
+        exit_code =parse_filter(argv[2]);
     } else {
         ovs_fatal(0, "usage: %s parse-keys | parse-wc-keys | parse-actions", argv[0]);
     }
+
+    exit(exit_code);
 }
+
+OVSTEST_REGISTER("test-odp", test_odp_main);

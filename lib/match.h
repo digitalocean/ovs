@@ -41,6 +41,12 @@ void match_init_catchall(struct match *);
 
 void match_zero_wildcarded_fields(struct match *);
 
+void match_set_dp_hash(struct match *, uint32_t value);
+void match_set_dp_hash_masked(struct match *, uint32_t value, uint32_t mask);
+
+void match_set_recirc_id(struct match *, uint32_t value);
+void match_set_recirc_id_masked(struct match *, uint32_t value, uint32_t mask);
+
 void match_set_reg(struct match *, unsigned int reg_idx, uint32_t value);
 void match_set_reg_masked(struct match *, unsigned int reg_idx,
                           uint32_t value, uint32_t mask);
@@ -78,13 +84,16 @@ void match_set_vlan_vid(struct match *, ovs_be16);
 void match_set_vlan_vid_masked(struct match *, ovs_be16 vid, ovs_be16 mask);
 void match_set_any_pcp(struct match *);
 void match_set_dl_vlan_pcp(struct match *, uint8_t);
-void match_set_any_mpls_label(struct match *);
-void match_set_mpls_label(struct match *, ovs_be32);
-void match_set_any_mpls_tc(struct match *);
-void match_set_mpls_tc(struct match *, uint8_t);
-void match_set_any_mpls_bos(struct match *);
-void match_set_mpls_bos(struct match *, uint8_t);
+void match_set_any_mpls_lse(struct match *, int idx);
+void match_set_mpls_lse(struct match *, int idx, ovs_be32);
+void match_set_any_mpls_label(struct match *, int idx);
+void match_set_mpls_label(struct match *, int idx, ovs_be32);
+void match_set_any_mpls_tc(struct match *, int idx);
+void match_set_mpls_tc(struct match *, int idx, uint8_t);
+void match_set_any_mpls_bos(struct match *, int idx);
+void match_set_mpls_bos(struct match *, int idx, uint8_t);
 void match_set_tp_src(struct match *, ovs_be16);
+void match_set_mpls_lse(struct match *, int idx, ovs_be32 lse);
 void match_set_tp_src_masked(struct match *, ovs_be16 port, ovs_be16 mask);
 void match_set_tp_dst(struct match *, ovs_be16);
 void match_set_tp_dst_masked(struct match *, ovs_be16 port, ovs_be16 mask);
@@ -125,6 +134,9 @@ void match_set_nd_target_masked(struct match *, const struct in6_addr *,
 bool match_equal(const struct match *, const struct match *);
 uint32_t match_hash(const struct match *, uint32_t basis);
 
+void match_init_hidden_fields(struct match *);
+bool match_has_default_hidden_fields(const struct match *);
+
 void match_format(const struct match *, struct ds *, unsigned int priority);
 char *match_to_string(const struct match *, unsigned int priority);
 void match_print(const struct match *);
@@ -155,12 +167,8 @@ void minimatch_destroy(struct minimatch *);
 void minimatch_expand(const struct minimatch *, struct match *);
 
 bool minimatch_equal(const struct minimatch *a, const struct minimatch *b);
-uint32_t minimatch_hash(const struct minimatch *, uint32_t basis);
 
 bool minimatch_matches_flow(const struct minimatch *, const struct flow *);
-
-uint32_t minimatch_hash_range(const struct minimatch *,
-                              uint8_t start, uint8_t end, uint32_t *basis);
 
 void minimatch_format(const struct minimatch *, struct ds *,
                       unsigned int priority);

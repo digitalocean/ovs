@@ -16,6 +16,9 @@
  * 02110-1301, USA
  */
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
+
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/in.h>
@@ -37,7 +40,7 @@
 int iptunnel_xmit(struct rtable *rt,
 		  struct sk_buff *skb,
 		  __be32 src, __be32 dst, __u8 proto,
-		  __u8 tos, __u8 ttl, __be16 df)
+		  __u8 tos, __u8 ttl, __be16 df, bool xnet)
 {
 	int pkt_len = skb->len;
 	struct iphdr *iph;
@@ -45,7 +48,7 @@ int iptunnel_xmit(struct rtable *rt,
 
 	nf_reset(skb);
 	secpath_reset(skb);
-	skb_clear_rxhash(skb);
+	skb_clear_hash(skb);
 	skb_dst_drop(skb);
 	skb_dst_set(skb, &rt_dst(rt));
 #if 0
@@ -101,10 +104,12 @@ int iptunnel_pull_header(struct sk_buff *skb, int hdr_len, __be16 inner_proto)
 
 	nf_reset(skb);
 	secpath_reset(skb);
-	skb_clear_rxhash(skb);
+	skb_clear_hash(skb);
 	skb_dst_drop(skb);
 	vlan_set_tci(skb, 0);
 	skb_set_queue_mapping(skb, 0);
 	skb->pkt_type = PACKET_HOST;
 	return 0;
 }
+
+#endif /* 3.12 */

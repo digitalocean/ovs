@@ -53,6 +53,7 @@
 #include "ofproto-dpif-ipfix.h"
 #include "ofproto-dpif-mirror.h"
 #include "ofproto-dpif-monitor.h"
+#include "ofproto-dpif-rid.h"
 #include "ofproto-dpif-sflow.h"
 #include "ofproto-dpif-upcall.h"
 #include "ofproto-dpif-xlate.h"
@@ -72,10 +73,8 @@ VLOG_DEFINE_THIS_MODULE(ofproto_dpif);
 COVERAGE_DEFINE(ofproto_dpif_expired);
 COVERAGE_DEFINE(packet_in_overflow);
 
-/* Number of implemented OpenFlow tables. */
-enum { N_TABLES = 255 };
-enum { TBL_INTERNAL = N_TABLES - 1 };    /* Used for internal hidden rules. */
-BUILD_ASSERT_DECL(N_TABLES >= 2 && N_TABLES <= 255);
+/* No bfd/cfm status change. */
+#define NO_STATUS_CHANGE -1
 
 struct flow_miss;
 
@@ -87,11 +86,14 @@ struct rule_dpif {
      *   - Do include packets and bytes from datapath flows which have not
      *   recently been processed by a revalidator. */
     struct ovs_mutex stats_mutex;
-    uint64_t packet_count OVS_GUARDED;  /* Number of packets received. */
-    uint64_t byte_count OVS_GUARDED;    /* Number of bytes received. */
+    struct dpif_flow_stats stats OVS_GUARDED;
 };
 
-static void rule_get_stats(struct rule *, uint64_t *packets, uint64_t *bytes);
+/* RULE_CAST() depends on this. */
+BUILD_ASSERT_DECL(offsetof(struct rule_dpif, up) == 0);
+
+static void rule_get_stats(struct rule *, uint64_t *packets, uint64_t *bytes,
+                           long long int *used);
 static struct rule_dpif *rule_dpif_cast(const struct rule *);
 static void rule_expire(struct rule_dpif *);
 
@@ -251,6 +253,19 @@ struct dpif_backer {
     enum revalidate_reason need_revalidate; /* Revalidate all flows. */
 
     bool recv_set_enable; /* Enables or disables receiving packets. */
+
+    /* Recirculation. */
+    struct recirc_id_pool *rid_pool;       /* Recirculation ID pool. */
+    bool enable_recirc;   /* True if the datapath supports recirculation */
+
+    /* True if the datapath supports variable-length
+     * OVS_USERSPACE_ATTR_USERDATA in OVS_ACTION_ATTR_USERSPACE actions.
+     * False if the datapath supports only 8-byte (or shorter) userdata. */
+    bool variable_length_userdata;
+
+    /* Maximum number of MPLS label stack entries that the datapath supports
+     * in a match */
+    size_t max_mpls_depth;
 };
 
 /* All existing ofproto_backer instances, indexed by ofproto->up.type. */
@@ -300,6 +315,8 @@ struct ofproto_dpif {
 
     /* Work queues. */
     struct guarded_list pins;      /* Contains "struct ofputil_packet_in"s. */
+    struct seq *pins_seq;          /* For notifying 'pins' reception. */
+    uint64_t pins_seqno;
 };
 
 /* All existing ofproto_dpif instances, indexed by ->up.name. */
@@ -314,9 +331,21 @@ ofproto_dpif_cast(const struct ofproto *ofproto)
     return CONTAINER_OF(ofproto, struct ofproto_dpif, up);
 }
 
+size_t
+ofproto_dpif_get_max_mpls_depth(const struct ofproto_dpif *ofproto)
+{
+    return ofproto->backer->max_mpls_depth;
+}
+
+bool
+ofproto_dpif_get_enable_recirc(const struct ofproto_dpif *ofproto)
+{
+    return ofproto->backer->enable_recirc;
+}
+
 static struct ofport_dpif *get_ofp_port(const struct ofproto_dpif *ofproto,
                                         ofp_port_t ofp_port);
-static void ofproto_trace(struct ofproto_dpif *, const struct flow *,
+static void ofproto_trace(struct ofproto_dpif *, struct flow *,
                           const struct ofpbuf *packet,
                           const struct ofpact[], size_t ofpacts_len,
                           struct ds *);
@@ -347,6 +376,21 @@ ofproto_dpif_send_packet_in(struct ofproto_dpif *ofproto,
         free(CONST_CAST(void *, pin->up.packet));
         free(pin);
     }
+
+    /* Wakes up main thread for packet-in I/O. */
+    seq_change(ofproto->pins_seq);
+}
+
+/* The default "table-miss" behaviour for OpenFlow1.3+ is to drop the
+ * packet rather than to send the packet to the controller.
+ *
+ * This function returns false to indicate that a packet_in message
+ * for a "table-miss" should be sent to at least one controller.
+ * False otherwise. */
+bool
+ofproto_dpif_wants_packet_in_on_miss(struct ofproto_dpif *ofproto)
+{
+    return connmgr_wants_packet_in_on_miss(ofproto->up.connmgr);
 }
 
 /* Factory functions. */
@@ -552,7 +596,10 @@ type_run(const char *type)
                               ofproto->sflow, ofproto->ipfix,
                               ofproto->netflow, ofproto->up.frag_handling,
                               ofproto->up.forward_bpdu,
-                              connmgr_has_in_band(ofproto->up.connmgr));
+                              connmgr_has_in_band(ofproto->up.connmgr),
+                              ofproto->backer->enable_recirc,
+                              ofproto->backer->variable_length_userdata,
+                              ofproto->backer->max_mpls_depth);
 
             HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
                 xlate_bundle_set(ofproto, bundle, bundle->name,
@@ -762,9 +809,9 @@ close_dpif_backer(struct dpif_backer *backer)
     ovs_rwlock_destroy(&backer->odp_to_ofport_lock);
     hmap_destroy(&backer->odp_to_ofport_map);
     shash_find_and_delete(&all_dpif_backers, backer->type);
+    recirc_id_pool_destroy(backer->rid_pool);
     free(backer->type);
     dpif_close(backer->dpif);
-
     free(backer);
 }
 
@@ -773,6 +820,10 @@ struct odp_garbage {
     struct list list_node;
     odp_port_t odp_port;
 };
+
+static bool check_variable_length_userdata(struct dpif_backer *backer);
+static size_t check_max_mpls_depth(struct dpif_backer *backer);
+static bool check_recirc(struct dpif_backer *backer);
 
 static int
 open_dpif_backer(const char *type, struct dpif_backer **backerp)
@@ -783,6 +834,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     struct shash_node *node;
     struct list garbage_list;
     struct odp_garbage *garbage, *next;
+
     struct sset names;
     char *backer_name;
     const char *name;
@@ -865,6 +917,11 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
 
     shash_add(&all_dpif_backers, type, backer);
 
+    backer->enable_recirc = check_recirc(backer);
+    backer->variable_length_userdata = check_variable_length_userdata(backer);
+    backer->max_mpls_depth = check_max_mpls_depth(backer);
+    backer->rid_pool = recirc_id_pool_create();
+
     error = dpif_recv_set(backer->dpif, backer->recv_set_enable);
     if (error) {
         VLOG_ERR("failed to listen on datapath of type %s: %s",
@@ -878,6 +935,179 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     }
 
     return error;
+}
+
+/* Tests whether 'backer''s datapath supports recirculation.  Only newer
+ * datapaths support OVS_KEY_ATTR_RECIRC_ID in keys.  We need to disable some
+ * features on older datapaths that don't support this feature.
+ *
+ * Returns false if 'backer' definitely does not support recirculation, true if
+ * it seems to support recirculation or if at least the error we get is
+ * ambiguous. */
+static bool
+check_recirc(struct dpif_backer *backer)
+{
+    struct flow flow;
+    struct odputil_keybuf keybuf;
+    struct ofpbuf key;
+    int error;
+    bool enable_recirc = false;
+
+    memset(&flow, 0, sizeof flow);
+    flow.recirc_id = 1;
+    flow.dp_hash = 1;
+
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&key, &flow, NULL, 0);
+
+    error = dpif_flow_put(backer->dpif, DPIF_FP_CREATE,
+                          ofpbuf_data(&key), ofpbuf_size(&key), NULL, 0, NULL,
+                          0, NULL);
+    if (error && error != EEXIST) {
+        if (error != EINVAL) {
+            VLOG_WARN("%s: Reciculation flow probe failed (%s)",
+                      dpif_name(backer->dpif), ovs_strerror(error));
+        }
+        goto done;
+    }
+
+    error = dpif_flow_del(backer->dpif, ofpbuf_data(&key), ofpbuf_size(&key),
+                          NULL);
+    if (error) {
+        VLOG_WARN("%s: failed to delete recirculation feature probe flow",
+                  dpif_name(backer->dpif));
+    }
+
+    enable_recirc = true;
+
+done:
+    if (enable_recirc) {
+        VLOG_INFO("%s: Datapath supports recirculation",
+                  dpif_name(backer->dpif));
+    } else {
+        VLOG_INFO("%s: Datapath does not support recirculation",
+                  dpif_name(backer->dpif));
+    }
+
+    return enable_recirc;
+}
+
+/* Tests whether 'backer''s datapath supports variable-length
+ * OVS_USERSPACE_ATTR_USERDATA in OVS_ACTION_ATTR_USERSPACE actions.  We need
+ * to disable some features on older datapaths that don't support this
+ * feature.
+ *
+ * Returns false if 'backer' definitely does not support variable-length
+ * userdata, true if it seems to support them or if at least the error we get
+ * is ambiguous. */
+static bool
+check_variable_length_userdata(struct dpif_backer *backer)
+{
+    struct eth_header *eth;
+    struct ofpbuf actions;
+    struct dpif_execute execute;
+    struct ofpbuf packet;
+    size_t start;
+    int error;
+
+    /* Compose a userspace action that will cause an ERANGE error on older
+     * datapaths that don't support variable-length userdata.
+     *
+     * We really test for using userdata longer than 8 bytes, but older
+     * datapaths accepted these, silently truncating the userdata to 8 bytes.
+     * The same older datapaths rejected userdata shorter than 8 bytes, so we
+     * test for that instead as a proxy for longer userdata support. */
+    ofpbuf_init(&actions, 64);
+    start = nl_msg_start_nested(&actions, OVS_ACTION_ATTR_USERSPACE);
+    nl_msg_put_u32(&actions, OVS_USERSPACE_ATTR_PID,
+                   dpif_port_get_pid(backer->dpif, ODPP_NONE, 0));
+    nl_msg_put_unspec_zero(&actions, OVS_USERSPACE_ATTR_USERDATA, 4);
+    nl_msg_end_nested(&actions, start);
+
+    /* Compose a dummy ethernet packet. */
+    ofpbuf_init(&packet, ETH_HEADER_LEN);
+    eth = ofpbuf_put_zeros(&packet, ETH_HEADER_LEN);
+    eth->eth_type = htons(0x1234);
+
+    /* Execute the actions.  On older datapaths this fails with ERANGE, on
+     * newer datapaths it succeeds. */
+    execute.actions = ofpbuf_data(&actions);
+    execute.actions_len = ofpbuf_size(&actions);
+    execute.packet = &packet;
+    execute.md = PKT_METADATA_INITIALIZER(0);
+    execute.needs_help = false;
+
+    error = dpif_execute(backer->dpif, &execute);
+
+    ofpbuf_uninit(&packet);
+    ofpbuf_uninit(&actions);
+
+    switch (error) {
+    case 0:
+        return true;
+
+    case ERANGE:
+        /* Variable-length userdata is not supported. */
+        VLOG_WARN("%s: datapath does not support variable-length userdata "
+                  "feature (needs Linux 3.10+ or kernel module from OVS "
+                  "1..11+).  The NXAST_SAMPLE action will be ignored.",
+                  dpif_name(backer->dpif));
+        return false;
+
+    default:
+        /* Something odd happened.  We're not sure whether variable-length
+         * userdata is supported.  Default to "yes". */
+        VLOG_WARN("%s: variable-length userdata feature probe failed (%s)",
+                  dpif_name(backer->dpif), ovs_strerror(error));
+        return true;
+    }
+}
+
+/* Tests the MPLS label stack depth supported by 'backer''s datapath.
+ *
+ * Returns the number of elements in a struct flow's mpls_lse field
+ * if the datapath supports at least that many entries in an
+ * MPLS label stack.
+ * Otherwise returns the number of MPLS push actions supported by
+ * the datapath. */
+static size_t
+check_max_mpls_depth(struct dpif_backer *backer)
+{
+    struct flow flow;
+    int n;
+
+    for (n = 0; n < FLOW_MAX_MPLS_LABELS; n++) {
+        struct odputil_keybuf keybuf;
+        struct ofpbuf key;
+        int error;
+
+        memset(&flow, 0, sizeof flow);
+        flow.dl_type = htons(ETH_TYPE_MPLS);
+        flow_set_mpls_bos(&flow, n, 1);
+
+        ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+        odp_flow_key_from_flow(&key, &flow, NULL, 0);
+
+        error = dpif_flow_put(backer->dpif, DPIF_FP_CREATE,
+                              ofpbuf_data(&key), ofpbuf_size(&key), NULL, 0, NULL, 0, NULL);
+        if (error && error != EEXIST) {
+            if (error != EINVAL) {
+                VLOG_WARN("%s: MPLS stack length feature probe failed (%s)",
+                          dpif_name(backer->dpif), ovs_strerror(error));
+            }
+            break;
+        }
+
+        error = dpif_flow_del(backer->dpif, ofpbuf_data(&key), ofpbuf_size(&key), NULL);
+        if (error) {
+            VLOG_WARN("%s: failed to delete MPLS feature probe flow",
+                      dpif_name(backer->dpif));
+        }
+    }
+
+    VLOG_INFO("%s: MPLS label stack length probed as %d",
+              dpif_name(backer->dpif), n);
+    return n;
 }
 
 static int
@@ -902,7 +1132,7 @@ construct(struct ofproto *ofproto_)
     ofproto->mbridge = mbridge_create();
     ofproto->has_bonded_bundles = false;
     ofproto->lacp_enabled = false;
-    ovs_mutex_init(&ofproto->stats_mutex);
+    ovs_mutex_init_adaptive(&ofproto->stats_mutex);
     ovs_mutex_init(&ofproto->vsp_mutex);
 
     guarded_list_init(&ofproto->pins);
@@ -917,6 +1147,9 @@ construct(struct ofproto *ofproto_)
     sset_init(&ofproto->port_poll_set);
     ofproto->port_poll_errno = 0;
     ofproto->change_seq = 0;
+    ofproto->pins_seq = seq_create();
+    ofproto->pins_seqno = seq_read(ofproto->pins_seq);
+
 
     SHASH_FOR_EACH_SAFE (node, next, &init_ofp_ports) {
         struct iface_hint *iface_hint = node->data;
@@ -940,50 +1173,27 @@ construct(struct ofproto *ofproto_)
 
     ofproto_init_tables(ofproto_, N_TABLES);
     error = add_internal_flows(ofproto);
+
     ofproto->up.tables[TBL_INTERNAL].flags = OFTABLE_HIDDEN | OFTABLE_READONLY;
 
     return error;
 }
 
 static int
-add_internal_flow(struct ofproto_dpif *ofproto, int id,
+add_internal_miss_flow(struct ofproto_dpif *ofproto, int id,
                   const struct ofpbuf *ofpacts, struct rule_dpif **rulep)
 {
-    struct ofputil_flow_mod fm;
+    struct match match;
     int error;
+    struct rule *rule;
 
-    match_init_catchall(&fm.match);
-    fm.priority = 0;
-    match_set_reg(&fm.match, 0, id);
-    fm.new_cookie = htonll(0);
-    fm.cookie = htonll(0);
-    fm.cookie_mask = htonll(0);
-    fm.modify_cookie = false;
-    fm.table_id = TBL_INTERNAL;
-    fm.command = OFPFC_ADD;
-    fm.idle_timeout = 0;
-    fm.hard_timeout = 0;
-    fm.buffer_id = 0;
-    fm.out_port = 0;
-    fm.flags = 0;
-    fm.ofpacts = ofpacts->data;
-    fm.ofpacts_len = ofpacts->size;
+    match_init_catchall(&match);
+    match_set_reg(&match, 0, id);
 
-    error = ofproto_flow_mod(&ofproto->up, &fm);
-    if (error) {
-        VLOG_ERR_RL(&rl, "failed to add internal flow %d (%s)",
-                    id, ofperr_to_string(error));
-        return error;
-    }
+    error = ofproto_dpif_add_internal_flow(ofproto, &match, 0, ofpacts, &rule);
+    *rulep = error ? NULL : rule_dpif_cast(rule);
 
-    if (rule_dpif_lookup_in_table(ofproto, &fm.match.flow, NULL, TBL_INTERNAL,
-                                  rulep)) {
-        rule_dpif_unref(*rulep);
-    } else {
-        OVS_NOT_REACHED();
-    }
-
-    return 0;
+    return error;
 }
 
 static int
@@ -992,6 +1202,9 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     struct ofpact_controller *controller;
     uint64_t ofpacts_stub[128 / 8];
     struct ofpbuf ofpacts;
+    struct rule *unused_rulep OVS_UNUSED;
+    struct ofpact_resubmit *resubmit;
+    struct match match;
     int error;
     int id;
 
@@ -1004,20 +1217,53 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     controller->reason = OFPR_NO_MATCH;
     ofpact_pad(&ofpacts);
 
-    error = add_internal_flow(ofproto, id++, &ofpacts, &ofproto->miss_rule);
+    error = add_internal_miss_flow(ofproto, id++, &ofpacts,
+                                   &ofproto->miss_rule);
     if (error) {
         return error;
     }
 
     ofpbuf_clear(&ofpacts);
-    error = add_internal_flow(ofproto, id++, &ofpacts,
-                              &ofproto->no_packet_in_rule);
+    error = add_internal_miss_flow(ofproto, id++, &ofpacts,
+                                   &ofproto->no_packet_in_rule);
     if (error) {
         return error;
     }
 
-    error = add_internal_flow(ofproto, id++, &ofpacts,
-                              &ofproto->drop_frags_rule);
+    error = add_internal_miss_flow(ofproto, id++, &ofpacts,
+                                   &ofproto->drop_frags_rule);
+    if (error) {
+        return error;
+    }
+
+    /* Continue non-recirculation rule lookups from table 0.
+     *
+     * (priority=2), recirc=0, actions=resubmit(, 0)
+     */
+    resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->ofpact.compat = 0;
+    resubmit->in_port = OFPP_IN_PORT;
+    resubmit->table_id = 0;
+
+    match_init_catchall(&match);
+    match_set_recirc_id(&match, 0);
+
+    error = ofproto_dpif_add_internal_flow(ofproto, &match, 2, &ofpacts,
+                                           &unused_rulep);
+    if (error) {
+        return error;
+    }
+
+    /* Drop any run away recirc rule lookups. Recirc_id has to be
+     * non-zero when reaching this rule.
+     *
+     * (priority=1), *, actions=drop
+     */
+    ofpbuf_clear(&ofpacts);
+    match_init_catchall(&match);
+    error = ofproto_dpif_add_internal_flow(ofproto, &match, 1, &ofpacts,
+                                           &unused_rulep);
+
     return error;
 }
 
@@ -1077,6 +1323,8 @@ destruct(struct ofproto *ofproto_)
     ovs_mutex_destroy(&ofproto->stats_mutex);
     ovs_mutex_destroy(&ofproto->vsp_mutex);
 
+    seq_destroy(ofproto->pins_seq);
+
     close_dpif_backer(ofproto->backer);
 }
 
@@ -1092,6 +1340,12 @@ run(struct ofproto *ofproto_)
         mac_learning_flush(ofproto->ml);
         ovs_rwlock_unlock(&ofproto->ml->rwlock);
     }
+
+    /* Always updates the ofproto->pins_seqno to avoid frequent wakeup during
+     * flow restore.  Even though nothing is processed during flow restore,
+     * all queued 'pins' will be handled immediately when flow restore
+     * completes. */
+    ofproto->pins_seqno = seq_read(ofproto->pins_seq);
 
     /* Do not perform any periodic activity required by 'ofproto' while
      * waiting for flow restore to complete. */
@@ -1212,6 +1466,7 @@ wait(struct ofproto *ofproto_)
     }
 
     seq_wait(udpif_dump_seq(ofproto->backer->udpif), ofproto->dump_seq);
+    seq_wait(ofproto->pins_seq, ofproto->pins_seqno);
 }
 
 static void
@@ -1226,9 +1481,14 @@ type_get_memory_usage(const char *type, struct simap *usage)
 }
 
 static void
-flush(struct ofproto *ofproto OVS_UNUSED)
+flush(struct ofproto *ofproto_)
 {
-    udpif_flush();
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    struct dpif_backer *backer = ofproto->backer;
+
+    if (backer) {
+        udpif_flush(backer->udpif);
+    }
 }
 
 static void
@@ -1257,14 +1517,16 @@ get_tables(struct ofproto *ofproto_, struct ofp12_table_stats *ots)
     struct dpif_dp_stats s;
     uint64_t n_miss, n_no_pkt_in, n_bytes, n_dropped_frags;
     uint64_t n_lookup;
+    long long int used;
 
     strcpy(ots->name, "classifier");
 
     dpif_get_dp_stats(ofproto->backer->dpif, &s);
-    rule_get_stats(&ofproto->miss_rule->up, &n_miss, &n_bytes);
-    rule_get_stats(&ofproto->no_packet_in_rule->up, &n_no_pkt_in, &n_bytes);
-    rule_get_stats(&ofproto->drop_frags_rule->up, &n_dropped_frags, &n_bytes);
-
+    rule_get_stats(&ofproto->miss_rule->up, &n_miss, &n_bytes, &used);
+    rule_get_stats(&ofproto->no_packet_in_rule->up, &n_no_pkt_in, &n_bytes,
+                   &used);
+    rule_get_stats(&ofproto->drop_frags_rule->up, &n_dropped_frags, &n_bytes,
+                   &used);
     n_lookup = s.n_hit + s.n_missed - n_dropped_frags;
     ots->lookup_count = htonll(n_lookup);
     ots->matched_count = htonll(n_lookup - n_miss - n_no_pkt_in);
@@ -1547,22 +1809,28 @@ out:
     return error;
 }
 
-static bool
-get_cfm_status(const struct ofport *ofport_,
+static int
+get_cfm_status(const struct ofport *ofport_, bool force,
                struct ofproto_cfm_status *status)
 {
     struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
+    int ret = 0;
 
     if (ofport->cfm) {
-        status->faults = cfm_get_fault(ofport->cfm);
-        status->flap_count = cfm_get_flap_count(ofport->cfm);
-        status->remote_opstate = cfm_get_opup(ofport->cfm);
-        status->health = cfm_get_health(ofport->cfm);
-        cfm_get_remote_mpids(ofport->cfm, &status->rmps, &status->n_rmps);
-        return true;
+        if (cfm_check_status_change(ofport->cfm) || force) {
+            status->faults = cfm_get_fault(ofport->cfm);
+            status->flap_count = cfm_get_flap_count(ofport->cfm);
+            status->remote_opstate = cfm_get_opup(ofport->cfm);
+            status->health = cfm_get_health(ofport->cfm);
+            cfm_get_remote_mpids(ofport->cfm, &status->rmps, &status->n_rmps);
+        } else {
+            ret = NO_STATUS_CHANGE;
+        }
     } else {
-        return false;
+        ret = ENOENT;
     }
+
+    return ret;
 }
 
 static int
@@ -1584,16 +1852,22 @@ set_bfd(struct ofport *ofport_, const struct smap *cfg)
 }
 
 static int
-get_bfd_status(struct ofport *ofport_, struct smap *smap)
+get_bfd_status(struct ofport *ofport_, bool force, struct smap *smap)
 {
     struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
+    int ret = 0;
 
     if (ofport->bfd) {
-        bfd_get_status(ofport->bfd, smap);
-        return 0;
+        if (bfd_check_status_change(ofport->bfd) || force) {
+            bfd_get_status(ofport->bfd, smap);
+        } else {
+            ret = NO_STATUS_CHANGE;
+        }
     } else {
-        return ENOENT;
+        ret = ENOENT;
     }
+
+    return ret;
 }
 
 /* Spanning Tree. */
@@ -1610,7 +1884,7 @@ send_bpdu_cb(struct ofpbuf *pkt, int port_num, void *ofproto_)
         VLOG_WARN_RL(&rl, "%s: cannot send BPDU on unknown port %d",
                      ofproto->up.name, port_num);
     } else {
-        struct eth_header *eth = pkt->l2;
+        struct eth_header *eth = ofpbuf_l2(pkt);
 
         netdev_get_etheraddr(ofport->up.netdev, eth->eth_src);
         if (eth_addr_is_zero(eth->eth_src)) {
@@ -2178,12 +2452,13 @@ bundle_set(struct ofproto *ofproto_, void *aux,
                 ofproto->backer->need_revalidate = REV_RECONFIGURE;
             }
         } else {
-            bundle->bond = bond_create(s->bond);
+            bundle->bond = bond_create(s->bond, ofproto);
             ofproto->backer->need_revalidate = REV_RECONFIGURE;
         }
 
         LIST_FOR_EACH (port, bundle_node, &bundle->ports) {
-            bond_slave_register(bundle->bond, port, port->up.netdev);
+            bond_slave_register(bundle->bond, port,
+                                port->up.ofp_port, port->up.netdev);
         }
     } else {
         bond_unref(bundle->bond);
@@ -2261,7 +2536,9 @@ bundle_send_learning_packets(struct ofbundle *bundle)
             learning_packet = bond_compose_learning_packet(bundle->bond,
                                                            e->mac, e->vlan,
                                                            &port_void);
-            learning_packet->private_p = port_void;
+            /* Temporarily use 'frame' as a private pointer (see below). */
+            ovs_assert(learning_packet->frame == ofpbuf_data(learning_packet));
+            learning_packet->frame = port_void;
             list_push_back(&packets, &learning_packet->list_node);
         }
     }
@@ -2270,8 +2547,11 @@ bundle_send_learning_packets(struct ofbundle *bundle)
     error = n_packets = n_errors = 0;
     LIST_FOR_EACH (learning_packet, list_node, &packets) {
         int ret;
+        void *port_void = learning_packet->frame;
 
-        ret = ofproto_dpif_send_packet(learning_packet->private_p, learning_packet);
+        /* Restore 'frame'. */
+        learning_packet->frame = ofpbuf_data(learning_packet);
+        ret = ofproto_dpif_send_packet(port_void, learning_packet);
         if (ret) {
             error = ret;
             n_errors++;
@@ -2769,24 +3049,39 @@ static void
 rule_expire(struct rule_dpif *rule)
     OVS_REQUIRES(ofproto_mutex)
 {
-    uint16_t idle_timeout, hard_timeout;
+    uint16_t hard_timeout, idle_timeout;
     long long int now = time_msec();
-    int reason;
+    int reason = -1;
 
     ovs_assert(!rule->up.pending);
 
-    /* Has 'rule' expired? */
-    ovs_mutex_lock(&rule->up.mutex);
     hard_timeout = rule->up.hard_timeout;
     idle_timeout = rule->up.idle_timeout;
-    if (hard_timeout && now > rule->up.modified + hard_timeout * 1000) {
-        reason = OFPRR_HARD_TIMEOUT;
-    } else if (idle_timeout && now > rule->up.used + idle_timeout * 1000) {
-        reason = OFPRR_IDLE_TIMEOUT;
-    } else {
-        reason = -1;
+
+    /* Has 'rule' expired? */
+    if (hard_timeout) {
+        long long int modified;
+
+        ovs_mutex_lock(&rule->up.mutex);
+        modified = rule->up.modified;
+        ovs_mutex_unlock(&rule->up.mutex);
+
+        if (now > modified + hard_timeout * 1000) {
+            reason = OFPRR_HARD_TIMEOUT;
+        }
     }
-    ovs_mutex_unlock(&rule->up.mutex);
+
+    if (reason < 0 && idle_timeout) {
+        long long int used;
+
+        ovs_mutex_lock(&rule->stats_mutex);
+        used = rule->stats.used;
+        ovs_mutex_unlock(&rule->stats_mutex);
+
+        if (now > used + idle_timeout * 1000) {
+            reason = OFPRR_IDLE_TIMEOUT;
+        }
+    }
 
     if (reason >= 0) {
         COVERAGE_INC(ofproto_dpif_expired);
@@ -2803,17 +3098,17 @@ ofproto_dpif_execute_actions(struct ofproto_dpif *ofproto,
                              const struct ofpact *ofpacts, size_t ofpacts_len,
                              struct ofpbuf *packet)
 {
-    struct odputil_keybuf keybuf;
     struct dpif_flow_stats stats;
     struct xlate_out xout;
     struct xlate_in xin;
     ofp_port_t in_port;
-    struct ofpbuf key;
+    struct dpif_execute execute;
     int error;
 
     ovs_assert((rule != NULL) != (ofpacts != NULL));
 
     dpif_flow_stats_extract(flow, packet, time_msec(), &stats);
+
     if (rule) {
         rule_dpif_credit_stats(rule, &stats);
     }
@@ -2824,16 +3119,21 @@ ofproto_dpif_execute_actions(struct ofproto_dpif *ofproto,
     xin.resubmit_stats = &stats;
     xlate_actions(&xin, &xout);
 
-    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    execute.actions = ofpbuf_data(&xout.odp_actions);
+    execute.actions_len = ofpbuf_size(&xout.odp_actions);
+    execute.packet = packet;
+    execute.md = pkt_metadata_from_flow(flow);
+    execute.needs_help = (xout.slow & SLOW_ACTION) != 0;
+
+    /* Fix up in_port. */
     in_port = flow->in_port.ofp_port;
     if (in_port == OFPP_NONE) {
         in_port = OFPP_LOCAL;
     }
-    odp_flow_key_from_flow(&key, flow, ofp_port_to_odp_port(ofproto, in_port));
+    execute.md.in_port.odp_port = ofp_port_to_odp_port(ofproto, in_port);
 
-    error = dpif_execute(ofproto->backer->dpif, key.data, key.size,
-                         xout.odp_actions.data, xout.odp_actions.size, packet,
-                         (xout.slow & SLOW_ACTION) != 0);
+    error = dpif_execute(ofproto->backer->dpif, &execute);
+
     xlate_out_uninit(&xout);
 
     return error;
@@ -2844,22 +3144,10 @@ rule_dpif_credit_stats(struct rule_dpif *rule,
                        const struct dpif_flow_stats *stats)
 {
     ovs_mutex_lock(&rule->stats_mutex);
-    rule->packet_count += stats->n_packets;
-    rule->byte_count += stats->n_bytes;
-    rule->up.used = MAX(rule->up.used, stats->used);
+    rule->stats.n_packets += stats->n_packets;
+    rule->stats.n_bytes += stats->n_bytes;
+    rule->stats.used = MAX(rule->stats.used, stats->used);
     ovs_mutex_unlock(&rule->stats_mutex);
-}
-
-bool
-rule_dpif_is_fail_open(const struct rule_dpif *rule)
-{
-    return is_fail_open_rule(&rule->up);
-}
-
-bool
-rule_dpif_is_table_miss(const struct rule_dpif *rule)
-{
-    return rule_is_table_miss(&rule->up);
 }
 
 ovs_be64
@@ -2879,101 +3167,227 @@ rule_dpif_reduce_timeouts(struct rule_dpif *rule, uint16_t idle_timeout,
 /* Returns 'rule''s actions.  The caller owns a reference on the returned
  * actions and must eventually release it (with rule_actions_unref()) to avoid
  * a memory leak. */
-struct rule_actions *
+const struct rule_actions *
 rule_dpif_get_actions(const struct rule_dpif *rule)
 {
     return rule_get_actions(&rule->up);
 }
 
-/* Lookup 'flow' in 'ofproto''s classifier.  If 'wc' is non-null, sets
- * the fields that were relevant as part of the lookup. */
-void
-rule_dpif_lookup(struct ofproto_dpif *ofproto, const struct flow *flow,
-                 struct flow_wildcards *wc, struct rule_dpif **rule)
+/* Lookup 'flow' in table 0 of 'ofproto''s classifier.
+ * If 'wc' is non-null, sets the fields that were relevant as part of
+ * the lookup. Returns the table_id where a match or miss occurred.
+ *
+ * The return value will be zero unless there was a miss and
+ * OFPTC11_TABLE_MISS_CONTINUE is in effect for the sequence of tables
+ * where misses occur.
+ *
+ * The rule is returned in '*rule', which is valid at least until the next
+ * RCU quiescent period.  If the '*rule' needs to stay around longer,
+ * a non-zero 'take_ref' must be passed in to cause a reference to be taken
+ * on it before this returns. */
+uint8_t
+rule_dpif_lookup(struct ofproto_dpif *ofproto, struct flow *flow,
+                 struct flow_wildcards *wc, struct rule_dpif **rule,
+                 bool take_ref)
 {
-    struct ofport_dpif *port;
+    enum rule_dpif_lookup_verdict verdict;
+    enum ofputil_port_config config = 0;
+    uint8_t table_id;
 
-    if (rule_dpif_lookup_in_table(ofproto, flow, wc, 0, rule)) {
-        return;
-    }
-    port = get_ofp_port(ofproto, flow->in_port.ofp_port);
-    if (!port) {
-        VLOG_WARN_RL(&rl, "packet-in on unknown OpenFlow port %"PRIu16,
-                     flow->in_port.ofp_port);
+    if (ofproto_dpif_get_enable_recirc(ofproto)) {
+        /* Always exactly match recirc_id since datapath supports
+         * recirculation.  */
+        if (wc) {
+            wc->masks.recirc_id = UINT32_MAX;
+        }
+
+        /* Start looking up from internal table for post recirculation flows
+         * or packets. We can also simply send all, including normal flows
+         * or packets to the internal table. They will not match any post
+         * recirculation rules except the 'catch all' rule that resubmit
+         * them to table 0.
+         *
+         * As an optimization, we send normal flows and packets to table 0
+         * directly, saving one table lookup.  */
+        table_id = flow->recirc_id ? TBL_INTERNAL : 0;
+    } else {
+        table_id = 0;
     }
 
-    choose_miss_rule(port ? port->up.pp.config : 0, ofproto->miss_rule,
-                     ofproto->no_packet_in_rule, rule);
+    verdict = rule_dpif_lookup_from_table(ofproto, flow, wc, true,
+                                          &table_id, rule, take_ref);
+
+    switch (verdict) {
+    case RULE_DPIF_LOOKUP_VERDICT_MATCH:
+        return table_id;
+    case RULE_DPIF_LOOKUP_VERDICT_CONTROLLER: {
+        struct ofport_dpif *port;
+
+        port = get_ofp_port(ofproto, flow->in_port.ofp_port);
+        if (!port) {
+            VLOG_WARN_RL(&rl, "packet-in on unknown OpenFlow port %"PRIu16,
+                         flow->in_port.ofp_port);
+        }
+        config = port ? port->up.pp.config : 0;
+        break;
+    }
+    case RULE_DPIF_LOOKUP_VERDICT_DROP:
+        config = OFPUTIL_PC_NO_PACKET_IN;
+        break;
+    case RULE_DPIF_LOOKUP_VERDICT_DEFAULT:
+        if (!connmgr_wants_packet_in_on_miss(ofproto->up.connmgr)) {
+            config = OFPUTIL_PC_NO_PACKET_IN;
+        }
+        break;
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    choose_miss_rule(config, ofproto->miss_rule,
+                     ofproto->no_packet_in_rule, rule, take_ref);
+    return table_id;
 }
 
-bool
-rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto,
+/* The returned rule is valid at least until the next RCU quiescent period.
+ * If the '*rule' needs to stay around longer, a non-zero 'take_ref' must be
+ * passed in to cause a reference to be taken on it before this returns. */
+static struct rule_dpif *
+rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, uint8_t table_id,
                           const struct flow *flow, struct flow_wildcards *wc,
-                          uint8_t table_id, struct rule_dpif **rule)
+                          bool take_ref)
 {
+    struct classifier *cls = &ofproto->up.tables[table_id].cls;
     const struct cls_rule *cls_rule;
-    struct classifier *cls;
-    bool frag;
+    struct rule_dpif *rule;
 
-    *rule = NULL;
-    if (table_id >= N_TABLES) {
-        return false;
-    }
-
-    if (wc) {
-        memset(&wc->masks.dl_type, 0xff, sizeof wc->masks.dl_type);
-        if (is_ip_any(flow)) {
-            wc->masks.nw_frag |= FLOW_NW_FRAG_MASK;
-        }
-    }
-
-    cls = &ofproto->up.tables[table_id].cls;
     fat_rwlock_rdlock(&cls->rwlock);
-    frag = (flow->nw_frag & FLOW_NW_FRAG_ANY) != 0;
-    if (frag && ofproto->up.frag_handling == OFPC_FRAG_NORMAL) {
-        /* We must pretend that transport ports are unavailable. */
-        struct flow ofpc_normal_flow = *flow;
-        ofpc_normal_flow.tp_src = htons(0);
-        ofpc_normal_flow.tp_dst = htons(0);
-        cls_rule = classifier_lookup(cls, &ofpc_normal_flow, wc);
-    } else if (frag && ofproto->up.frag_handling == OFPC_FRAG_DROP) {
-        cls_rule = &ofproto->drop_frags_rule->up.cr;
-        /* Frag mask in wc already set above. */
+    if (ofproto->up.frag_handling != OFPC_FRAG_NX_MATCH) {
+        if (wc) {
+            memset(&wc->masks.dl_type, 0xff, sizeof wc->masks.dl_type);
+            if (is_ip_any(flow)) {
+                wc->masks.nw_frag |= FLOW_NW_FRAG_MASK;
+            }
+        }
+
+        if (flow->nw_frag & FLOW_NW_FRAG_ANY) {
+            if (ofproto->up.frag_handling == OFPC_FRAG_NORMAL) {
+                /* We must pretend that transport ports are unavailable. */
+                struct flow ofpc_normal_flow = *flow;
+                ofpc_normal_flow.tp_src = htons(0);
+                ofpc_normal_flow.tp_dst = htons(0);
+                cls_rule = classifier_lookup(cls, &ofpc_normal_flow, wc);
+            } else {
+                /* Must be OFPC_FRAG_DROP (we don't have OFPC_FRAG_REASM). */
+                cls_rule = &ofproto->drop_frags_rule->up.cr;
+            }
+        } else {
+            cls_rule = classifier_lookup(cls, flow, wc);
+        }
     } else {
         cls_rule = classifier_lookup(cls, flow, wc);
     }
 
-    *rule = rule_dpif_cast(rule_from_cls_rule(cls_rule));
-    rule_dpif_ref(*rule);
+    rule = rule_dpif_cast(rule_from_cls_rule(cls_rule));
+    if (take_ref) {
+        rule_dpif_ref(rule);
+    }
     fat_rwlock_unlock(&cls->rwlock);
 
-    return *rule != NULL;
+    return rule;
+}
+
+/* Look up 'flow' in 'ofproto''s classifier starting from table '*table_id'.
+ * Stores the rule that was found in '*rule', or NULL if none was found.
+ * Updates 'wc', if nonnull, to reflect the fields that were used during the
+ * lookup.
+ *
+ * If 'honor_table_miss' is true, the first lookup occurs in '*table_id', but
+ * if none is found then the table miss configuration for that table is
+ * honored, which can result in additional lookups in other OpenFlow tables.
+ * In this case the function updates '*table_id' to reflect the final OpenFlow
+ * table that was searched.
+ *
+ * If 'honor_table_miss' is false, then only one table lookup occurs, in
+ * '*table_id'.
+ *
+ * Returns:
+ *
+ *    - RULE_DPIF_LOOKUP_VERDICT_MATCH if a rule (in '*rule') was found.
+ *
+ *    - RULE_OFPTC_TABLE_MISS_CONTROLLER if no rule was found and either:
+ *      + 'honor_table_miss' is false
+ *      + a table miss configuration specified that the packet should be
+ *        sent to the controller in this case.
+ *
+ *    - RULE_DPIF_LOOKUP_VERDICT_DROP if no rule was found, 'honor_table_miss'
+ *      is true and a table miss configuration specified that the packet
+ *      should be dropped in this case.
+ *
+ *    - RULE_DPIF_LOOKUP_VERDICT_DEFAULT if no rule was found,
+ *      'honor_table_miss' is true and a table miss configuration has
+ *      not been specified in this case.
+ *
+ * The rule is returned in '*rule', which is valid at least until the next
+ * RCU quiescent period.  If the '*rule' needs to stay around longer,
+ * a non-zero 'take_ref' must be passed in to cause a reference to be taken
+ * on it before this returns. */
+enum rule_dpif_lookup_verdict
+rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
+                            const struct flow *flow,
+                            struct flow_wildcards *wc,
+                            bool honor_table_miss,
+                            uint8_t *table_id, struct rule_dpif **rule,
+                            bool take_ref)
+{
+    uint8_t next_id;
+
+    for (next_id = *table_id;
+         next_id < ofproto->up.n_tables;
+         next_id++, next_id += (next_id == TBL_INTERNAL))
+    {
+        *table_id = next_id;
+        *rule = rule_dpif_lookup_in_table(ofproto, *table_id, flow, wc,
+                                          take_ref);
+        if (*rule) {
+            return RULE_DPIF_LOOKUP_VERDICT_MATCH;
+        } else if (!honor_table_miss) {
+            return RULE_DPIF_LOOKUP_VERDICT_CONTROLLER;
+        } else {
+            switch (ofproto_table_get_config(&ofproto->up, *table_id)) {
+            case OFPROTO_TABLE_MISS_CONTINUE:
+                break;
+
+            case OFPROTO_TABLE_MISS_CONTROLLER:
+                return RULE_DPIF_LOOKUP_VERDICT_CONTROLLER;
+
+            case OFPROTO_TABLE_MISS_DROP:
+                return RULE_DPIF_LOOKUP_VERDICT_DROP;
+
+            case OFPROTO_TABLE_MISS_DEFAULT:
+                return RULE_DPIF_LOOKUP_VERDICT_DEFAULT;
+            }
+        }
+    }
+
+    return RULE_DPIF_LOOKUP_VERDICT_CONTROLLER;
 }
 
 /* Given a port configuration (specified as zero if there's no port), chooses
  * which of 'miss_rule' and 'no_packet_in_rule' should be used in case of a
- * flow table miss. */
+ * flow table miss.
+ *
+ * The rule is returned in '*rule', which is valid at least until the next
+ * RCU quiescent period.  If the '*rule' needs to stay around longer,
+ * a reference must be taken on it (rule_dpif_ref()).
+ */
 void
 choose_miss_rule(enum ofputil_port_config config, struct rule_dpif *miss_rule,
-                 struct rule_dpif *no_packet_in_rule, struct rule_dpif **rule)
+                 struct rule_dpif *no_packet_in_rule, struct rule_dpif **rule,
+                 bool take_ref)
 {
     *rule = config & OFPUTIL_PC_NO_PACKET_IN ? no_packet_in_rule : miss_rule;
-    rule_dpif_ref(*rule);
-}
-
-void
-rule_dpif_ref(struct rule_dpif *rule)
-{
-    if (rule) {
-        ofproto_rule_ref(&rule->up);
-    }
-}
-
-void
-rule_dpif_unref(struct rule_dpif *rule)
-{
-    if (rule) {
-        ofproto_rule_unref(&rule->up);
+    if (take_ref) {
+        rule_dpif_ref(*rule);
     }
 }
 
@@ -3008,13 +3422,13 @@ rule_dealloc(struct rule *rule_)
 
 static enum ofperr
 rule_construct(struct rule *rule_)
+    OVS_NO_THREAD_SAFETY_ANALYSIS
 {
     struct rule_dpif *rule = rule_dpif_cast(rule_);
-    ovs_mutex_init(&rule->stats_mutex);
-    ovs_mutex_lock(&rule->stats_mutex);
-    rule->packet_count = 0;
-    rule->byte_count = 0;
-    ovs_mutex_unlock(&rule->stats_mutex);
+    ovs_mutex_init_adaptive(&rule->stats_mutex);
+    rule->stats.n_packets = 0;
+    rule->stats.n_bytes = 0;
+    rule->stats.used = rule->up.modified;
     return 0;
 }
 
@@ -3042,13 +3456,15 @@ rule_destruct(struct rule *rule_)
 }
 
 static void
-rule_get_stats(struct rule *rule_, uint64_t *packets, uint64_t *bytes)
+rule_get_stats(struct rule *rule_, uint64_t *packets, uint64_t *bytes,
+               long long int *used)
 {
     struct rule_dpif *rule = rule_dpif_cast(rule_);
 
     ovs_mutex_lock(&rule->stats_mutex);
-    *packets = rule->packet_count;
-    *bytes = rule->byte_count;
+    *packets = rule->stats.n_packets;
+    *bytes = rule->stats.n_bytes;
+    *used = rule->stats.used;
     ovs_mutex_unlock(&rule->stats_mutex);
 }
 
@@ -3078,8 +3494,8 @@ rule_modify_actions(struct rule *rule_, bool reset_counters)
 
     if (reset_counters) {
         ovs_mutex_lock(&rule->stats_mutex);
-        rule->packet_count = 0;
-        rule->byte_count = 0;
+        rule->stats.n_packets = 0;
+        rule->stats.n_bytes = 0;
         ovs_mutex_unlock(&rule->stats_mutex);
     }
 
@@ -3124,7 +3540,21 @@ static enum ofperr
 group_construct(struct ofgroup *group_)
 {
     struct group_dpif *group = group_dpif_cast(group_);
-    ovs_mutex_init(&group->stats_mutex);
+    const struct ofputil_bucket *bucket;
+
+    /* Prevent group chaining because our locking structure makes it hard to
+     * implement deadlock-free.  (See xlate_group_resource_check().) */
+    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        const struct ofpact *a;
+
+        OFPACT_FOR_EACH (a, bucket->ofpacts, bucket->ofpacts_len) {
+            if (a->type == OFPACT_GROUP) {
+                return OFPERR_OFPGMFC_CHAINING_UNSUPPORTED;
+            }
+        }
+    }
+
+    ovs_mutex_init_adaptive(&group->stats_mutex);
     ovs_mutex_lock(&group->stats_mutex);
     group_construct_stats(group);
     ovs_mutex_unlock(&group->stats_mutex);
@@ -3231,7 +3661,7 @@ ofproto_dpif_send_packet(const struct ofport_dpif *ofport, struct ofpbuf *packet
 
     ovs_mutex_lock(&ofproto->stats_mutex);
     ofproto->stats.tx_packets++;
-    ofproto->stats.tx_bytes += packet->size;
+    ofproto->stats.tx_bytes += ofpbuf_size(packet);
     ovs_mutex_unlock(&ofproto->stats_mutex);
     return error;
 }
@@ -3374,14 +3804,16 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
 struct trace_ctx {
     struct xlate_out xout;
     struct xlate_in xin;
+    const struct flow *key;
     struct flow flow;
+    struct flow_wildcards wc;
     struct ds *result;
 };
 
 static void
 trace_format_rule(struct ds *result, int level, const struct rule_dpif *rule)
 {
-    struct rule_actions *actions;
+    const struct rule_actions *actions;
     ovs_be64 cookie;
 
     ds_put_char_multiple(result, '\t', level);
@@ -3405,8 +3837,6 @@ trace_format_rule(struct ds *result, int level, const struct rule_dpif *rule)
     ds_put_cstr(result, "OpenFlow actions=");
     ofpacts_format(actions->ofpacts, actions->ofpacts_len, result);
     ds_put_char(result, '\n');
-
-    rule_actions_unref(actions);
 }
 
 static void
@@ -3415,7 +3845,9 @@ trace_format_flow(struct ds *result, int level, const char *title,
 {
     ds_put_char_multiple(result, '\t', level);
     ds_put_format(result, "%s: ", title);
-    if (flow_equal(&trace->xin.flow, &trace->flow)) {
+    /* Do not report unchanged flows for resubmits. */
+    if ((level > 0 && flow_equal(&trace->xin.flow, &trace->flow))
+        || (level == 0 && flow_equal(&trace->xin.flow, trace->key))) {
         ds_put_cstr(result, "unchanged");
     } else {
         flow_format(result, &trace->xin.flow);
@@ -3446,7 +3878,22 @@ trace_format_odp(struct ds *result, int level, const char *title,
 
     ds_put_char_multiple(result, '\t', level);
     ds_put_format(result, "%s: ", title);
-    format_odp_actions(result, odp_actions->data, odp_actions->size);
+    format_odp_actions(result, ofpbuf_data(odp_actions),
+                               ofpbuf_size(odp_actions));
+    ds_put_char(result, '\n');
+}
+
+static void
+trace_format_megaflow(struct ds *result, int level, const char *title,
+                      struct trace_ctx *trace)
+{
+    struct match match;
+
+    ds_put_char_multiple(result, '\t', level);
+    ds_put_format(result, "%s: ", title);
+    flow_wildcards_or(&trace->wc, &trace->xout.wc, &trace->wc);
+    match_init(&match, trace->key, &trace->wc);
+    match_format(&match, result, OFP_DEFAULT_PRIORITY);
     ds_put_char(result, '\n');
 }
 
@@ -3460,6 +3907,7 @@ trace_resubmit(struct xlate_in *xin, struct rule_dpif *rule, int recurse)
     trace_format_flow(result, recurse + 1, "Resubmitted flow", trace);
     trace_format_regs(result, recurse + 1, "Resubmitted regs", trace);
     trace_format_odp(result,  recurse + 1, "Resubmitted  odp", trace);
+    trace_format_megaflow(result, recurse + 1, "Resubmitted megaflow", trace);
     trace_format_rule(result, recurse + 1, rule);
 }
 
@@ -3555,8 +4003,9 @@ parse_flow_and_packet(int argc, const char *argv[],
             goto exit;
         }
 
-        if (xlate_receive(backer, NULL, odp_key.data, odp_key.size, flow,
-                          NULL, ofprotop, NULL, NULL, NULL, NULL)) {
+        if (xlate_receive(backer, NULL, ofpbuf_data(&odp_key),
+                          ofpbuf_size(&odp_key), flow,
+                          ofprotop, NULL, NULL, NULL, NULL)) {
             error = "Invalid datapath flow";
             goto exit;
         }
@@ -3583,15 +4032,14 @@ parse_flow_and_packet(int argc, const char *argv[],
 
     /* Generate a packet, if requested. */
     if (packet) {
-        if (!packet->size) {
+        if (!ofpbuf_size(packet)) {
             flow_compose(packet, flow);
         } else {
-            union flow_in_port in_port = flow->in_port;
+            struct pkt_metadata md = pkt_metadata_from_flow(flow);
 
             /* Use the metadata from the flow and the packet argument
              * to reconstruct the flow. */
-            flow_extract(packet, flow->skb_priority, flow->pkt_mark, NULL,
-                         &in_port, flow);
+            flow_extract(packet, &md, flow);
         }
     }
 
@@ -3697,11 +4145,11 @@ ofproto_unixctl_trace_actions(struct unixctl_conn *conn, int argc,
         goto exit;
     }
     if (enforce_consistency) {
-        retval = ofpacts_check_consistency(ofpacts.data, ofpacts.size, &flow,
-                                           u16_to_ofp(ofproto->up.max_ports),
+        retval = ofpacts_check_consistency(ofpbuf_data(&ofpacts), ofpbuf_size(&ofpacts),
+                                           &flow, u16_to_ofp(ofproto->up.max_ports),
                                            0, 0, usable_protocols);
     } else {
-        retval = ofpacts_check(ofpacts.data, ofpacts.size, &flow,
+        retval = ofpacts_check(ofpbuf_data(&ofpacts), ofpbuf_size(&ofpacts), &flow,
                                u16_to_ofp(ofproto->up.max_ports), 0, 0,
                                &usable_protocols);
     }
@@ -3713,7 +4161,8 @@ ofproto_unixctl_trace_actions(struct unixctl_conn *conn, int argc,
         goto exit;
     }
 
-    ofproto_trace(ofproto, &flow, packet, ofpacts.data, ofpacts.size, &result);
+    ofproto_trace(ofproto, &flow, packet,
+                  ofpbuf_data(&ofpacts), ofpbuf_size(&ofpacts), &result);
     unixctl_command_reply(conn, ds_cstr(&result));
 
 exit:
@@ -3732,24 +4181,24 @@ exit:
  * If 'ofpacts' is nonnull then its 'ofpacts_len' bytes specify the actions to
  * trace, otherwise the actions are determined by a flow table lookup. */
 static void
-ofproto_trace(struct ofproto_dpif *ofproto, const struct flow *flow,
+ofproto_trace(struct ofproto_dpif *ofproto, struct flow *flow,
               const struct ofpbuf *packet,
               const struct ofpact ofpacts[], size_t ofpacts_len,
               struct ds *ds)
 {
     struct rule_dpif *rule;
-    struct flow_wildcards wc;
+    struct trace_ctx trace;
 
     ds_put_format(ds, "Bridge: %s\n", ofproto->up.name);
     ds_put_cstr(ds, "Flow: ");
     flow_format(ds, flow);
     ds_put_char(ds, '\n');
 
-    flow_wildcards_init_catchall(&wc);
+    flow_wildcards_init_catchall(&trace.wc);
     if (ofpacts) {
         rule = NULL;
     } else {
-        rule_dpif_lookup(ofproto, flow, &wc, &rule);
+        rule_dpif_lookup(ofproto, flow, &trace.wc, &rule, false);
 
         trace_format_rule(ds, 0, rule);
         if (rule == ofproto->miss_rule) {
@@ -3764,18 +4213,11 @@ ofproto_trace(struct ofproto_dpif *ofproto, const struct flow *flow,
     }
 
     if (rule || ofpacts) {
-        uint64_t odp_actions_stub[1024 / 8];
-        struct ofpbuf odp_actions;
-        struct trace_ctx trace;
-        struct match match;
-        uint16_t tcp_flags;
-
-        tcp_flags = packet ? packet_get_tcp_flags(packet, flow) : 0;
         trace.result = ds;
-        trace.flow = *flow;
-        ofpbuf_use_stub(&odp_actions,
-                        odp_actions_stub, sizeof odp_actions_stub);
-        xlate_in_init(&trace.xin, ofproto, flow, rule, tcp_flags, packet);
+        trace.key = flow; /* Original flow key, used for megaflow. */
+        trace.flow = *flow; /* May be modified by actions. */
+        xlate_in_init(&trace.xin, ofproto, flow, rule, ntohs(flow->tcp_flags),
+                      packet);
         if (ofpacts) {
             trace.xin.ofpacts = ofpacts;
             trace.xin.ofpacts_len = ofpacts_len;
@@ -3784,19 +4226,14 @@ ofproto_trace(struct ofproto_dpif *ofproto, const struct flow *flow,
         trace.xin.report_hook = trace_report;
 
         xlate_actions(&trace.xin, &trace.xout);
-        flow_wildcards_or(&trace.xout.wc, &trace.xout.wc, &wc);
 
         ds_put_char(ds, '\n');
         trace_format_flow(ds, 0, "Final flow", &trace);
-
-        match_init(&match, flow, &trace.xout.wc);
-        ds_put_cstr(ds, "Relevant fields: ");
-        match_format(&match, ds, OFP_DEFAULT_PRIORITY);
-        ds_put_char(ds, '\n');
+        trace_format_megaflow(ds, 0, "Megaflow", &trace);
 
         ds_put_cstr(ds, "Datapath actions: ");
-        format_odp_actions(ds, trace.xout.odp_actions.data,
-                           trace.xout.odp_actions.size);
+        format_odp_actions(ds, ofpbuf_data(&trace.xout.odp_actions),
+                           ofpbuf_size(&trace.xout.odp_actions));
 
         if (trace.xout.slow) {
             enum slow_path_reason slow;
@@ -3817,8 +4254,6 @@ ofproto_trace(struct ofproto_dpif *ofproto, const struct flow *flow,
 
         xlate_out_uninit(&trace.xout);
     }
-
-    rule_dpif_unref(rule);
 }
 
 /* Store the current ofprotos in 'ofproto_shash'.  Returns a sorted list
@@ -3952,11 +4387,10 @@ static bool
 ofproto_dpif_contains_flow(const struct ofproto_dpif *ofproto,
                            const struct nlattr *key, size_t key_len)
 {
-    enum odp_key_fitness fitness;
     struct ofproto_dpif *ofp;
     struct flow flow;
 
-    xlate_receive(ofproto->backer, NULL, key, key_len, &flow, &fitness, &ofp,
+    xlate_receive(ofproto->backer, NULL, key, key_len, &flow, &ofp,
                   NULL, NULL, NULL, NULL);
     return ofp == ofproto;
 }
@@ -3976,36 +4410,62 @@ ofproto_unixctl_dpif_dump_flows(struct unixctl_conn *conn,
     size_t actions_len;
     size_t mask_len;
     size_t key_len;
+    bool verbosity = false;
+    struct dpif_port dpif_port;
+    struct dpif_port_dump port_dump;
+    struct hmap portno_names;
+    void *state = NULL;
+    int error;
 
-    ofproto = ofproto_dpif_lookup(argv[1]);
+    ofproto = ofproto_dpif_lookup(argv[argc - 1]);
     if (!ofproto) {
         unixctl_command_reply_error(conn, "no such bridge");
         return;
     }
 
+    if (argc > 2 && !strcmp(argv[1], "-m")) {
+        verbosity = true;
+    }
+
+    hmap_init(&portno_names);
+    DPIF_PORT_FOR_EACH (&dpif_port, &port_dump, ofproto->backer->dpif) {
+        odp_portno_names_set(&portno_names, dpif_port.port_no, dpif_port.name);
+    }
+
     ds_init(&ds);
-    dpif_flow_dump_start(&flow_dump, ofproto->backer->dpif);
-    while (dpif_flow_dump_next(&flow_dump, &key, &key_len, &mask, &mask_len,
-                               &actions, &actions_len, &stats)) {
+    error = dpif_flow_dump_start(&flow_dump, ofproto->backer->dpif);
+    if (error) {
+        goto exit;
+    }
+    dpif_flow_dump_state_init(ofproto->backer->dpif, &state);
+    while (dpif_flow_dump_next(&flow_dump, state, &key, &key_len,
+                               &mask, &mask_len, &actions, &actions_len,
+                               &stats)) {
         if (!ofproto_dpif_contains_flow(ofproto, key, key_len)) {
             continue;
         }
 
-        odp_flow_format(key, key_len, mask, mask_len, NULL, &ds, false);
+        odp_flow_format(key, key_len, mask, mask_len, &portno_names, &ds,
+                        verbosity);
         ds_put_cstr(&ds, ", ");
         dpif_flow_stats_format(stats, &ds);
         ds_put_cstr(&ds, ", actions:");
         format_odp_actions(&ds, actions, actions_len);
         ds_put_char(&ds, '\n');
     }
+    dpif_flow_dump_state_uninit(ofproto->backer->dpif, state);
+    error = dpif_flow_dump_done(&flow_dump);
 
-    if (dpif_flow_dump_done(&flow_dump)) {
+exit:
+    if (error) {
         ds_clear(&ds);
         ds_put_format(&ds, "dpif/dump_flows failed: %s", ovs_strerror(errno));
         unixctl_command_reply_error(conn, ds_cstr(&ds));
     } else {
         unixctl_command_reply(conn, ds_cstr(&ds));
     }
+    odp_portno_names_destroy(&portno_names);
+    hmap_destroy(&portno_names);
     ds_destroy(&ds);
 }
 
@@ -4034,8 +4494,16 @@ ofproto_dpif_unixctl_init(void)
                              ofproto_unixctl_dpif_dump_dps, NULL);
     unixctl_command_register("dpif/show", "", 0, 0, ofproto_unixctl_dpif_show,
                              NULL);
-    unixctl_command_register("dpif/dump-flows", "bridge", 1, 1,
+    unixctl_command_register("dpif/dump-flows", "[-m] bridge", 1, 2,
                              ofproto_unixctl_dpif_dump_flows, NULL);
+}
+
+/* Returns true if 'table' is the table used for internal rules,
+ * false otherwise. */
+bool
+table_is_internal(uint8_t table_id)
+{
+    return table_id == TBL_INTERNAL;
 }
 
 /* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
@@ -4064,7 +4532,7 @@ set_realdev(struct ofport *ofport_, ofp_port_t realdev_ofp_port, int vid)
     if (realdev_ofp_port && ofport->bundle) {
         /* vlandevs are enslaved to their realdevs, so they are not allowed to
          * themselves be part of a bundle. */
-        bundle_set(ofport->up.ofproto, ofport->bundle, NULL);
+        bundle_set(ofport_->ofproto, ofport->bundle, NULL);
     }
 
     ofport->realdev_ofp_port = realdev_ofp_port;
@@ -4087,13 +4555,10 @@ bool
 ofproto_has_vlan_splinters(const struct ofproto_dpif *ofproto)
     OVS_EXCLUDED(ofproto->vsp_mutex)
 {
-    bool ret;
-
-    ovs_mutex_lock(&ofproto->vsp_mutex);
-    ret = !hmap_is_empty(&ofproto->realdev_vid_map);
-    ovs_mutex_unlock(&ofproto->vsp_mutex);
-    return ret;
+    /* hmap_is_empty is thread safe. */
+    return !hmap_is_empty(&ofproto->realdev_vid_map);
 }
+
 
 static ofp_port_t
 vsp_realdev_to_vlandev__(const struct ofproto_dpif *ofproto,
@@ -4130,6 +4595,10 @@ vsp_realdev_to_vlandev(const struct ofproto_dpif *ofproto,
 {
     ofp_port_t ret;
 
+    /* hmap_is_empty is thread safe, see if we can return immediately. */
+    if (hmap_is_empty(&ofproto->realdev_vid_map)) {
+        return realdev_ofp_port;
+    }
     ovs_mutex_lock(&ofproto->vsp_mutex);
     ret = vsp_realdev_to_vlandev__(ofproto, realdev_ofp_port, vlan_tci);
     ovs_mutex_unlock(&ofproto->vsp_mutex);
@@ -4192,6 +4661,11 @@ vsp_adjust_flow(const struct ofproto_dpif *ofproto, struct flow *flow)
 {
     ofp_port_t realdev;
     int vid;
+
+    /* hmap_is_empty is thread safe. */
+    if (hmap_is_empty(&ofproto->vlandev_map)) {
+        return false;
+    }
 
     ovs_mutex_lock(&ofproto->vsp_mutex);
     realdev = vsp_vlandev_to_realdev(ofproto, flow->in_port.ofp_port, &vid);
@@ -4291,6 +4765,93 @@ odp_port_to_ofp_port(const struct ofproto_dpif *ofproto, odp_port_t odp_port)
     } else {
         return OFPP_NONE;
     }
+}
+
+uint32_t
+ofproto_dpif_alloc_recirc_id(struct ofproto_dpif *ofproto)
+{
+    struct dpif_backer *backer = ofproto->backer;
+
+    return  recirc_id_alloc(backer->rid_pool);
+}
+
+void
+ofproto_dpif_free_recirc_id(struct ofproto_dpif *ofproto, uint32_t recirc_id)
+{
+    struct dpif_backer *backer = ofproto->backer;
+
+    recirc_id_free(backer->rid_pool, recirc_id);
+}
+
+int
+ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
+                               const struct match *match, int priority,
+                               const struct ofpbuf *ofpacts,
+                               struct rule **rulep)
+{
+    struct ofputil_flow_mod fm;
+    struct rule_dpif *rule;
+    int error;
+
+    fm.match = *match;
+    fm.priority = priority;
+    fm.new_cookie = htonll(0);
+    fm.cookie = htonll(0);
+    fm.cookie_mask = htonll(0);
+    fm.modify_cookie = false;
+    fm.table_id = TBL_INTERNAL;
+    fm.command = OFPFC_ADD;
+    fm.idle_timeout = 0;
+    fm.hard_timeout = 0;
+    fm.buffer_id = 0;
+    fm.out_port = 0;
+    fm.flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY;
+    fm.ofpacts = ofpbuf_data(ofpacts);
+    fm.ofpacts_len = ofpbuf_size(ofpacts);
+
+    error = ofproto_flow_mod(&ofproto->up, &fm);
+    if (error) {
+        VLOG_ERR_RL(&rl, "failed to add internal flow (%s)",
+                    ofperr_to_string(error));
+        *rulep = NULL;
+        return error;
+    }
+
+    rule = rule_dpif_lookup_in_table(ofproto, TBL_INTERNAL, &fm.match.flow,
+                                     &fm.match.wc, false);
+    if (rule) {
+        *rulep = &rule->up;
+    } else {
+        OVS_NOT_REACHED();
+    }
+    return 0;
+}
+
+int
+ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
+                                  struct match *match, int priority)
+{
+    struct ofputil_flow_mod fm;
+    int error;
+
+    fm.match = *match;
+    fm.priority = priority;
+    fm.new_cookie = htonll(0);
+    fm.cookie = htonll(0);
+    fm.cookie_mask = htonll(0);
+    fm.modify_cookie = false;
+    fm.table_id = TBL_INTERNAL;
+    fm.flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY;
+    fm.command = OFPFC_DELETE_STRICT;
+
+    error = ofproto_flow_mod(&ofproto->up, &fm);
+    if (error) {
+        VLOG_ERR_RL(&rl, "failed to delete internal flow (%s)",
+                    ofperr_to_string(error));
+        return error;
+    }
+
+    return 0;
 }
 
 const struct ofproto_class ofproto_dpif_class = {

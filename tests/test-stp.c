@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "ofpbuf.h"
 #include "packets.h"
 #include "vlog.h"
+#include "ovstest.h"
 
 struct bpdu {
     int port_no;
@@ -92,7 +93,7 @@ send_bpdu(struct ofpbuf *pkt, int port_no, void *b_)
     assert(port_no < b->n_ports);
     lan = b->ports[port_no];
     if (lan) {
-        const void *data = pkt->l3;
+        const void *data = ofpbuf_l3(pkt);
         size_t size = (char *) ofpbuf_tail(pkt) - (char *) data;
         int i;
 
@@ -434,8 +435,8 @@ must_match(const char *want)
     }
 }
 
-int
-main(int argc, char *argv[])
+static void
+test_stp_main(int argc, char *argv[])
 {
     struct test_case *tc;
     FILE *input_file;
@@ -665,6 +666,6 @@ main(int argc, char *argv[])
         free(bridge);
     }
     free(tc);
-
-    return 0;
 }
+
+OVSTEST_REGISTER("test-stp", test_stp_main);

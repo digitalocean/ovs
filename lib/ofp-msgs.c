@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -268,6 +268,8 @@ ofp_is_stat_request(enum ofp_version version, uint8_t type)
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
+    case OFP14_VERSION:
+    case OFP15_VERSION:
         return type == OFPT11_STATS_REQUEST;
     }
 
@@ -283,6 +285,8 @@ ofp_is_stat_reply(enum ofp_version version, uint8_t type)
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
+    case OFP14_VERSION:
+    case OFP15_VERSION:
         return type == OFPT11_STATS_REPLY;
     }
 
@@ -322,6 +326,8 @@ ofphdrs_len(const struct ofphdrs *hdrs)
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
+    case OFP14_VERSION:
+    case OFP15_VERSION:
         if (hdrs->type == OFPT11_STATS_REQUEST ||
             hdrs->type == OFPT11_STATS_REPLY) {
             return (hdrs->stat == OFPST_VENDOR
@@ -368,18 +374,18 @@ ofpraw_decode_assert(const struct ofp_header *oh)
 }
 
 /* Determines the OFPRAW_* type of the OpenFlow message in 'msg', which starts
- * at 'msg->data' and has length 'msg->size' bytes.  On success, returns 0 and
- * stores the type into '*rawp'.  On failure, returns an OFPERR_* error code
- * and zeros '*rawp'.
+ * at 'ofpbuf_data(msg)' and has length 'ofpbuf_size(msg)' bytes.  On success,
+ * returns 0 and stores the type into '*rawp'.  On failure, returns an OFPERR_*
+ * error code and zeros '*rawp'.
  *
  * This function checks that the message has a valid length for its particular
  * type of message, and returns an error if not.
  *
  * In addition to setting '*rawp', this function pulls off the OpenFlow header
  * (including the stats headers, vendor header, and any subtype header) with
- * ofpbuf_pull().  It also sets 'msg->l2' to the start of the OpenFlow header
- * and 'msg->l3' just beyond the headers (that is, to the final value of
- * msg->data). */
+ * ofpbuf_pull().  It also sets 'msg->frame' to the start of the OpenFlow
+ * header and 'msg->l3' just beyond the headers (that is, to the final value of
+ * ofpbuf_data(msg)). */
 enum ofperr
 ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
 {
@@ -396,11 +402,12 @@ ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
     enum ofpraw raw;
 
     /* Set default outputs. */
-    msg->l2 = msg->l3 = msg->data;
+    msg->frame = ofpbuf_data(msg);
+    ofpbuf_set_l3(msg, msg->frame);
     *rawp = 0;
 
-    len = msg->size;
-    error = ofphdrs_decode(&hdrs, msg->data, len);
+    len = ofpbuf_size(msg);
+    error = ofphdrs_decode(&hdrs, ofpbuf_data(msg), len);
     if (error) {
         return error;
     }
@@ -412,8 +419,8 @@ ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
 
     info = raw_info_get(raw);
     instance = raw_instance_get(info, hdrs.version);
-    msg->l2 = ofpbuf_pull(msg, instance->hdrs_len);
-    msg->l3 = msg->data;
+    msg->frame = ofpbuf_pull(msg, instance->hdrs_len);
+    ofpbuf_set_l3(msg, ofpbuf_data(msg));
 
     min_len = instance->hdrs_len + info->min_body;
     switch (info->extra_multiple) {
@@ -507,10 +514,10 @@ static void ofpraw_put__(enum ofpraw, uint8_t version, ovs_be32 xid,
  * Each 'raw' value is valid only for certain OpenFlow versions.  The caller
  * must specify a valid (raw, version) pair.
  *
- * In the returned ofpbuf, 'l2' points to the beginning of the OpenFlow header
- * and 'l3' points just after it, to where the message's body will start.  The
- * caller must actually allocate the body into the space reserved for it,
- * e.g. with ofpbuf_put_uninit().
+ * In the returned ofpbuf, 'frame' points to the beginning of the
+ * OpenFlow header and 'l3' points just after it, to where the
+ * message's body will start.  The caller must actually allocate the
+ * body into the space reserved for it, e.g. with ofpbuf_put_uninit().
  *
  * The caller owns the returned ofpbuf and must free it when it is no longer
  * needed, e.g. with ofpbuf_delete(). */
@@ -554,10 +561,10 @@ ofpraw_alloc_reply(enum ofpraw raw, const struct ofp_header *request,
  * value.  Every stats request has a corresponding reply, so the (raw, version)
  * pairing pitfalls of the other ofpraw_alloc_*() functions don't apply here.
  *
- * In the returned ofpbuf, 'l2' points to the beginning of the OpenFlow header
- * and 'l3' points just after it, to where the message's body will start.  The
- * caller must actually allocate the body into the space reserved for it,
- * e.g. with ofpbuf_put_uninit().
+ * In the returned ofpbuf, 'frame' points to the beginning of the
+ * OpenFlow header and 'l3' points just after it, to where the
+ * message's body will start.  The caller must actually allocate the
+ * body into the space reserved for it, e.g. with ofpbuf_put_uninit().
  *
  * The caller owns the returned ofpbuf and must free it when it is no longer
  * needed, e.g. with ofpbuf_delete(). */
@@ -587,7 +594,7 @@ ofpraw_alloc_stats_reply(const struct ofp_header *request,
  * Each 'raw' value is valid only for certain OpenFlow versions.  The caller
  * must specify a valid (raw, version) pair.
  *
- * Upon return, 'buf->l2' points to the beginning of the OpenFlow header and
+ * Upon return, 'buf->frame' points to the beginning of the OpenFlow header and
  * 'buf->l3' points just after it, to where the message's body will start.  The
  * caller must actually allocating the body into the space reserved for it,
  * e.g. with ofpbuf_put_uninit(). */
@@ -627,10 +634,10 @@ ofpraw_put_reply(enum ofpraw raw, const struct ofp_header *request,
  * value.  Every stats request has a corresponding reply, so the (raw, version)
  * pairing pitfalls of the other ofpraw_alloc_*() functions don't apply here.
  *
- * In the returned ofpbuf, 'l2' points to the beginning of the OpenFlow header
- * and 'l3' points just after it, to where the message's body will start.  The
- * caller must actually allocate the body into the space reserved for it,
- * e.g. with ofpbuf_put_uninit().
+ * In the returned ofpbuf, 'frame' points to the beginning of the
+ * OpenFlow header and 'l3' points just after it, to where the
+ * message's body will start.  The caller must actually allocate the
+ * body into the space reserved for it, e.g. with ofpbuf_put_uninit().
  *
  * The caller owns the returned ofpbuf and must free it when it is no longer
  * needed, e.g. with ofpbuf_delete(). */
@@ -660,17 +667,17 @@ ofpraw_put__(enum ofpraw raw, uint8_t version, ovs_be32 xid,
 
     ofpbuf_prealloc_tailroom(buf, (instance->hdrs_len + info->min_body
                                    + extra_tailroom));
-    buf->l2 = ofpbuf_put_uninit(buf, instance->hdrs_len);
-    buf->l3 = ofpbuf_tail(buf);
+    buf->frame = ofpbuf_put_uninit(buf, instance->hdrs_len);
+    ofpbuf_set_l3(buf, ofpbuf_tail(buf));
 
-    oh = buf->l2;
+    oh = buf->frame;
     oh->version = version;
     oh->type = hdrs->type;
-    oh->length = htons(buf->size);
+    oh->length = htons(ofpbuf_size(buf));
     oh->xid = xid;
 
     if (hdrs->type == OFPT_VENDOR) {
-        struct nicira_header *nh = buf->l2;
+        struct nicira_header *nh = buf->frame;
 
         ovs_assert(hdrs->vendor == NX_VENDOR_ID);
         nh->vendor = htonl(hdrs->vendor);
@@ -678,17 +685,17 @@ ofpraw_put__(enum ofpraw raw, uint8_t version, ovs_be32 xid,
     } else if (version == OFP10_VERSION
                && (hdrs->type == OFPT10_STATS_REQUEST ||
                    hdrs->type == OFPT10_STATS_REPLY)) {
-        struct ofp10_stats_msg *osm = buf->l2;
+        struct ofp10_stats_msg *osm = buf->frame;
 
         osm->type = htons(hdrs->stat);
         osm->flags = htons(0);
 
         if (hdrs->stat == OFPST_VENDOR) {
-            struct ofp10_vendor_stats_msg *ovsm = buf->l2;
+            struct ofp10_vendor_stats_msg *ovsm = buf->frame;
 
             ovsm->vendor = htonl(hdrs->vendor);
             if (hdrs->vendor == NX_VENDOR_ID) {
-                struct nicira10_stats_msg *nsm = buf->l2;
+                struct nicira10_stats_msg *nsm = buf->frame;
 
                 nsm->subtype = htonl(hdrs->subtype);
                 memset(nsm->pad, 0, sizeof nsm->pad);
@@ -699,18 +706,18 @@ ofpraw_put__(enum ofpraw raw, uint8_t version, ovs_be32 xid,
     } else if (version != OFP10_VERSION
                && (hdrs->type == OFPT11_STATS_REQUEST ||
                    hdrs->type == OFPT11_STATS_REPLY)) {
-        struct ofp11_stats_msg *osm = buf->l2;
+        struct ofp11_stats_msg *osm = buf->frame;
 
         osm->type = htons(hdrs->stat);
         osm->flags = htons(0);
         memset(osm->pad, 0, sizeof osm->pad);
 
         if (hdrs->stat == OFPST_VENDOR) {
-            struct ofp11_vendor_stats_msg *ovsm = buf->l2;
+            struct ofp11_vendor_stats_msg *ovsm = buf->frame;
 
             ovsm->vendor = htonl(hdrs->vendor);
             if (hdrs->vendor == NX_VENDOR_ID) {
-                struct nicira11_stats_msg *nsm = buf->l2;
+                struct nicira11_stats_msg *nsm = buf->frame;
 
                 nsm->subtype = htonl(hdrs->subtype);
             } else {
@@ -753,6 +760,8 @@ ofpraw_stats_request_to_reply(enum ofpraw raw, uint8_t version)
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
+    case OFP14_VERSION:
+    case OFP15_VERSION:
         ovs_assert(hdrs.type == OFPT11_STATS_REQUEST);
         hdrs.type = OFPT11_STATS_REPLY;
         break;
@@ -785,18 +794,18 @@ ofptype_decode(enum ofptype *typep, const struct ofp_header *oh)
 }
 
 /* Determines the OFPTYPE_* type of the OpenFlow message in 'msg', which starts
- * at 'msg->data' and has length 'msg->size' bytes.  On success, returns 0 and
- * stores the type into '*typep'.  On failure, returns an OFPERR_* error code
- * and zeros '*typep'.
+ * at 'ofpbuf_data(msg)' and has length 'ofpbuf_size(msg)' bytes.  On success,
+ * returns 0 and stores the type into '*typep'.  On failure, returns an
+ * OFPERR_* error code and zeros '*typep'.
  *
  * This function checks that the message has a valid length for its particular
  * type of message, and returns an error if not.
  *
  * In addition to setting '*typep', this function pulls off the OpenFlow header
  * (including the stats headers, vendor header, and any subtype header) with
- * ofpbuf_pull().  It also sets 'msg->l2' to the start of the OpenFlow header
- * and 'msg->l3' just beyond the headers (that is, to the final value of
- * msg->data). */
+ * ofpbuf_pull().  It also sets 'msg->frame' to the start of the OpenFlow
+ * header and 'msg->l3' just beyond the headers (that is, to the final value of
+ * ofpbuf_data(msg)). */
 enum ofperr
 ofptype_pull(enum ofptype *typep, struct ofpbuf *buf)
 {
@@ -819,12 +828,12 @@ ofptype_from_ofpraw(enum ofpraw raw)
 }
 
 /* Updates the 'length' field of the OpenFlow message in 'buf' to
- * 'buf->size'. */
+ * 'ofpbuf_size(buf)'. */
 void
 ofpmsg_update_length(struct ofpbuf *buf)
 {
     struct ofp_header *oh = ofpbuf_at_assert(buf, 0, sizeof *oh);
-    oh->length = htons(buf->size);
+    oh->length = htons(ofpbuf_size(buf));
 }
 
 /* Returns just past the Openflow header (including the stats headers, vendor
@@ -875,7 +884,7 @@ ofpmp_reserve(struct list *replies, size_t len)
 {
     struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
 
-    if (msg->size + len <= UINT16_MAX) {
+    if (ofpbuf_size(msg) + len <= UINT16_MAX) {
         ofpbuf_prealloc_tailroom(msg, len);
         return msg;
     } else {
@@ -883,16 +892,16 @@ ofpmp_reserve(struct list *replies, size_t len)
         struct ofpbuf *next;
         struct ofphdrs hdrs;
 
-        ofphdrs_decode_assert(&hdrs, msg->data, msg->size);
+        ofphdrs_decode_assert(&hdrs, ofpbuf_data(msg), ofpbuf_size(msg));
         hdrs_len = ofphdrs_len(&hdrs);
 
         next = ofpbuf_new(MAX(1024, hdrs_len + len));
-        ofpbuf_put(next, msg->data, hdrs_len);
-        next->l2 = next->data;
-        next->l3 = ofpbuf_tail(next);
+        ofpbuf_put(next, ofpbuf_data(msg), hdrs_len);
+        next->frame = ofpbuf_data(next);
+        ofpbuf_set_l3(next, ofpbuf_tail(next));
         list_push_back(replies, &next->list_node);
 
-        *ofpmp_flags__(msg->data) |= htons(OFPSF_REPLY_MORE);
+        *ofpmp_flags__(ofpbuf_data(msg)) |= htons(OFPSF_REPLY_MORE);
 
         return next;
     }
@@ -922,12 +931,37 @@ ofpmp_postappend(struct list *replies, size_t start_ofs)
     struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
 
     ovs_assert(start_ofs <= UINT16_MAX);
-    if (msg->size > UINT16_MAX) {
-        size_t len = msg->size - start_ofs;
+    if (ofpbuf_size(msg) > UINT16_MAX) {
+        size_t len = ofpbuf_size(msg) - start_ofs;
         memcpy(ofpmp_append(replies, len),
-               (const uint8_t *) msg->data + start_ofs, len);
-        msg->size = start_ofs;
+               (const uint8_t *) ofpbuf_data(msg) + start_ofs, len);
+        ofpbuf_set_size(msg, start_ofs);
     }
+}
+
+/* Returns the OpenFlow version of the replies being constructed in 'replies',
+ * which should have been initialized by ofpmp_init(). */
+enum ofp_version
+ofpmp_version(struct list *replies)
+{
+    struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
+    const struct ofp_header *oh = ofpbuf_data(msg);
+
+    return oh->version;
+}
+
+/* Determines the OFPRAW_* type of the OpenFlow messages in 'replies', which
+ * should have been initialized by ofpmp_init(). */
+enum ofpraw
+ofpmp_decode_raw(struct list *replies)
+{
+    struct ofpbuf *msg = ofpbuf_from_list(list_back(replies));
+    enum ofperr error;
+    enum ofpraw raw;
+
+    error = ofpraw_decode_partial(&raw, ofpbuf_data(msg), ofpbuf_size(msg));
+    ovs_assert(!error);
+    return raw;
 }
 
 static ovs_be16 *
@@ -939,6 +973,8 @@ ofpmp_flags__(const struct ofp_header *oh)
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
+    case OFP14_VERSION:
+    case OFP15_VERSION:
         return &((struct ofp11_stats_msg *) oh)->flags;
     default:
         OVS_NOT_REACHED();

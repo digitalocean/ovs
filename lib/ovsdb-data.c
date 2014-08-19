@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ wrap_json(const char *name, struct json *wrapped)
 
 /* Initializes 'atom' with the default value of the given 'type'.
  *
- * The default value for an atom is as defined in ovsdb/SPECS:
+ * The default value for an atom is as defined in RFC 7047:
  *
  *      - "integer" or "real": 0
  *
@@ -409,10 +409,9 @@ ovsdb_atom_from_json__(union ovsdb_atom *atom,
  * Violations of constraints expressed by 'base' are treated as errors.
  *
  * If 'symtab' is nonnull, then named UUIDs in 'symtab' are accepted.  Refer to
- * ovsdb/SPECS for information about this, and for the syntax that this
- * function accepts.  If 'base' is a reference and a symbol is parsed, then the
- * symbol's 'strong_ref' or 'weak_ref' member is set to true, as
- * appropriate. */
+ * RFC 7047 for information about this, and for the syntax that this function
+ * accepts.  If 'base' is a reference and a symbol is parsed, then the symbol's
+ * 'strong_ref' or 'weak_ref' member is set to true, as appropriate. */
 struct ovsdb_error *
 ovsdb_atom_from_json(union ovsdb_atom *atom,
                      const struct ovsdb_base_type *base,
@@ -436,8 +435,7 @@ ovsdb_atom_from_json(union ovsdb_atom *atom,
 /* Converts 'atom', of the specified 'type', to JSON format, and returns the
  * JSON.  The caller is responsible for freeing the returned JSON.
  *
- * Refer to ovsdb/SPECS for the format of the JSON that this function
- * produces. */
+ * Refer to RFC 7047 for the format of the JSON that this function produces. */
 struct json *
 ovsdb_atom_to_json(const union ovsdb_atom *atom, enum ovsdb_atomic_type type)
 {
@@ -465,47 +463,6 @@ ovsdb_atom_to_json(const union ovsdb_atom *atom, enum ovsdb_atomic_type type)
     default:
         OVS_NOT_REACHED();
     }
-}
-
-/* Returns strlen(json_to_string(ovsdb_atom_to_json(atom, type), 0)). */
-size_t
-ovsdb_atom_json_length(const union ovsdb_atom *atom,
-                       enum ovsdb_atomic_type type)
-{
-    struct json json;
-
-    switch (type) {
-    case OVSDB_TYPE_VOID:
-        OVS_NOT_REACHED();
-
-    case OVSDB_TYPE_INTEGER:
-        json.type = JSON_INTEGER;
-        json.u.integer = atom->integer;
-        break;
-
-    case OVSDB_TYPE_REAL:
-        json.type = JSON_REAL;
-        json.u.real = atom->real;
-        break;
-
-    case OVSDB_TYPE_BOOLEAN:
-        json.type = atom->boolean ? JSON_TRUE : JSON_FALSE;
-        break;
-
-    case OVSDB_TYPE_STRING:
-        json.type = JSON_STRING;
-        json.u.string = atom->string;
-        break;
-
-    case OVSDB_TYPE_UUID:
-        return strlen("[\"uuid\",\"00000000-0000-0000-0000-000000000000\"]");
-
-    case OVSDB_N_TYPES:
-    default:
-        OVS_NOT_REACHED();
-    }
-
-    return json_serialized_length(&json);
 }
 
 static char *
@@ -884,7 +841,7 @@ ovsdb_datum_init_empty(struct ovsdb_datum *datum)
 
 /* Initializes 'datum' as a datum that has the default value for 'type'.
  *
- * The default value for a particular type is as defined in ovsdb/SPECS:
+ * The default value for a particular type is as defined in RFC 7047:
  *
  *    - If n_min is 0, then the default value is the empty set (or map).
  *
@@ -1289,8 +1246,8 @@ ovsdb_datum_from_json__(struct ovsdb_datum *datum,
  * Violations of constraints expressed by 'type' are treated as errors.
  *
  * If 'symtab' is nonnull, then named UUIDs in 'symtab' are accepted.  Refer to
- * ovsdb/SPECS for information about this, and for the syntax that this
- * function accepts. */
+ * RFC 7047 for information about this, and for the syntax that this function
+ * accepts. */
 struct ovsdb_error *
 ovsdb_datum_from_json(struct ovsdb_datum *datum,
                       const struct ovsdb_type *type,
@@ -1316,8 +1273,7 @@ ovsdb_datum_from_json(struct ovsdb_datum *datum,
  *
  * 'type' constraints on datum->n are ignored.
  *
- * Refer to ovsdb/SPECS for the format of the JSON that this function
- * produces. */
+ * Refer to RFC 7047 for the format of the JSON that this function produces. */
 struct json *
 ovsdb_datum_to_json(const struct ovsdb_datum *datum,
                     const struct ovsdb_type *type)
@@ -1346,56 +1302,6 @@ ovsdb_datum_to_json(const struct ovsdb_datum *datum,
         }
 
         return wrap_json("set", json_array_create(elems, datum->n));
-    }
-}
-
-/* Returns strlen(json_to_string(ovsdb_datum_to_json(datum, type), 0)). */
-size_t
-ovsdb_datum_json_length(const struct ovsdb_datum *datum,
-                        const struct ovsdb_type *type)
-{
-    if (ovsdb_type_is_map(type)) {
-        size_t length;
-
-        /* ["map",[...]]. */
-        length = 10;
-        if (datum->n > 0) {
-            size_t i;
-
-            /* Commas between pairs in the inner [...] */
-            length += datum->n - 1;
-
-            /* [,] in each pair. */
-            length += datum->n * 3;
-
-            /* Data. */
-            for (i = 0; i < datum->n; i++) {
-                length += ovsdb_atom_json_length(&datum->keys[i],
-                                                 type->key.type);
-                length += ovsdb_atom_json_length(&datum->values[i],
-                                                 type->value.type);
-            }
-        }
-        return length;
-    } else if (datum->n == 1) {
-        return ovsdb_atom_json_length(&datum->keys[0], type->key.type);
-    } else {
-        size_t length;
-        size_t i;
-
-        /* ["set",[...]]. */
-        length = 10;
-        if (datum->n > 0) {
-            /* Commas between elements in the inner [...]. */
-            length += datum->n - 1;
-
-            /* Data. */
-            for (i = 0; i < datum->n; i++) {
-                length += ovsdb_atom_json_length(&datum->keys[i],
-                                                 type->key.type);
-            }
-        }
-        return length;
     }
 }
 

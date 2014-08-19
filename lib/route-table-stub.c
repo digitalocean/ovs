@@ -1,4 +1,4 @@
-/* Copyright (c) 2012 Nicira, Inc.
+/* Copyright (c) 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +24,10 @@ route_table_get_name(ovs_be32 ip OVS_UNUSED, char name[IFNAMSIZ] OVS_UNUSED)
     return false;
 }
 
-bool
-route_table_get_ifindex(ovs_be32 ip OVS_UNUSED, int *ifindex)
+uint64_t
+route_table_get_change_seq(void)
 {
-    *ifindex = 0;
-    return false;
+    return 0;
 }
 
 void

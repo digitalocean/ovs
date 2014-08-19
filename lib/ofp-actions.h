@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -234,8 +234,8 @@ struct ofpact_enqueue {
  * Used for NXAST_OUTPUT_REG. */
 struct ofpact_output_reg {
     struct ofpact ofpact;
-    struct mf_subfield src;
     uint16_t max_len;
+    struct mf_subfield src;
 };
 
 /* OFPACT_BUNDLE.
@@ -363,19 +363,6 @@ struct ofpact_reg_load {
     union mf_subvalue subvalue; /* Least-significant bits are used. */
 };
 
-/* The position in the packet at which to insert an MPLS header.
- *
- * Used NXAST_PUSH_MPLS, OFPAT11_PUSH_MPLS. */
-enum ofpact_mpls_position {
-    /* Add the MPLS LSE after the Ethernet header but before any VLAN tags.
-     * OpenFlow 1.3+ requires this behavior. */
-   OFPACT_MPLS_BEFORE_VLAN,
-
-   /* Add the MPLS LSE after the Ethernet header and any VLAN tags.
-    * OpenFlow 1.1 and 1.2 require this behavior. */
-   OFPACT_MPLS_AFTER_VLAN
-};
-
 /* OFPACT_SET_FIELD.
  *
  * Used for OFPAT12_SET_FIELD. */
@@ -392,7 +379,6 @@ struct ofpact_set_field {
 struct ofpact_push_mpls {
     struct ofpact ofpact;
     ovs_be16 ethertype;
-    enum ofpact_mpls_position position;
 };
 
 /* OFPACT_POP_MPLS
@@ -450,10 +436,10 @@ struct ofpact_meter {
  * Used for OFPIT11_WRITE_ACTIONS. */
 struct ofpact_nest {
     struct ofpact ofpact;
-    uint8_t pad[OFPACT_ALIGN(sizeof(struct ofpact)) - sizeof(struct ofpact)];
+    uint8_t pad[PAD_SIZE(sizeof(struct ofpact), OFPACT_ALIGNTO)];
     struct ofpact actions[];
 };
-BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions) == OFPACT_ALIGNTO);
+BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions) % OFPACT_ALIGNTO == 0);
 
 static inline size_t
 ofpact_nest_get_action_len(const struct ofpact_nest *on)
@@ -655,8 +641,8 @@ void *ofpact_put(struct ofpbuf *, enum ofpact_type, size_t len);
  *     After using this function to add a variable-length action, add the
  *     elements of the flexible array (e.g. with ofpbuf_put()), then use
  *     ofpact_update_len() to update the length embedded into the action.
- *     (Keep in mind the need to refresh the structure from 'ofpacts->l2' after
- *     adding data to 'ofpacts'.)
+ *     (Keep in mind the need to refresh the structure from 'ofpacts->frame'
+ *     after adding data to 'ofpacts'.)
  *
  *   struct <STRUCT> *ofpact_get_<ENUM>(const struct ofpact *ofpact);
  *
@@ -764,4 +750,7 @@ const char *ovs_instruction_name_from_type(enum ovs_instruction_type type);
 int ovs_instruction_type_from_name(const char *name);
 enum ovs_instruction_type ovs_instruction_type_from_ofpact_type(
     enum ofpact_type);
+enum ofperr ovs_instruction_type_from_inst_type(
+    enum ovs_instruction_type *instruction_type, const uint16_t inst_type);
+
 #endif /* ofp-actions.h */

@@ -82,6 +82,7 @@ DISTCLEANFILES += \
 man_MANS += \
 	utilities/ovs-appctl.8 \
 	utilities/ovs-benchmark.1 \
+	utilities/ovs-ctl.8 \
 	utilities/ovs-dpctl.8 \
 	utilities/ovs-dpctl-top.8 \
 	utilities/ovs-l3ping.8 \
@@ -94,35 +95,33 @@ man_MANS += \
 	utilities/ovs-test.8 \
 	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
-dist_man_MANS += utilities/ovs-ctl.8
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
-utilities_ovs_appctl_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
 
 utilities_ovs_dpctl_SOURCES = utilities/ovs-dpctl.c
-utilities_ovs_dpctl_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_ovs_dpctl_LDADD = lib/libopenvswitch.la
 
 utilities_ovs_ofctl_SOURCES = utilities/ovs-ofctl.c
 utilities_ovs_ofctl_LDADD = \
 	ofproto/libofproto.la \
-	lib/libopenvswitch.la \
-	$(SSL_LIBS)
+	lib/libopenvswitch.la
 
 utilities_ovs_vsctl_SOURCES = utilities/ovs-vsctl.c
-utilities_ovs_vsctl_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_ovs_vsctl_LDADD = lib/libopenvswitch.la
 
-if LINUX_DATAPATH
+if LINUX
 sbin_PROGRAMS += utilities/ovs-vlan-bug-workaround
 utilities_ovs_vlan_bug_workaround_SOURCES = utilities/ovs-vlan-bug-workaround.c
-utilities_ovs_vlan_bug_workaround_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_ovs_vlan_bug_workaround_LDADD = lib/libopenvswitch.la
 
 noinst_PROGRAMS += utilities/nlmon
 utilities_nlmon_SOURCES = utilities/nlmon.c
-utilities_nlmon_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_nlmon_LDADD = lib/libopenvswitch.la
 endif
 
 bin_PROGRAMS += utilities/ovs-benchmark
 utilities_ovs_benchmark_SOURCES = utilities/ovs-benchmark.c
-utilities_ovs_benchmark_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+utilities_ovs_benchmark_LDADD = lib/libopenvswitch.la
 
 include utilities/bugtool/automake.mk

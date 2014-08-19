@@ -96,6 +96,12 @@ vteprec_physical_switch_cast(const struct ovsdb_idl_row *row)
     return row ? CONTAINER_OF(row, struct vteprec_physical_switch, header_) : NULL;
 }
 
+static struct vteprec_tunnel *
+vteprec_tunnel_cast(const struct ovsdb_idl_row *row)
+{
+    return row ? CONTAINER_OF(row, struct vteprec_tunnel, header_) : NULL;
+}
+
 static struct vteprec_ucast_macs_local *
 vteprec_ucast_macs_local_cast(const struct ovsdb_idl_row *row)
 {
@@ -158,6 +164,12 @@ void
 vteprec_arp_sources_local_init(struct vteprec_arp_sources_local *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_arp_sources_local *
+vteprec_arp_sources_local_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_arp_sources_local_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_ARP_SOURCES_LOCAL], uuid));
 }
 
 const struct vteprec_arp_sources_local *
@@ -356,6 +368,12 @@ void
 vteprec_arp_sources_remote_init(struct vteprec_arp_sources_remote *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_arp_sources_remote *
+vteprec_arp_sources_remote_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_arp_sources_remote_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_ARP_SOURCES_REMOTE], uuid));
 }
 
 const struct vteprec_arp_sources_remote *
@@ -576,6 +594,12 @@ void
 vteprec_global_init(struct vteprec_global *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_global *
+vteprec_global_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_global_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_GLOBAL], uuid));
 }
 
 const struct vteprec_global *
@@ -819,6 +843,12 @@ void
 vteprec_logical_binding_stats_init(struct vteprec_logical_binding_stats *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_logical_binding_stats *
+vteprec_logical_binding_stats_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_logical_binding_stats_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_LOGICAL_BINDING_STATS], uuid));
 }
 
 const struct vteprec_logical_binding_stats *
@@ -1183,6 +1213,12 @@ vteprec_logical_router_init(struct vteprec_logical_router *row)
 {
     memset(row, 0, sizeof *row); 
     smap_init(&row->static_routes);
+}
+
+const struct vteprec_logical_router *
+vteprec_logical_router_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_logical_router_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_LOGICAL_ROUTER], uuid));
 }
 
 const struct vteprec_logical_router *
@@ -1552,6 +1588,12 @@ vteprec_logical_switch_init(struct vteprec_logical_switch *row)
 }
 
 const struct vteprec_logical_switch *
+vteprec_logical_switch_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_logical_switch_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_LOGICAL_SWITCH], uuid));
+}
+
+const struct vteprec_logical_switch *
 vteprec_logical_switch_first(const struct ovsdb_idl *idl)
 {
     return vteprec_logical_switch_cast(ovsdb_idl_first_row(idl, &vteprec_table_classes[VTEPREC_TABLE_LOGICAL_SWITCH]));
@@ -1912,6 +1954,12 @@ vteprec_manager_init(struct vteprec_manager *row)
     memset(row, 0, sizeof *row); 
     smap_init(&row->other_config);
     smap_init(&row->status);
+}
+
+const struct vteprec_manager *
+vteprec_manager_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_manager_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_MANAGER], uuid));
 }
 
 const struct vteprec_manager *
@@ -2422,6 +2470,12 @@ vteprec_mcast_macs_local_init(struct vteprec_mcast_macs_local *row)
 }
 
 const struct vteprec_mcast_macs_local *
+vteprec_mcast_macs_local_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_mcast_macs_local_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_LOCAL], uuid));
+}
+
+const struct vteprec_mcast_macs_local *
 vteprec_mcast_macs_local_first(const struct ovsdb_idl *idl)
 {
     return vteprec_mcast_macs_local_cast(ovsdb_idl_first_row(idl, &vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_LOCAL]));
@@ -2771,6 +2825,12 @@ vteprec_mcast_macs_remote_init(struct vteprec_mcast_macs_remote *row)
 }
 
 const struct vteprec_mcast_macs_remote *
+vteprec_mcast_macs_remote_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_mcast_macs_remote_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_REMOTE], uuid));
+}
+
+const struct vteprec_mcast_macs_remote *
 vteprec_mcast_macs_remote_first(const struct ovsdb_idl *idl)
 {
     return vteprec_mcast_macs_remote_cast(ovsdb_idl_first_row(idl, &vteprec_table_classes[VTEPREC_TABLE_MCAST_MACS_REMOTE]));
@@ -3032,36 +3092,6 @@ vteprec_mcast_macs_remote_columns_init(void)
 /* Physical_Locator table. */
 
 static void
-vteprec_physical_locator_parse_bfd(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct vteprec_physical_locator *row = vteprec_physical_locator_cast(row_);
-    size_t i;
-
-    ovs_assert(inited);
-    smap_init(&row->bfd);
-    for (i = 0; i < datum->n; i++) {
-        smap_add(&row->bfd,
-                 datum->keys[i].string,
-                 datum->values[i].string);
-    }
-}
-
-static void
-vteprec_physical_locator_parse_bfd_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
-{
-    struct vteprec_physical_locator *row = vteprec_physical_locator_cast(row_);
-    size_t i;
-
-    ovs_assert(inited);
-    smap_init(&row->bfd_status);
-    for (i = 0; i < datum->n; i++) {
-        smap_add(&row->bfd_status,
-                 datum->keys[i].string,
-                 datum->values[i].string);
-    }
-}
-
-static void
 vteprec_physical_locator_parse_dst_ip(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct vteprec_physical_locator *row = vteprec_physical_locator_cast(row_);
@@ -3088,24 +3118,6 @@ vteprec_physical_locator_parse_encapsulation_type(struct ovsdb_idl_row *row_, co
 }
 
 static void
-vteprec_physical_locator_unparse_bfd(struct ovsdb_idl_row *row_)
-{
-    struct vteprec_physical_locator *row = vteprec_physical_locator_cast(row_);
-
-    ovs_assert(inited);
-    smap_destroy(&row->bfd);
-}
-
-static void
-vteprec_physical_locator_unparse_bfd_status(struct ovsdb_idl_row *row_)
-{
-    struct vteprec_physical_locator *row = vteprec_physical_locator_cast(row_);
-
-    ovs_assert(inited);
-    smap_destroy(&row->bfd_status);
-}
-
-static void
 vteprec_physical_locator_unparse_dst_ip(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -3127,8 +3139,12 @@ void
 vteprec_physical_locator_init(struct vteprec_physical_locator *row)
 {
     memset(row, 0, sizeof *row); 
-    smap_init(&row->bfd);
-    smap_init(&row->bfd_status);
+}
+
+const struct vteprec_physical_locator *
+vteprec_physical_locator_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_physical_locator_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR], uuid));
 }
 
 const struct vteprec_physical_locator *
@@ -3157,20 +3173,6 @@ vteprec_physical_locator_insert(struct ovsdb_idl_txn *txn)
 
 
 void
-vteprec_physical_locator_verify_bfd(const struct vteprec_physical_locator *row)
-{
-    ovs_assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD]);
-}
-
-void
-vteprec_physical_locator_verify_bfd_status(const struct vteprec_physical_locator *row)
-{
-    ovs_assert(inited);
-    ovsdb_idl_txn_verify(&row->header_, &vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD_STATUS]);
-}
-
-void
 vteprec_physical_locator_verify_dst_ip(const struct vteprec_physical_locator *row)
 {
     ovs_assert(inited);
@@ -3182,58 +3184,6 @@ vteprec_physical_locator_verify_encapsulation_type(const struct vteprec_physical
 {
     ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_ENCAPSULATION_TYPE]);
-}
-
-/* Returns the bfd column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * 'value_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes bfd's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-vteprec_physical_locator_get_bfd(const struct vteprec_physical_locator *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED,
-	enum ovsdb_atomic_type value_type OVS_UNUSED)
-{
-    ovs_assert(key_type == OVSDB_TYPE_STRING);
-    ovs_assert(value_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &vteprec_physical_locator_col_bfd);
-}
-
-/* Returns the bfd_status column's value in 'row' as a struct ovsdb_datum.
- * This is useful occasionally: for example, ovsdb_datum_find_key() is an
- * easier and more efficient way to search for a given key than implementing
- * the same operation on the "cooked" form in 'row'.
- *
- * 'key_type' must be OVSDB_TYPE_STRING.
- * 'value_type' must be OVSDB_TYPE_STRING.
- * (This helps to avoid silent bugs if someone changes bfd_status's
- * type without updating the caller.)
- *
- * The caller must not modify or free the returned value.
- *
- * Various kinds of changes can invalidate the returned value: modifying
- * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
- * If the returned value is needed for a long time, it is best to make a copy
- * of it with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-vteprec_physical_locator_get_bfd_status(const struct vteprec_physical_locator *row,
-	enum ovsdb_atomic_type key_type OVS_UNUSED,
-	enum ovsdb_atomic_type value_type OVS_UNUSED)
-{
-    ovs_assert(key_type == OVSDB_TYPE_STRING);
-    ovs_assert(value_type == OVSDB_TYPE_STRING);
-    return ovsdb_idl_read(&row->header_, &vteprec_physical_locator_col_bfd_status);
 }
 
 /* Returns the dst_ip column's value in 'row' as a struct ovsdb_datum.
@@ -3283,66 +3233,6 @@ vteprec_physical_locator_get_encapsulation_type(const struct vteprec_physical_lo
 }
 
 void
-vteprec_physical_locator_set_bfd(const struct vteprec_physical_locator *row, const struct smap *smap)
-{
-    struct ovsdb_datum datum;
-
-    ovs_assert(inited);
-    if (smap) {
-        struct smap_node *node;
-        size_t i;
-
-        datum.n = smap_count(smap);
-        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
-        datum.values = xmalloc(datum.n * sizeof *datum.values);
-
-        i = 0;
-        SMAP_FOR_EACH (node, smap) {
-            datum.keys[i].string = xstrdup(node->key);
-            datum.values[i].string = xstrdup(node->value);
-            i++;
-        }
-        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
-    } else {
-        ovsdb_datum_init_empty(&datum);
-    }
-    ovsdb_idl_txn_write(&row->header_,
-                        &vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD],
-                        &datum);
-}
-
-
-void
-vteprec_physical_locator_set_bfd_status(const struct vteprec_physical_locator *row, const struct smap *smap)
-{
-    struct ovsdb_datum datum;
-
-    ovs_assert(inited);
-    if (smap) {
-        struct smap_node *node;
-        size_t i;
-
-        datum.n = smap_count(smap);
-        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
-        datum.values = xmalloc(datum.n * sizeof *datum.values);
-
-        i = 0;
-        SMAP_FOR_EACH (node, smap) {
-            datum.keys[i].string = xstrdup(node->key);
-            datum.values[i].string = xstrdup(node->value);
-            i++;
-        }
-        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
-    } else {
-        ovsdb_datum_init_empty(&datum);
-    }
-    ovsdb_idl_txn_write(&row->header_,
-                        &vteprec_physical_locator_columns[VTEPREC_PHYSICAL_LOCATOR_COL_BFD_STATUS],
-                        &datum);
-}
-
-
-void
 vteprec_physical_locator_set_dst_ip(const struct vteprec_physical_locator *row, const char *dst_ip)
 {
     struct ovsdb_datum datum;
@@ -3376,32 +3266,6 @@ static void
 vteprec_physical_locator_columns_init(void)
 {
     struct ovsdb_idl_column *c;
-
-    /* Initialize vteprec_physical_locator_col_bfd. */
-    c = &vteprec_physical_locator_col_bfd;
-    c->name = "bfd";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
-    c->type.value.u.string.minLen = 0;
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->mutable = true;
-    c->parse = vteprec_physical_locator_parse_bfd;
-    c->unparse = vteprec_physical_locator_unparse_bfd;
-
-    /* Initialize vteprec_physical_locator_col_bfd_status. */
-    c = &vteprec_physical_locator_col_bfd_status;
-    c->name = "bfd_status";
-    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
-    c->type.key.u.string.minLen = 0;
-    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
-    c->type.value.u.string.minLen = 0;
-    c->type.n_min = 0;
-    c->type.n_max = UINT_MAX;
-    c->mutable = true;
-    c->parse = vteprec_physical_locator_parse_bfd_status;
-    c->unparse = vteprec_physical_locator_unparse_bfd_status;
 
     /* Initialize vteprec_physical_locator_col_dst_ip. */
     c = &vteprec_physical_locator_col_dst_ip;
@@ -3475,6 +3339,12 @@ void
 vteprec_physical_locator_set_init(struct vteprec_physical_locator_set *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_physical_locator_set *
+vteprec_physical_locator_set_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_physical_locator_set_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR_SET], uuid));
 }
 
 const struct vteprec_physical_locator_set *
@@ -3715,6 +3585,12 @@ void
 vteprec_physical_port_init(struct vteprec_physical_port *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_physical_port *
+vteprec_physical_port_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_physical_port_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_PORT], uuid));
 }
 
 const struct vteprec_physical_port *
@@ -4157,6 +4033,27 @@ vteprec_physical_switch_parse_tunnel_ips(struct ovsdb_idl_row *row_, const struc
 }
 
 static void
+vteprec_physical_switch_parse_tunnels(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_physical_switch *row = vteprec_physical_switch_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    row->tunnels = NULL;
+    row->n_tunnels = 0;
+    for (i = 0; i < datum->n; i++) {
+        struct vteprec_tunnel *keyRow = vteprec_tunnel_cast(ovsdb_idl_get_row_arc(row_, &vteprec_table_classes[VTEPREC_TABLE_TUNNEL], &datum->keys[i].uuid));
+        if (keyRow) {
+            if (!row->n_tunnels) {
+                row->tunnels = xmalloc(datum->n * sizeof *row->tunnels);
+            }
+            row->tunnels[row->n_tunnels] = keyRow;
+            row->n_tunnels++;
+        }
+    }
+}
+
+static void
 vteprec_physical_switch_unparse_description(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -4205,6 +4102,15 @@ vteprec_physical_switch_unparse_tunnel_ips(struct ovsdb_idl_row *row_)
 }
 
 static void
+vteprec_physical_switch_unparse_tunnels(struct ovsdb_idl_row *row_)
+{
+    struct vteprec_physical_switch *row = vteprec_physical_switch_cast(row_);
+
+    ovs_assert(inited);
+    free(row->tunnels);
+}
+
+static void
 vteprec_physical_switch_init__(struct ovsdb_idl_row *row)
 {
     vteprec_physical_switch_init(vteprec_physical_switch_cast(row));
@@ -4214,6 +4120,12 @@ void
 vteprec_physical_switch_init(struct vteprec_physical_switch *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_physical_switch *
+vteprec_physical_switch_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_physical_switch_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_SWITCH], uuid));
 }
 
 const struct vteprec_physical_switch *
@@ -4281,6 +4193,13 @@ vteprec_physical_switch_verify_tunnel_ips(const struct vteprec_physical_switch *
 {
     ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNEL_IPS]);
+}
+
+void
+vteprec_physical_switch_verify_tunnels(const struct vteprec_physical_switch *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNELS]);
 }
 
 /* Returns the description column's value in 'row' as a struct ovsdb_datum.
@@ -4421,6 +4340,29 @@ vteprec_physical_switch_get_tunnel_ips(const struct vteprec_physical_switch *row
     return ovsdb_idl_read(&row->header_, &vteprec_physical_switch_col_tunnel_ips);
 }
 
+/* Returns the tunnels column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_UUID.
+ * (This helps to avoid silent bugs if someone changes tunnels's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_physical_switch_get_tunnels(const struct vteprec_physical_switch *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
+    return ovsdb_idl_read(&row->header_, &vteprec_physical_switch_col_tunnels);
+}
+
 void
 vteprec_physical_switch_set_description(const struct vteprec_physical_switch *row, const char *description)
 {
@@ -4517,6 +4459,23 @@ vteprec_physical_switch_set_tunnel_ips(const struct vteprec_physical_switch *row
     ovsdb_idl_txn_write(&row->header_, &vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNEL_IPS], &datum);
 }
 
+void
+vteprec_physical_switch_set_tunnels(const struct vteprec_physical_switch *row, struct vteprec_tunnel **tunnels, size_t n_tunnels)
+{
+    struct ovsdb_datum datum;
+    size_t i;
+
+    ovs_assert(inited);
+    datum.n = n_tunnels;
+    datum.keys = n_tunnels ? xmalloc(n_tunnels * sizeof *datum.keys) : NULL;
+    datum.values = NULL;
+    for (i = 0; i < n_tunnels; i++) {
+        datum.keys[i].uuid = tunnels[i]->header_.uuid;
+    }
+    ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_UUID, OVSDB_TYPE_VOID);
+    ovsdb_idl_txn_write(&row->header_, &vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_COL_TUNNELS], &datum);
+}
+
 struct ovsdb_idl_column vteprec_physical_switch_columns[VTEPREC_PHYSICAL_SWITCH_N_COLUMNS];
 
 static void
@@ -4596,6 +4555,628 @@ vteprec_physical_switch_columns_init(void)
     c->mutable = true;
     c->parse = vteprec_physical_switch_parse_tunnel_ips;
     c->unparse = vteprec_physical_switch_unparse_tunnel_ips;
+
+    /* Initialize vteprec_physical_switch_col_tunnels. */
+    c = &vteprec_physical_switch_col_tunnels;
+    c->name = "tunnels";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
+    c->type.key.u.uuid.refTableName = "Tunnel";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = vteprec_physical_switch_parse_tunnels;
+    c->unparse = vteprec_physical_switch_unparse_tunnels;
+}
+
+/* Tunnel table. */
+
+static void
+vteprec_tunnel_parse_bfd_config_local(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    smap_init(&row->bfd_config_local);
+    for (i = 0; i < datum->n; i++) {
+        smap_add(&row->bfd_config_local,
+                 datum->keys[i].string,
+                 datum->values[i].string);
+    }
+}
+
+static void
+vteprec_tunnel_parse_bfd_config_remote(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    smap_init(&row->bfd_config_remote);
+    for (i = 0; i < datum->n; i++) {
+        smap_add(&row->bfd_config_remote,
+                 datum->keys[i].string,
+                 datum->values[i].string);
+    }
+}
+
+static void
+vteprec_tunnel_parse_bfd_params(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    smap_init(&row->bfd_params);
+    for (i = 0; i < datum->n; i++) {
+        smap_add(&row->bfd_params,
+                 datum->keys[i].string,
+                 datum->values[i].string);
+    }
+}
+
+static void
+vteprec_tunnel_parse_bfd_status(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+    size_t i;
+
+    ovs_assert(inited);
+    smap_init(&row->bfd_status);
+    for (i = 0; i < datum->n; i++) {
+        smap_add(&row->bfd_status,
+                 datum->keys[i].string,
+                 datum->values[i].string);
+    }
+}
+
+static void
+vteprec_tunnel_parse_local(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    if (datum->n >= 1) {
+        row->local = vteprec_physical_locator_cast(ovsdb_idl_get_row_arc(row_, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR], &datum->keys[0].uuid));
+    } else {
+        row->local = NULL;
+    }
+}
+
+static void
+vteprec_tunnel_parse_remote(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    if (datum->n >= 1) {
+        row->remote = vteprec_physical_locator_cast(ovsdb_idl_get_row_arc(row_, &vteprec_table_classes[VTEPREC_TABLE_PHYSICAL_LOCATOR], &datum->keys[0].uuid));
+    } else {
+        row->remote = NULL;
+    }
+}
+
+static void
+vteprec_tunnel_unparse_bfd_config_local(struct ovsdb_idl_row *row_)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    smap_destroy(&row->bfd_config_local);
+}
+
+static void
+vteprec_tunnel_unparse_bfd_config_remote(struct ovsdb_idl_row *row_)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    smap_destroy(&row->bfd_config_remote);
+}
+
+static void
+vteprec_tunnel_unparse_bfd_params(struct ovsdb_idl_row *row_)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    smap_destroy(&row->bfd_params);
+}
+
+static void
+vteprec_tunnel_unparse_bfd_status(struct ovsdb_idl_row *row_)
+{
+    struct vteprec_tunnel *row = vteprec_tunnel_cast(row_);
+
+    ovs_assert(inited);
+    smap_destroy(&row->bfd_status);
+}
+
+static void
+vteprec_tunnel_unparse_local(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+vteprec_tunnel_unparse_remote(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
+vteprec_tunnel_init__(struct ovsdb_idl_row *row)
+{
+    vteprec_tunnel_init(vteprec_tunnel_cast(row));
+}
+
+void
+vteprec_tunnel_init(struct vteprec_tunnel *row)
+{
+    memset(row, 0, sizeof *row); 
+    smap_init(&row->bfd_config_local);
+    smap_init(&row->bfd_config_remote);
+    smap_init(&row->bfd_params);
+    smap_init(&row->bfd_status);
+}
+
+const struct vteprec_tunnel *
+vteprec_tunnel_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_tunnel_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_TUNNEL], uuid));
+}
+
+const struct vteprec_tunnel *
+vteprec_tunnel_first(const struct ovsdb_idl *idl)
+{
+    return vteprec_tunnel_cast(ovsdb_idl_first_row(idl, &vteprec_table_classes[VTEPREC_TABLE_TUNNEL]));
+}
+
+const struct vteprec_tunnel *
+vteprec_tunnel_next(const struct vteprec_tunnel *row)
+{
+    return vteprec_tunnel_cast(ovsdb_idl_next_row(&row->header_));
+}
+
+void
+vteprec_tunnel_delete(const struct vteprec_tunnel *row)
+{
+    ovsdb_idl_txn_delete(&row->header_);
+}
+
+struct vteprec_tunnel *
+vteprec_tunnel_insert(struct ovsdb_idl_txn *txn)
+{
+    return vteprec_tunnel_cast(ovsdb_idl_txn_insert(txn, &vteprec_table_classes[VTEPREC_TABLE_TUNNEL], NULL));
+}
+
+
+void
+vteprec_tunnel_verify_bfd_config_local(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_LOCAL]);
+}
+
+void
+vteprec_tunnel_verify_bfd_config_remote(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_REMOTE]);
+}
+
+void
+vteprec_tunnel_verify_bfd_params(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_PARAMS]);
+}
+
+void
+vteprec_tunnel_verify_bfd_status(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_STATUS]);
+}
+
+void
+vteprec_tunnel_verify_local(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_LOCAL]);
+}
+
+void
+vteprec_tunnel_verify_remote(const struct vteprec_tunnel *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_REMOTE]);
+}
+
+/* Returns the bfd_config_local column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bfd_config_local's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_bfd_config_local(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_bfd_config_local);
+}
+
+/* Returns the bfd_config_remote column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bfd_config_remote's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_bfd_config_remote(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_bfd_config_remote);
+}
+
+/* Returns the bfd_params column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bfd_params's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_bfd_params(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_bfd_params);
+}
+
+/* Returns the bfd_status column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * 'value_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bfd_status's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_bfd_status(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED,
+	enum ovsdb_atomic_type value_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    ovs_assert(value_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_bfd_status);
+}
+
+/* Returns the local column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_UUID.
+ * (This helps to avoid silent bugs if someone changes local's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_local(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_local);
+}
+
+/* Returns the remote column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_UUID.
+ * (This helps to avoid silent bugs if someone changes remote's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+vteprec_tunnel_get_remote(const struct vteprec_tunnel *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_UUID);
+    return ovsdb_idl_read(&row->header_, &vteprec_tunnel_col_remote);
+}
+
+void
+vteprec_tunnel_set_bfd_config_local(const struct vteprec_tunnel *row, const struct smap *smap)
+{
+    struct ovsdb_datum datum;
+
+    ovs_assert(inited);
+    if (smap) {
+        struct smap_node *node;
+        size_t i;
+
+        datum.n = smap_count(smap);
+        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
+        datum.values = xmalloc(datum.n * sizeof *datum.values);
+
+        i = 0;
+        SMAP_FOR_EACH (node, smap) {
+            datum.keys[i].string = xstrdup(node->key);
+            datum.values[i].string = xstrdup(node->value);
+            i++;
+        }
+        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_datum_init_empty(&datum);
+    }
+    ovsdb_idl_txn_write(&row->header_,
+                        &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_LOCAL],
+                        &datum);
+}
+
+
+void
+vteprec_tunnel_set_bfd_config_remote(const struct vteprec_tunnel *row, const struct smap *smap)
+{
+    struct ovsdb_datum datum;
+
+    ovs_assert(inited);
+    if (smap) {
+        struct smap_node *node;
+        size_t i;
+
+        datum.n = smap_count(smap);
+        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
+        datum.values = xmalloc(datum.n * sizeof *datum.values);
+
+        i = 0;
+        SMAP_FOR_EACH (node, smap) {
+            datum.keys[i].string = xstrdup(node->key);
+            datum.values[i].string = xstrdup(node->value);
+            i++;
+        }
+        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_datum_init_empty(&datum);
+    }
+    ovsdb_idl_txn_write(&row->header_,
+                        &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_CONFIG_REMOTE],
+                        &datum);
+}
+
+
+void
+vteprec_tunnel_set_bfd_params(const struct vteprec_tunnel *row, const struct smap *smap)
+{
+    struct ovsdb_datum datum;
+
+    ovs_assert(inited);
+    if (smap) {
+        struct smap_node *node;
+        size_t i;
+
+        datum.n = smap_count(smap);
+        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
+        datum.values = xmalloc(datum.n * sizeof *datum.values);
+
+        i = 0;
+        SMAP_FOR_EACH (node, smap) {
+            datum.keys[i].string = xstrdup(node->key);
+            datum.values[i].string = xstrdup(node->value);
+            i++;
+        }
+        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_datum_init_empty(&datum);
+    }
+    ovsdb_idl_txn_write(&row->header_,
+                        &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_PARAMS],
+                        &datum);
+}
+
+
+void
+vteprec_tunnel_set_bfd_status(const struct vteprec_tunnel *row, const struct smap *smap)
+{
+    struct ovsdb_datum datum;
+
+    ovs_assert(inited);
+    if (smap) {
+        struct smap_node *node;
+        size_t i;
+
+        datum.n = smap_count(smap);
+        datum.keys = xmalloc(datum.n * sizeof *datum.keys);
+        datum.values = xmalloc(datum.n * sizeof *datum.values);
+
+        i = 0;
+        SMAP_FOR_EACH (node, smap) {
+            datum.keys[i].string = xstrdup(node->key);
+            datum.values[i].string = xstrdup(node->value);
+            i++;
+        }
+        ovsdb_datum_sort_unique(&datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_datum_init_empty(&datum);
+    }
+    ovsdb_idl_txn_write(&row->header_,
+                        &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_BFD_STATUS],
+                        &datum);
+}
+
+
+void
+vteprec_tunnel_set_local(const struct vteprec_tunnel *row, const struct vteprec_physical_locator *local)
+{
+    struct ovsdb_datum datum;
+    union ovsdb_atom key;
+
+    ovs_assert(inited);
+    datum.n = 1;
+    datum.keys = &key;
+    key.uuid = local->header_.uuid;
+    datum.values = NULL;
+    ovsdb_idl_txn_write_clone(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_LOCAL], &datum);
+}
+
+void
+vteprec_tunnel_set_remote(const struct vteprec_tunnel *row, const struct vteprec_physical_locator *remote)
+{
+    struct ovsdb_datum datum;
+    union ovsdb_atom key;
+
+    ovs_assert(inited);
+    datum.n = 1;
+    datum.keys = &key;
+    key.uuid = remote->header_.uuid;
+    datum.values = NULL;
+    ovsdb_idl_txn_write_clone(&row->header_, &vteprec_tunnel_columns[VTEPREC_TUNNEL_COL_REMOTE], &datum);
+}
+
+struct ovsdb_idl_column vteprec_tunnel_columns[VTEPREC_TUNNEL_N_COLUMNS];
+
+static void
+vteprec_tunnel_columns_init(void)
+{
+    struct ovsdb_idl_column *c;
+
+    /* Initialize vteprec_tunnel_col_bfd_config_local. */
+    c = &vteprec_tunnel_col_bfd_config_local;
+    c->name = "bfd_config_local";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_bfd_config_local;
+    c->unparse = vteprec_tunnel_unparse_bfd_config_local;
+
+    /* Initialize vteprec_tunnel_col_bfd_config_remote. */
+    c = &vteprec_tunnel_col_bfd_config_remote;
+    c->name = "bfd_config_remote";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_bfd_config_remote;
+    c->unparse = vteprec_tunnel_unparse_bfd_config_remote;
+
+    /* Initialize vteprec_tunnel_col_bfd_params. */
+    c = &vteprec_tunnel_col_bfd_params;
+    c->name = "bfd_params";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_bfd_params;
+    c->unparse = vteprec_tunnel_unparse_bfd_params;
+
+    /* Initialize vteprec_tunnel_col_bfd_status. */
+    c = &vteprec_tunnel_col_bfd_status;
+    c->name = "bfd_status";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_STRING);
+    c->type.value.u.string.minLen = 0;
+    c->type.n_min = 0;
+    c->type.n_max = UINT_MAX;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_bfd_status;
+    c->unparse = vteprec_tunnel_unparse_bfd_status;
+
+    /* Initialize vteprec_tunnel_col_local. */
+    c = &vteprec_tunnel_col_local;
+    c->name = "local";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
+    c->type.key.u.uuid.refTableName = "Physical_Locator";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 1;
+    c->type.n_max = 1;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_local;
+    c->unparse = vteprec_tunnel_unparse_local;
+
+    /* Initialize vteprec_tunnel_col_remote. */
+    c = &vteprec_tunnel_col_remote;
+    c->name = "remote";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_UUID);
+    c->type.key.u.uuid.refTableName = "Physical_Locator";
+    c->type.key.u.uuid.refType = OVSDB_REF_STRONG;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 1;
+    c->type.n_max = 1;
+    c->mutable = true;
+    c->parse = vteprec_tunnel_parse_remote;
+    c->unparse = vteprec_tunnel_unparse_remote;
 }
 
 /* Ucast_Macs_Local table. */
@@ -4686,6 +5267,12 @@ void
 vteprec_ucast_macs_local_init(struct vteprec_ucast_macs_local *row)
 {
     memset(row, 0, sizeof *row); 
+}
+
+const struct vteprec_ucast_macs_local *
+vteprec_ucast_macs_local_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_ucast_macs_local_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_UCAST_MACS_LOCAL], uuid));
 }
 
 const struct vteprec_ucast_macs_local *
@@ -5038,6 +5625,12 @@ vteprec_ucast_macs_remote_init(struct vteprec_ucast_macs_remote *row)
 }
 
 const struct vteprec_ucast_macs_remote *
+vteprec_ucast_macs_remote_get_for_uuid(const struct ovsdb_idl *idl, const struct uuid *uuid)
+{
+    return vteprec_ucast_macs_remote_cast(ovsdb_idl_get_row_for_uuid(idl, &vteprec_table_classes[VTEPREC_TABLE_UCAST_MACS_REMOTE], uuid));
+}
+
+const struct vteprec_ucast_macs_remote *
 vteprec_ucast_macs_remote_first(const struct ovsdb_idl *idl)
 {
     return vteprec_ucast_macs_remote_cast(ovsdb_idl_first_row(idl, &vteprec_table_classes[VTEPREC_TABLE_UCAST_MACS_REMOTE]));
@@ -5336,6 +5929,9 @@ struct ovsdb_idl_table_class vteprec_table_classes[VTEPREC_N_TABLES] = {
     {"Physical_Switch", false,
      vteprec_physical_switch_columns, ARRAY_SIZE(vteprec_physical_switch_columns),
      sizeof(struct vteprec_physical_switch), vteprec_physical_switch_init__},
+    {"Tunnel", false,
+     vteprec_tunnel_columns, ARRAY_SIZE(vteprec_tunnel_columns),
+     sizeof(struct vteprec_tunnel), vteprec_tunnel_init__},
     {"Ucast_Macs_Local", true,
      vteprec_ucast_macs_local_columns, ARRAY_SIZE(vteprec_ucast_macs_local_columns),
      sizeof(struct vteprec_ucast_macs_local), vteprec_ucast_macs_local_init__},
@@ -5370,6 +5966,15 @@ vteprec_init(void)
     vteprec_physical_locator_set_columns_init();
     vteprec_physical_port_columns_init();
     vteprec_physical_switch_columns_init();
+    vteprec_tunnel_columns_init();
     vteprec_ucast_macs_local_columns_init();
     vteprec_ucast_macs_remote_columns_init();
 }
+
+/* Return the schema version.  The caller must not free the returned value. */
+const char *
+vteprec_get_db_version(void)
+{
+    return "1.3.0";
+}
+

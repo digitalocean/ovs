@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Nicira, Inc.
+ * Copyright (c) 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include "ovs-atomic.h"
 #include "util.h"
+#include "ovstest.h"
 
 #define TEST_ATOMIC_TYPE(ATOMIC_TYPE, BASE_TYPE)        \
     {                                                   \
@@ -71,8 +72,9 @@ test_atomic_flag(void)
     ovs_assert(atomic_flag_test_and_set(&flag) == false);
 }
 
-int
-main(void)
+
+static void
+test_atomic_main(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     TEST_ATOMIC_TYPE(atomic_char, char);
     TEST_ATOMIC_TYPE(atomic_uchar, unsigned char);
@@ -97,10 +99,8 @@ main(void)
     TEST_ATOMIC_TYPE(atomic_int16_t, int16_t);
     TEST_ATOMIC_TYPE(atomic_uint32_t, uint32_t);
     TEST_ATOMIC_TYPE(atomic_int32_t, int32_t);
-    TEST_ATOMIC_TYPE(atomic_uint64_t, uint64_t);
-    TEST_ATOMIC_TYPE(atomic_int64_t, int64_t);
 
     test_atomic_flag();
-
-    return 0;
 }
+
+OVSTEST_REGISTER("test-atomic", test_atomic_main);

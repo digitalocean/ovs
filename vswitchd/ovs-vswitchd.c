@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,13 +32,12 @@
 #include "dirs.h"
 #include "dpif.h"
 #include "dummy.h"
+#include "fatal-signal.h"
 #include "memory.h"
 #include "netdev.h"
 #include "openflow/openflow.h"
 #include "ovsdb-idl.h"
 #include "poll-loop.h"
-#include "process.h"
-#include "signals.h"
 #include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
@@ -49,6 +48,7 @@
 #include "vconn.h"
 #include "vlog.h"
 #include "lib/vswitch-idl.h"
+#include "lib/netdev-dpdk.h"
 
 VLOG_DEFINE_THIS_MODULE(vswitchd);
 
@@ -66,17 +66,19 @@ main(int argc, char *argv[])
 {
     char *unixctl_path = NULL;
     struct unixctl_server *unixctl;
-    struct signal *sighup;
     char *remote;
     bool exiting;
     int retval;
 
-    proctitle_init(argc, argv);
     set_program_name(argv[0]);
+    retval = dpdk_init(argc,argv);
+    argc -= retval;
+    argv += retval;
+
+    proctitle_init(argc, argv);
+    service_start(&argc, &argv);
     remote = parse_options(argc, argv, &unixctl_path);
-    signal(SIGPIPE, SIG_IGN);
-    sighup = signal_register(SIGHUP);
-    process_init();
+    fatal_ignore_sigpipe();
     ovsrec_init();
 
     daemonize_start();
@@ -102,9 +104,6 @@ main(int argc, char *argv[])
 
     exiting = false;
     while (!exiting) {
-        if (signal_poll(sighup)) {
-            vlog_reopen_log_file();
-        }
         memory_run();
         if (memory_should_report()) {
             struct simap usage;
@@ -118,7 +117,6 @@ main(int argc, char *argv[])
         unixctl_server_run(unixctl);
         netdev_run();
 
-        signal_wait(sighup);
         memory_wait();
         bridge_wait();
         unixctl_server_wait(unixctl);
@@ -127,9 +125,13 @@ main(int argc, char *argv[])
             poll_immediate_wake();
         }
         poll_block();
+        if (should_service_stop()) {
+            exiting = true;
+        }
     }
     bridge_exit();
     unixctl_server_destroy(unixctl);
+    service_stop();
 
     return 0;
 }
@@ -145,7 +147,8 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
         OPT_BOOTSTRAP_CA_CERT,
         OPT_ENABLE_DUMMY,
         OPT_DISABLE_SYSTEM,
-        DAEMON_OPTION_ENUMS
+        DAEMON_OPTION_ENUMS,
+        OPT_DPDK,
     };
     static const struct option long_options[] = {
         {"help",        no_argument, NULL, 'h'},
@@ -159,6 +162,7 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
         {"enable-dummy", optional_argument, NULL, OPT_ENABLE_DUMMY},
         {"disable-system", no_argument, NULL, OPT_DISABLE_SYSTEM},
+        {"dpdk", required_argument, NULL, OPT_DPDK},
         {NULL, 0, NULL, 0},
     };
     char *short_options = long_options_to_short_options(long_options);
@@ -209,6 +213,9 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
 
         case '?':
             exit(EXIT_FAILURE);
+
+        case OPT_DPDK:
+            break;
 
         default:
             abort();

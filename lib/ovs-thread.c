@@ -21,7 +21,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "compiler.h"
+#include "hash.h"
+#include "ovs-rcu.h"
 #include "poll-loop.h"
+#include "seq.h"
 #include "socket-util.h"
 #include "util.h"
 
@@ -50,12 +53,20 @@ static bool multithreaded;
         OVS_NO_THREAD_SAFETY_ANALYSIS \
     { \
         struct ovs_##TYPE *l = CONST_CAST(struct ovs_##TYPE *, l_); \
-        int error = pthread_##TYPE##_##FUN(&l->lock); \
+        int error; \
+ \
+        /* Verify that 'l' was initialized. */ \
+        if (OVS_UNLIKELY(!l->where)) { \
+            ovs_abort(0, "%s: %s() passed uninitialized ovs_"#TYPE, \
+                      where, __func__); \
+        } \
+ \
+        error = pthread_##TYPE##_##FUN(&l->lock); \
         if (OVS_UNLIKELY(error)) { \
-            ovs_abort(error, "pthread_%s_%s failed", #TYPE, #FUN); \
+            ovs_abort(error, "%s: pthread_%s_%s failed", where, #TYPE, #FUN); \
         } \
         l->where = where; \
-    }
+ }
 LOCK_FUNCTION(mutex, lock);
 LOCK_FUNCTION(rwlock, rdlock);
 LOCK_FUNCTION(rwlock, wrlock);
@@ -67,9 +78,17 @@ LOCK_FUNCTION(rwlock, wrlock);
         OVS_NO_THREAD_SAFETY_ANALYSIS \
     { \
         struct ovs_##TYPE *l = CONST_CAST(struct ovs_##TYPE *, l_); \
-        int error = pthread_##TYPE##_##FUN(&l->lock); \
+        int error; \
+ \
+        /* Verify that 'l' was initialized. */ \
+        if (OVS_UNLIKELY(!l->where)) { \
+            ovs_abort(0, "%s: %s() passed uninitialized ovs_"#TYPE, \
+                      where, __func__); \
+        } \
+ \
+        error = pthread_##TYPE##_##FUN(&l->lock); \
         if (OVS_UNLIKELY(error) && error != EBUSY) { \
-            ovs_abort(error, "pthread_%s_%s failed", #TYPE, #FUN); \
+            ovs_abort(error, "%s: pthread_%s_%s failed", where, #TYPE, #FUN); \
         } \
         if (!error) { \
             l->where = where; \
@@ -80,23 +99,27 @@ TRY_LOCK_FUNCTION(mutex, trylock);
 TRY_LOCK_FUNCTION(rwlock, tryrdlock);
 TRY_LOCK_FUNCTION(rwlock, trywrlock);
 
-#define UNLOCK_FUNCTION(TYPE, FUN) \
+#define UNLOCK_FUNCTION(TYPE, FUN, WHERE) \
     void \
     ovs_##TYPE##_##FUN(const struct ovs_##TYPE *l_) \
         OVS_NO_THREAD_SAFETY_ANALYSIS \
     { \
         struct ovs_##TYPE *l = CONST_CAST(struct ovs_##TYPE *, l_); \
         int error; \
-        l->where = NULL; \
+ \
+        /* Verify that 'l' was initialized. */ \
+        ovs_assert(l->where); \
+ \
+        l->where = WHERE; \
         error = pthread_##TYPE##_##FUN(&l->lock); \
         if (OVS_UNLIKELY(error)) { \
             ovs_abort(error, "pthread_%s_%sfailed", #TYPE, #FUN); \
         } \
     }
-UNLOCK_FUNCTION(mutex, unlock);
-UNLOCK_FUNCTION(mutex, destroy);
-UNLOCK_FUNCTION(rwlock, unlock);
-UNLOCK_FUNCTION(rwlock, destroy);
+UNLOCK_FUNCTION(mutex, unlock, "<unlocked>");
+UNLOCK_FUNCTION(mutex, destroy, NULL);
+UNLOCK_FUNCTION(rwlock, unlock, "<unlocked>");
+UNLOCK_FUNCTION(rwlock, destroy, NULL);
 
 #define XPTHREAD_FUNC1(FUNCTION, PARAM1)                \
     void                                                \
@@ -116,6 +139,15 @@ UNLOCK_FUNCTION(rwlock, destroy);
             ovs_abort(error, "%s failed", #FUNCTION);   \
         }                                               \
     }
+#define XPTHREAD_FUNC3(FUNCTION, PARAM1, PARAM2, PARAM3)\
+    void                                                \
+    x##FUNCTION(PARAM1 arg1, PARAM2 arg2, PARAM3 arg3)  \
+    {                                                   \
+        int error = FUNCTION(arg1, arg2, arg3);         \
+        if (OVS_UNLIKELY(error)) {                      \
+            ovs_abort(error, "%s failed", #FUNCTION);   \
+        }                                               \
+    }
 
 XPTHREAD_FUNC1(pthread_mutex_lock, pthread_mutex_t *);
 XPTHREAD_FUNC1(pthread_mutex_unlock, pthread_mutex_t *);
@@ -123,6 +155,12 @@ XPTHREAD_FUNC1(pthread_mutexattr_init, pthread_mutexattr_t *);
 XPTHREAD_FUNC1(pthread_mutexattr_destroy, pthread_mutexattr_t *);
 XPTHREAD_FUNC2(pthread_mutexattr_settype, pthread_mutexattr_t *, int);
 XPTHREAD_FUNC2(pthread_mutexattr_gettype, pthread_mutexattr_t *, int *);
+
+XPTHREAD_FUNC1(pthread_rwlockattr_init, pthread_rwlockattr_t *);
+XPTHREAD_FUNC1(pthread_rwlockattr_destroy, pthread_rwlockattr_t *);
+#ifdef PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP
+XPTHREAD_FUNC2(pthread_rwlockattr_setkind_np, pthread_rwlockattr_t *, int);
+#endif
 
 XPTHREAD_FUNC2(pthread_cond_init, pthread_cond_t *, pthread_condattr_t *);
 XPTHREAD_FUNC1(pthread_cond_destroy, pthread_cond_t *);
@@ -143,7 +181,7 @@ ovs_mutex_init__(const struct ovs_mutex *l_, int type)
     pthread_mutexattr_t attr;
     int error;
 
-    l->where = NULL;
+    l->where = "<unlocked>";
     xpthread_mutexattr_init(&attr);
     xpthread_mutexattr_settype(&attr, type);
     error = pthread_mutex_init(&l->lock, &attr);
@@ -167,26 +205,89 @@ ovs_mutex_init_recursive(const struct ovs_mutex *mutex)
     ovs_mutex_init__(mutex, PTHREAD_MUTEX_RECURSIVE);
 }
 
+/* Initializes 'mutex' as a recursive mutex. */
+void
+ovs_mutex_init_adaptive(const struct ovs_mutex *mutex)
+{
+#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+    ovs_mutex_init__(mutex, PTHREAD_MUTEX_ADAPTIVE_NP);
+#else
+    ovs_mutex_init(mutex);
+#endif
+}
+
 void
 ovs_rwlock_init(const struct ovs_rwlock *l_)
 {
     struct ovs_rwlock *l = CONST_CAST(struct ovs_rwlock *, l_);
+    pthread_rwlockattr_t attr;
     int error;
 
-    l->where = NULL;
+    l->where = "<unlocked>";
+
+    xpthread_rwlockattr_init(&attr);
+#ifdef PTHREAD_RWLOCK_WRITER_NONRECURSIVE_INITIALIZER_NP
+    xpthread_rwlockattr_setkind_np(
+        &attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+#endif
     error = pthread_rwlock_init(&l->lock, NULL);
     if (OVS_UNLIKELY(error)) {
         ovs_abort(error, "pthread_rwlock_init failed");
     }
+    xpthread_rwlockattr_destroy(&attr);
 }
 
 void
 ovs_mutex_cond_wait(pthread_cond_t *cond, const struct ovs_mutex *mutex_)
 {
     struct ovs_mutex *mutex = CONST_CAST(struct ovs_mutex *, mutex_);
-    int error = pthread_cond_wait(cond, &mutex->lock);
+    int error;
+
+    ovsrcu_quiesce_start();
+    error = pthread_cond_wait(cond, &mutex->lock);
+    ovsrcu_quiesce_end();
+
     if (OVS_UNLIKELY(error)) {
         ovs_abort(error, "pthread_cond_wait failed");
+    }
+}
+
+/* Initializes the 'barrier'.  'size' is the number of threads
+ * expected to hit the barrier. */
+void
+ovs_barrier_init(struct ovs_barrier *barrier, uint32_t size)
+{
+    barrier->size = size;
+    atomic_init(&barrier->count, 0);
+    barrier->seq = seq_create();
+}
+
+/* Destroys the 'barrier'. */
+void
+ovs_barrier_destroy(struct ovs_barrier *barrier)
+{
+    seq_destroy(barrier->seq);
+}
+
+/* Makes the calling thread block on the 'barrier' until all
+ * 'barrier->size' threads hit the barrier. */
+void
+ovs_barrier_block(struct ovs_barrier *barrier)
+{
+    uint64_t seq = seq_read(barrier->seq);
+    uint32_t orig;
+
+    atomic_add(&barrier->count, 1, &orig);
+    if (orig + 1 == barrier->size) {
+        atomic_store(&barrier->count, 0);
+        seq_change(barrier->seq);
+    }
+
+    /* To prevent thread from waking up by other event,
+     * keeps waiting for the change of 'barrier->seq'. */
+    while (seq == seq_read(barrier->seq)) {
+        seq_wait(barrier->seq, seq);
+        poll_block();
     }
 }
 
@@ -195,6 +296,7 @@ DEFINE_EXTERN_PER_THREAD_DATA(ovsthread_id, 0);
 struct ovsthread_aux {
     void *(*start)(void *);
     void *arg;
+    char name[16];
 };
 
 static void *
@@ -212,12 +314,18 @@ ovsthread_wrapper(void *aux_)
     aux = *auxp;
     free(auxp);
 
+    /* The order of the following calls is important, because
+     * ovsrcu_quiesce_end() saves a copy of the thread name. */
+    set_subprogram_name("%s%u", aux.name, id);
+    ovsrcu_quiesce_end();
+
     return aux.start(aux.arg);
 }
 
-void
-xpthread_create(pthread_t *threadp, pthread_attr_t *attr,
-                void *(*start)(void *), void *arg)
+/* Starts a thread that calls 'start(arg)'.  Sets the thread's name to 'name'
+ * (suffixed by its ovsthread_id()).  Returns the new thread's pthread_t. */
+pthread_t
+ovs_thread_create(const char *name, void *(*start)(void *), void *arg)
 {
     struct ovsthread_aux *aux;
     pthread_t thread;
@@ -225,16 +333,18 @@ xpthread_create(pthread_t *threadp, pthread_attr_t *attr,
 
     forbid_forking("multiple threads exist");
     multithreaded = true;
+    ovsrcu_quiesce_end();
 
     aux = xmalloc(sizeof *aux);
     aux->start = start;
     aux->arg = arg;
+    ovs_strlcpy(aux->name, name, sizeof aux->name);
 
-    error = pthread_create(threadp ? threadp : &thread, attr,
-                           ovsthread_wrapper, aux);
+    error = pthread_create(&thread, NULL, ovsthread_wrapper, aux);
     if (error) {
         ovs_abort(error, "pthread_create failed");
     }
+    return thread;
 }
 
 bool
@@ -255,6 +365,12 @@ ovsthread_once_done(struct ovsthread_once *once)
     ovs_mutex_unlock(&once->mutex);
 }
 
+bool
+single_threaded(void)
+{
+    return !multithreaded;
+}
+
 /* Asserts that the process has not yet created any threads (beyond the initial
  * thread).
  *
@@ -270,6 +386,7 @@ assert_single_threaded_at(const char *where)
     }
 }
 
+#ifndef _WIN32
 /* Forks the current process (checking that this is allowed).  Aborts with
  * VLOG_FATAL if fork() returns an error, and otherwise returns the value
  * returned by fork().
@@ -293,6 +410,7 @@ xfork_at(const char *where)
     }
     return pid;
 }
+#endif
 
 /* Notes that the process must not call fork() from now on, for the specified
  * 'reason'.  (The process may still fork() if it execs itself immediately
@@ -310,6 +428,54 @@ may_fork(void)
 {
     return !must_not_fork;
 }
+
+/* ovsthread_stats. */
+
+void
+ovsthread_stats_init(struct ovsthread_stats *stats)
+{
+    int i;
+
+    ovs_mutex_init(&stats->mutex);
+    for (i = 0; i < ARRAY_SIZE(stats->buckets); i++) {
+        stats->buckets[i] = NULL;
+    }
+}
+
+void
+ovsthread_stats_destroy(struct ovsthread_stats *stats)
+{
+    ovs_mutex_destroy(&stats->mutex);
+}
+
+void *
+ovsthread_stats_bucket_get(struct ovsthread_stats *stats,
+                           void *(*new_bucket)(void))
+{
+    unsigned int idx = ovsthread_id_self() & (ARRAY_SIZE(stats->buckets) - 1);
+    void *bucket = stats->buckets[idx];
+    if (!bucket) {
+        ovs_mutex_lock(&stats->mutex);
+        bucket = stats->buckets[idx];
+        if (!bucket) {
+            bucket = stats->buckets[idx] = new_bucket();
+        }
+        ovs_mutex_unlock(&stats->mutex);
+    }
+    return bucket;
+}
+
+size_t
+ovs_thread_stats_next_bucket(const struct ovsthread_stats *stats, size_t i)
+{
+    for (; i < ARRAY_SIZE(stats->buckets); i++) {
+        if (stats->buckets[i]) {
+            break;
+        }
+    }
+    return i;
+}
+
 
 /* Parses /proc/cpuinfo for the total number of physical cores on this system
  * across all CPU packages, not counting hyper-threads.
@@ -379,10 +545,16 @@ count_cpu_cores(void)
     static long int n_cores;
 
     if (ovsthread_once_start(&once)) {
+#ifndef _WIN32
         parse_cpuinfo(&n_cores);
         if (!n_cores) {
             n_cores = sysconf(_SC_NPROCESSORS_ONLN);
         }
+#else
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        n_cores = sysinfo.dwNumberOfProcessors;
+#endif
         ovsthread_once_done(&once);
     }
 

@@ -22,6 +22,7 @@
 #include "openvswitch/types.h"
 
 #ifndef __CHECKER__
+#ifndef _WIN32
 static inline ovs_be64
 htonll(uint64_t n)
 {
@@ -33,6 +34,7 @@ ntohll(ovs_be64 n)
 {
     return htonl(1) == 1 ? n : ((uint64_t) ntohl(n) << 32) | ntohl(n >> 32);
 }
+#endif /* _WIN32 */
 #else
 /* Making sparse happy with these functions also makes them unreadable, so
  * don't bother to show it their implementations. */
@@ -74,6 +76,18 @@ uint32_byteswap(uint32_t crc) {
          ((((ovs_be64) (VALUE)) & UINT64_C(0x0000ff0000000000)) >> 24) | \
          ((((ovs_be64) (VALUE)) & UINT64_C(0x00ff000000000000)) >> 40) | \
          ((((ovs_be64) (VALUE)) & UINT64_C(0xff00000000000000)) >> 56))
+#endif
+
+#if WORDS_BIGENDIAN
+#define BYTES_TO_BE32(B1, B2, B3, B4) \
+    (OVS_FORCE ovs_be32)((uint32_t)(B1) << 24 | (B2) << 16 | (B3) << 8 | (B4))
+#define BE16S_TO_BE32(B1, B2) \
+    (OVS_FORCE ovs_be32)((uint32_t)(B1) << 16 | (B2))
+#else
+#define BYTES_TO_BE32(B1, B2, B3, B4) \
+    (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 8 | (B3) << 16 | (B4) << 24)
+#define BE16S_TO_BE32(B1, B2) \
+    (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 16)
 #endif
 
 #endif /* byte-order.h */

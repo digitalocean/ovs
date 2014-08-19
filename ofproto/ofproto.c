@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  * Copyright (c) 2010 Jean Tourrilhes - HP-Labs.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +43,7 @@
 #include "ofproto-provider.h"
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
+#include "ovs-rcu.h"
 #include "packets.h"
 #include "pinsched.h"
 #include "pktbuf.h"
@@ -57,6 +58,7 @@
 #include "unaligned.h"
 #include "unixctl.h"
 #include "vlog.h"
+#include "bundles.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto);
 
@@ -124,7 +126,7 @@ struct ofoperation {
 
     /* OFOPERATION_MODIFY, OFOPERATION_REPLACE: The old actions, if the actions
      * are changing. */
-    struct rule_actions *actions;
+    const struct rule_actions *actions;
 
     /* OFOPERATION_DELETE. */
     enum ofp_flow_removed_reason reason; /* Reason flow was removed. */
@@ -182,7 +184,7 @@ struct eviction_group {
 
 static bool choose_rule_to_evict(struct oftable *table, struct rule **rulep);
 static void ofproto_evict(struct ofproto *) OVS_EXCLUDED(ofproto_mutex);
-static uint32_t rule_eviction_priority(struct rule *);
+static uint32_t rule_eviction_priority(struct ofproto *ofproto, struct rule *);
 static void eviction_group_add_rule(struct rule *);
 static void eviction_group_remove_rule(struct rule *);
 
@@ -258,14 +260,17 @@ struct ofport_usage {
 };
 
 /* rule. */
-static void ofproto_rule_destroy__(struct rule *);
 static void ofproto_rule_send_removed(struct rule *, uint8_t reason);
-static bool rule_is_modifiable(const struct rule *);
+static bool rule_is_modifiable(const struct rule *rule,
+                               enum ofputil_flow_mod_flags flag);
 
 /* OpenFlow. */
 static enum ofperr add_flow(struct ofproto *, struct ofconn *,
                             struct ofputil_flow_mod *,
                             const struct ofp_header *);
+static void do_add_flow(struct ofproto *, struct ofconn *,
+                        const struct ofp_header *request, uint32_t buffer_id,
+                        struct rule *);
 static enum ofperr modify_flows__(struct ofproto *, struct ofconn *,
                                   struct ofputil_flow_mod *,
                                   const struct ofp_header *,
@@ -307,7 +312,7 @@ static size_t allocated_ofproto_classes;
 struct ovs_mutex ofproto_mutex = OVS_MUTEX_INITIALIZER;
 
 unsigned ofproto_flow_limit = OFPROTO_FLOW_LIMIT_DEFAULT;
-enum ofproto_flow_miss_model flow_miss_model = OFPROTO_HANDLE_MISS_AUTO;
+unsigned ofproto_max_idle = OFPROTO_MAX_IDLE_DEFAULT;
 
 size_t n_handlers, n_revalidators;
 
@@ -525,10 +530,6 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ofproto->n_pending = 0;
     hmap_init(&ofproto->deletions);
     guarded_list_init(&ofproto->rule_executes);
-    ofproto->n_add = ofproto->n_delete = ofproto->n_modify = 0;
-    ofproto->first_op = ofproto->last_op = LLONG_MIN;
-    ofproto->next_op_report = LLONG_MAX;
-    ofproto->op_backoff = LLONG_MIN;
     ofproto->vlan_bitmap = NULL;
     ofproto->vlans_changed = false;
     ofproto->min_mtu = INT_MAX;
@@ -698,11 +699,12 @@ ofproto_set_flow_limit(unsigned limit)
     ofproto_flow_limit = limit;
 }
 
-/* Sets the path for handling flow misses. */
+/* Sets the maximum idle time for flows in the datapath before they are
+ * expired. */
 void
-ofproto_set_flow_miss_model(unsigned model)
+ofproto_set_max_idle(unsigned max_idle)
 {
-    flow_miss_model = model;
+    ofproto_max_idle = max_idle;
 }
 
 /* If forward_bpdu is true, the NORMAL action will forward frames with
@@ -734,12 +736,12 @@ ofproto_set_mac_table_config(struct ofproto *ofproto, unsigned idle_time,
 }
 
 void
-ofproto_set_threads(size_t n_handlers_, size_t n_revalidators_)
+ofproto_set_threads(int n_handlers_, int n_revalidators_)
 {
     int threads = MAX(count_cpu_cores(), 2);
 
-    n_revalidators = n_revalidators_;
-    n_handlers = n_handlers_;
+    n_revalidators = MAX(n_revalidators_, 0);
+    n_handlers = MAX(n_handlers_, 0);
 
     if (!n_revalidators) {
         n_revalidators = n_handlers
@@ -1013,17 +1015,22 @@ ofproto_port_set_bfd(struct ofproto *ofproto, ofp_port_t ofp_port,
     }
 }
 
-/* Populates 'status' with key value pairs indicating the status of the BFD
- * session on 'ofp_port'.  This information is intended to be populated in the
- * OVS database.  Has no effect if 'ofp_port' is not na OpenFlow port in
- * 'ofproto'. */
+/* Populates 'status' with the status of BFD on 'ofport'.  If 'force' is set to
+ * true, status will be returned even if there is no status change since last
+ * update.
+ *
+ * Returns 0 on success.  Returns a negative number if there is no status change
+ * since last update and 'force' is set to false.  Returns a positive errno
+ * otherwise.  Has no effect if 'ofp_port' is not an OpenFlow port in 'ofproto'.
+ *
+ * The caller must provide and own '*status'. */
 int
 ofproto_port_get_bfd_status(struct ofproto *ofproto, ofp_port_t ofp_port,
-                            struct smap *status)
+                            bool force, struct smap *status)
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     return (ofport && ofproto->ofproto_class->get_bfd_status
-            ? ofproto->ofproto_class->get_bfd_status(ofport, status)
+            ? ofproto->ofproto_class->get_bfd_status(ofport, force, status)
             : EOPNOTSUPP);
 }
 
@@ -1141,6 +1148,24 @@ ofproto_get_n_tables(const struct ofproto *ofproto)
     return ofproto->n_tables;
 }
 
+/* Returns the number of Controller visible OpenFlow tables
+ * in 'ofproto'. This number will exclude Hidden tables.
+ * This funtion's return value should be less or equal to that of
+ * ofproto_get_n_tables() . */
+uint8_t
+ofproto_get_n_visible_tables(const struct ofproto *ofproto)
+{
+    uint8_t n = ofproto->n_tables;
+
+    /* Count only non-hidden tables in the number of tables.  (Hidden tables,
+     * if present, are always at the end.) */
+    while(n && (ofproto->tables[n - 1].flags & OFTABLE_HIDDEN)) {
+        n--;
+    }
+
+    return n;
+}
+
 /* Configures the OpenFlow table in 'ofproto' with id 'table_id' with the
  * settings from 's'.  'table_id' must be in the range 0 through the number of
  * OpenFlow tables in 'ofproto' minus 1, inclusive.
@@ -1217,7 +1242,7 @@ ofproto_rule_delete__(struct ofproto *ofproto, struct rule *rule,
     ofopgroup_submit(group);
 }
 
-/* Deletes 'rule' from 'cls' within 'ofproto'.
+/* Deletes 'rule' from 'ofproto'.
  *
  * Within an ofproto implementation, this function allows an ofproto
  * implementation to destroy any rules that remain when its ->destruct()
@@ -1286,9 +1311,9 @@ ofproto_destroy__(struct ofproto *ofproto)
     ovs_assert(list_is_empty(&ofproto->pending));
 
     destroy_rule_executes(ofproto);
-    guarded_list_destroy(&ofproto->rule_executes);
-
     delete_group(ofproto, OFPG_ALL);
+
+    guarded_list_destroy(&ofproto->rule_executes);
     ovs_rwlock_destroy(&ofproto->groups_rwlock);
     hmap_destroy(&ofproto->groups);
 
@@ -1313,6 +1338,9 @@ ofproto_destroy__(struct ofproto *ofproto)
     free(ofproto->tables);
 
     hmap_destroy(&ofproto->deletions);
+
+    ovs_assert(hindex_is_empty(&ofproto->cookies));
+    hindex_destroy(&ofproto->cookies);
 
     free(ofproto->vlan_bitmap);
 
@@ -1348,7 +1376,8 @@ ofproto_destroy(struct ofproto *p)
     }
 
     p->ofproto_class->destruct(p);
-    ofproto_destroy__(p);
+    /* Destroying rules is deferred, must have 'ofproto' around for them. */
+    ovsrcu_postpone(ofproto_destroy__, p);
 }
 
 /* Destroys the datapath with the respective 'name' and 'type'.  With the Linux
@@ -1450,19 +1479,23 @@ ofproto_run(struct ofproto *p)
             }
 
             ovs_mutex_lock(&ofproto_mutex);
-            HEAP_FOR_EACH (evg, size_node, &table->eviction_groups_by_size) {
-                heap_rebuild(&evg->rules);
-            }
-
             fat_rwlock_rdlock(&table->cls.rwlock);
             cls_cursor_init(&cursor, &table->cls, NULL);
             CLS_CURSOR_FOR_EACH (rule, cr, &cursor) {
-                if (!rule->eviction_group
-                    && (rule->idle_timeout || rule->hard_timeout)) {
-                    eviction_group_add_rule(rule);
+                if (rule->idle_timeout || rule->hard_timeout) {
+                    if (!rule->eviction_group) {
+                        eviction_group_add_rule(rule);
+                    } else {
+                        heap_raw_change(&rule->evg_node,
+                                        rule_eviction_priority(p, rule));
+                    }
                 }
             }
             fat_rwlock_unlock(&table->cls.rwlock);
+
+            HEAP_FOR_EACH (evg, size_node, &table->eviction_groups_by_size) {
+                heap_rebuild(&evg->rules);
+            }
             ovs_mutex_unlock(&ofproto_mutex);
         }
     }
@@ -1489,7 +1522,13 @@ ofproto_run(struct ofproto *p)
          * need this two-phase approach. */
         sset_init(&devnames);
         HMAP_FOR_EACH (ofport, hmap_node, &p->ports) {
-            sset_add(&devnames, netdev_get_name(ofport->netdev));
+            uint64_t port_change_seq;
+
+            port_change_seq = netdev_get_change_seq(ofport->netdev);
+            if (ofport->change_seq != port_change_seq) {
+                ofport->change_seq = port_change_seq;
+                sset_add(&devnames, netdev_get_name(ofport->netdev));
+            }
         }
         SSET_FOR_EACH (devname, &devnames) {
             update_port(p, devname);
@@ -1523,43 +1562,6 @@ ofproto_run(struct ofproto *p)
 
     default:
         OVS_NOT_REACHED();
-    }
-
-    if (time_msec() >= p->next_op_report) {
-        long long int ago = (time_msec() - p->first_op) / 1000;
-        long long int interval = (p->last_op - p->first_op) / 1000;
-        struct ds s;
-
-        ds_init(&s);
-        ds_put_format(&s, "%d flow_mods ",
-                      p->n_add + p->n_delete + p->n_modify);
-        if (interval == ago) {
-            ds_put_format(&s, "in the last %lld s", ago);
-        } else if (interval) {
-            ds_put_format(&s, "in the %lld s starting %lld s ago",
-                          interval, ago);
-        } else {
-            ds_put_format(&s, "%lld s ago", ago);
-        }
-
-        ds_put_cstr(&s, " (");
-        if (p->n_add) {
-            ds_put_format(&s, "%d adds, ", p->n_add);
-        }
-        if (p->n_delete) {
-            ds_put_format(&s, "%d deletes, ", p->n_delete);
-        }
-        if (p->n_modify) {
-            ds_put_format(&s, "%d modifications, ", p->n_modify);
-        }
-        s.length -= 2;
-        ds_put_char(&s, ')');
-
-        VLOG_INFO("%s: %s", p->name, ds_cstr(&s));
-        ds_destroy(&s);
-
-        p->n_add = p->n_delete = p->n_modify = 0;
-        p->next_op_report = LLONG_MAX;
     }
 
     return error;
@@ -1905,11 +1907,9 @@ ofproto_add_flow(struct ofproto *ofproto, const struct match *match,
     rule = rule_from_cls_rule(classifier_find_match_exactly(
                                   &ofproto->tables[0].cls, match, priority));
     if (rule) {
-        ovs_mutex_lock(&rule->mutex);
-        must_add = !ofpacts_equal(rule->actions->ofpacts,
-                                  rule->actions->ofpacts_len,
+        const struct rule_actions *actions = rule_get_actions(rule);
+        must_add = !ofpacts_equal(actions->ofpacts, actions->ofpacts_len,
                                   ofpacts, ofpacts_len);
-        ovs_mutex_unlock(&rule->mutex);
     } else {
         must_add = true;
     }
@@ -1935,6 +1935,47 @@ int
 ofproto_flow_mod(struct ofproto *ofproto, struct ofputil_flow_mod *fm)
     OVS_EXCLUDED(ofproto_mutex)
 {
+    /* Optimize for the most common case of a repeated learn action.
+     * If an identical flow already exists we only need to update its
+     * 'modified' time. */
+    if (fm->command == OFPFC_MODIFY_STRICT && fm->table_id != OFPTT_ALL
+        && !(fm->flags & OFPUTIL_FF_RESET_COUNTS)) {
+        struct oftable *table = &ofproto->tables[fm->table_id];
+        struct rule *rule;
+        bool done = false;
+
+        fat_rwlock_rdlock(&table->cls.rwlock);
+        rule = rule_from_cls_rule(classifier_find_match_exactly(&table->cls,
+                                                                &fm->match,
+                                                                fm->priority));
+        if (rule) {
+            /* Reading many of the rule fields and writing on 'modified'
+             * requires the rule->mutex.  Also, rule->actions may change
+             * if rule->mutex is not held. */
+            const struct rule_actions *actions;
+
+            ovs_mutex_lock(&rule->mutex);
+            actions = rule_get_actions(rule);
+            if (rule->idle_timeout == fm->idle_timeout
+                && rule->hard_timeout == fm->hard_timeout
+                && rule->flags == (fm->flags & OFPUTIL_FF_STATE)
+                && (!fm->modify_cookie || (fm->new_cookie == rule->flow_cookie))
+                && ofpacts_equal(fm->ofpacts, fm->ofpacts_len,
+                                 actions->ofpacts, actions->ofpacts_len)) {
+                /* Rule already exists and need not change, only update the
+                   modified timestamp. */
+                rule->modified = time_msec();
+                done = true;
+            }
+            ovs_mutex_unlock(&rule->mutex);
+        }
+        fat_rwlock_unlock(&table->cls.rwlock);
+
+        if (done) {
+            return 0;
+        }
+    }
+
     return handle_flow_mod__(ofproto, NULL, fm, NULL);
 }
 
@@ -2145,6 +2186,7 @@ ofport_install(struct ofproto *p,
     }
     ofport->ofproto = p;
     ofport->netdev = netdev;
+    ofport->change_seq = netdev_get_change_seq(netdev);
     ofport->pp = *pp;
     ofport->ofp_port = pp->port_no;
     ofport->created = time_msec();
@@ -2161,7 +2203,7 @@ ofport_install(struct ofproto *p,
     if (error) {
         goto error;
     }
-    connmgr_send_port_status(p->connmgr, pp, OFPPR_ADD);
+    connmgr_send_port_status(p->connmgr, NULL, pp, OFPPR_ADD);
     return;
 
 error:
@@ -2178,7 +2220,7 @@ error:
 static void
 ofport_remove(struct ofport *ofport)
 {
-    connmgr_send_port_status(ofport->ofproto->connmgr, &ofport->pp,
+    connmgr_send_port_status(ofport->ofproto->connmgr, NULL, &ofport->pp,
                              OFPPR_DELETE);
     ofport_destroy(ofport);
 }
@@ -2213,7 +2255,8 @@ ofport_modified(struct ofport *port, struct ofputil_phy_port *pp)
     port->pp.curr_speed = pp->curr_speed;
     port->pp.max_speed = pp->max_speed;
 
-    connmgr_send_port_status(port->ofproto->connmgr, &port->pp, OFPPR_MODIFY);
+    connmgr_send_port_status(port->ofproto->connmgr, NULL,
+                             &port->pp, OFPPR_MODIFY);
 }
 
 /* Update OpenFlow 'state' in 'port' and notify controller. */
@@ -2222,8 +2265,8 @@ ofproto_port_set_state(struct ofport *port, enum ofputil_port_state state)
 {
     if (port->pp.state != state) {
         port->pp.state = state;
-        connmgr_send_port_status(port->ofproto->connmgr, &port->pp,
-                                 OFPPR_MODIFY);
+        connmgr_send_port_status(port->ofproto->connmgr, NULL,
+                                 &port->pp, OFPPR_MODIFY);
     }
 }
 
@@ -2380,6 +2423,7 @@ update_port(struct ofproto *ofproto, const char *name)
              * Don't close the old netdev yet in case port_modified has to
              * remove a retained reference to it.*/
             port->netdev = netdev;
+            port->change_seq = netdev_get_change_seq(netdev);
 
             if (port->ofproto->ofproto_class->port_modified) {
                 port->ofproto->ofproto_class->port_modified(port);
@@ -2524,113 +2568,72 @@ update_mtu(struct ofproto *p, struct ofport *port)
     }
 }
 
-void
-ofproto_rule_ref(struct rule *rule)
-{
-    if (rule) {
-        unsigned int orig;
-
-        atomic_add(&rule->ref_count, 1, &orig);
-        ovs_assert(orig != 0);
-    }
-}
-
-void
-ofproto_rule_unref(struct rule *rule)
-{
-    if (rule) {
-        unsigned int orig;
-
-        atomic_sub(&rule->ref_count, 1, &orig);
-        if (orig == 1) {
-            rule->ofproto->ofproto_class->rule_destruct(rule);
-            ofproto_rule_destroy__(rule);
-        } else {
-            ovs_assert(orig != 0);
-        }
-    }
-}
-
-struct rule_actions *
-rule_get_actions(const struct rule *rule)
-    OVS_EXCLUDED(rule->mutex)
-{
-    struct rule_actions *actions;
-
-    ovs_mutex_lock(&rule->mutex);
-    actions = rule_get_actions__(rule);
-    ovs_mutex_unlock(&rule->mutex);
-
-    return actions;
-}
-
-struct rule_actions *
-rule_get_actions__(const struct rule *rule)
-    OVS_REQUIRES(rule->mutex)
-{
-    rule_actions_ref(rule->actions);
-    return rule->actions;
-}
-
 static void
 ofproto_rule_destroy__(struct rule *rule)
     OVS_NO_THREAD_SAFETY_ANALYSIS
 {
     cls_rule_destroy(CONST_CAST(struct cls_rule *, &rule->cr));
-    rule_actions_unref(rule->actions);
+    rule_actions_destroy(rule_get_actions(rule));
     ovs_mutex_destroy(&rule->mutex);
     rule->ofproto->ofproto_class->rule_dealloc(rule);
+}
+
+static void
+rule_destroy_cb(struct rule *rule)
+{
+    rule->ofproto->ofproto_class->rule_destruct(rule);
+    ofproto_rule_destroy__(rule);
+}
+
+void
+ofproto_rule_ref(struct rule *rule)
+{
+    if (rule) {
+        ovs_refcount_ref(&rule->ref_count);
+    }
+}
+
+/* Decrements 'rule''s ref_count and schedules 'rule' to be destroyed if the
+ * ref_count reaches 0.
+ *
+ * Use of RCU allows short term use (between RCU quiescent periods) without
+ * keeping a reference.  A reference must be taken if the rule needs to
+ * stay around accross the RCU quiescent periods. */
+void
+ofproto_rule_unref(struct rule *rule)
+{
+    if (rule && ovs_refcount_unref(&rule->ref_count) == 1) {
+        ovsrcu_postpone(rule_destroy_cb, rule);
+    }
 }
 
 static uint32_t get_provider_meter_id(const struct ofproto *,
                                       uint32_t of_meter_id);
 
-/* Creates and returns a new 'struct rule_actions', with a ref_count of 1,
- * whose actions are a copy of from the 'ofpacts_len' bytes of 'ofpacts'. */
-struct rule_actions *
+/* Creates and returns a new 'struct rule_actions', whose actions are a copy
+ * of from the 'ofpacts_len' bytes of 'ofpacts'. */
+const struct rule_actions *
 rule_actions_create(const struct ofproto *ofproto,
                     const struct ofpact *ofpacts, size_t ofpacts_len)
 {
     struct rule_actions *actions;
 
-    actions = xmalloc(sizeof *actions);
-    atomic_init(&actions->ref_count, 1);
-    actions->ofpacts = xmemdup(ofpacts, ofpacts_len);
+    actions = xmalloc(sizeof *actions + ofpacts_len);
     actions->ofpacts_len = ofpacts_len;
     actions->provider_meter_id
         = get_provider_meter_id(ofproto,
                                 ofpacts_get_meter(ofpacts, ofpacts_len));
+    memcpy(actions->ofpacts, ofpacts, ofpacts_len);
 
     return actions;
 }
 
-/* Increments 'actions''s ref_count. */
+/* Free the actions after the RCU quiescent period is reached. */
 void
-rule_actions_ref(struct rule_actions *actions)
+rule_actions_destroy(const struct rule_actions *actions)
 {
     if (actions) {
-        unsigned int orig;
-
-        atomic_add(&actions->ref_count, 1, &orig);
-        ovs_assert(orig != 0);
-    }
-}
-
-/* Decrements 'actions''s ref_count and frees 'actions' if the ref_count
- * reaches 0. */
-void
-rule_actions_unref(struct rule_actions *actions)
-{
-    if (actions) {
-        unsigned int orig;
-
-        atomic_sub(&actions->ref_count, 1, &orig);
-        if (orig == 1) {
-            free(actions->ofpacts);
-            free(actions);
-        } else {
-            ovs_assert(orig != 0);
-        }
+        ovsrcu_postpone(free, CONST_CAST(struct rule_actions *, actions));
     }
 }
 
@@ -2640,9 +2643,13 @@ static bool
 ofproto_rule_has_out_port(const struct rule *rule, ofp_port_t port)
     OVS_REQUIRES(ofproto_mutex)
 {
-    return (port == OFPP_ANY
-            || ofpacts_output_to_port(rule->actions->ofpacts,
-                                      rule->actions->ofpacts_len, port));
+    if (port == OFPP_ANY) {
+        return true;
+    } else {
+        const struct rule_actions *actions = rule_get_actions(rule);
+        return ofpacts_output_to_port(actions->ofpacts,
+                                      actions->ofpacts_len, port);
+    }
 }
 
 /* Returns true if 'rule' has group and equals group_id. */
@@ -2650,9 +2657,13 @@ static bool
 ofproto_rule_has_out_group(const struct rule *rule, uint32_t group_id)
     OVS_REQUIRES(ofproto_mutex)
 {
-    return (group_id == OFPG11_ANY
-            || ofpacts_output_to_group(rule->actions->ofpacts,
-                                       rule->actions->ofpacts_len, group_id));
+    if (group_id == OFPG_ANY) {
+        return true;
+    } else {
+        const struct rule_actions *actions = rule_get_actions(rule);
+        return ofpacts_output_to_group(actions->ofpacts,
+                                       actions->ofpacts_len, group_id);
+    }
 }
 
 /* Returns true if a rule related to 'op' has an OpenFlow OFPAT_OUTPUT or
@@ -2698,11 +2709,10 @@ run_rule_executes(struct ofproto *ofproto)
 
     guarded_list_pop_all(&ofproto->rule_executes, &executes);
     LIST_FOR_EACH_SAFE (e, next, list_node, &executes) {
-        union flow_in_port in_port_;
         struct flow flow;
 
-        in_port_.ofp_port = e->in_port;
-        flow_extract(e->packet, 0, 0, NULL, &in_port_, &flow);
+        flow_extract(e->packet, NULL, &flow);
+        flow.in_port.ofp_port = e->in_port;
         ofproto->ofproto_class->rule_execute(e->rule, &flow, e->packet);
 
         rule_execute_destroy(e);
@@ -2732,19 +2742,27 @@ destroy_rule_executes(struct ofproto *ofproto)
 static bool
 ofproto_rule_is_hidden(const struct rule *rule)
 {
-    return rule->cr.priority > UINT16_MAX;
-}
-
-static enum oftable_flags
-rule_get_flags(const struct rule *rule)
-{
-    return rule->ofproto->tables[rule->table_id].flags;
+    return (rule->cr.priority > UINT16_MAX);
 }
 
 static bool
-rule_is_modifiable(const struct rule *rule)
+oftable_is_modifiable(const struct oftable *table,
+                      enum ofputil_flow_mod_flags flags)
 {
-    return !(rule_get_flags(rule) & OFTABLE_READONLY);
+    if (flags & OFPUTIL_FF_NO_READONLY) {
+        return true;
+    }
+
+    return !(table->flags & OFTABLE_READONLY);
+}
+
+static bool
+rule_is_modifiable(const struct rule *rule, enum ofputil_flow_mod_flags flags)
+{
+    const struct oftable *rule_table;
+
+    rule_table = &rule->ofproto->tables[rule->table_id];
+    return oftable_is_modifiable(rule_table, flags);
 }
 
 static enum ofperr
@@ -2762,26 +2780,14 @@ handle_features_request(struct ofconn *ofconn, const struct ofp_header *oh)
     struct ofport *port;
     bool arp_match_ip;
     struct ofpbuf *b;
-    int n_tables;
-    int i;
 
     ofproto->ofproto_class->get_features(ofproto, &arp_match_ip,
                                          &features.actions);
     ovs_assert(features.actions & OFPUTIL_A_OUTPUT); /* sanity check */
 
-    /* Count only non-hidden tables in the number of tables.  (Hidden tables,
-     * if present, are always at the end.) */
-    n_tables = ofproto->n_tables;
-    for (i = 0; i < ofproto->n_tables; i++) {
-        if (ofproto->tables[i].flags & OFTABLE_HIDDEN) {
-            n_tables = i;
-            break;
-        }
-    }
-
     features.datapath_id = ofproto->datapath_id;
     features.n_buffers = pktbuf_capacity();
-    features.n_tables = n_tables;
+    features.n_tables = ofproto_get_n_visible_tables(ofproto);
     features.capabilities = (OFPUTIL_C_FLOW_STATS | OFPUTIL_C_TABLE_STATS |
                              OFPUTIL_C_PORT_STATS | OFPUTIL_C_QUEUE_STATS);
     if (arp_match_ip) {
@@ -2911,7 +2917,6 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     uint64_t ofpacts_stub[1024 / 8];
     struct ofpbuf ofpacts;
     struct flow flow;
-    union flow_in_port in_port_;
     enum ofperr error;
 
     COVERAGE_INC(ofproto_packet_out);
@@ -2945,8 +2950,8 @@ handle_packet_out(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     /* Verify actions against packet, then send packet if successful. */
-    in_port_.ofp_port = po.in_port;
-    flow_extract(payload, 0, 0, NULL, &in_port_, &flow);
+    flow_extract(payload, NULL, &flow);
+    flow.in_port.ofp_port = po.in_port;
     error = ofproto_check_ofpacts(p, po.ofpacts, po.ofpacts_len);
     if (!error) {
         error = p->ofproto_class->packet_out(p, payload, &flow,
@@ -2961,26 +2966,27 @@ exit:
 }
 
 static void
-update_port_config(struct ofport *port,
+update_port_config(struct ofconn *ofconn, struct ofport *port,
                    enum ofputil_port_config config,
                    enum ofputil_port_config mask)
 {
-    enum ofputil_port_config old_config = port->pp.config;
-    enum ofputil_port_config toggle;
+    enum ofputil_port_config toggle = (config ^ port->pp.config) & mask;
 
-    toggle = (config ^ port->pp.config) & mask;
-    if (toggle & OFPUTIL_PC_PORT_DOWN) {
-        if (config & OFPUTIL_PC_PORT_DOWN) {
-            netdev_turn_flags_off(port->netdev, NETDEV_UP, NULL);
-        } else {
-            netdev_turn_flags_on(port->netdev, NETDEV_UP, NULL);
-        }
+    if (toggle & OFPUTIL_PC_PORT_DOWN
+        && (config & OFPUTIL_PC_PORT_DOWN
+            ? netdev_turn_flags_off(port->netdev, NETDEV_UP, NULL)
+            : netdev_turn_flags_on(port->netdev, NETDEV_UP, NULL))) {
+        /* We tried to bring the port up or down, but it failed, so don't
+         * update the "down" bit. */
         toggle &= ~OFPUTIL_PC_PORT_DOWN;
     }
 
-    port->pp.config ^= toggle;
-    if (port->pp.config != old_config) {
+    if (toggle) {
+        enum ofputil_port_config old_config = port->pp.config;
+        port->pp.config ^= toggle;
         port->ofproto->ofproto_class->port_reconfigured(port, old_config);
+        connmgr_send_port_status(port->ofproto->connmgr, ofconn, &port->pp,
+                                 OFPPR_MODIFY);
     }
 }
 
@@ -2997,7 +3003,7 @@ handle_port_mod(struct ofconn *ofconn, const struct ofp_header *oh)
         return error;
     }
 
-    error = ofputil_decode_port_mod(oh, &pm);
+    error = ofputil_decode_port_mod(oh, &pm, false);
     if (error) {
         return error;
     }
@@ -3008,7 +3014,7 @@ handle_port_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     } else if (!eth_addr_equals(port->pp.hw_addr, pm.hw_addr)) {
         return OFPERR_OFPPMFC_BAD_HW_ADDR;
     } else {
-        update_port_config(port, pm.config, pm.mask);
+        update_port_config(ofconn, port, pm.config, pm.mask);
         if (pm.advertise) {
             netdev_set_advertisements(port->netdev, pm.advertise);
         }
@@ -3129,62 +3135,68 @@ append_port_stat(struct ofport *port, struct list *replies)
     ofputil_append_port_stat(replies, &ops);
 }
 
-static enum ofperr
-handle_port_stats_request(struct ofconn *ofconn,
-                          const struct ofp_header *request)
+static void
+handle_port_request(struct ofconn *ofconn,
+                    const struct ofp_header *request, ofp_port_t port_no,
+                    void (*cb)(struct ofport *, struct list *replies))
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     struct ofport *port;
     struct list replies;
-    ofp_port_t port_no;
-    enum ofperr error;
-
-    error = ofputil_decode_port_stats_request(request, &port_no);
-    if (error) {
-        return error;
-    }
 
     ofpmp_init(&replies, request);
     if (port_no != OFPP_ANY) {
-        port = ofproto_get_port(p, port_no);
+        port = ofproto_get_port(ofproto, port_no);
         if (port) {
-            append_port_stat(port, &replies);
+            cb(port, &replies);
         }
     } else {
-        HMAP_FOR_EACH (port, hmap_node, &p->ports) {
-            append_port_stat(port, &replies);
+        HMAP_FOR_EACH (port, hmap_node, &ofproto->ports) {
+            cb(port, &replies);
         }
     }
 
     ofconn_send_replies(ofconn, &replies);
-    return 0;
+}
+
+static enum ofperr
+handle_port_stats_request(struct ofconn *ofconn,
+                          const struct ofp_header *request)
+{
+    ofp_port_t port_no;
+    enum ofperr error;
+
+    error = ofputil_decode_port_stats_request(request, &port_no);
+    if (!error) {
+        handle_port_request(ofconn, request, port_no, append_port_stat);
+    }
+    return error;
+}
+
+static void
+append_port_desc(struct ofport *port, struct list *replies)
+{
+    ofputil_append_port_desc_stats_reply(&port->pp, replies);
 }
 
 static enum ofperr
 handle_port_desc_stats_request(struct ofconn *ofconn,
                                const struct ofp_header *request)
 {
-    struct ofproto *p = ofconn_get_ofproto(ofconn);
-    enum ofp_version version;
-    struct ofport *port;
-    struct list replies;
+    ofp_port_t port_no;
+    enum ofperr error;
 
-    ofpmp_init(&replies, request);
-
-    version = ofputil_protocol_to_ofp_version(ofconn_get_protocol(ofconn));
-    HMAP_FOR_EACH (port, hmap_node, &p->ports) {
-        ofputil_append_port_desc_stats_reply(version, &port->pp, &replies);
+    error = ofputil_decode_port_desc_stats_request(request, &port_no);
+    if (!error) {
+        handle_port_request(ofconn, request, port_no, append_port_desc);
     }
-
-    ofconn_send_replies(ofconn, &replies);
-    return 0;
+    return error;
 }
 
 static uint32_t
 hash_cookie(ovs_be64 cookie)
 {
-    return hash_2words((OVS_FORCE uint64_t)cookie >> 32,
-                       (OVS_FORCE uint64_t)cookie);
+    return hash_uint64((OVS_FORCE uint64_t)cookie);
 }
 
 static void
@@ -3228,14 +3240,11 @@ calc_duration(long long int start, long long int now,
 }
 
 /* Checks whether 'table_id' is 0xff or a valid table ID in 'ofproto'.  Returns
- * 0 if 'table_id' is OK, otherwise an OpenFlow error code.  */
-static enum ofperr
+ * true if 'table_id' is OK, false otherwise.  */
+static bool
 check_table_id(const struct ofproto *ofproto, uint8_t table_id)
 {
-    return (table_id == 0xff || table_id < ofproto->n_tables
-            ? 0
-            : OFPERR_OFPBRC_BAD_TABLE_ID);
-
+    return table_id == OFPTT_ALL || table_id < ofproto->n_tables;
 }
 
 static struct oftable *
@@ -3419,12 +3428,12 @@ collect_rules_loose(struct ofproto *ofproto,
     OVS_REQUIRES(ofproto_mutex)
 {
     struct oftable *table;
-    enum ofperr error;
+    enum ofperr error = 0;
 
     rule_collection_init(rules);
 
-    error = check_table_id(ofproto, criteria->table_id);
-    if (error) {
+    if (!check_table_id(ofproto, criteria->table_id)) {
+        error = OFPERR_OFPBRC_BAD_TABLE_ID;
         goto exit;
     }
 
@@ -3480,12 +3489,12 @@ collect_rules_strict(struct ofproto *ofproto,
     OVS_REQUIRES(ofproto_mutex)
 {
     struct oftable *table;
-    int error;
+    int error = 0;
 
     rule_collection_init(rules);
 
-    error = check_table_id(ofproto, criteria->table_id);
-    if (error) {
+    if (!check_table_id(ofproto, criteria->table_id)) {
+        error = OFPERR_OFPBRC_BAD_TABLE_ID;
         goto exit;
     }
 
@@ -3575,7 +3584,7 @@ handle_flow_stats_request(struct ofconn *ofconn,
         long long int now = time_msec();
         struct ofputil_flow_stats fs;
         long long int created, used, modified;
-        struct rule_actions *actions;
+        const struct rule_actions *actions;
         enum ofputil_flow_mod_flags flags;
 
         ovs_mutex_lock(&rule->mutex);
@@ -3583,11 +3592,13 @@ handle_flow_stats_request(struct ofconn *ofconn,
         fs.idle_timeout = rule->idle_timeout;
         fs.hard_timeout = rule->hard_timeout;
         created = rule->created;
-        used = rule->used;
         modified = rule->modified;
-        actions = rule_get_actions__(rule);
+        actions = rule_get_actions(rule);
         flags = rule->flags;
         ovs_mutex_unlock(&rule->mutex);
+
+        ofproto->ofproto_class->rule_get_stats(rule, &fs.packet_count,
+                                               &fs.byte_count, &used);
 
         minimatch_expand(&rule->cr.match, &fs.match);
         fs.table_id = rule->table_id;
@@ -3595,15 +3606,11 @@ handle_flow_stats_request(struct ofconn *ofconn,
         fs.priority = rule->cr.priority;
         fs.idle_age = age_secs(now - used);
         fs.hard_age = age_secs(now - modified);
-        ofproto->ofproto_class->rule_get_stats(rule, &fs.packet_count,
-                                               &fs.byte_count);
         fs.ofpacts = actions->ofpacts;
         fs.ofpacts_len = actions->ofpacts_len;
 
         fs.flags = flags;
         ofputil_append_flow_stats_reply(&fs, &replies);
-
-        rule_actions_unref(actions);
     }
 
     rule_collection_unref(&rules);
@@ -3618,14 +3625,14 @@ static void
 flow_stats_ds(struct rule *rule, struct ds *results)
 {
     uint64_t packet_count, byte_count;
-    struct rule_actions *actions;
-    long long int created;
+    const struct rule_actions *actions;
+    long long int created, used;
 
-    rule->ofproto->ofproto_class->rule_get_stats(rule,
-                                                 &packet_count, &byte_count);
+    rule->ofproto->ofproto_class->rule_get_stats(rule, &packet_count,
+                                                 &byte_count, &used);
 
     ovs_mutex_lock(&rule->mutex);
-    actions = rule_get_actions__(rule);
+    actions = rule_get_actions(rule);
     created = rule->created;
     ovs_mutex_unlock(&rule->mutex);
 
@@ -3642,8 +3649,6 @@ flow_stats_ds(struct rule *rule, struct ds *results)
     ofpacts_format(actions->ofpacts, actions->ofpacts_len, results);
 
     ds_put_cstr(results, "\n");
-
-    rule_actions_unref(actions);
 }
 
 /* Adds a pretty-printed description of all flows to 'results', including
@@ -3675,20 +3680,24 @@ ofproto_get_netflow_ids(const struct ofproto *ofproto,
     ofproto->ofproto_class->get_netflow_ids(ofproto, engine_type, engine_id);
 }
 
-/* Checks the status of CFM configured on 'ofp_port' within 'ofproto'.  Returns
- * true if the port's CFM status was successfully stored into '*status'.
- * Returns false if the port did not have CFM configured, in which case
- * '*status' is indeterminate.
+/* Checks the status of CFM configured on 'ofp_port' within 'ofproto' and stores
+ * the port's CFM status in '*status'.  If 'force' is set to true, status will
+ * be returned even if there is no status change since last update.
  *
- * The caller must provide and owns '*status', and must free 'status->rmps'. */
-bool
+ * Returns 0 on success.  Returns a negative number if there is no status
+ * change since last update and 'force' is set to false.  Returns positive errno
+ * if the port did not have CFM configured.
+ *
+ * The caller must provide and own '*status', and must free 'status->rmps'.
+ * '*status' is indeterminate if the return value is non-zero. */
+int
 ofproto_port_get_cfm_status(const struct ofproto *ofproto, ofp_port_t ofp_port,
-                            struct ofproto_cfm_status *status)
+                            bool force, struct ofproto_cfm_status *status)
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
-    return (ofport
-            && ofproto->ofproto_class->get_cfm_status
-            && ofproto->ofproto_class->get_cfm_status(ofport, status));
+    return (ofport && ofproto->ofproto_class->get_cfm_status
+            ? ofproto->ofproto_class->get_cfm_status(ofport, force, status)
+            : EOPNOTSUPP);
 }
 
 static enum ofperr
@@ -3733,9 +3742,10 @@ handle_aggregate_stats_request(struct ofconn *ofconn,
         struct rule *rule = rules.rules[i];
         uint64_t packet_count;
         uint64_t byte_count;
+        long long int used;
 
         ofproto->ofproto_class->rule_get_stats(rule, &packet_count,
-                                               &byte_count);
+                                               &byte_count, &used);
 
         if (packet_count == UINT64_MAX) {
             unknown_packets = true;
@@ -3877,7 +3887,8 @@ is_flow_deletion_pending(const struct ofproto *ofproto,
         HMAP_FOR_EACH_WITH_HASH (op, hmap_node,
                                  cls_rule_hash(cls_rule, table_id),
                                  &ofproto->deletions) {
-            if (cls_rule_equal(cls_rule, &op->rule->cr)) {
+            if (op->rule->table_id == table_id
+                && cls_rule_equal(cls_rule, &op->rule->cr)) {
                 return true;
             }
         }
@@ -3934,14 +3945,13 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     OVS_REQUIRES(ofproto_mutex)
 {
     struct oftable *table;
-    struct ofopgroup *group;
     struct cls_rule cr;
     struct rule *rule;
     uint8_t table_id;
-    int error;
+    int error = 0;
 
-    error = check_table_id(ofproto, fm->table_id);
-    if (error) {
+    if (!check_table_id(ofproto, fm->table_id)) {
+        error = OFPERR_OFPBRC_BAD_TABLE_ID;
         return error;
     }
 
@@ -3966,8 +3976,16 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
 
     table = &ofproto->tables[table_id];
 
-    if (table->flags & OFTABLE_READONLY) {
+    if (!oftable_is_modifiable(table, fm->flags)) {
         return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (!(fm->flags & OFPUTIL_FF_HIDDEN_FIELDS)) {
+        if (!match_has_default_hidden_fields(&fm->match)) {
+            VLOG_WARN_RL(&rl, "%s: (add_flow) only internal flows can set "
+                         "non-default values to hidden fields", ofproto->name);
+            return OFPERR_OFPBRC_EPERM;
+        }
     }
 
     cls_rule_init(&cr, &fm->match, fm->priority);
@@ -3978,7 +3996,7 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     fat_rwlock_unlock(&table->cls.rwlock);
     if (rule) {
         cls_rule_destroy(&cr);
-        if (!rule_is_modifiable(rule)) {
+        if (!rule_is_modifiable(rule, fm->flags)) {
             return OFPERR_OFPBRC_EPERM;
         } else if (rule->pending) {
             return OFPROTO_POSTPONE;
@@ -4034,10 +4052,10 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     /* Initialize base state. */
     *CONST_CAST(struct ofproto **, &rule->ofproto) = ofproto;
     cls_rule_move(CONST_CAST(struct cls_rule *, &rule->cr), &cr);
-    atomic_init(&rule->ref_count, 1);
+    ovs_refcount_init(&rule->ref_count);
     rule->pending = NULL;
     rule->flow_cookie = fm->new_cookie;
-    rule->created = rule->modified = rule->used = time_msec();
+    rule->created = rule->modified = time_msec();
 
     ovs_mutex_init(&rule->mutex);
     ovs_mutex_lock(&rule->mutex);
@@ -4047,7 +4065,8 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
 
     *CONST_CAST(uint8_t *, &rule->table_id) = table - ofproto->tables;
     rule->flags = fm->flags & OFPUTIL_FF_STATE;
-    rule->actions = rule_actions_create(ofproto, fm->ofpacts, fm->ofpacts_len);
+    ovsrcu_set(&rule->actions,
+               rule_actions_create(ofproto, fm->ofpacts, fm->ofpacts_len));
     list_init(&rule->meter_list_node);
     rule->eviction_group = NULL;
     list_init(&rule->expirable);
@@ -4063,14 +4082,25 @@ add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
     }
 
     /* Insert rule. */
+    do_add_flow(ofproto, ofconn, request, fm->buffer_id, rule);
+
+    return error;
+}
+
+static void
+do_add_flow(struct ofproto *ofproto, struct ofconn *ofconn,
+            const struct ofp_header *request, uint32_t buffer_id,
+            struct rule *rule)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    struct ofopgroup *group;
+
     oftable_insert_rule(rule);
 
-    group = ofopgroup_create(ofproto, ofconn, request, fm->buffer_id);
+    group = ofopgroup_create(ofproto, ofconn, request, buffer_id);
     ofoperation_create(group, rule, OFOPERATION_ADD, 0);
     ofproto->ofproto_class->rule_insert(rule);
     ofopgroup_submit(group);
-
-    return error;
 }
 
 /* OFPFC_MODIFY and OFPFC_MODIFY_STRICT. */
@@ -4098,22 +4128,24 @@ modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
     error = OFPERR_OFPBRC_EPERM;
     for (i = 0; i < rules->n; i++) {
         struct rule *rule = rules->rules[i];
+        const struct rule_actions *actions;
         struct ofoperation *op;
         bool actions_changed;
         bool reset_counters;
 
         /* FIXME: Implement OFPFUTIL_FF_RESET_COUNTS */
 
-        if (rule_is_modifiable(rule)) {
+        if (rule_is_modifiable(rule, fm->flags)) {
             /* At least one rule is modifiable, don't report EPERM error. */
             error = 0;
         } else {
             continue;
         }
 
+        actions = rule_get_actions(rule);
         actions_changed = !ofpacts_equal(fm->ofpacts, fm->ofpacts_len,
-                                         rule->actions->ofpacts,
-                                         rule->actions->ofpacts_len);
+                                         actions->ofpacts,
+                                         actions->ofpacts_len);
 
         op = ofoperation_create(group, rule, type, 0);
 
@@ -4138,15 +4170,13 @@ modify_flows__(struct ofproto *ofproto, struct ofconn *ofconn,
 
         reset_counters = (fm->flags & OFPUTIL_FF_RESET_COUNTS) != 0;
         if (actions_changed || reset_counters) {
-            struct rule_actions *new_actions;
+            const struct rule_actions *new_actions;
 
-            op->actions = rule->actions;
+            op->actions = rule_get_actions(rule);
             new_actions = rule_actions_create(ofproto,
                                               fm->ofpacts, fm->ofpacts_len);
 
-            ovs_mutex_lock(&rule->mutex);
-            rule->actions = new_actions;
-            ovs_mutex_unlock(&rule->mutex);
+            ovsrcu_set(&rule->actions, new_actions);
 
             rule->ofproto->ofproto_class->rule_modify_actions(rule,
                                                               reset_counters);
@@ -4327,6 +4357,7 @@ ofproto_rule_send_removed(struct rule *rule, uint8_t reason)
     OVS_REQUIRES(ofproto_mutex)
 {
     struct ofputil_flow_removed fr;
+    long long int used;
 
     if (ofproto_rule_is_hidden(rule) ||
         !(rule->flags & OFPUTIL_FF_SEND_FLOW_REM)) {
@@ -4345,7 +4376,7 @@ ofproto_rule_send_removed(struct rule *rule, uint8_t reason)
     fr.hard_timeout = rule->hard_timeout;
     ovs_mutex_unlock(&rule->mutex);
     rule->ofproto->ofproto_class->rule_get_stats(rule, &fr.packet_count,
-                                                 &fr.byte_count);
+                                                 &fr.byte_count, &used);
 
     connmgr_send_flow_removed(rule->ofproto->connmgr, &fr);
 }
@@ -4416,7 +4447,6 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     uint64_t ofpacts_stub[1024 / 8];
     struct ofpbuf ofpacts;
     enum ofperr error;
-    long long int now;
 
     error = reject_slave_controller(ofconn);
     if (error) {
@@ -4438,31 +4468,7 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
         goto exit_free_ofpacts;
     }
 
-    /* Record the operation for logging a summary report. */
-    switch (fm.command) {
-    case OFPFC_ADD:
-        ofproto->n_add++;
-        break;
-
-    case OFPFC_MODIFY:
-    case OFPFC_MODIFY_STRICT:
-        ofproto->n_modify++;
-        break;
-
-    case OFPFC_DELETE:
-    case OFPFC_DELETE_STRICT:
-        ofproto->n_delete++;
-        break;
-    }
-
-    now = time_msec();
-    if (ofproto->next_op_report == LLONG_MAX) {
-        ofproto->first_op = now;
-        ofproto->next_op_report = MAX(now + 10 * 1000,
-                                      ofproto->op_backoff);
-        ofproto->op_backoff = ofproto->next_op_report + 60 * 1000;
-    }
-    ofproto->last_op = now;
+    ofconn_report_flow_mod(ofconn, fm.command);
 
 exit_free_ofpacts:
     ofpbuf_uninit(&ofpacts);
@@ -4726,7 +4732,7 @@ ofproto_compose_flow_refresh_update(const struct rule *rule,
     if (!(flags & NXFMF_ACTIONS)) {
         actions = NULL;
     } else if (!op) {
-        actions = rule->actions;
+        actions = rule_get_actions(rule);
     } else {
         /* An operation is in progress.  Use the previous version of the flow's
          * actions, so that when the operation commits we report the change. */
@@ -4736,11 +4742,11 @@ ofproto_compose_flow_refresh_update(const struct rule *rule,
 
         case OFOPERATION_MODIFY:
         case OFOPERATION_REPLACE:
-            actions = op->actions ? op->actions : rule->actions;
+            actions = op->actions ? op->actions : rule_get_actions(rule);
             break;
 
         case OFOPERATION_DELETE:
-            actions = rule->actions;
+            actions = rule_get_actions(rule);
             break;
 
         default:
@@ -5419,64 +5425,66 @@ append_group_stats(struct ofgroup *group, struct list *replies)
     free(ogs.bucket_stats);
 }
 
+static void
+handle_group_request(struct ofconn *ofconn,
+                     const struct ofp_header *request, uint32_t group_id,
+                     void (*cb)(struct ofgroup *, struct list *replies))
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    struct ofgroup *group;
+    struct list replies;
+
+    ofpmp_init(&replies, request);
+    if (group_id == OFPG_ALL) {
+        ovs_rwlock_rdlock(&ofproto->groups_rwlock);
+        HMAP_FOR_EACH (group, hmap_node, &ofproto->groups) {
+            ovs_rwlock_rdlock(&group->rwlock);
+            cb(group, &replies);
+            ovs_rwlock_unlock(&group->rwlock);
+        }
+        ovs_rwlock_unlock(&ofproto->groups_rwlock);
+    } else {
+        if (ofproto_group_lookup(ofproto, group_id, &group)) {
+            cb(group, &replies);
+            ofproto_group_release(group);
+        }
+    }
+    ofconn_send_replies(ofconn, &replies);
+}
+
 static enum ofperr
 handle_group_stats_request(struct ofconn *ofconn,
                            const struct ofp_header *request)
 {
-    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct list replies;
-    enum ofperr error;
-    struct ofgroup *group;
     uint32_t group_id;
+    enum ofperr error;
 
     error = ofputil_decode_group_stats_request(request, &group_id);
     if (error) {
         return error;
     }
 
-    ofpmp_init(&replies, request);
-
-    if (group_id == OFPG_ALL) {
-        ovs_rwlock_rdlock(&ofproto->groups_rwlock);
-        HMAP_FOR_EACH (group, hmap_node, &ofproto->groups) {
-            ovs_rwlock_rdlock(&group->rwlock);
-            append_group_stats(group, &replies);
-            ovs_rwlock_unlock(&group->rwlock);
-        }
-        ovs_rwlock_unlock(&ofproto->groups_rwlock);
-    } else {
-        if (ofproto_group_lookup(ofproto, group_id, &group)) {
-            append_group_stats(group, &replies);
-            ofproto_group_release(group);
-        }
-    }
-
-    ofconn_send_replies(ofconn, &replies);
-
+    handle_group_request(ofconn, request, group_id, append_group_stats);
     return 0;
+}
+
+static void
+append_group_desc(struct ofgroup *group, struct list *replies)
+{
+    struct ofputil_group_desc gds;
+
+    gds.group_id = group->group_id;
+    gds.type = group->type;
+    ofputil_append_group_desc_reply(&gds, &group->buckets, replies);
 }
 
 static enum ofperr
 handle_group_desc_stats_request(struct ofconn *ofconn,
                                 const struct ofp_header *request)
 {
-    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-    struct list replies;
-    struct ofputil_group_desc gds;
-    struct ofgroup *group;
-
-    ofpmp_init(&replies, request);
-
-    ovs_rwlock_rdlock(&ofproto->groups_rwlock);
-    HMAP_FOR_EACH (group, hmap_node, &ofproto->groups) {
-        gds.group_id = group->group_id;
-        gds.type = group->type;
-        ofputil_append_group_desc_reply(&gds, &group->buckets, &replies);
-    }
-    ovs_rwlock_unlock(&ofproto->groups_rwlock);
-
-    ofconn_send_replies(ofconn, &replies);
-
+    handle_group_request(ofconn, request,
+                         ofputil_decode_group_desc_request(request),
+                         append_group_desc);
     return 0;
 }
 
@@ -5782,11 +5790,21 @@ handle_group_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 }
 
+enum ofproto_table_config
+ofproto_table_get_config(const struct ofproto *ofproto, uint8_t table_id)
+{
+    unsigned int value;
+    atomic_read(&ofproto->tables[table_id].config, &value);
+    return (enum ofproto_table_config)value;
+}
+
 static enum ofperr
 table_mod(struct ofproto *ofproto, const struct ofputil_table_mod *tm)
 {
-    /* XXX Reject all configurations because none are currently supported */
-    return OFPERR_OFPTMFC_BAD_CONFIG;
+    /* Only accept currently supported configurations */
+    if (tm->config & ~OFPTC11_TABLE_MISS_MASK) {
+        return OFPERR_OFPTMFC_BAD_CONFIG;
+    }
 
     if (tm->table_id == OFPTT_ALL) {
         int i;
@@ -5825,10 +5843,73 @@ handle_table_mod(struct ofconn *ofconn, const struct ofp_header *oh)
 }
 
 static enum ofperr
+handle_bundle_control(struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    enum ofperr error;
+    struct ofputil_bundle_ctrl_msg bctrl;
+    struct ofpbuf *buf;
+    struct ofputil_bundle_ctrl_msg reply;
+
+    error = ofputil_decode_bundle_ctrl(oh, &bctrl);
+    if (error) {
+        return error;
+    }
+    reply.flags = 0;
+    reply.bundle_id = bctrl.bundle_id;
+
+    switch (bctrl.type) {
+        case OFPBCT_OPEN_REQUEST:
+        error = ofp_bundle_open(ofconn, bctrl.bundle_id, bctrl.flags);
+        reply.type = OFPBCT_OPEN_REPLY;
+        break;
+    case OFPBCT_CLOSE_REQUEST:
+        error = ofp_bundle_close(ofconn, bctrl.bundle_id, bctrl.flags);
+        reply.type = OFPBCT_CLOSE_REPLY;;
+        break;
+    case OFPBCT_COMMIT_REQUEST:
+        error = ofp_bundle_commit(ofconn, bctrl.bundle_id, bctrl.flags);
+        reply.type = OFPBCT_COMMIT_REPLY;
+        break;
+    case OFPBCT_DISCARD_REQUEST:
+        error = ofp_bundle_discard(ofconn, bctrl.bundle_id);
+        reply.type = OFPBCT_DISCARD_REPLY;
+        break;
+
+    case OFPBCT_OPEN_REPLY:
+    case OFPBCT_CLOSE_REPLY:
+    case OFPBCT_COMMIT_REPLY:
+    case OFPBCT_DISCARD_REPLY:
+        return OFPERR_OFPBFC_BAD_TYPE;
+        break;
+    }
+
+    if (!error) {
+        buf = ofputil_encode_bundle_ctrl_reply(oh, &reply);
+        ofconn_send_reply(ofconn, buf);
+    }
+    return error;
+}
+
+
+static enum ofperr
+handle_bundle_add(struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    enum ofperr error;
+    struct ofputil_bundle_add_msg badd;
+
+    error = ofputil_decode_bundle_add(oh, &badd);
+    if (error) {
+        return error;
+    }
+
+    return ofp_bundle_add_message(ofconn, &badd);
+}
+
+static enum ofperr
 handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     OVS_EXCLUDED(ofproto_mutex)
 {
-    const struct ofp_header *oh = msg->data;
+    const struct ofp_header *oh = ofpbuf_data(msg);
     enum ofptype type;
     enum ofperr error;
 
@@ -5956,6 +6037,12 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_QUEUE_GET_CONFIG_REQUEST:
         return handle_queue_get_config_request(ofconn, oh);
 
+    case OFPTYPE_BUNDLE_CONTROL:
+        return handle_bundle_control(ofconn, oh);
+
+    case OFPTYPE_BUNDLE_ADD_MESSAGE:
+        return handle_bundle_add(ofconn, oh);
+
     case OFPTYPE_HELLO:
     case OFPTYPE_ERROR:
     case OFPTYPE_FEATURES_REPLY:
@@ -6001,7 +6088,7 @@ handle_openflow(struct ofconn *ofconn, const struct ofpbuf *ofp_msg)
 {
     int error = handle_openflow__(ofconn, ofp_msg);
     if (error && error != OFPROTO_POSTPONE) {
-        ofconn_send_error(ofconn, ofp_msg->data, error);
+        ofconn_send_error(ofconn, ofpbuf_data(ofp_msg), error);
     }
     COVERAGE_INC(ofproto_recv_openflow);
     return error != OFPROTO_POSTPONE;
@@ -6150,7 +6237,7 @@ ofopgroup_complete(struct ofopgroup *group)
         if (!(op->error
               || ofproto_rule_is_hidden(rule)
               || (op->type == OFOPERATION_MODIFY
-                  && op->actions
+                  && !op->actions
                   && rule->flow_cookie == op->flow_cookie))) {
             /* Check that we can just cast from ofoperation_type to
              * nx_flow_update_event. */
@@ -6214,10 +6301,12 @@ ofopgroup_complete(struct ofopgroup *group)
             if (!op->error) {
                 long long int now = time_msec();
 
+                ovs_mutex_lock(&rule->mutex);
                 rule->modified = now;
                 if (op->type == OFOPERATION_REPLACE) {
-                    rule->created = rule->used = now;
+                    rule->created = now;
                 }
+                ovs_mutex_unlock(&rule->mutex);
             } else {
                 ofproto_rule_change_cookie(ofproto, rule, op->flow_cookie);
                 ovs_mutex_lock(&rule->mutex);
@@ -6225,15 +6314,15 @@ ofopgroup_complete(struct ofopgroup *group)
                 rule->hard_timeout = op->hard_timeout;
                 ovs_mutex_unlock(&rule->mutex);
                 if (op->actions) {
-                    struct rule_actions *old_actions;
+                    const struct rule_actions *old_actions;
 
                     ovs_mutex_lock(&rule->mutex);
-                    old_actions = rule->actions;
-                    rule->actions = op->actions;
+                    old_actions = rule_get_actions(rule);
+                    ovsrcu_set(&rule->actions, op->actions);
                     ovs_mutex_unlock(&rule->mutex);
 
                     op->actions = NULL;
-                    rule_actions_unref(old_actions);
+                    rule_actions_destroy(old_actions);
                 }
                 rule->flags = op->flags;
             }
@@ -6319,7 +6408,7 @@ ofoperation_destroy(struct ofoperation *op)
         hmap_remove(&group->ofproto->deletions, &op->hmap_node);
     }
     list_remove(&op->group_node);
-    rule_actions_unref(op->actions);
+    rule_actions_destroy(op->actions);
     free(op);
 }
 
@@ -6580,26 +6669,34 @@ eviction_group_find(struct oftable *table, uint32_t id)
 
 /* Returns an eviction priority for 'rule'.  The return value should be
  * interpreted so that higher priorities make a rule more attractive candidates
- * for eviction. */
+ * for eviction.
+ * Called only if have a timeout. */
 static uint32_t
-rule_eviction_priority(struct rule *rule)
+rule_eviction_priority(struct ofproto *ofproto, struct rule *rule)
     OVS_REQUIRES(ofproto_mutex)
 {
-    long long int hard_expiration;
-    long long int idle_expiration;
-    long long int expiration;
+    long long int expiration = LLONG_MAX;
+    long long int modified;
     uint32_t expiration_offset;
 
-    /* Calculate time of expiration. */
+    /* 'modified' needs protection even when we hold 'ofproto_mutex'. */
     ovs_mutex_lock(&rule->mutex);
-    hard_expiration = (rule->hard_timeout
-                       ? rule->modified + rule->hard_timeout * 1000
-                       : LLONG_MAX);
-    idle_expiration = (rule->idle_timeout
-                       ? rule->used + rule->idle_timeout * 1000
-                       : LLONG_MAX);
-    expiration = MIN(hard_expiration, idle_expiration);
+    modified = rule->modified;
     ovs_mutex_unlock(&rule->mutex);
+
+    if (rule->hard_timeout) {
+        expiration = modified + rule->hard_timeout * 1000;
+    }
+    if (rule->idle_timeout) {
+        uint64_t packets, bytes;
+        long long int used;
+        long long int idle_expiration;
+
+        ofproto->ofproto_class->rule_get_stats(rule, &packets, &bytes, &used);
+        idle_expiration = used + rule->idle_timeout * 1000;
+        expiration = MIN(expiration, idle_expiration);
+    }
+
     if (expiration == LLONG_MAX) {
         return 0;
     }
@@ -6629,9 +6726,9 @@ eviction_group_add_rule(struct rule *rule)
     struct oftable *table = &ofproto->tables[rule->table_id];
     bool has_timeout;
 
-    ovs_mutex_lock(&rule->mutex);
+    /* Timeouts may be modified only when holding 'ofproto_mutex'.  We have it
+     * so no additional protection is needed. */
     has_timeout = rule->hard_timeout || rule->idle_timeout;
-    ovs_mutex_unlock(&rule->mutex);
 
     if (table->eviction_fields && has_timeout) {
         struct eviction_group *evg;
@@ -6640,7 +6737,7 @@ eviction_group_add_rule(struct rule *rule)
 
         rule->eviction_group = evg;
         heap_insert(&evg->rules, &rule->evg_node,
-                    rule_eviction_priority(rule));
+                    rule_eviction_priority(ofproto, rule));
         eviction_group_resized(table, evg);
     }
 }
@@ -6654,7 +6751,7 @@ oftable_init(struct oftable *table)
     memset(table, 0, sizeof *table);
     classifier_init(&table->cls, flow_segment_u32s);
     table->max_flows = UINT_MAX;
-    atomic_init(&table->config, (unsigned int)OFPTC11_TABLE_MISS_CONTROLLER);
+    atomic_init(&table->config, (unsigned int)OFPROTO_TABLE_MISS_DEFAULT);
 }
 
 /* Destroys 'table', including its classifier and eviction groups.
@@ -6793,6 +6890,7 @@ oftable_insert_rule(struct rule *rule)
 {
     struct ofproto *ofproto = rule->ofproto;
     struct oftable *table = &ofproto->tables[rule->table_id];
+    const struct rule_actions *actions;
     bool may_expire;
 
     ovs_mutex_lock(&rule->mutex);
@@ -6805,9 +6903,10 @@ oftable_insert_rule(struct rule *rule)
 
     cookies_insert(ofproto, rule);
 
-    if (rule->actions->provider_meter_id != UINT32_MAX) {
-        uint32_t meter_id = ofpacts_get_meter(rule->actions->ofpacts,
-                                              rule->actions->ofpacts_len);
+    actions = rule_get_actions(rule);
+    if (actions->provider_meter_id != UINT32_MAX) {
+        uint32_t meter_id = ofpacts_get_meter(actions->ofpacts,
+                                              actions->ofpacts_len);
         struct meter *meter = ofproto->meters[meter_id];
         list_insert(&meter->rules, &rule->meter_list_node);
     }
@@ -6873,25 +6972,30 @@ ofproto_unixctl_init(void)
 void
 ofproto_get_vlan_usage(struct ofproto *ofproto, unsigned long int *vlan_bitmap)
 {
+    struct match match;
+    struct cls_rule target;
     const struct oftable *oftable;
+
+    match_init_catchall(&match);
+    match_set_vlan_vid_masked(&match, htons(VLAN_CFI), htons(VLAN_CFI));
+    cls_rule_init(&target, &match, 0);
 
     free(ofproto->vlan_bitmap);
     ofproto->vlan_bitmap = bitmap_allocate(4096);
     ofproto->vlans_changed = false;
 
     OFPROTO_FOR_EACH_TABLE (oftable, ofproto) {
-        const struct cls_subtable *table;
+        struct cls_cursor cursor;
+        struct rule *rule;
 
         fat_rwlock_rdlock(&oftable->cls.rwlock);
-        HMAP_FOR_EACH (table, hmap_node, &oftable->cls.subtables) {
-            if (minimask_get_vid_mask(&table->mask) == VLAN_VID_MASK) {
-                const struct cls_rule *rule;
+        cls_cursor_init(&cursor, &oftable->cls, &target);
+        CLS_CURSOR_FOR_EACH (rule, cr, &cursor) {
+            if (minimask_get_vid_mask(&rule->cr.match.mask) == VLAN_VID_MASK) {
+                uint16_t vid = miniflow_get_vid(&rule->cr.match.flow);
 
-                HMAP_FOR_EACH (rule, hmap_node, &table->rules) {
-                    uint16_t vid = miniflow_get_vid(&rule->match.flow);
-                    bitmap_set1(vlan_bitmap, vid);
-                    bitmap_set1(ofproto->vlan_bitmap, vid);
-                }
+                bitmap_set1(vlan_bitmap, vid);
+                bitmap_set1(ofproto->vlan_bitmap, vid);
             }
         }
         fat_rwlock_unlock(&oftable->cls.rwlock);

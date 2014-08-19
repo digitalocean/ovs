@@ -60,8 +60,46 @@ struct tnl_port {
 
 static struct ovs_rwlock rwlock = OVS_RWLOCK_INITIALIZER;
 
-static struct hmap tnl_match_map__ = HMAP_INITIALIZER(&tnl_match_map__);
-static struct hmap *tnl_match_map OVS_GUARDED_BY(rwlock) = &tnl_match_map__;
+/* Tunnel matches.
+ *
+ * This module maps packets received over tunnel protocols to vports.  The
+ * tunnel protocol and, for some protocols, tunnel-specific information (e.g.,
+ * for VXLAN, the UDP destination port number) are always use as part of the
+ * mapping.  Which other fields are used for the mapping depends on the vports
+ * themselves (the parenthesized notations refer to "struct tnl_match" fields):
+ *
+ *     - in_key: A vport may match a specific tunnel ID (in_key_flow == false)
+ *       or arrange for the tunnel ID to be matched as tunnel.tun_id in the
+ *       OpenFlow flow (in_key_flow == true).
+ *
+ *     - ip_dst: A vport may match a specific destination IP address
+ *       (ip_dst_flow == false) or arrange for the destination IP to be matched
+ *       as tunnel.ip_dst in the OpenFlow flow (ip_dst_flow == true).
+ *
+ *     - ip_src: A vport may match a specific IP source address (ip_src_flow ==
+ *       false, ip_src != 0), wildcard all source addresses (ip_src_flow ==
+ *       false, ip_src == 0), or arrange for the IP source address to be
+ *       handled in the OpenFlow flow table (ip_src_flow == true).
+ *
+ * Thus, there are 2 * 2 * 3 == 12 possible ways a vport can match against a
+ * tunnel packet.  We number the possibilities for each field in increasing
+ * order as listed in each bullet above.  We order the 12 overall combinations
+ * in lexicographic order considering in_key first, then ip_dst, then
+ * ip_src. */
+#define N_MATCH_TYPES (2 * 2 * 3)
+
+/* The three possibilities (see above) for vport ip_src matches. */
+enum ip_src_type {
+    IP_SRC_CFG,             /* ip_src must equal configured address. */
+    IP_SRC_ANY,             /* Any ip_src is acceptable. */
+    IP_SRC_FLOW             /* ip_src is handled in flow table. */
+};
+
+/* Each hmap contains "struct tnl_port"s.
+ * The index is a combination of how each of the fields listed under "Tunnel
+ * matches" above matches, see the final paragraph for ordering. */
+static struct hmap *tnl_match_maps[N_MATCH_TYPES] OVS_GUARDED_BY(rwlock);
+static struct hmap **tnl_match_map(const struct tnl_match *);
 
 static struct hmap ofport_map__ = HMAP_INITIALIZER(&ofport_map__);
 static struct hmap *ofport_map OVS_GUARDED_BY(rwlock) = &ofport_map__;
@@ -70,7 +108,7 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 static struct vlog_rate_limit dbg_rl = VLOG_RATE_LIMIT_INIT(60, 60);
 
 static struct tnl_port *tnl_find(const struct flow *) OVS_REQ_RDLOCK(rwlock);
-static struct tnl_port *tnl_find_exact(struct tnl_match *)
+static struct tnl_port *tnl_find_exact(struct tnl_match *, struct hmap *)
     OVS_REQ_RDLOCK(rwlock);
 static struct tnl_port *tnl_find_ofport(const struct ofport_dpif *)
     OVS_REQ_RDLOCK(rwlock);
@@ -92,6 +130,7 @@ tnl_port_add__(const struct ofport_dpif *ofport, const struct netdev *netdev,
     const struct netdev_tunnel_config *cfg;
     struct tnl_port *existing_port;
     struct tnl_port *tnl_port;
+    struct hmap **map;
 
     cfg = netdev_get_tunnel_config(netdev);
     ovs_assert(cfg);
@@ -110,7 +149,8 @@ tnl_port_add__(const struct ofport_dpif *ofport, const struct netdev *netdev,
     tnl_port->match.in_key_flow = cfg->in_key_flow;
     tnl_port->match.odp_port = odp_port;
 
-    existing_port = tnl_find_exact(&tnl_port->match);
+    map = tnl_match_map(&tnl_port->match);
+    existing_port = tnl_find_exact(&tnl_port->match, *map);
     if (existing_port) {
         if (warn) {
             struct ds ds = DS_EMPTY_INITIALIZER;
@@ -119,14 +159,19 @@ tnl_port_add__(const struct ofport_dpif *ofport, const struct netdev *netdev,
                       "port '%s' (%s)", tnl_port_get_name(tnl_port),
                       tnl_port_get_name(existing_port), ds_cstr(&ds));
             ds_destroy(&ds);
-            free(tnl_port);
         }
+        netdev_close(tnl_port->netdev);
+        free(tnl_port);
         return false;
     }
 
     hmap_insert(ofport_map, &tnl_port->ofport_node, hash_pointer(ofport, 0));
-    hmap_insert(tnl_match_map, &tnl_port->match_node,
-                tnl_hash(&tnl_port->match));
+
+    if (!*map) {
+        *map = xmalloc(sizeof **map);
+        hmap_init(*map);
+    }
+    hmap_insert(*map, &tnl_port->match_node, tnl_hash(&tnl_port->match));
     tnl_port_mod_log(tnl_port, "adding");
     return true;
 }
@@ -182,8 +227,16 @@ tnl_port_del__(const struct ofport_dpif *ofport) OVS_REQ_WRLOCK(rwlock)
 
     tnl_port = tnl_find_ofport(ofport);
     if (tnl_port) {
+        struct hmap **map;
+
         tnl_port_mod_log(tnl_port, "removing");
-        hmap_remove(tnl_match_map, &tnl_port->match_node);
+        map = tnl_match_map(&tnl_port->match);
+        hmap_remove(*map, &tnl_port->match_node);
+        if (hmap_is_empty(*map)) {
+            hmap_destroy(*map);
+            free(*map);
+            *map = NULL;
+        }
         hmap_remove(ofport_map, &tnl_port->ofport_node);
         netdev_close(tnl_port->netdev);
         free(tnl_port);
@@ -246,17 +299,20 @@ out:
 }
 
 static bool
-tnl_ecn_ok(const struct flow *base_flow, struct flow *flow)
+tnl_ecn_ok(const struct flow *base_flow, struct flow *flow,
+           struct flow_wildcards *wc)
 {
-    if (is_ip_any(base_flow)
-        && (flow->tunnel.ip_tos & IP_ECN_MASK) == IP_ECN_CE) {
-        if ((base_flow->nw_tos & IP_ECN_MASK) == IP_ECN_NOT_ECT) {
-            VLOG_WARN_RL(&rl, "dropping tunnel packet marked ECN CE"
-                         " but is not ECN capable");
-            return false;
-        } else {
-            /* Set the ECN CE value in the tunneled packet. */
-            flow->nw_tos |= IP_ECN_CE;
+    if (is_ip_any(base_flow)) {
+        if ((flow->tunnel.ip_tos & IP_ECN_MASK) == IP_ECN_CE) {
+            wc->masks.nw_tos |= IP_ECN_MASK;
+            if ((base_flow->nw_tos & IP_ECN_MASK) == IP_ECN_NOT_ECT) {
+                VLOG_WARN_RL(&rl, "dropping tunnel packet marked ECN CE"
+                             " but is not ECN capable");
+                return false;
+            } else {
+                /* Set the ECN CE value in the tunneled packet. */
+                flow->nw_tos |= IP_ECN_CE;
+            }
         }
     }
 
@@ -271,6 +327,11 @@ bool
 tnl_xlate_init(const struct flow *base_flow, struct flow *flow,
                struct flow_wildcards *wc)
 {
+    /* tnl_port_should_receive() examines the 'tunnel.ip_dst' field to
+     * determine the presence of the tunnel metadata.  However, since tunnels'
+     * datapath port numbers are different from the non-tunnel ports, and we
+     * always unwildcard the 'in_port', we do not need to unwildcard
+     * the 'tunnel.ip_dst' for non-tunneled packets. */
     if (tnl_port_should_receive(flow)) {
         wc->masks.tunnel.tun_id = OVS_BE64_MAX;
         wc->masks.tunnel.ip_src = OVS_BE32_MAX;
@@ -283,7 +344,7 @@ tnl_xlate_init(const struct flow *base_flow, struct flow *flow,
 
         memset(&wc->masks.pkt_mark, 0xff, sizeof wc->masks.pkt_mark);
 
-        if (!tnl_ecn_ok(base_flow, flow)) {
+        if (!tnl_ecn_ok(base_flow, flow, wc)) {
             return false;
         }
 
@@ -340,7 +401,7 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
     }
 
     if (cfg->tos_inherit && is_ip_any(flow)) {
-        wc->masks.nw_tos = 0xff;
+        wc->masks.nw_tos = IP_DSCP_MASK;
         flow->tunnel.ip_tos = flow->nw_tos & IP_DSCP_MASK;
     } else {
         flow->tunnel.ip_tos = cfg->tos;
@@ -349,12 +410,12 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
     /* ECN fields are always inherited. */
     if (is_ip_any(flow)) {
         wc->masks.nw_tos |= IP_ECN_MASK;
-    }
 
-    if ((flow->nw_tos & IP_ECN_MASK) == IP_ECN_CE) {
-        flow->tunnel.ip_tos |= IP_ECN_ECT_0;
-    } else {
-        flow->tunnel.ip_tos |= flow->nw_tos & IP_ECN_MASK;
+        if ((flow->nw_tos & IP_ECN_MASK) == IP_ECN_CE) {
+            flow->tunnel.ip_tos |= IP_ECN_ECT_0;
+        } else {
+            flow->tunnel.ip_tos |= flow->nw_tos & IP_ECN_MASK;
+        }
     }
 
     flow->tunnel.flags = (cfg->dont_fragment ? FLOW_TNL_F_DONT_FRAGMENT : 0)
@@ -401,14 +462,16 @@ tnl_find_ofport(const struct ofport_dpif *ofport) OVS_REQ_RDLOCK(rwlock)
 }
 
 static struct tnl_port *
-tnl_find_exact(struct tnl_match *match) OVS_REQ_RDLOCK(rwlock)
+tnl_find_exact(struct tnl_match *match, struct hmap *map)
+    OVS_REQ_RDLOCK(rwlock)
 {
-    struct tnl_port *tnl_port;
+    if (map) {
+        struct tnl_port *tnl_port;
 
-    HMAP_FOR_EACH_WITH_HASH (tnl_port, match_node, tnl_hash(match),
-                             tnl_match_map) {
-        if (!memcmp(match, &tnl_port->match, sizeof *match)) {
-            return tnl_port;
+        HMAP_FOR_EACH_WITH_HASH (tnl_port, match_node, tnl_hash(match), map) {
+            if (!memcmp(match, &tnl_port->match, sizeof *match)) {
+                return tnl_port;
+            }
         }
     }
     return NULL;
@@ -419,53 +482,65 @@ tnl_find_exact(struct tnl_match *match) OVS_REQ_RDLOCK(rwlock)
 static struct tnl_port *
 tnl_find(const struct flow *flow) OVS_REQ_RDLOCK(rwlock)
 {
-    enum ip_src_type {
-        IP_SRC_CFG,             /* ip_src must equal configured address. */
-        IP_SRC_ANY,             /* Any ip_src is acceptable. */
-        IP_SRC_FLOW             /* ip_src is handled in flow table. */
-    };
+    enum ip_src_type ip_src;
+    int in_key_flow;
+    int ip_dst_flow;
+    int i;
 
-    struct tnl_match_pattern {
-        bool in_key_flow;
-        bool ip_dst_flow;
-        enum ip_src_type ip_src;
-    };
+    i = 0;
+    for (in_key_flow = 0; in_key_flow < 2; in_key_flow++) {
+        for (ip_dst_flow = 0; ip_dst_flow < 2; ip_dst_flow++) {
+            for (ip_src = 0; ip_src < 3; ip_src++) {
+                struct hmap *map = tnl_match_maps[i];
 
-    static const struct tnl_match_pattern patterns[] = {
-        { false, false, IP_SRC_CFG },  /* remote_ip, local_ip, in_key. */
-        { false, false, IP_SRC_ANY },  /* remote_ip, in_key. */
-        { true,  false, IP_SRC_CFG },  /* remote_ip, local_ip. */
-        { true,  false, IP_SRC_ANY },  /* remote_ip. */
-        { true,  true,  IP_SRC_ANY },  /* Flow-based remote. */
-        { true,  true,  IP_SRC_FLOW }, /* Flow-based everything. */
-    };
+                if (map) {
+                    struct tnl_port *tnl_port;
+                    struct tnl_match match;
 
-    const struct tnl_match_pattern *p;
-    struct tnl_match match;
+                    memset(&match, 0, sizeof match);
 
-    memset(&match, 0, sizeof match);
-    match.odp_port = flow->in_port.odp_port;
-    match.pkt_mark = flow->pkt_mark;
+                    /* The apparent mix-up of 'ip_dst' and 'ip_src' below is
+                     * correct, because "struct tnl_match" is expressed in
+                     * terms of packets being sent out, but we are using it
+                     * here as a description of how to treat received
+                     * packets. */
+                    match.in_key = in_key_flow ? 0 : flow->tunnel.tun_id;
+                    match.ip_src = (ip_src == IP_SRC_CFG
+                                    ? flow->tunnel.ip_dst
+                                    : 0);
+                    match.ip_dst = ip_dst_flow ? 0 : flow->tunnel.ip_src;
+                    match.odp_port = flow->in_port.odp_port;
+                    match.pkt_mark = flow->pkt_mark;
+                    match.in_key_flow = in_key_flow;
+                    match.ip_dst_flow = ip_dst_flow;
+                    match.ip_src_flow = ip_src == IP_SRC_FLOW;
 
-    for (p = patterns; p < &patterns[ARRAY_SIZE(patterns)]; p++) {
-        struct tnl_port *tnl_port;
+                    tnl_port = tnl_find_exact(&match, map);
+                    if (tnl_port) {
+                        return tnl_port;
+                    }
+                }
 
-        match.in_key_flow = p->in_key_flow;
-        match.in_key = p->in_key_flow ? 0 : flow->tunnel.tun_id;
-
-        match.ip_dst_flow = p->ip_dst_flow;
-        match.ip_dst = p->ip_dst_flow ? 0 : flow->tunnel.ip_src;
-
-        match.ip_src_flow = p->ip_src == IP_SRC_FLOW;
-        match.ip_src = p->ip_src == IP_SRC_CFG ? flow->tunnel.ip_dst : 0;
-
-        tnl_port = tnl_find_exact(&match);
-        if (tnl_port) {
-            return tnl_port;
+                i++;
+            }
         }
     }
 
     return NULL;
+}
+
+/* Returns a pointer to the 'tnl_match_maps' element corresponding to 'm''s
+ * matching criteria. */
+static struct hmap **
+tnl_match_map(const struct tnl_match *m)
+{
+    enum ip_src_type ip_src;
+
+    ip_src = (m->ip_src_flow ? IP_SRC_FLOW
+              : m->ip_src ? IP_SRC_CFG
+              : IP_SRC_ANY);
+
+    return &tnl_match_maps[6 * m->in_key_flow + 3 * m->ip_dst_flow + ip_src];
 }
 
 static void

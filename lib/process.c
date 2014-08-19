@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -68,6 +69,7 @@ static void sigchld_handler(int signr OVS_UNUSED);
 void
 process_init(void)
 {
+#ifndef _WIN32
     static bool inited;
     struct sigaction sa;
 
@@ -86,6 +88,7 @@ process_init(void)
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
     xsigaction(SIGCHLD, &sa, NULL);
+#endif
 }
 
 char *
@@ -163,6 +166,49 @@ process_register(const char *name, pid_t pid)
     return p;
 }
 
+#ifndef _WIN32
+static bool
+rlim_is_finite(rlim_t limit)
+{
+    if (limit == RLIM_INFINITY) {
+        return false;
+    }
+
+#ifdef RLIM_SAVED_CUR           /* FreeBSD 8.0 lacks RLIM_SAVED_CUR. */
+    if (limit == RLIM_SAVED_CUR) {
+        return false;
+    }
+#endif
+
+#ifdef RLIM_SAVED_MAX           /* FreeBSD 8.0 lacks RLIM_SAVED_MAX. */
+    if (limit == RLIM_SAVED_MAX) {
+        return false;
+    }
+#endif
+
+    return true;
+}
+
+/* Returns the maximum valid FD value, plus 1. */
+static int
+get_max_fds(void)
+{
+    static int max_fds;
+
+    if (!max_fds) {
+        struct rlimit r;
+        if (!getrlimit(RLIMIT_NOFILE, &r) && rlim_is_finite(r.rlim_cur)) {
+            max_fds = r.rlim_cur;
+        } else {
+            VLOG_WARN("failed to obtain fd limit, defaulting to 1024");
+            max_fds = 1024;
+        }
+    }
+
+    return max_fds;
+}
+#endif /* _WIN32 */
+
 /* Starts a subprocess with the arguments in the null-terminated argv[] array.
  * argv[0] is used as the name of the process.  Searches the PATH environment
  * variable to find the program to execute.
@@ -178,6 +224,7 @@ process_register(const char *name, pid_t pid)
 int
 process_start(char **argv, struct process **pp)
 {
+#ifndef _WIN32
     pid_t pid;
     int error;
 
@@ -212,6 +259,10 @@ process_start(char **argv, struct process **pp)
                 argv[0], ovs_strerror(errno));
         _exit(1);
     }
+#else
+    *pp = NULL;
+    return ENOSYS;
+#endif
 }
 
 /* Destroys process 'p'. */
@@ -230,9 +281,13 @@ process_destroy(struct process *p)
 int
 process_kill(const struct process *p, int signr)
 {
+#ifndef _WIN32
     return (p->exited ? ESRCH
             : !kill(p->pid, signr) ? 0
             : errno);
+#else
+    return ENOSYS;
+#endif
 }
 
 /* Returns the pid of process 'p'. */
@@ -275,6 +330,7 @@ char *
 process_status_msg(int status)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
+#ifndef _WIN32
     if (WIFEXITED(status)) {
         ds_put_format(&ds, "exit status %d", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
@@ -293,6 +349,9 @@ process_status_msg(int status)
     if (WCOREDUMP(status)) {
         ds_put_cstr(&ds, ", core dumped");
     }
+#else
+    ds_put_cstr(&ds, "function not supported.");
+#endif
     return ds_cstr(&ds);
 }
 
@@ -300,6 +359,7 @@ process_status_msg(int status)
 void
 process_run(void)
 {
+#ifndef _WIN32
     char buf[_POSIX_PIPE_BUF];
 
     if (!list_is_empty(&all_processes) && read(fds[0], buf, sizeof buf) > 0) {
@@ -322,6 +382,7 @@ process_run(void)
             }
         }
     }
+#endif
 }
 
 
@@ -330,11 +391,15 @@ process_run(void)
 void
 process_wait(struct process *p)
 {
+#ifndef _WIN32
     if (p->exited) {
         poll_immediate_wake();
     } else {
         poll_fd_wait(fds[0], POLLIN);
     }
+#else
+    OVS_NOT_REACHED();
+#endif
 }
 
 char *

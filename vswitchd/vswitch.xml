@@ -72,6 +72,22 @@
         host as displayed by <code>xe host-list</code>.
       </column>
 
+      <column name="other_config" key="stats-update-interval"
+              type='{"type": "integer", "minInteger": 5000}'>
+        <p>
+          Interval for updating statistics to the database, in milliseconds.
+          This option will affect the update of the <code>statistics</code>
+          column in the following tables: <code>Port</code>, <code>Interface
+          </code>, <code>Mirror</code>.
+        </p>
+        <p>
+          Default value is 5000 ms.
+        </p>
+        <p>
+          Getting statistics more frequently can be achieved via OpenFlow.
+        </p>
+      </column>
+
       <column name="other_config" key="flow-restore-wait"
               type='{"type": "boolean"}'>
         <p>
@@ -133,28 +149,6 @@
         </p>
         <p>
           The default is 200000.
-        </p>
-      </column>
-
-      <column name="other_config" key="force-miss-model">
-        <p>
-          Specifies userspace behaviour for handling flow misses. This takes
-          precedence over flow-eviction-threshold.
-        </p>
-        <p>
-          <dl>
-            <dt><code>auto</code></dt>
-            <dd>Handle automatically based on the flow-eviction-threshold and
-            the flow setup governer (default, recommended).</dd>
-            <dt><code>with-facets</code></dt>
-            <dd>Always create facets. Expensive kernel flow creation and
-            statistics tracking is always performed, even on flows with only
-            a small number of packets.</dd>
-            <dt><code>without-facets</code></dt>
-            <dd>Always handle without facets. Forces flow misses to be handled
-            in userspace. May cause an increase in CPU usage and packet loss
-            on high throughput.</dd>
-          </dl>
         </p>
       </column>
 
@@ -587,9 +581,24 @@
       </column>
 
       <column name="protocols">
-        List of OpenFlow protocols that may be used when negotiating a
-        connection with a controller.  A default value of
-        <code>OpenFlow10</code> will be used if this column is empty.
+	<p>
+	  List of OpenFlow protocols that may be used when negotiating
+	  a connection with a controller.  OpenFlow 1.0, 1.1, 1.2, and
+	  1.3 are enabled by default if this column is empty.
+	</p>
+
+	<p>
+	  OpenFlow 1.4 is not enabled by default because its implementation is
+	  missing features.
+	</p>
+
+        <p>
+          OpenFlow 1.5 has the same risks as OpenFlow 1.4, but it is even more
+          experimental because the OpenFlow 1.5 specification is still under
+          development and thus subject to change.  Pass
+          <code>--enable-of15</code> to <code>ovs-vswitchd</code> to allow
+          OpenFlow 1.5 to be enabled.
+        </p>
       </column>
     </group>
 
@@ -1220,7 +1229,9 @@
 
     <group title="Port Statistics">
       <p>
-        Key-value pairs that report port statistics.
+        Key-value pairs that report port statistics.  The update period
+        is controlled by <ref column="other_config"
+        key="stats-update-interval"/> in the <code>Open_vSwitch</code> table.
       </p>
       <group title="Statistics: STP transmit and receive counters">
         <column name="statistics" key="stp_tx_count">
@@ -1778,12 +1789,14 @@
     <group title="Statistics">
       <p>
         Key-value pairs that report interface statistics.  The current
-        implementation updates these counters periodically.  Future
-        implementations may update them when an interface is created, when they
-        are queried (e.g. using an OVSDB <code>select</code> operation), and
-        just before an interface is deleted due to virtual interface hot-unplug
-        or VM shutdown, and perhaps at other times, but not on any regular
-        periodic basis.
+        implementation updates these counters periodically.  The update period
+        is controlled by <ref column="other_config"
+        key="stats-update-interval"/> in the <code>Open_vSwitch</code> table.
+        Future implementations may update them when an interface is created,
+        when they are queried (e.g. using an OVSDB <code>select</code>
+        operation), and just before an interface is deleted due to virtual
+        interface hot-unplug or VM shutdown, and perhaps at other times, but
+        not on any regular periodic basis.
       </p>
       <p>
         These are the same statistics reported by OpenFlow in its <code>struct
@@ -1977,10 +1990,13 @@
 	</column>
 
 	<column name="bfd" key="forwarding_if_rx" type='{"type": "boolean"}'>
-          True to consider the interface capable of packet I/O as long as it
-          continues to receive any packets (not just BFD packets).  This
-          prevents link congestion that causes consecutive BFD control packets
-          to be lost from marking the interface down.
+          When <code>true</code>, traffic received on the
+          <ref table="Interface"/> is used to indicate the capability of packet
+          I/O.  BFD control packets are still transmitted and received.  At
+          least one BFD control packet must be received every 100 * <ref
+          column="bfd" key="min_rx"/> amount of time.  Otherwise, even if
+          traffic are received, the <ref column="bfd" key="forwarding"/>
+          will be <code>false</code>.
 	</column>
 
 	<column name="bfd" key="cpath_down" type='{"type": "boolean"}'>
@@ -1997,22 +2013,37 @@
           tunnel key.
 	</column>
 
-	<column name="bfd" key="bfd_dst_mac">
+	<column name="bfd" key="bfd_local_src_mac">
 	  Set to an Ethernet address in the form
 	  <var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>
-	  to set the MAC used as destination for transmitted BFD packets and
-	  expected as destination for received BFD packets.  The default is
-	  <code>00:23:20:00:00:01</code>.
+	  to set the MAC used as source for transmitted BFD packets.  The
+	  default is the mac address of the BFD enabled interface.
+	</column>
+
+	<column name="bfd" key="bfd_local_dst_mac">
+	  Set to an Ethernet address in the form
+	  <var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>
+	  to set the MAC used as destination for transmitted BFD packets.  The
+	  default is <code>00:23:20:00:00:01</code>.
+	</column>
+
+	<column name="bfd" key="bfd_remoe_dst_mac">
+	  Set to an Ethernet address in the form
+	  <var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>
+	  to set the MAC used for checking the destination of received BFD packets.
+	  Packets with different destination MAC will not be considered as BFD packets.
+	  If not specified the destination MAC address of received BFD packets
+	  are not checked.
 	</column>
 
 	<column name="bfd" key="bfd_src_ip">
           Set to an IPv4 address to set the IP address used as source for
-          transmitted BFD packets.  The default is <code>169.254.1.0</code>.
+          transmitted BFD packets.  The default is <code>169.254.1.1</code>.
 	</column>
 
 	<column name="bfd" key="bfd_dst_ip">
           Set to an IPv4 address to set the IP address used as destination
-          for transmitted BFD packets.  The default is <code>169.254.1.1</code>.
+          for transmitted BFD packets.  The default is <code>169.254.1.0</code>.
 	</column>
       </group>
 
@@ -2240,9 +2271,10 @@
           <ref column="other_config" key="cfm_extended"/> is true, the CFM
           module operates in demand mode.  When in demand mode, traffic
           received on the <ref table="Interface"/> is used to indicate
-          liveness.  CCMs are still transmitted and received, but if the
-          <ref table="Interface"/> is receiving traffic, their absence does not
-          cause a connectivity fault.
+          liveness.  CCMs are still transmitted and received.  At least one
+          CCM must be received every 100 * <ref column="other_config"
+          key="cfm_interval"/> amount of time.  Otherwise, even if traffic
+          are received, the CFM module will raise the connectivity fault.
         </p>
 
         <p>
@@ -2637,6 +2669,13 @@
         one flow table.  Currently this limit is 3.
       </p>
     </column>
+
+    <group title="Common Columns">
+      The overall purpose of these columns is described under <code>Common
+      Columns</code> at the beginning of this document.
+
+      <column name="external_ids"/>
+    </group>
   </table>
 
   <table name="QoS" title="Quality of Service configuration">
@@ -2896,7 +2935,9 @@
 
     <group title="Statistics: Mirror counters">
       <p>
-        Key-value pairs that report mirror statistics.
+        Key-value pairs that report mirror statistics.  The update period
+        is controlled by <ref column="other_config"
+        key="stats-update-interval"/> in the <code>Open_vSwitch</code> table.
       </p>
       <column name="statistics" key="tx_packets">
         Number of packets transmitted through this mirror.
@@ -3000,12 +3041,18 @@
           </dd>
           <dt><code>tcp:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
-            <p>The specified TCP <var>port</var> on the host at the
-            given <var>ip</var>, which must be expressed as an IP
-            address (not a DNS name).</p>
-            <p>If <var>port</var> is not specified, it currently
-            defaults to 6633.  In the future, the default will change to
-            6653, which is the IANA-defined value.</p>
+            <p>
+              The specified TCP <var>port</var> on the host at the given
+              <var>ip</var>, which must be expressed as an IP address (not a
+              DNS name), where <var>ip</var> can be IPv4 or IPv6 address.  If
+              <var>ip</var> is an IPv6 address, wrap it in square brackets,
+              e.g. <code>tcp:[::1]:6632</code>.
+            </p>
+            <p>
+              If <var>port</var> is not specified, it currently defaults to
+              6633.  In the future, the default will change to 6653, which is
+              the IANA-defined value.
+            </p>
           </dd>
         </dl>
         <p>
@@ -3015,29 +3062,48 @@
         <dl>
           <dt><code>pssl:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
           <dd>
-            <p> Listens for SSL connections on the specified TCP
-            <var>port</var>.  If <var>ip</var>, which must be expressed
-            as an IP address (not a DNS name), is specified, then
-            connections are restricted to the specified local IP
-            address.  The <ref table="Open_vSwitch" column="ssl"/>
-            column in the <ref table="Open_vSwitch"/> table must point
-            to a valid SSL configuration when this form is used.</p>
-            <p>If <var>port</var> is not specified, it currently
-            defaults to 6633.  In the future, the default will change to
-            6653, which is the IANA-defined value.</p>
-            <p>SSL support is an optional feature that is not always built as
-            part of Open vSwitch.</p>
+            <p>
+              Listens for SSL connections on the specified TCP <var>port</var>.
+              If <var>ip</var>, which must be expressed as an IP address (not a
+              DNS name), is specified, then connections are restricted to the
+              specified local IP address (either IPv4 or IPv6).  If
+              <var>ip</var> is an IPv6 address, wrap it in square brackets,
+              e.g. <code>pssl:6632:[::1]</code>.
+            </p>
+            <p>
+              If <var>port</var> is not specified, it currently defaults to
+              6633.  If <var>ip</var> is not specified then it listens only on
+              IPv4 (but not IPv6) addresses.  The
+              <ref table="Open_vSwitch" column="ssl"/>
+              column in the <ref table="Open_vSwitch"/> table must point to a
+              valid SSL configuration when this form is used.
+            </p>
+            <p>
+              If <var>port</var> is not specified, it currently defaults to
+              6633.  In the future, the default will change to 6653, which is
+              the IANA-defined value.
+            </p>
+            <p>
+              SSL support is an optional feature that is not always built as
+              part of Open vSwitch.
+            </p>
           </dd>
           <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
           <dd>
-            <p>Listens for connections on the specified TCP
-            <var>port</var>.  If <var>ip</var>, which must be expressed
-            as an IP address (not a DNS name), is specified, then
-            connections are restricted to the specified local IP
-            address.</p>
-            <p>If <var>port</var> is not specified, it currently
-            defaults to 6633.  In the future, the default will change to
-            6653, which is the IANA-defined value.</p>
+            <p>
+              Listens for connections on the specified TCP <var>port</var>.  If
+              <var>ip</var>, which must be expressed as an IP address (not a
+              DNS name), is specified, then connections are restricted to the
+              specified local IP address (either IPv4 or IPv6).  If
+              <var>ip</var> is an IPv6 address, wrap it in square brackets,
+              e.g. <code>ptcp:6632:[::1]</code>. If <var>ip</var> is not
+              specified then it listens only on IPv4 addresses.
+            </p>
+            <p>
+              If <var>port</var> is not specified, it currently defaults to
+              6633.  In the future, the default will change to 6653, which is
+              the IANA-defined value.
+            </p>
           </dd>
         </dl>
         <p>When multiple controllers are configured for a single bridge, the
@@ -3331,8 +3397,10 @@
           <dd>
             <p>
               The specified TCP <var>port</var> on the host at the given
-              <var>ip</var>, which must be expressed as an IP address
-              (not a DNS name).
+              <var>ip</var>, which must be expressed as an IP address (not a
+              DNS name), where <var>ip</var> can be IPv4 or IPv6 address.  If
+              <var>ip</var> is an IPv6 address, wrap it in square brackets,
+              e.g. <code>tcp:[::1]:6632</code>.
             </p>
             <p>
               If <var>port</var> is not specified, it currently defaults
@@ -3343,13 +3411,16 @@
           <dt><code>pssl:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
           <dd>
             <p>
-              Listens for SSL connections on the specified TCP
-              <var>port</var>.  Specify 0 for <var>port</var> to have
-              the kernel automatically choose an available port.  If
-              <var>ip</var>, which must be expressed as an IP address
-              (not a DNS name), is specified, then connections are
-              restricted to the specified local IP address.  The <ref
-              table="Open_vSwitch" column="ssl"/> column in the <ref
+              Listens for SSL connections on the specified TCP <var>port</var>.
+              Specify 0 for <var>port</var> to have the kernel automatically
+              choose an available port.  If <var>ip</var>, which must be
+              expressed as an IP address (not a DNS name), is specified, then
+              connections are restricted to the specified local IP address
+              (either IPv4 or IPv6 address).  If <var>ip</var> is an IPv6
+              address, wrap in square brackets,
+              e.g. <code>pssl:6632:[::1]</code>.  If <var>ip</var> is not
+              specified then it listens only on IPv4 (but not IPv6) addresses.
+              The <ref table="Open_vSwitch" column="ssl"/> column in the <ref
               table="Open_vSwitch"/> table must point to a valid SSL
               configuration when this form is used.
             </p>
@@ -3366,12 +3437,15 @@
           <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
           <dd>
             <p>
-              Listens for connections on the specified TCP
-              <var>port</var>.  Specify 0 for <var>port</var> to have
-              the kernel automatically choose an available port.  If
-              <var>ip</var>, which must be expressed as an IP address
-              (not a DNS name), is specified, then connections are
-              restricted to the specified local IP address.
+              Listens for connections on the specified TCP <var>port</var>.
+              Specify 0 for <var>port</var> to have the kernel automatically
+              choose an available port.  If <var>ip</var>, which must be
+              expressed as an IP address (not a DNS name), is specified, then
+              connections are restricted to the specified local IP address
+              (either IPv4 or IPv6 address).  If <var>ip</var> is an IPv6
+              address, wrap it in square brackets,
+              e.g. <code>ptcp:6632:[::1]</code>.  If <var>ip</var> is not
+              specified then it listens only on IPv4 addresses.
             </p>
             <p>
               If <var>port</var> is not specified, it currently defaults

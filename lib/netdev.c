@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,20 +24,19 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "connectivity.h"
 #include "coverage.h"
 #include "dpif.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
 #include "hash.h"
 #include "list.h"
+#include "netdev-dpdk.h"
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "seq.h"
 #include "shash.h"
 #include "smap.h"
 #include "sset.h"
@@ -67,15 +66,14 @@ static struct shash netdev_shash OVS_GUARDED_BY(netdev_mutex)
 
 /* Protects 'netdev_classes' against insertions or deletions.
  *
- * This is not an rwlock for performance reasons but to allow recursive
- * acquisition when calling into providers.  For example, netdev_run() calls
- * into provider 'run' functions, which might reasonably want to call one of
- * the netdev functions that takes netdev_class_rwlock read-only. */
-static struct ovs_rwlock netdev_class_rwlock OVS_ACQ_BEFORE(netdev_mutex)
-    = OVS_RWLOCK_INITIALIZER;
+ * This is a recursive mutex to allow recursive acquisition when calling into
+ * providers.  For example, netdev_run() calls into provider 'run' functions,
+ * which might reasonably want to call one of the netdev functions that takes
+ * netdev_class_mutex. */
+static struct ovs_mutex netdev_class_mutex OVS_ACQ_BEFORE(netdev_mutex);
 
 /* Contains 'struct netdev_registered_class'es. */
-static struct hmap netdev_classes OVS_GUARDED_BY(netdev_class_rwlock)
+static struct hmap netdev_classes OVS_GUARDED_BY(netdev_class_mutex)
     = HMAP_INITIALIZER(&netdev_classes);
 
 struct netdev_registered_class {
@@ -91,17 +89,43 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
 static void restore_all_flags(void *aux OVS_UNUSED);
 void update_device_args(struct netdev *, const struct shash *args);
 
+int
+netdev_n_rxq(const struct netdev *netdev)
+{
+    return netdev->n_rxq;
+}
+
+bool
+netdev_is_pmd(const struct netdev *netdev)
+{
+    return !strcmp(netdev->netdev_class->type, "dpdk");
+}
+
 static void
-netdev_initialize(void)
-    OVS_EXCLUDED(netdev_class_rwlock, netdev_mutex)
+netdev_class_mutex_initialize(void)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
 {
     static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
 
     if (ovsthread_once_start(&once)) {
+        ovs_mutex_init_recursive(&netdev_class_mutex);
+        ovsthread_once_done(&once);
+    }
+}
+
+static void
+netdev_initialize(void)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
+{
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+
+    if (ovsthread_once_start(&once)) {
+        netdev_class_mutex_initialize();
+
         fatal_signal_add_hook(restore_all_flags, NULL, NULL, true);
         netdev_vport_patch_register();
 
-#ifdef LINUX_DATAPATH
+#ifdef __linux__
         netdev_register_provider(&netdev_linux_class);
         netdev_register_provider(&netdev_internal_class);
         netdev_register_provider(&netdev_tap_class);
@@ -111,6 +135,7 @@ netdev_initialize(void)
         netdev_register_provider(&netdev_tap_class);
         netdev_register_provider(&netdev_bsd_class);
 #endif
+        netdev_dpdk_register();
 
         ovsthread_once_done(&once);
     }
@@ -122,17 +147,18 @@ netdev_initialize(void)
  * main poll loop. */
 void
 netdev_run(void)
-    OVS_EXCLUDED(netdev_class_rwlock, netdev_mutex)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
 {
     struct netdev_registered_class *rc;
 
-    ovs_rwlock_rdlock(&netdev_class_rwlock);
+    netdev_initialize();
+    ovs_mutex_lock(&netdev_class_mutex);
     HMAP_FOR_EACH (rc, hmap_node, &netdev_classes) {
         if (rc->class->run) {
             rc->class->run();
         }
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 }
 
 /* Arranges for poll_block() to wake up when netdev_run() needs to be called.
@@ -141,22 +167,22 @@ netdev_run(void)
  * main poll loop. */
 void
 netdev_wait(void)
-    OVS_EXCLUDED(netdev_class_rwlock, netdev_mutex)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
 {
     struct netdev_registered_class *rc;
 
-    ovs_rwlock_rdlock(&netdev_class_rwlock);
+    ovs_mutex_lock(&netdev_class_mutex);
     HMAP_FOR_EACH (rc, hmap_node, &netdev_classes) {
         if (rc->class->wait) {
             rc->class->wait();
         }
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 }
 
 static struct netdev_registered_class *
 netdev_lookup_class(const char *type)
-    OVS_REQ_RDLOCK(netdev_class_rwlock)
+    OVS_REQ_RDLOCK(netdev_class_mutex)
 {
     struct netdev_registered_class *rc;
 
@@ -173,11 +199,12 @@ netdev_lookup_class(const char *type)
  * registration, new netdevs of that type can be opened using netdev_open(). */
 int
 netdev_register_provider(const struct netdev_class *new_class)
-    OVS_EXCLUDED(netdev_class_rwlock, netdev_mutex)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
 {
     int error;
 
-    ovs_rwlock_wrlock(&netdev_class_rwlock);
+    netdev_class_mutex_initialize();
+    ovs_mutex_lock(&netdev_class_mutex);
     if (netdev_lookup_class(new_class->type)) {
         VLOG_WARN("attempted to register duplicate netdev provider: %s",
                    new_class->type);
@@ -197,7 +224,7 @@ netdev_register_provider(const struct netdev_class *new_class)
                      new_class->type, ovs_strerror(error));
         }
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 
     return error;
 }
@@ -207,12 +234,12 @@ netdev_register_provider(const struct netdev_class *new_class)
  * new netdevs of that type cannot be opened using netdev_open(). */
 int
 netdev_unregister_provider(const char *type)
-    OVS_EXCLUDED(netdev_class_rwlock, netdev_mutex)
+    OVS_EXCLUDED(netdev_class_mutex, netdev_mutex)
 {
     struct netdev_registered_class *rc;
     int error;
 
-    ovs_rwlock_wrlock(&netdev_class_rwlock);
+    ovs_mutex_lock(&netdev_class_mutex);
     rc = netdev_lookup_class(type);
     if (!rc) {
         VLOG_WARN("attempted to unregister a netdev provider that is not "
@@ -232,7 +259,7 @@ netdev_unregister_provider(const char *type)
             error = EBUSY;
         }
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 
     return error;
 }
@@ -248,11 +275,11 @@ netdev_enumerate_types(struct sset *types)
     netdev_initialize();
     sset_clear(types);
 
-    ovs_rwlock_rdlock(&netdev_class_rwlock);
+    ovs_mutex_lock(&netdev_class_mutex);
     HMAP_FOR_EACH (rc, hmap_node, &netdev_classes) {
         sset_add(types, rc->class->type);
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 }
 
 /* Check that the network device name is not the same as any of the registered
@@ -268,15 +295,15 @@ netdev_is_reserved_name(const char *name)
 
     netdev_initialize();
 
-    ovs_rwlock_rdlock(&netdev_class_rwlock);
+    ovs_mutex_lock(&netdev_class_mutex);
     HMAP_FOR_EACH (rc, hmap_node, &netdev_classes) {
         const char *dpif_port = netdev_vport_class_get_dpif_port(rc->class);
         if (dpif_port && !strcmp(dpif_port, name)) {
-            ovs_rwlock_unlock(&netdev_class_rwlock);
+            ovs_mutex_unlock(&netdev_class_mutex);
             return true;
         }
     }
-    ovs_rwlock_unlock(&netdev_class_rwlock);
+    ovs_mutex_unlock(&netdev_class_mutex);
 
     if (!strncmp(name, "ovs-", 4)) {
         struct sset types;
@@ -312,7 +339,7 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
 
     netdev_initialize();
 
-    ovs_rwlock_rdlock(&netdev_class_rwlock);
+    ovs_mutex_lock(&netdev_class_mutex);
     ovs_mutex_lock(&netdev_mutex);
     netdev = shash_find_data(&netdev_shash, name);
     if (!netdev) {
@@ -325,7 +352,15 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
                 memset(netdev, 0, sizeof *netdev);
                 netdev->netdev_class = rc->class;
                 netdev->name = xstrdup(name);
+                netdev->change_seq = 1;
                 netdev->node = shash_add(&netdev_shash, name, netdev);
+
+                /* By default enable one rx queue per netdev. */
+                if (netdev->netdev_class->rxq_alloc) {
+                    netdev->n_rxq = 1;
+                } else {
+                    netdev->n_rxq = 0;
+                }
                 list_init(&netdev->saved_flags_list);
 
                 error = rc->class->construct(netdev);
@@ -333,7 +368,7 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
                     int old_ref_cnt;
 
                     atomic_add(&rc->ref_cnt, 1, &old_ref_cnt);
-                    seq_change(connectivity_seq_get());
+                    netdev_change_seq_changed(netdev);
                 } else {
                     free(netdev->name);
                     ovs_assert(list_is_empty(&netdev->saved_flags_list));
@@ -352,15 +387,15 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
         error = 0;
     }
 
-    ovs_mutex_unlock(&netdev_mutex);
-    ovs_rwlock_unlock(&netdev_class_rwlock);
-
     if (!error) {
         netdev->ref_cnt++;
         *netdevp = netdev;
     } else {
         *netdevp = NULL;
     }
+    ovs_mutex_unlock(&netdev_mutex);
+    ovs_mutex_unlock(&netdev_class_mutex);
+
     return error;
 }
 
@@ -459,11 +494,11 @@ netdev_unref(struct netdev *dev)
         dev->netdev_class->dealloc(dev);
         ovs_mutex_unlock(&netdev_mutex);
 
-        ovs_rwlock_rdlock(&netdev_class_rwlock);
+        ovs_mutex_lock(&netdev_class_mutex);
         rc = netdev_lookup_class(class->type);
         atomic_sub(&rc->ref_cnt, 1, &old_ref_cnt);
         ovs_assert(old_ref_cnt > 0);
-        ovs_rwlock_unlock(&netdev_class_rwlock);
+        ovs_mutex_unlock(&netdev_class_mutex);
     } else {
         ovs_mutex_unlock(&netdev_mutex);
     }
@@ -499,26 +534,31 @@ netdev_parse_name(const char *netdev_name_, char **name, char **type)
     }
 }
 
+/* Attempts to open a netdev_rxq handle for obtaining packets received on
+ * 'netdev'.  On success, returns 0 and stores a nonnull 'netdev_rxq *' into
+ * '*rxp'.  On failure, returns a positive errno value and stores NULL into
+ * '*rxp'.
+ *
+ * Some kinds of network devices might not support receiving packets.  This
+ * function returns EOPNOTSUPP in that case.*/
 int
-netdev_rx_open(struct netdev *netdev, struct netdev_rx **rxp)
+netdev_rxq_open(struct netdev *netdev, struct netdev_rxq **rxp, int id)
     OVS_EXCLUDED(netdev_mutex)
 {
     int error;
 
-    if (netdev->netdev_class->rx_alloc) {
-        struct netdev_rx *rx = netdev->netdev_class->rx_alloc();
+    if (netdev->netdev_class->rxq_alloc && id < netdev->n_rxq) {
+        struct netdev_rxq *rx = netdev->netdev_class->rxq_alloc();
         if (rx) {
             rx->netdev = netdev;
-            error = netdev->netdev_class->rx_construct(rx);
+            rx->queue_id = id;
+            error = netdev->netdev_class->rxq_construct(rx);
             if (!error) {
-                ovs_mutex_lock(&netdev_mutex);
-                netdev->ref_cnt++;
-                ovs_mutex_unlock(&netdev_mutex);
-
+                netdev_ref(netdev);
                 *rxp = rx;
                 return 0;
             }
-            netdev->netdev_class->rx_dealloc(rx);
+            netdev->netdev_class->rxq_dealloc(rx);
         } else {
             error = ENOMEM;
         }
@@ -530,51 +570,59 @@ netdev_rx_open(struct netdev *netdev, struct netdev_rx **rxp)
     return error;
 }
 
+/* Closes 'rx'. */
 void
-netdev_rx_close(struct netdev_rx *rx)
+netdev_rxq_close(struct netdev_rxq *rx)
     OVS_EXCLUDED(netdev_mutex)
 {
     if (rx) {
         struct netdev *netdev = rx->netdev;
-        netdev->netdev_class->rx_destruct(rx);
-        netdev->netdev_class->rx_dealloc(rx);
+        netdev->netdev_class->rxq_destruct(rx);
+        netdev->netdev_class->rxq_dealloc(rx);
         netdev_close(netdev);
     }
 }
 
+/* Attempts to receive batch of packets from 'rx'.
+ *
+ * Returns EAGAIN immediately if no packet is ready to be received.
+ *
+ * Returns EMSGSIZE, and discards the packet, if the received packet is longer
+ * than 'ofpbuf_tailroom(buffer)'.
+ *
+ * It is advised that the tailroom of 'buffer' should be
+ * VLAN_HEADER_LEN bytes longer than the MTU to allow space for an
+ * out-of-band VLAN header to be added to the packet.  At the very least,
+ * 'buffer' must have at least ETH_TOTAL_MIN bytes of tailroom.
+ *
+ * This function may be set to null if it would always return EOPNOTSUPP
+ * anyhow. */
 int
-netdev_rx_recv(struct netdev_rx *rx, struct ofpbuf *buffer)
+netdev_rxq_recv(struct netdev_rxq *rx, struct ofpbuf **buffers, int *cnt)
 {
     int retval;
 
-    ovs_assert(buffer->size == 0);
-    ovs_assert(ofpbuf_tailroom(buffer) >= ETH_TOTAL_MIN);
-
-    retval = rx->netdev->netdev_class->rx_recv(rx, buffer->data,
-                                               ofpbuf_tailroom(buffer));
-    if (retval >= 0) {
+    retval = rx->netdev->netdev_class->rxq_recv(rx, buffers, cnt);
+    if (!retval) {
         COVERAGE_INC(netdev_received);
-        buffer->size += retval;
-        if (buffer->size < ETH_TOTAL_MIN) {
-            ofpbuf_put_zeros(buffer, ETH_TOTAL_MIN - buffer->size);
-        }
-        return 0;
-    } else {
-        return -retval;
     }
+    return retval;
 }
 
+/* Arranges for poll_block() to wake up when a packet is ready to be received
+ * on 'rx'. */
 void
-netdev_rx_wait(struct netdev_rx *rx)
+netdev_rxq_wait(struct netdev_rxq *rx)
 {
-    rx->netdev->netdev_class->rx_wait(rx);
+    rx->netdev->netdev_class->rxq_wait(rx);
 }
 
+/* Discards any packets ready to be received on 'rx'. */
 int
-netdev_rx_drain(struct netdev_rx *rx)
+netdev_rxq_drain(struct netdev_rxq *rx)
 {
-    return (rx->netdev->netdev_class->rx_drain
-            ? rx->netdev->netdev_class->rx_drain(rx)
+    return (rx->netdev->netdev_class->rxq_drain
+            ? rx->netdev->netdev_class->rxq_drain(rx)
             : 0);
 }
 
@@ -583,7 +631,7 @@ netdev_rx_drain(struct netdev_rx *rx)
  * immediately.  Returns EMSGSIZE if a partial packet was transmitted or if
  * the packet is too big or too small to transmit on the device.
  *
- * The caller retains ownership of 'buffer' in all cases.
+ * To retain ownership of 'buffer' caller can set may_steal to false.
  *
  * The kernel maintains a packet transmission queue, so the caller is not
  * expected to do additional queuing of packets.
@@ -591,12 +639,12 @@ netdev_rx_drain(struct netdev_rx *rx)
  * Some network devices may not implement support for this function.  In such
  * cases this function will always return EOPNOTSUPP. */
 int
-netdev_send(struct netdev *netdev, const struct ofpbuf *buffer)
+netdev_send(struct netdev *netdev, struct ofpbuf *buffer, bool may_steal)
 {
     int error;
 
     error = (netdev->netdev_class->send
-             ? netdev->netdev_class->send(netdev, buffer->data, buffer->size)
+             ? netdev->netdev_class->send(netdev, buffer, may_steal)
              : EOPNOTSUPP);
     if (!error) {
         COVERAGE_INC(netdev_sent);
@@ -1562,6 +1610,41 @@ netdev_get_devices(const struct netdev_class *netdev_class,
     ovs_mutex_unlock(&netdev_mutex);
 }
 
+/* Extracts pointers to all 'netdev-vports' into an array 'vports'
+ * and returns it.  Stores the size of the array into '*size'.
+ *
+ * The caller is responsible for freeing 'vports' and must close
+ * each 'netdev-vport' in the list. */
+struct netdev **
+netdev_get_vports(size_t *size)
+    OVS_EXCLUDED(netdev_mutex)
+{
+    struct netdev **vports;
+    struct shash_node *node;
+    size_t n = 0;
+
+    if (!size) {
+        return NULL;
+    }
+
+    /* Explicitly allocates big enough chunk of memory. */
+    vports = xmalloc(shash_count(&netdev_shash) * sizeof *vports);
+    ovs_mutex_lock(&netdev_mutex);
+    SHASH_FOR_EACH (node, &netdev_shash) {
+        struct netdev *dev = node->data;
+
+        if (netdev_vport_is_vport_class(dev->netdev_class)) {
+            dev->ref_cnt++;
+            vports[n] = dev;
+            n++;
+        }
+    }
+    ovs_mutex_unlock(&netdev_mutex);
+    *size = n;
+
+    return vports;
+}
+
 const char *
 netdev_get_type_from_name(const char *name)
 {
@@ -1572,16 +1655,16 @@ netdev_get_type_from_name(const char *name)
 }
 
 struct netdev *
-netdev_rx_get_netdev(const struct netdev_rx *rx)
+netdev_rxq_get_netdev(const struct netdev_rxq *rx)
 {
     ovs_assert(rx->netdev->ref_cnt > 0);
     return rx->netdev;
 }
 
 const char *
-netdev_rx_get_name(const struct netdev_rx *rx)
+netdev_rxq_get_name(const struct netdev_rxq *rx)
 {
-    return netdev_get_name(netdev_rx_get_netdev(rx));
+    return netdev_get_name(netdev_rxq_get_netdev(rx));
 }
 
 static void
@@ -1610,4 +1693,10 @@ restore_all_flags(void *aux OVS_UNUSED)
                                                &old_flags);
         }
     }
+}
+
+uint64_t
+netdev_get_change_seq(const struct netdev *netdev)
+{
+    return netdev->change_seq;
 }

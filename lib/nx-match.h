@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 
 struct ds;
 struct match;
+struct mf_field;
 struct mf_subfield;
 struct ofpact_reg_move;
 struct ofpact_reg_load;
@@ -51,7 +52,7 @@ enum ofperr oxm_pull_match(struct ofpbuf *, struct match *);
 enum ofperr oxm_pull_match_loose(struct ofpbuf *, struct match *);
 int nx_put_match(struct ofpbuf *, const struct match *,
                  ovs_be64 cookie, ovs_be64 cookie_mask);
-int oxm_put_match(struct ofpbuf *, const struct match *);
+int oxm_put_match(struct ofpbuf *, const struct match *, enum ofp_version);
 
 char *nx_match_to_string(const uint8_t *, unsigned int match_len);
 char *oxm_match_to_string(const struct ofpbuf *, unsigned int match_len);

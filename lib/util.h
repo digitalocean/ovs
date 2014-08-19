@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #ifndef UTIL_H
 #define UTIL_H 1
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -85,7 +86,7 @@ void ovs_assert_failure(const char *, const char *, const char *) NO_RETURN;
     ((void) sizeof ((int) ((POINTER) == (TYPE) (POINTER))),     \
      (TYPE) (POINTER))
 
-extern const char *program_name;
+extern char *program_name;
 
 #define __ARRAY_SIZE_NOCHECK(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
 #ifdef __GNUC__
@@ -110,6 +111,9 @@ extern const char *program_name;
 
 /* Returns X rounded up to the nearest multiple of Y. */
 #define ROUND_UP(X, Y) (DIV_ROUND_UP(X, Y) * (Y))
+
+/* Returns the least number that, when added to X, yields a multiple of Y. */
+#define PAD_SIZE(X, Y) (ROUND_UP(X, Y) - (X))
 
 /* Returns X rounded down to the nearest multiple of Y. */
 #define ROUND_DOWN(X, Y) ((X) / (Y) * (Y))
@@ -141,6 +145,22 @@ is_pow2(uintmax_t x)
 #define RDP2_3(X) (RDP2_4(X) | (RDP2_4(X) >> 4))
 #define RDP2_4(X) (RDP2_5(X) | (RDP2_5(X) >> 2))
 #define RDP2_5(X) (      (X) | (      (X) >> 1))
+
+/* This system's cache line size, in bytes.
+ * Being wrong hurts performance but not correctness. */
+#define CACHE_LINE_SIZE 64
+BUILD_ASSERT_DECL(IS_POW2(CACHE_LINE_SIZE));
+
+static inline void
+ovs_prefetch_range(const void *start, size_t size)
+{
+    const char *addr = (const char *)start;
+    size_t ofs;
+
+    for (ofs = 0; ofs < size; ofs += CACHE_LINE_SIZE) {
+        OVS_PREFETCH(addr + ofs);
+    }
+}
 
 #ifndef MIN
 #define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
@@ -256,6 +276,10 @@ char *xasprintf(const char *format, ...) PRINTF_FORMAT(1, 2) MALLOC_LIKE;
 char *xvasprintf(const char *format, va_list) PRINTF_FORMAT(1, 0) MALLOC_LIKE;
 void *x2nrealloc(void *p, size_t *n, size_t s);
 
+void *xmalloc_cacheline(size_t) MALLOC_LIKE;
+void *xzalloc_cacheline(size_t) MALLOC_LIKE;
+void free_cacheline(void *);
+
 void ovs_strlcpy(char *dst, const char *src, size_t size);
 void ovs_strzcpy(char *dst, const char *src, size_t size);
 
@@ -277,24 +301,7 @@ void ovs_hex_dump(FILE *, const void *, size_t, uintptr_t offset, bool ascii);
 bool str_to_int(const char *, int base, int *);
 bool str_to_long(const char *, int base, long *);
 bool str_to_llong(const char *, int base, long long *);
-
-static inline bool
-str_to_uint(const char *s, int base, unsigned int *u)
-{
-    return str_to_int(s, base, (int *) u);
-}
-
-static inline bool
-str_to_ulong(const char *s, int base, unsigned long *ul)
-{
-    return str_to_long(s, base, (long *) ul);
-}
-
-static inline bool
-str_to_ullong(const char *s, int base, unsigned long long *ull)
-{
-    return str_to_llong(s, base, (long long *) ull);
-}
+bool str_to_uint(const char *, int base, unsigned int *);
 
 bool ovs_scan(const char *s, const char *format, ...) SCANF_FORMAT(2, 3);
 
@@ -310,7 +317,6 @@ char *dir_name(const char *file_name);
 char *base_name(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
 
-char *xreadlink(const char *filename);
 char *follow_symlinks(const char *filename);
 
 void ignore(bool x OVS_UNUSED);
@@ -489,6 +495,15 @@ void bitwise_put(uint64_t value,
                  unsigned int n_bits);
 uint64_t bitwise_get(const void *src, unsigned int src_len,
                      unsigned int src_ofs, unsigned int n_bits);
+
+void xsleep(unsigned int seconds);
+
+#ifdef _WIN32
+
+char *ovs_format_message(int error);
+char *ovs_lasterror_to_string(void);
+int ftruncate(int fd, off_t length);
+#endif
 
 #ifdef  __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,30 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
     /* ## -------- ## */
 
     {
+        MFF_DP_HASH, "dp_hash", NULL,
+        MF_FIELD_SIZES(be32),
+        MFM_FULLY,
+        MFS_HEXADECIMAL,
+        MFP_NONE,
+        false,
+        NXM_NX_DP_HASH, "NXM_NX_DP_HASH",
+        NXM_NX_DP_HASH, "NXM_NX_DP_HASH", 0,
+        OFPUTIL_P_NXM_OXM_ANY,
+        OFPUTIL_P_NXM_OXM_ANY,
+        -1,
+    }, {
+        MFF_RECIRC_ID, "recirc_id", NULL,
+        MF_FIELD_SIZES(be32),
+        MFM_NONE,
+        MFS_DECIMAL,
+        MFP_NONE,
+        false,
+        NXM_NX_RECIRC_ID, "NXM_NX_RECIRC_ID",
+        NXM_NX_RECIRC_ID, "NXM_NX_RECIRC_ID", 0,
+        OFPUTIL_P_NXM_OXM_ANY,
+        OFPUTIL_P_NXM_OXM_ANY,
+        -1,
+    }, {
         MFF_TUN_ID, "tun_id", "tunnel_id",
         MF_FIELD_SIZES(be64),
         MFM_FULLY,
@@ -59,7 +83,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_NX_TUN_ID, "NXM_NX_TUN_ID",
-        OXM_OF_TUNNEL_ID, "OXM_OF_TUNNEL_ID",
+        OXM_OF_TUNNEL_ID, "OXM_OF_TUNNEL_ID", OFP13_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         FLOW_U32OFS(tunnel.tun_id),
@@ -71,7 +95,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_NX_TUN_IPV4_SRC, "NXM_NX_TUN_IPV4_SRC",
-        NXM_NX_TUN_IPV4_SRC, "NXM_NX_TUN_IPV4_SRC",
+        NXM_NX_TUN_IPV4_SRC, "NXM_NX_TUN_IPV4_SRC", 0,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         FLOW_U32OFS(tunnel.ip_src),
@@ -83,7 +107,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_NX_TUN_IPV4_DST, "NXM_NX_TUN_IPV4_DST",
-        NXM_NX_TUN_IPV4_DST, "NXM_NX_TUN_IPV4_DST",
+        NXM_NX_TUN_IPV4_DST, "NXM_NX_TUN_IPV4_DST", 0,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         FLOW_U32OFS(tunnel.ip_dst),
@@ -95,7 +119,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_NONE,
         OFPUTIL_P_NONE,
         -1,
@@ -107,7 +131,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_NONE,
         OFPUTIL_P_NONE,
         -1,
@@ -119,7 +143,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_NONE,
         OFPUTIL_P_NONE,
         -1,
@@ -131,7 +155,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         OXM_OF_METADATA, "OXM_OF_METADATA",
-        OXM_OF_METADATA, "OXM_OF_METADATA",
+        OXM_OF_METADATA, "OXM_OF_METADATA", OFP12_VERSION,
         OFPUTIL_P_NXM_OF11_UP,
         OFPUTIL_P_NXM_OF11_UP,
         -1,
@@ -143,7 +167,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_IN_PORT, "NXM_OF_IN_PORT",
-        NXM_OF_IN_PORT, "NXM_OF_IN_PORT",
+        NXM_OF_IN_PORT, "NXM_OF_IN_PORT", 0,
         OFPUTIL_P_ANY,   /* OF11+ via mapping to 32 bits. */
         OFPUTIL_P_NONE,
         -1,
@@ -155,7 +179,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         OXM_OF_IN_PORT, "OXM_OF_IN_PORT",
-        OXM_OF_IN_PORT, "OXM_OF_IN_PORT",
+        OXM_OF_IN_PORT, "OXM_OF_IN_PORT", OFP12_VERSION,
         OFPUTIL_P_OF11_UP,
         OFPUTIL_P_NONE,
         -1,
@@ -167,7 +191,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_NONE,
         OFPUTIL_P_NONE,
         -1,
@@ -179,7 +203,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_NX_PKT_MARK, "NXM_NX_PKT_MARK",
-        NXM_NX_PKT_MARK, "NXM_NX_PKT_MARK",
+        NXM_NX_PKT_MARK, "NXM_NX_PKT_MARK", 0,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -194,7 +218,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,                               \
         true,                                   \
         NXM_NX_REG(IDX), "NXM_NX_REG" #IDX,     \
-        NXM_NX_REG(IDX), "NXM_NX_REG" #IDX,     \
+        NXM_NX_REG(IDX), "NXM_NX_REG" #IDX, 0,  \
         OFPUTIL_P_NXM_OXM_ANY,                  \
         OFPUTIL_P_NXM_OXM_ANY,                  \
         -1,                                     \
@@ -239,7 +263,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_ETH_SRC, "NXM_OF_ETH_SRC",
-        OXM_OF_ETH_SRC, "OXM_OF_ETH_SRC",
+        OXM_OF_ETH_SRC, "OXM_OF_ETH_SRC", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,   /* Bitwise masking only with NXM and OF11+! */
         -1,
@@ -251,7 +275,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_ETH_DST, "NXM_OF_ETH_DST",
-        OXM_OF_ETH_DST, "OXM_OF_ETH_DST",
+        OXM_OF_ETH_DST, "OXM_OF_ETH_DST", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,   /* Bitwise masking only with NXM and OF11+! */
         -1,
@@ -263,7 +287,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         false,
         NXM_OF_ETH_TYPE, "NXM_OF_ETH_TYPE",
-        OXM_OF_ETH_TYPE, "OXM_OF_ETH_TYPE",
+        OXM_OF_ETH_TYPE, "OXM_OF_ETH_TYPE", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -277,7 +301,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
-        NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI",
+        NXM_OF_VLAN_TCI, "NXM_OF_VLAN_TCI", 0,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -289,7 +313,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -301,7 +325,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID",
-        OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID",
+        OXM_OF_VLAN_VID, "OXM_OF_VLAN_VID", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -313,7 +337,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_NONE,
         true,
         0, NULL,
-        0, NULL,
+        0, NULL, 0,
         OFPUTIL_P_ANY,   /* Will be mapped to NXM and OXM. */
         OFPUTIL_P_NONE,
         -1,
@@ -325,7 +349,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_VLAN_VID,
         true,
         OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP",
-        OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP",
+        OXM_OF_VLAN_PCP, "OXM_OF_VLAN_PCP", OFP12_VERSION,
         OFPUTIL_P_ANY,   /* Will be mapped to OF10 and NXM. */
         OFPUTIL_P_NONE,
         -1,
@@ -342,7 +366,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_MPLS,
         true,
         OXM_OF_MPLS_LABEL, "OXM_OF_MPLS_LABEL",
-        OXM_OF_MPLS_LABEL, "OXM_OF_MPLS_LABEL",
+        OXM_OF_MPLS_LABEL, "OXM_OF_MPLS_LABEL", OFP12_VERSION,
         OFPUTIL_P_NXM_OF11_UP,
         OFPUTIL_P_NONE,
         -1,
@@ -354,7 +378,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_MPLS,
         true,
         OXM_OF_MPLS_TC, "OXM_OF_MPLS_TC",
-        OXM_OF_MPLS_TC, "OXM_OF_MPLS_TC",
+        OXM_OF_MPLS_TC, "OXM_OF_MPLS_TC", OFP12_VERSION,
         OFPUTIL_P_NXM_OF11_UP,
         OFPUTIL_P_NONE,
         -1,
@@ -366,7 +390,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_MPLS,
         false,
         OXM_OF_MPLS_BOS, "OXM_OF_MPLS_BOS",
-        OXM_OF_MPLS_BOS, "OXM_OF_MPLS_BOS",
+        OXM_OF_MPLS_BOS, "OXM_OF_MPLS_BOS", OFP13_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -384,7 +408,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV4,
         true,
         NXM_OF_IP_SRC, "NXM_OF_IP_SRC",
-        OXM_OF_IPV4_SRC, "OXM_OF_IPV4_SRC",
+        OXM_OF_IPV4_SRC, "OXM_OF_IPV4_SRC", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,
         FLOW_U32OFS(nw_src),
@@ -396,7 +420,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV4,
         true,
         NXM_OF_IP_DST, "NXM_OF_IP_DST",
-        OXM_OF_IPV4_DST, "OXM_OF_IPV4_DST",
+        OXM_OF_IPV4_DST, "OXM_OF_IPV4_DST", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,
         FLOW_U32OFS(nw_dst),
@@ -410,7 +434,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         true,
         NXM_NX_IPV6_SRC, "NXM_NX_IPV6_SRC",
-        OXM_OF_IPV6_SRC, "OXM_OF_IPV6_SRC",
+        OXM_OF_IPV6_SRC, "OXM_OF_IPV6_SRC", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         FLOW_U32OFS(ipv6_src),
@@ -422,7 +446,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         true,
         NXM_NX_IPV6_DST, "NXM_NX_IPV6_DST",
-        OXM_OF_IPV6_DST, "OXM_OF_IPV6_DST",
+        OXM_OF_IPV6_DST, "OXM_OF_IPV6_DST", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         FLOW_U32OFS(ipv6_dst),
@@ -435,7 +459,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IPV6,
         false,
         NXM_NX_IPV6_LABEL, "NXM_NX_IPV6_LABEL",
-        OXM_OF_IPV6_FLABEL, "OXM_OF_IPV6_FLABEL",
+        OXM_OF_IPV6_FLABEL, "OXM_OF_IPV6_FLABEL", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -449,7 +473,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         false,
         NXM_OF_IP_PROTO, "NXM_OF_IP_PROTO",
-        OXM_OF_IP_PROTO, "OXM_OF_IP_PROTO",
+        OXM_OF_IP_PROTO, "OXM_OF_IP_PROTO", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -461,7 +485,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         true,
         NXM_OF_IP_TOS, "NXM_OF_IP_TOS",
-        NXM_OF_IP_TOS, "NXM_OF_IP_TOS",
+        NXM_OF_IP_TOS, "NXM_OF_IP_TOS", 0,
         OFPUTIL_P_ANY,   /* Will be shifted for OXM. */
         OFPUTIL_P_NONE,
         -1,
@@ -473,7 +497,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         true,
         OXM_OF_IP_DSCP, "OXM_OF_IP_DSCP",
-        OXM_OF_IP_DSCP, "OXM_OF_IP_DSCP",
+        OXM_OF_IP_DSCP, "OXM_OF_IP_DSCP", OFP12_VERSION,
         OFPUTIL_P_ANY,   /* Will be shifted for non-OXM. */
         OFPUTIL_P_NONE,
         -1,
@@ -485,7 +509,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         true,
         NXM_NX_IP_ECN, "NXM_NX_IP_ECN",
-        OXM_OF_IP_ECN, "OXM_OF_IP_ECN",
+        OXM_OF_IP_ECN, "OXM_OF_IP_ECN", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -497,7 +521,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         true,
         NXM_NX_IP_TTL, "NXM_NX_IP_TTL",
-        NXM_NX_IP_TTL, "NXM_NX_IP_TTL",
+        NXM_NX_IP_TTL, "NXM_NX_IP_TTL", 0,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -509,7 +533,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_IP_ANY,
         false,
         NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG",
-        NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG",
+        NXM_NX_IP_FRAG, "NXM_NX_IP_FRAG", 0,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -523,7 +547,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         true,
         NXM_OF_ARP_OP, "NXM_OF_ARP_OP",
-        OXM_OF_ARP_OP, "OXM_OF_ARP_OP",
+        OXM_OF_ARP_OP, "OXM_OF_ARP_OP", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -535,7 +559,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         true,
         NXM_OF_ARP_SPA, "NXM_OF_ARP_SPA",
-        OXM_OF_ARP_SPA, "OXM_OF_ARP_SPA",
+        OXM_OF_ARP_SPA, "OXM_OF_ARP_SPA", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,
         -1,
@@ -547,7 +571,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         true,
         NXM_OF_ARP_TPA, "NXM_OF_ARP_TPA",
-        OXM_OF_ARP_TPA, "OXM_OF_ARP_TPA",
+        OXM_OF_ARP_TPA, "OXM_OF_ARP_TPA", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OF11_UP,
         -1,
@@ -559,7 +583,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         true,
         NXM_NX_ARP_SHA, "NXM_NX_ARP_SHA",
-        OXM_OF_ARP_SHA, "OXM_OF_ARP_SHA",
+        OXM_OF_ARP_SHA, "OXM_OF_ARP_SHA", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -571,7 +595,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ARP,
         true,
         NXM_NX_ARP_THA, "NXM_NX_ARP_THA",
-        OXM_OF_ARP_THA, "OXM_OF_ARP_THA",
+        OXM_OF_ARP_THA, "OXM_OF_ARP_THA", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -589,7 +613,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_TCP,
         true,
         NXM_OF_TCP_SRC, "NXM_OF_TCP_SRC",
-        OXM_OF_TCP_SRC, "OXM_OF_TCP_SRC",
+        OXM_OF_TCP_SRC, "OXM_OF_TCP_SRC", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -601,7 +625,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_TCP,
         true,
         NXM_OF_TCP_DST, "NXM_OF_TCP_DST",
-        OXM_OF_TCP_DST, "OXM_OF_TCP_DST",
+        OXM_OF_TCP_DST, "OXM_OF_TCP_DST", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -613,7 +637,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_TCP,
         false,
         NXM_NX_TCP_FLAGS, "NXM_NX_TCP_FLAGS",
-        NXM_NX_TCP_FLAGS, "NXM_NX_TCP_FLAGS",
+        OXM_OF_TCP_FLAGS, "OXM_OF_TCP_FLAGS", OFP15_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -627,7 +651,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_UDP,
         true,
         NXM_OF_UDP_SRC, "NXM_OF_UDP_SRC",
-        OXM_OF_UDP_SRC, "OXM_OF_UDP_SRC",
+        OXM_OF_UDP_SRC, "OXM_OF_UDP_SRC", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -639,7 +663,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_UDP,
         true,
         NXM_OF_UDP_DST, "NXM_OF_UDP_DST",
-        OXM_OF_UDP_DST, "OXM_OF_UDP_DST",
+        OXM_OF_UDP_DST, "OXM_OF_UDP_DST", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -653,7 +677,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_SCTP,
         true,
         OXM_OF_SCTP_SRC, "OXM_OF_SCTP_SRC",
-        OXM_OF_SCTP_SRC, "OXM_OF_SCTP_SRC",
+        OXM_OF_SCTP_SRC, "OXM_OF_SCTP_SRC", OFP12_VERSION,
         OFPUTIL_P_NXM_OF11_UP,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -665,7 +689,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_SCTP,
         true,
         OXM_OF_SCTP_DST, "OXM_OF_SCTP_DST",
-        OXM_OF_SCTP_DST, "OXM_OF_SCTP_DST",
+        OXM_OF_SCTP_DST, "OXM_OF_SCTP_DST", OFP12_VERSION,
         OFPUTIL_P_NXM_OF11_UP,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -679,7 +703,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV4,
         false,
         NXM_OF_ICMP_TYPE, "NXM_OF_ICMP_TYPE",
-        OXM_OF_ICMPV4_TYPE, "OXM_OF_ICMPV4_TYPE",
+        OXM_OF_ICMPV4_TYPE, "OXM_OF_ICMPV4_TYPE", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -691,7 +715,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV4,
         false,
         NXM_OF_ICMP_CODE, "NXM_OF_ICMP_CODE",
-        OXM_OF_ICMPV4_CODE, "OXM_OF_ICMPV4_CODE",
+        OXM_OF_ICMPV4_CODE, "OXM_OF_ICMPV4_CODE", OFP12_VERSION,
         OFPUTIL_P_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -705,7 +729,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV6,
         false,
         NXM_NX_ICMPV6_TYPE, "NXM_NX_ICMPV6_TYPE",
-        OXM_OF_ICMPV6_TYPE, "OXM_OF_ICMPV6_TYPE",
+        OXM_OF_ICMPV6_TYPE, "OXM_OF_ICMPV6_TYPE", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -717,7 +741,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ICMPV6,
         false,
         NXM_NX_ICMPV6_CODE, "NXM_NX_ICMPV6_CODE",
-        OXM_OF_ICMPV6_CODE, "OXM_OF_ICMPV6_CODE",
+        OXM_OF_ICMPV6_CODE, "OXM_OF_ICMPV6_CODE", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NONE,
         -1,
@@ -735,7 +759,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ND,
         false,
         NXM_NX_ND_TARGET, "NXM_NX_ND_TARGET",
-        OXM_OF_IPV6_ND_TARGET, "OXM_OF_IPV6_ND_TARGET",
+        OXM_OF_IPV6_ND_TARGET, "OXM_OF_IPV6_ND_TARGET", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -747,7 +771,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ND_SOLICIT,
         false,
         NXM_NX_ND_SLL, "NXM_NX_ND_SLL",
-        OXM_OF_IPV6_ND_SLL, "OXM_OF_IPV6_ND_SLL",
+        OXM_OF_IPV6_ND_SLL, "OXM_OF_IPV6_ND_SLL", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -759,7 +783,7 @@ const struct mf_field mf_fields[MFF_N_IDS] = {
         MFP_ND_ADVERT,
         false,
         NXM_NX_ND_TLL, "NXM_NX_ND_TLL",
-        OXM_OF_IPV6_ND_TLL, "OXM_OF_IPV6_ND_TLL",
+        OXM_OF_IPV6_ND_TLL, "OXM_OF_IPV6_ND_TLL", OFP12_VERSION,
         OFPUTIL_P_NXM_OXM_ANY,
         OFPUTIL_P_NXM_OXM_ANY,
         -1,
@@ -870,6 +894,16 @@ mf_from_nxm_header__(uint32_t header)
     return NULL;
 }
 
+uint32_t
+mf_oxm_header(enum mf_field_id id, enum ofp_version oxm_version)
+{
+    const struct mf_field *field = mf_from_id(id);
+
+    return (oxm_version >= field->oxm_version
+            ? field->oxm_header
+            : field->nxm_header);
+}
+
 /* Returns true if 'wc' wildcards all the bits in field 'mf', false if 'wc'
  * specifies at least one bit in the field.
  *
@@ -879,6 +913,10 @@ bool
 mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+        return !wc->masks.dp_hash;
+    case MFF_RECIRC_ID:
+        return !wc->masks.recirc_id;
     case MFF_TUN_SRC:
         return !wc->masks.tunnel.ip_src;
     case MFF_TUN_DST:
@@ -926,11 +964,11 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
         return !(wc->masks.vlan_tci & htons(VLAN_PCP_MASK));
 
     case MFF_MPLS_LABEL:
-        return !(wc->masks.mpls_lse & htonl(MPLS_LABEL_MASK));
+        return !(wc->masks.mpls_lse[0] & htonl(MPLS_LABEL_MASK));
     case MFF_MPLS_TC:
-        return !(wc->masks.mpls_lse & htonl(MPLS_TC_MASK));
+        return !(wc->masks.mpls_lse[1] & htonl(MPLS_TC_MASK));
     case MFF_MPLS_BOS:
-        return !(wc->masks.mpls_lse & htonl(MPLS_BOS_MASK));
+        return !(wc->masks.mpls_lse[2] & htonl(MPLS_BOS_MASK));
 
     case MFF_IPV4_SRC:
         return !wc->masks.nw_src;
@@ -1124,6 +1162,8 @@ bool
 mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+    case MFF_RECIRC_ID:
     case MFF_TUN_ID:
     case MFF_TUN_SRC:
     case MFF_TUN_DST:
@@ -1217,6 +1257,12 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
              union mf_value *value)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+        value->be32 = htonl(flow->dp_hash);
+        break;
+    case MFF_RECIRC_ID:
+        value->be32 = htonl(flow->recirc_id);
+        break;
     case MFF_TUN_ID:
         value->be64 = flow->tunnel.tun_id;
         break;
@@ -1288,15 +1334,15 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         break;
 
     case MFF_MPLS_LABEL:
-        value->be32 = htonl(mpls_lse_to_label(flow->mpls_lse));
+        value->be32 = htonl(mpls_lse_to_label(flow->mpls_lse[0]));
         break;
 
     case MFF_MPLS_TC:
-        value->u8 = mpls_lse_to_tc(flow->mpls_lse);
+        value->u8 = mpls_lse_to_tc(flow->mpls_lse[0]);
         break;
 
     case MFF_MPLS_BOS:
-        value->u8 = mpls_lse_to_bos(flow->mpls_lse);
+        value->u8 = mpls_lse_to_bos(flow->mpls_lse[0]);
         break;
 
     case MFF_IPV4_SRC:
@@ -1409,6 +1455,12 @@ mf_set_value(const struct mf_field *mf,
              const union mf_value *value, struct match *match)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+        match_set_dp_hash(match, ntohl(value->be32));
+        break;
+    case MFF_RECIRC_ID:
+        match_set_recirc_id(match, ntohl(value->be32));
+        break;
     case MFF_TUN_ID:
         match_set_tun_id(match, value->be64);
         break;
@@ -1484,15 +1536,15 @@ mf_set_value(const struct mf_field *mf,
         break;
 
     case MFF_MPLS_LABEL:
-        match_set_mpls_label(match, value->be32);
+        match_set_mpls_label(match, 0, value->be32);
         break;
 
     case MFF_MPLS_TC:
-        match_set_mpls_tc(match, value->u8);
+        match_set_mpls_tc(match, 0, value->u8);
         break;
 
     case MFF_MPLS_BOS:
-        match_set_mpls_bos(match, value->u8);
+        match_set_mpls_bos(match, 0, value->u8);
         break;
 
     case MFF_IPV4_SRC:
@@ -1622,6 +1674,12 @@ mf_set_flow_value(const struct mf_field *mf,
                   const union mf_value *value, struct flow *flow)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+        flow->dp_hash = ntohl(value->be32);
+        break;
+    case MFF_RECIRC_ID:
+        flow->recirc_id = ntohl(value->be32);
+        break;
     case MFF_TUN_ID:
         flow->tunnel.tun_id = value->be64;
         break;
@@ -1697,15 +1755,15 @@ mf_set_flow_value(const struct mf_field *mf,
         break;
 
     case MFF_MPLS_LABEL:
-        flow_set_mpls_label(flow, value->be32);
+        flow_set_mpls_label(flow, 0, value->be32);
         break;
 
     case MFF_MPLS_TC:
-        flow_set_mpls_tc(flow, value->u8);
+        flow_set_mpls_tc(flow, 0, value->u8);
         break;
 
     case MFF_MPLS_BOS:
-        flow_set_mpls_bos(flow, value->u8);
+        flow_set_mpls_bos(flow, 0, value->u8);
         break;
 
     case MFF_IPV4_SRC:
@@ -1834,6 +1892,14 @@ void
 mf_set_wild(const struct mf_field *mf, struct match *match)
 {
     switch (mf->id) {
+    case MFF_DP_HASH:
+        match->flow.dp_hash = 0;
+        match->wc.masks.dp_hash = 0;
+        break;
+    case MFF_RECIRC_ID:
+        match->flow.recirc_id = 0;
+        match->wc.masks.recirc_id = 0;
+        break;
     case MFF_TUN_ID:
         match_set_tun_id_masked(match, htonll(0), htonll(0));
         break;
@@ -1907,15 +1973,15 @@ mf_set_wild(const struct mf_field *mf, struct match *match)
         break;
 
     case MFF_MPLS_LABEL:
-        match_set_any_mpls_label(match);
+        match_set_any_mpls_label(match, 0);
         break;
 
     case MFF_MPLS_TC:
-        match_set_any_mpls_tc(match);
+        match_set_any_mpls_tc(match, 0);
         break;
 
     case MFF_MPLS_BOS:
-        match_set_any_mpls_bos(match);
+        match_set_any_mpls_bos(match, 0);
         break;
 
     case MFF_IPV4_SRC:
@@ -2046,6 +2112,7 @@ mf_set(const struct mf_field *mf,
     }
 
     switch (mf->id) {
+    case MFF_RECIRC_ID:
     case MFF_IN_PORT:
     case MFF_IN_PORT_OXM:
     case MFF_SKB_PRIORITY:
@@ -2068,6 +2135,9 @@ mf_set(const struct mf_field *mf,
     case MFF_ICMPV6_CODE:
         return OFPUTIL_P_NONE;
 
+    case MFF_DP_HASH:
+        match_set_dp_hash_masked(match, ntohl(value->be32), ntohl(mask->be32));
+        break;
     case MFF_TUN_ID:
         match_set_tun_id_masked(match, value->be64, mask->be64);
         break;

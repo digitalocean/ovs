@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "random.h"
 #include "util.h"
 #include "vlog.h"
+#include "ovstest.h"
 
 #undef NDEBUG
 #include <assert.h>
@@ -1013,6 +1014,23 @@ test_ovs_scan(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     ovs_assert(sscanf("0x12-3]xyz", "%[^-a-f]", str));
     ovs_assert(!strcmp(str, "0x12"));
 }
+
+static void
+test_snprintf(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    char s[16];
+
+    ovs_assert(snprintf(s, 4, "abcde") == 5);
+    ovs_assert(!strcmp(s, "abc"));
+
+    ovs_assert(snprintf(s, 5, "abcde") == 5);
+    ovs_assert(!strcmp(s, "abcd"));
+
+    ovs_assert(snprintf(s, 6, "abcde") == 5);
+    ovs_assert(!strcmp(s, "abcde"));
+
+    ovs_assert(snprintf(NULL, 0, "abcde") == 5);
+}
 
 static const struct command commands[] = {
     {"ctz", 0, 0, test_ctz},
@@ -1028,6 +1046,7 @@ static const struct command commands[] = {
     {"follow-symlinks", 1, INT_MAX, test_follow_symlinks},
     {"assert", 0, 0, test_assert},
     {"ovs_scan", 0, 0, test_ovs_scan},
+    {"snprintf", 0, 0, test_snprintf},
     {NULL, 0, 0, NULL},
 };
 
@@ -1062,11 +1081,12 @@ parse_options(int argc, char *argv[])
     free(short_options);
 }
 
-int
-main(int argc, char *argv[])
+static void
+test_util_main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     parse_options(argc, argv);
     run_command(argc - optind, argv + optind, commands);
-    return 0;
 }
+
+OVSTEST_REGISTER("test-util", test_util_main);

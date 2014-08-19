@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,9 +45,7 @@ static uint32_t
 mac_table_hash(const struct mac_learning *ml, const uint8_t mac[ETH_ADDR_LEN],
                uint16_t vlan)
 {
-    unsigned int mac1 = get_unaligned_u32(ALIGNED_CAST(uint32_t *, mac));
-    unsigned int mac2 = get_unaligned_u16(ALIGNED_CAST(uint16_t *, mac + 4));
-    return hash_3words(mac1, mac2 | (vlan << 16), ml->secret);
+    return hash_mac(mac, vlan, ml->secret);
 }
 
 static struct mac_entry *
@@ -111,7 +109,7 @@ mac_learning_create(unsigned int idle_time)
     ml->idle_time = normalize_idle_time(idle_time);
     ml->max_entries = MAC_DEFAULT_MAX;
     ml->need_revalidate = false;
-    atomic_init(&ml->ref_cnt, 1);
+    ovs_refcount_init(&ml->ref_cnt);
     ovs_rwlock_init(&ml->rwlock);
     return ml;
 }
@@ -121,9 +119,7 @@ mac_learning_ref(const struct mac_learning *ml_)
 {
     struct mac_learning *ml = CONST_CAST(struct mac_learning *, ml_);
     if (ml) {
-        int orig;
-        atomic_add(&ml->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&ml->ref_cnt);
     }
     return ml;
 }
@@ -132,15 +128,7 @@ mac_learning_ref(const struct mac_learning *ml_)
 void
 mac_learning_unref(struct mac_learning *ml)
 {
-    int orig;
-
-    if (!ml) {
-        return;
-    }
-
-    atomic_sub(&ml->ref_cnt, 1, &orig);
-    ovs_assert(orig > 0);
-    if (orig == 1) {
+    if (ml && ovs_refcount_unref(&ml->ref_cnt) == 1) {
         struct mac_entry *e, *next;
 
         HMAP_FOR_EACH_SAFE (e, next, hmap_node, &ml->table) {

@@ -38,8 +38,8 @@ n_tables:254, n_buffers:256
 capabilities: FLOW_STATS TABLE_STATS PORT_STATS QUEUE_STATS ARP_MATCH_IP
 actions: OUTPUT SET_VLAN_VID SET_VLAN_PCP STRIP_VLAN SET_DL_SRC SET_DL_DST SET_NW_SRC SET_NW_DST SET_NW_TOS SET_TP_SRC SET_TP_DST ENQUEUE
  LOCAL(br0): addr:aa:55:aa:55:00:00
-     config:     0
-     state:      0
+     config:     PORT_DOWN
+     state:      LINK_DOWN
      speed: 0 Mbps now, 0 Mbps max
 OFPT_GET_CONFIG_REPLY: frags=normal miss_send_len=0
 ])
@@ -68,8 +68,8 @@ actions: OUTPUT SET_VLAN_VID SET_VLAN_PCP STRIP_VLAN SET_DL_SRC SET_DL_DST SET_N
      state:      LINK_DOWN
      speed: 0 Mbps now, 0 Mbps max
  LOCAL(br0): addr:aa:55:aa:55:00:0x
-     config:     0
-     state:      0
+     config:     PORT_DOWN
+     state:      LINK_DOWN
      speed: 0 Mbps now, 0 Mbps max
 OFPT_GET_CONFIG_REPLY: frags=normal miss_send_len=0
 ])
@@ -101,6 +101,19 @@ OFPST_PORT reply (OF1.2): 1 ports
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([ofproto - port stats - (OpenFlow 1.4)])
+OVS_VSWITCHD_START
+AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn dump-ports br0], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout | sed 's/duration=[[0-9.]]*s/duration=?s/'],
+  [0], [dnl
+OFPST_PORT reply (OF1.4): 1 ports
+  port LOCAL: rx pkts=0, bytes=0, drop=0, errs=0, frame=0, over=0, crc=0
+           tx pkts=0, bytes=0, drop=0, errs=0, coll=0
+           duration=?s
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 dnl This is really bare-bones.
 dnl It at least checks request and reply serialization and deserialization.
 AT_SETUP([ofproto - port-desc stats (OpenFlow 1.0)])
@@ -109,8 +122,8 @@ AT_CHECK([ovs-ofctl -vwarn dump-ports-desc br0], [0], [stdout])
 AT_CHECK([STRIP_XIDS stdout], [0], [dnl
 OFPST_PORT_DESC reply:
  LOCAL(br0): addr:aa:55:aa:55:00:00
-     config:     0
-     state:      0
+     config:     PORT_DOWN
+     state:      LINK_DOWN
      speed: 0 Mbps now, 0 Mbps max
 ])
 OVS_VSWITCHD_STOP
@@ -124,8 +137,42 @@ AT_CHECK([ovs-ofctl -O OpenFlow12 -vwarn dump-ports-desc br0], [0], [stdout])
 AT_CHECK([STRIP_XIDS stdout], [0], [dnl
 OFPST_PORT_DESC reply (OF1.2):
  LOCAL(br0): addr:aa:55:aa:55:00:00
-     config:     0
-     state:      0
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - port-desc stats (OpenFlow 1.5)])
+OVS_VSWITCHD_START
+ADD_OF_PORTS([br0], 1, 2, 3)
+AT_CHECK([ovs-ofctl -F OXM-OpenFlow15 -O OpenFlow15 -vwarn dump-ports-desc br0], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout | sed 's/00:0./00:0x/'], [0], [dnl
+OFPST_PORT_DESC reply (OF1.5):
+ 1(p1): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ 2(p2): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ 3(p3): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ LOCAL(br0): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+])
+AT_CHECK([ovs-ofctl -F OXM-OpenFlow15 -O OpenFlow15 -vwarn dump-ports-desc br0 2], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout | sed 's/00:0./00:0x/'], [0], [dnl
+OFPST_PORT_DESC reply (OF1.5):
+ 2(p2): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
      speed: 0 Mbps now, 0 Mbps max
 ])
 OVS_VSWITCHD_STOP
@@ -163,6 +210,23 @@ OFPST_QUEUE request (OF1.2) (xid=0x2):port=ANY queue=5
 AT_CHECK([ovs-ofctl -O OpenFlow12 -vwarn queue-stats br0 10], [0],
   [OFPT_ERROR (OF1.2) (xid=0x2): OFPQOFC_BAD_PORT
 OFPST_QUEUE request (OF1.2) (xid=0x2):port=10 queue=ALL
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - queue stats - (OpenFlow 1.4)])
+OVS_VSWITCHD_START
+AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn queue-stats br0], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout], [0], [dnl
+OFPST_QUEUE reply (OF1.4): 0 queues
+])
+AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn queue-stats br0 ALL 5], [0],
+  [OFPT_ERROR (OF1.4) (xid=0x2): OFPQOFC_BAD_QUEUE
+OFPST_QUEUE request (OF1.4) (xid=0x2):port=ANY queue=5
+])
+AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn queue-stats br0 10], [0],
+  [OFPT_ERROR (OF1.4) (xid=0x2): OFPQOFC_BAD_PORT
+OFPST_QUEUE request (OF1.4) (xid=0x2):port=10 queue=ALL
 ])
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -206,6 +270,11 @@ group_id=1234,type=all,bucket=output:10
 group_id=1235,type=all,bucket=output:10
 ])
 AT_CHECK([ovs-ofctl -O OpenFlow11 -vwarn add-groups br0 groups.txt])
+AT_CHECK([ovs-ofctl -F OXM-OpenFlow15 -O OpenFlow15 -vwarn dump-groups br0 1234], [0], [stdout])
+AT_CHECK([STRIP_XIDS stdout], [0], [dnl
+OFPST_GROUP_DESC reply (OF1.5):
+ group_id=1234,type=all,bucket=actions=output:10
+])
 AT_CHECK([ovs-ofctl -O OpenFlow11 -vwarn del-groups br0 group_id=1234])
 AT_CHECK([ovs-ofctl -O OpenFlow11 -vwarn dump-groups br0], [0], [stdout])
 AT_CHECK([STRIP_XIDS stdout], [0], [dnl
@@ -418,6 +487,38 @@ capabilities: FLOW_STATS TABLE_STATS PORT_STATS QUEUE_STATS
      state:      $state
      speed: 0 Mbps now, 0 Mbps max
 OFPT_GET_CONFIG_REPLY (OF1.2): frags=normal miss_send_len=0
+])
+done
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - mod-port (OpenFlow 1.4)])
+OVS_VSWITCHD_START
+for command_config_state in \
+    'up 0 0' \
+    'down PORT_DOWN LINK_DOWN' \
+    'no-receive PORT_DOWN,NO_RECV LINK_DOWN' \
+    'no-forward PORT_DOWN,NO_RECV,NO_FWD LINK_DOWN' \
+    'no-packet-in PORT_DOWN,NO_RECV,NO_FWD,NO_PACKET_IN LINK_DOWN' \
+    'forward PORT_DOWN,NO_RECV,NO_PACKET_IN LINK_DOWN' \
+    'packet-in PORT_DOWN,NO_RECV LINK_DOWN' \
+    'up NO_RECV 0' \
+    'receive 0 0'
+do
+    set $command_config_state
+    command=$[1] config=`echo $[2] | sed 's/,/ /g'` state=$[3]
+    AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn mod-port br0 br0 $command])
+    AT_CHECK([ovs-ofctl -O OpenFlow14 -vwarn show br0], [0], [stdout])
+    AT_CHECK_UNQUOTED([STRIP_XIDS stdout], [0], [dnl
+OFPT_FEATURES_REPLY (OF1.4): dpid:fedcba9876543210
+n_tables:254, n_buffers:256
+capabilities: FLOW_STATS TABLE_STATS PORT_STATS QUEUE_STATS
+OFPST_PORT_DESC reply (OF1.4):
+ LOCAL(br0): addr:aa:55:aa:55:00:00
+     config:     $config
+     state:      $state
+     speed: 0 Mbps now, 0 Mbps max
+OFPT_GET_CONFIG_REPLY (OF1.4): frags=normal miss_send_len=0
 ])
 done
 OVS_VSWITCHD_STOP
@@ -1001,7 +1102,7 @@ AT_CHECK([ovs-ofctl -O OpenFlow12 dump-tables br0], [0], [expout])
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
-AT_SETUP([ofproto - hard limits on flow table size (OpenFLow 1.0)])
+AT_SETUP([ofproto - hard limits on flow table size (OpenFlow 1.0)])
 OVS_VSWITCHD_START
 # Configure a maximum of 4 flows.
 AT_CHECK(
@@ -1045,7 +1146,7 @@ NXST_FLOW reply:
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
-AT_SETUP([ofproto - hard limits on flow table size (OpenFLow 1.2)])
+AT_SETUP([ofproto - hard limits on flow table size (OpenFlow 1.2)])
 OVS_VSWITCHD_START
 # Configure a maximum of 4 flows.
 AT_CHECK(
@@ -1365,6 +1466,94 @@ OFPST_FLOW reply (OF1.2):
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([ofproto - eviction upon table overflow, with modified hard timeout])
+OVS_VSWITCHD_START
+# Configure a maximum of 4 flows.
+AT_CHECK(
+  [ovs-vsctl \
+     -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
+     -- set bridge br0 flow_tables:0=@t0 \
+   | ${PERL} $srcdir/uuidfilt.pl],
+  [0], [<0>
+])
+ovs-appctl time/stop
+# Add 4 flows.
+for in_port in 4 3 2 1; do
+    ovs-ofctl add-flow br0 hard_timeout=$((10 + in_port * 3)),in_port=$in_port,actions=drop
+done
+AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
+ hard_timeout=13, in_port=1 actions=drop
+ hard_timeout=16, in_port=2 actions=drop
+ hard_timeout=19, in_port=3 actions=drop
+ hard_timeout=22, in_port=4 actions=drop
+NXST_FLOW reply:
+])
+# Sleep and modify the one that expires soonest
+ovs-appctl time/warp 5000
+AT_CHECK([ovs-ofctl mod-flows br0 in_port=1,actions=drop])
+# At this point the table would looks like:
+#  in_port   seconds to expire
+#     1            13
+#     2            11
+#     3            14
+#     4            17
+ovs-appctl time/warp 2000
+# Adding another flow will cause the one that expires soonest to be evicted.
+AT_CHECK([ovs-ofctl add-flow br0 in_port=5,actions=drop])
+AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
+ hard_timeout=13, in_port=1 actions=drop
+ hard_timeout=19, in_port=3 actions=drop
+ hard_timeout=22, in_port=4 actions=drop
+ in_port=5 actions=drop
+NXST_FLOW reply:
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - eviction upon table overflow, with modified idle timeout])
+OVS_VSWITCHD_START([add-port br0 p1 -- set interface p1 type=dummy ofport_request=1])
+# Configure a maximum of 4 flows.
+AT_CHECK(
+  [ovs-vsctl \
+     -- --id=@t0 create Flow_Table flow-limit=4 overflow-policy=evict \
+     -- set bridge br0 flow_tables:0=@t0 \
+   | ${PERL} $srcdir/uuidfilt.pl],
+  [0], [<0>
+])
+# Add 4 flows.
+for in_port in 4 3 2 1; do
+    ovs-ofctl add-flow br0 idle_timeout=$((10 + in_port * 3)),in_port=$in_port,actions=drop
+done
+ovs-appctl time/stop
+AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
+ idle_timeout=13, in_port=1 actions=drop
+ idle_timeout=16, in_port=2 actions=drop
+ idle_timeout=19, in_port=3 actions=drop
+ idle_timeout=22, in_port=4 actions=drop
+NXST_FLOW reply:
+])
+# Sleep and receive on the flow that expires soonest
+ovs-appctl time/warp 5000
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1)'])
+# At this point the table would looks like:
+#  in_port   seconds to expire
+#     1            13
+#     2            11
+#     3            14
+#     4            17
+ovs-appctl time/warp 2000
+# Adding another flow will cause the one that expires soonest to be evicted.
+AT_CHECK([ovs-ofctl add-flow br0 in_port=5,actions=drop])
+AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
+ idle_timeout=19, in_port=3 actions=drop
+ idle_timeout=22, in_port=4 actions=drop
+ in_port=5 actions=drop
+ n_packets=1, n_bytes=60, idle_timeout=13, in_port=1 actions=drop
+NXST_FLOW reply:
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 AT_SETUP([ofproto - asynchronous message control (OpenFlow 1.0)])
 OVS_VSWITCHD_START
 AT_CHECK([ovs-ofctl -P openflow10 monitor br0 --detach --no-chdir --pidfile])
@@ -1676,41 +1865,128 @@ dnl This test checks that the role request/response messaging works
 dnl and that generation_id is handled properly.
 AT_SETUP([ofproto - controller role (OpenFlow 1.2)])
 OVS_VSWITCHD_START
-AT_CHECK([ovs-ofctl -O OpenFlow12 monitor br0 --detach --no-chdir --pidfile])
+ON_EXIT([kill `cat c1.pid c2.pid`])
 
-ovs-appctl -t ovs-ofctl ofctl/barrier
-ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
-: > expout
-: > experr
+# Start two ovs-ofctl controller processes.
+AT_CAPTURE_FILE([monitor1.log])
+AT_CAPTURE_FILE([expout1])
+AT_CAPTURE_FILE([experr1])
+AT_CAPTURE_FILE([monitor2.log])
+AT_CAPTURE_FILE([expout2])
+AT_CAPTURE_FILE([experr2])
+for i in 1 2; do
+     AT_CHECK([ovs-ofctl -O OpenFlow12 monitor br0 --detach --no-chdir --pidfile=`pwd`/c$i.pid --unixctl=`pwd`/c$i])
+    ovs-appctl -t `pwd`/c$i ofctl/barrier
+    ovs-appctl -t `pwd`/c$i ofctl/set-output-file monitor$i.log
+    : > expout$i
+    : > experr$i
 
-# find out current role
-ovs-appctl -t ovs-ofctl ofctl/send 031800180000000200000000000000000000000000000000
-echo >>experr "send: OFPT_ROLE_REQUEST (OF1.2) (xid=0x2): role=nochange"
-echo >>expout "OFPT_ROLE_REPLY (OF1.2) (xid=0x2): role=equal"
+    # find out current role
+    ovs-appctl -t `pwd`/c$i ofctl/send 031800180000000200000000000000000000000000000000
+    echo >>experr$i "send: OFPT_ROLE_REQUEST (OF1.2): role=nochange"
+    echo >>expout$i "OFPT_ROLE_REPLY (OF1.2): role=equal"
+done
 
-# Become slave (generation_id is initially undefined, so 2^63+2 should not be stale)
-ovs-appctl -t ovs-ofctl ofctl/send 031800180000000300000003000000008000000000000002
-echo >>experr "send: OFPT_ROLE_REQUEST (OF1.2) (xid=0x3): role=slave generation_id=9223372036854775810"
-echo >>expout "OFPT_ROLE_REPLY (OF1.2) (xid=0x3): role=slave generation_id=9223372036854775810"
+# controller 1: Become slave (generation_id is initially undefined, so
+# 2^63+2 should not be stale)
+ovs-appctl -t `pwd`/c1 ofctl/send 031800180000000300000003000000008000000000000002
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.2): role=slave generation_id=9223372036854775810"
+echo >>expout1 "OFPT_ROLE_REPLY (OF1.2): role=slave generation_id=9223372036854775810"
 
-# Try to become the master using a stale generation ID
-ovs-appctl -t ovs-ofctl ofctl/send 031800180000000400000002000000000000000000000002
-echo >>experr "send: OFPT_ROLE_REQUEST (OF1.2) (xid=0x4): role=master generation_id=2"
-echo >>expout "OFPT_ERROR (OF1.2) (xid=0x4): OFPRRFC_STALE"
-echo >>expout "OFPT_ROLE_REQUEST (OF1.2) (xid=0x4): role=master generation_id=2"
+# controller 2: Become master.
+ovs-appctl -t `pwd`/c2 ofctl/send 031800180000000300000002000000008000000000000003
+echo >>experr2 "send: OFPT_ROLE_REQUEST (OF1.2): role=master generation_id=9223372036854775811"
+echo >>expout2 "OFPT_ROLE_REPLY (OF1.2): role=master generation_id=9223372036854775811"
 
-# Become master using a valid generation ID
-ovs-appctl -t ovs-ofctl ofctl/send 031800180000000500000002000000000000000000000001
-echo >>experr "send: OFPT_ROLE_REQUEST (OF1.2) (xid=0x5): role=master generation_id=1"
-echo >>expout "OFPT_ROLE_REPLY (OF1.2) (xid=0x5): role=master generation_id=1"
-ovs-appctl -t ovs-ofctl ofctl/barrier
-echo >>expout "OFPT_BARRIER_REPLY (OF1.2) (xid=0x3):"
+# controller 1: Try to become the master using a stale generation ID
+ovs-appctl -t `pwd`/c1 ofctl/send 031800180000000400000002000000000000000000000003
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.2): role=master generation_id=3"
+echo >>expout1 "OFPT_ERROR (OF1.2): OFPRRFC_STALE"
+echo >>expout1 "OFPT_ROLE_REQUEST (OF1.2): role=master generation_id=3"
 
-AT_CHECK([grep -v '^send:' monitor.log], [0], [expout])
-mv experr expout
-AT_CHECK([grep '^send:' monitor.log], [0], [expout])
+# controller 1: Become master using a valid generation ID
+ovs-appctl -t `pwd`/c1 ofctl/send 031800180000000500000002000000000000000000000001
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.2): role=master generation_id=1"
+echo >>expout1 "OFPT_ROLE_REPLY (OF1.2): role=master generation_id=1"
 
-ovs-appctl -t ovs-ofctl exit
+for i in 1 2; do
+    ovs-appctl -t `pwd`/c$i ofctl/barrier
+    echo >>expout$i "OFPT_BARRIER_REPLY (OF1.2):"
+done
+
+# Check output.
+for i in 1 2; do
+    cp expout$i expout
+    AT_CHECK([grep -v '^send:' monitor$i.log | STRIP_XIDS], [0], [expout])
+    cp experr$i expout
+    AT_CHECK([grep '^send:' monitor$i.log | STRIP_XIDS], [0], [expout])
+done
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This test checks that the role request/response messaging works,
+dnl that generation_id is handled properly, and that role status update
+dnl messages are sent when a controller's role gets changed from master
+dnl to slave.
+AT_SETUP([ofproto - controller role (OpenFlow 1.4)])
+OVS_VSWITCHD_START
+ON_EXIT([kill `cat c1.pid c2.pid`])
+
+# Start two ovs-ofctl controller processes.
+AT_CAPTURE_FILE([monitor1.log])
+AT_CAPTURE_FILE([expout1])
+AT_CAPTURE_FILE([experr1])
+AT_CAPTURE_FILE([monitor2.log])
+AT_CAPTURE_FILE([expout2])
+AT_CAPTURE_FILE([experr2])
+for i in 1 2; do
+     AT_CHECK([ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile=`pwd`/c$i.pid --unixctl=`pwd`/c$i])
+    ovs-appctl -t `pwd`/c$i ofctl/barrier
+    ovs-appctl -t `pwd`/c$i ofctl/set-output-file monitor$i.log
+    : > expout$i
+    : > experr$i
+
+    # find out current role
+    ovs-appctl -t `pwd`/c$i ofctl/send 051800180000000200000000000000000000000000000000
+    echo >>experr$i "send: OFPT_ROLE_REQUEST (OF1.4): role=nochange"
+    echo >>expout$i "OFPT_ROLE_REPLY (OF1.4): role=equal"
+done
+
+# controller 1: Become slave (generation_id is initially undefined, so
+# 2^63+2 should not be stale)
+ovs-appctl -t `pwd`/c1 ofctl/send 051800180000000300000003000000008000000000000002
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.4): role=slave generation_id=9223372036854775810"
+echo >>expout1 "OFPT_ROLE_REPLY (OF1.4): role=slave generation_id=9223372036854775810"
+
+# controller 2: Become master.
+ovs-appctl -t `pwd`/c2 ofctl/send 051800180000000300000002000000008000000000000003
+echo >>experr2 "send: OFPT_ROLE_REQUEST (OF1.4): role=master generation_id=9223372036854775811"
+echo >>expout2 "OFPT_ROLE_REPLY (OF1.4): role=master generation_id=9223372036854775811"
+
+# controller 1: Try to become the master using a stale generation ID
+ovs-appctl -t `pwd`/c1 ofctl/send 051800180000000400000002000000000000000000000003
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.4): role=master generation_id=3"
+echo >>expout1 "OFPT_ERROR (OF1.4): OFPRRFC_STALE"
+echo >>expout1 "OFPT_ROLE_REQUEST (OF1.4): role=master generation_id=3"
+
+# controller 1: Become master using a valid generation ID
+ovs-appctl -t `pwd`/c1 ofctl/send 051800180000000500000002000000000000000000000001
+echo >>experr1 "send: OFPT_ROLE_REQUEST (OF1.4): role=master generation_id=1"
+echo >>expout1 "OFPT_ROLE_REPLY (OF1.4): role=master generation_id=1"
+echo >>expout2 "OFPT_ROLE_STATUS (OF1.4): role=slave generation_id=1 reason=master_request"
+
+for i in 1 2; do
+    ovs-appctl -t `pwd`/c$i ofctl/barrier
+    echo >>expout$i "OFPT_BARRIER_REPLY (OF1.4):"
+done
+
+# Check output.
+for i in 1 2; do
+    cp expout$i expout
+    AT_CHECK([grep -v '^send:' monitor$i.log | STRIP_XIDS], [0], [expout])
+    cp experr$i expout
+    AT_CHECK([grep '^send:' monitor$i.log | STRIP_XIDS], [0], [expout])
+done
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
@@ -1937,6 +2213,7 @@ ovs-ofctl add-flow br0 in_port=0,dl_vlan=0,actions=output:20
 ovs-ofctl add-flow br0 in_port=0,dl_vlan_pcp=0,actions=output:21
 ovs-ofctl add-flow br0 in_port=0,dl_vlan_pcp=1,actions=output:22
 ovs-ofctl add-flow br0 in_port=0,actions=output:23
+ovs-ofctl mod-flows br0 dl_vlan=123,actions=output:3
 ovs-ofctl mod-flows br0 cookie=5,dl_vlan=123,actions=output:3
 ovs-ofctl del-flows br0 dl_vlan=123
 ovs-ofctl del-flows br0
@@ -1999,6 +2276,10 @@ NXST_FLOW_MONITOR reply (xid=0x0):
  event=ADDED table=0 cookie=0 in_port=0,dl_vlan_pcp=1 actions=output:22
 NXST_FLOW_MONITOR reply (xid=0x0):
  event=ADDED table=0 cookie=0 in_port=0 actions=output:23
+NXST_FLOW_MONITOR reply (xid=0x0):
+ event=MODIFIED table=0 cookie=0 in_port=0,dl_vlan=123 actions=output:3
+ event=MODIFIED table=0 cookie=0 in_port=0,dl_vlan=123,dl_vlan_pcp=0 actions=output:3
+ event=MODIFIED table=0 cookie=0 in_port=0,dl_vlan=123,dl_vlan_pcp=1 actions=output:3
 NXST_FLOW_MONITOR reply (xid=0x0):
  event=MODIFIED table=0 cookie=0x5 in_port=0,dl_vlan=123 actions=output:3
  event=MODIFIED table=0 cookie=0x5 in_port=0,dl_vlan=123,dl_vlan_pcp=0 actions=output:3
@@ -2066,6 +2347,9 @@ fi
 queue_size=`expr $rmem_max + 128 \* 1024`
 echo rmem_max=$rmem_max queue_size=$queue_size
 
+# If there's too much queuing skip the test to avoid timing out.
+AT_SKIP_IF([test $rmem_max -gt 1048576])
+
 # Each flow update message takes up at least 48 bytes of space in queues
 # and in practice more than that.
 n_msgs=`expr $queue_size / 48`
@@ -2094,7 +2378,12 @@ AT_CHECK([ovs-ofctl mod-flows br0 in_port=2,cookie=2,actions=output:2])
 AT_CHECK([ovs-ofctl del-flows br0 cookie=1/-1])
 
 ovs-appctl -t ovs-ofctl ofctl/unblock
-ovs-appctl -t ovs-ofctl ofctl/barrier
+
+# Wait for the connection resumed.
+# A barrier doesn't work for this purpose.
+#    https://www.mail-archive.com/dev@openvswitch.org/msg27013.html
+#    https://www.mail-archive.com/dev@openvswitch.org/msg27675.html
+OVS_WAIT_UNTIL([grep NXT_FLOW_MONITOR_RESUMED monitor.log])
 
 ovs-appctl -t ovs-ofctl exit
 
@@ -2231,5 +2520,239 @@ for pre in      '1 2' '[[]] 2' '1 [[]]' '[[]] [[]]' '2 1' '[[]] 1' '2 [[]]' \
         set_and_check_poorly_specified_ofports $post
     done
 done
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+
+AT_SETUP([ofproto - bundles, open (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Send an OpenFlow14 message (05), OFPT_BUNDLE_CONTROL (21), length (10), xid (0a)
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundles, double open (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Send twice an OpenFlow14 message (05), OFPT_BUNDLE_CONTROL (21), length (10), xid (0a)
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_ERROR (OF1.4): OFPBFC_BAD_ID
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle close without open (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 02 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=atomic
+OFPT_ERROR (OF1.4): OFPBFC_BAD_ID
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=atomic
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle double close (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Open, Close, Close
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 02 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 02 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=atomic
+OFPT_ERROR (OF1.4): OFPBFC_BUNDLE_CLOSED
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=atomic
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle close, different flags (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Open, Close, Close
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 02 00 02"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=ordered
+OFPT_ERROR (OF1.4): OFPBFC_BAD_FLAGS
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=CLOSE_REQUEST flags=ordered
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle commit without open (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Open, Close, Close
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 04 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=COMMIT_REQUEST flags=atomic
+OFPT_ERROR (OF1.4): OFPBFC_BAD_ID
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=COMMIT_REQUEST flags=atomic
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle commit, different flags (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Open, Close, Close
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 00 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 04 00 02"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REQUEST flags=atomic
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=OPEN_REPLY flags=0
+OFPT_BARRIER_REPLY (OF1.4):
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=COMMIT_REQUEST flags=ordered
+OFPT_ERROR (OF1.4): OFPBFC_BAD_FLAGS
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=COMMIT_REQUEST flags=ordered
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - bundle discard without open (OpenFlow 1.4)])
+AT_KEYWORDS([monitor])
+OVS_VSWITCHD_START
+
+# Start a monitor, use the required protocol version
+ovs-ofctl -O OpenFlow14 monitor br0 --detach --no-chdir --pidfile >monitor.log 2>&1
+AT_CAPTURE_FILE([monitor.log])
+
+# Open, Close, Close
+ovs-appctl -t ovs-ofctl ofctl/send "05 21 00 10 00 00 00 0a 00 00 00 01 00 06 00 01"
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([ofctl_strip < monitor.log], [0], [dnl
+send: OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=DISCARD_REQUEST flags=atomic
+OFPT_ERROR (OF1.4): OFPBFC_BAD_ID
+OFPT_BUNDLE_CONTROL (OF1.4):
+ bundle_id=0x1 type=DISCARD_REQUEST flags=atomic
+OFPT_BARRIER_REPLY (OF1.4):
+])
+
 OVS_VSWITCHD_STOP
 AT_CLEANUP

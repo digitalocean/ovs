@@ -33,10 +33,6 @@ EOF
     exit $1
 }
 
-# Put /usr/bin last in the path, to avoid clashes with MSVC's link
-# Ugly workaround, but should work
-PATH=`echo $PATH | sed -e "s#/usr/bin:##" | sed -e "s#/bin:##"`:/usr/bin
-
 case $MACHTYPE in
     *-msys)
         slash="-"
@@ -95,16 +91,13 @@ EOF
 
     -L*)
         path=`echo "$1" | sed 's/-L//'`
-        linkopt="$linkopt /LIBPATH:$path"
+        linkopt="$linkopt ${slash}LIBPATH:$path"
+        cl_linkopt="${slash}link ${slash}LIBPATH:\"$path\""
         ;;
 
     -l*)
         lib=`echo "$1" | sed 's/-l//'`
-    if [ $lib != "dnsapi" -a $lib != "ws2_32" -a $lib != "wsock32" ]; then
-      lib="lib$lib.lib"
-    else
-      lib="$lib.lib"
-    fi
+        lib="$lib.lib"
 
         clopt="$clopt $lib"
         linkopt="$linkopt $lib"
@@ -192,7 +185,7 @@ fi
 
 # choose which opts we built up based on which program will actually run
 if test x$prog = xcl ; then
-    opts=$clopt
+    opts="$clopt $cl_linkopt"
 else
     opts=$linkopt
 fi

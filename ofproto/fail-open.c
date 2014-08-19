@@ -125,12 +125,12 @@ send_bogus_packet_ins(struct fail_open *fo)
     compose_rarp(&b, mac);
 
     memset(&pin, 0, sizeof pin);
-    pin.up.packet = b.data;
-    pin.up.packet_len = b.size;
+    pin.up.packet = ofpbuf_data(&b);
+    pin.up.packet_len = ofpbuf_size(&b);
     pin.up.reason = OFPR_NO_MATCH;
     pin.up.fmd.in_port = OFPP_LOCAL;
-    pin.send_len = b.size;
-    pin.generated_by_table_miss = false;
+    pin.send_len = ofpbuf_size(&b);
+    pin.miss_type = OFPROTO_PACKET_IN_NO_MISS;
     connmgr_send_packet_in(fo->connmgr, &pin);
 
     ofpbuf_uninit(&b);
@@ -182,6 +182,7 @@ fail_open_run(struct fail_open *fo)
  * controller, exits fail open mode. */
 void
 fail_open_maybe_recover(struct fail_open *fo)
+    OVS_EXCLUDED(ofproto_mutex)
 {
     if (fail_open_is_active(fo)
         && connmgr_is_any_controller_admitted(fo->connmgr)) {
@@ -191,6 +192,7 @@ fail_open_maybe_recover(struct fail_open *fo)
 
 static void
 fail_open_recover(struct fail_open *fo)
+    OVS_EXCLUDED(ofproto_mutex)
 {
     struct match match;
 
@@ -228,7 +230,7 @@ fail_open_flushed(struct fail_open *fo)
 
         match_init_catchall(&match);
         ofproto_add_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY,
-                         ofpacts.data, ofpacts.size);
+                         ofpbuf_data(&ofpacts), ofpbuf_size(&ofpacts));
 
         ofpbuf_uninit(&ofpacts);
     }
@@ -250,6 +252,7 @@ fail_open_create(struct ofproto *ofproto, struct connmgr *mgr)
 /* Destroys 'fo'. */
 void
 fail_open_destroy(struct fail_open *fo)
+    OVS_EXCLUDED(ofproto_mutex)
 {
     if (fo) {
         if (fail_open_is_active(fo)) {

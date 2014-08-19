@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -215,7 +215,7 @@ nx_pull_match__(struct ofpbuf *b, unsigned int match_len, bool strict,
         if (!p) {
             VLOG_DBG_RL(&rl, "nx_match length %u, rounded up to a "
                         "multiple of 8, is longer than space in message (max "
-                        "length %"PRIuSIZE")", match_len, b->size);
+                        "length %"PRIu32")", match_len, ofpbuf_size(b));
             return OFPERR_OFPBMC_BAD_LEN;
         }
     }
@@ -251,11 +251,11 @@ nx_pull_match_loose(struct ofpbuf *b, unsigned int match_len,
 static enum ofperr
 oxm_pull_match__(struct ofpbuf *b, bool strict, struct match *match)
 {
-    struct ofp11_match_header *omh = b->data;
+    struct ofp11_match_header *omh = ofpbuf_data(b);
     uint8_t *p;
     uint16_t match_len;
 
-    if (b->size < sizeof *omh) {
+    if (ofpbuf_size(b) < sizeof *omh) {
         return OFPERR_OFPBMC_BAD_LEN;
     }
 
@@ -272,7 +272,7 @@ oxm_pull_match__(struct ofpbuf *b, bool strict, struct match *match)
     if (!p) {
         VLOG_DBG_RL(&rl, "oxm length %u, rounded up to a "
                     "multiple of 8, is longer than space in message (max "
-                    "length %"PRIuSIZE")", match_len, b->size);
+                    "length %"PRIu32")", match_len, ofpbuf_size(b));
         return OFPERR_OFPBMC_BAD_LEN;
     }
 
@@ -496,58 +496,99 @@ nxm_put_frag(struct ofpbuf *b, const struct match *match)
     }
 }
 
+/* Appends to 'b' a set of OXM or NXM matches for the IPv4 or IPv6 fields in
+ * 'match'.  */
 static void
-nxm_put_ip(struct ofpbuf *b, const struct match *match,
-           uint8_t icmp_proto, uint32_t icmp_type, uint32_t icmp_code,
-           bool oxm)
+nxm_put_ip(struct ofpbuf *b, const struct match *match, enum ofp_version oxm)
 {
     const struct flow *flow = &match->flow;
+
+    if (flow->dl_type == htons(ETH_TYPE_IP)) {
+        nxm_put_32m(b, mf_oxm_header(MFF_IPV4_SRC, oxm),
+                    flow->nw_src, match->wc.masks.nw_src);
+        nxm_put_32m(b, mf_oxm_header(MFF_IPV4_DST, oxm),
+                    flow->nw_dst, match->wc.masks.nw_dst);
+    } else {
+        nxm_put_ipv6(b, mf_oxm_header(MFF_IPV6_SRC, oxm),
+                     &flow->ipv6_src, &match->wc.masks.ipv6_src);
+        nxm_put_ipv6(b, mf_oxm_header(MFF_IPV6_DST, oxm),
+                     &flow->ipv6_dst, &match->wc.masks.ipv6_dst);
+    }
 
     nxm_put_frag(b, match);
 
     if (match->wc.masks.nw_tos & IP_DSCP_MASK) {
         if (oxm) {
-            nxm_put_8(b, OXM_OF_IP_DSCP, flow->nw_tos >> 2);
+            nxm_put_8(b, mf_oxm_header(MFF_IP_DSCP_SHIFTED, oxm),
+                      flow->nw_tos >> 2);
         } else {
-            nxm_put_8(b, NXM_OF_IP_TOS, flow->nw_tos & IP_DSCP_MASK);
+            nxm_put_8(b, mf_oxm_header(MFF_IP_DSCP, oxm),
+                      flow->nw_tos & IP_DSCP_MASK);
         }
     }
 
     if (match->wc.masks.nw_tos & IP_ECN_MASK) {
-        nxm_put_8(b, oxm ? OXM_OF_IP_ECN : NXM_NX_IP_ECN,
+        nxm_put_8(b, mf_oxm_header(MFF_IP_ECN, oxm),
                   flow->nw_tos & IP_ECN_MASK);
     }
 
     if (!oxm && match->wc.masks.nw_ttl) {
-        nxm_put_8(b, NXM_NX_IP_TTL, flow->nw_ttl);
+        nxm_put_8(b, mf_oxm_header(MFF_IP_TTL, oxm), flow->nw_ttl);
     }
 
+    nxm_put_32m(b, mf_oxm_header(MFF_IPV6_LABEL, oxm),
+                flow->ipv6_label, match->wc.masks.ipv6_label);
+
     if (match->wc.masks.nw_proto) {
-        nxm_put_8(b, oxm ? OXM_OF_IP_PROTO : NXM_OF_IP_PROTO, flow->nw_proto);
+        nxm_put_8(b, mf_oxm_header(MFF_IP_PROTO, oxm), flow->nw_proto);
 
         if (flow->nw_proto == IPPROTO_TCP) {
-            nxm_put_16m(b, oxm ? OXM_OF_TCP_SRC : NXM_OF_TCP_SRC,
+            nxm_put_16m(b, mf_oxm_header(MFF_TCP_SRC, oxm),
                         flow->tp_src, match->wc.masks.tp_src);
-            nxm_put_16m(b, oxm ? OXM_OF_TCP_DST : NXM_OF_TCP_DST,
+            nxm_put_16m(b, mf_oxm_header(MFF_TCP_DST, oxm),
                         flow->tp_dst, match->wc.masks.tp_dst);
-            nxm_put_16m(b, NXM_NX_TCP_FLAGS,
+            nxm_put_16m(b, mf_oxm_header(MFF_TCP_FLAGS, oxm),
                         flow->tcp_flags, match->wc.masks.tcp_flags);
         } else if (flow->nw_proto == IPPROTO_UDP) {
-            nxm_put_16m(b, oxm ? OXM_OF_UDP_SRC : NXM_OF_UDP_SRC,
+            nxm_put_16m(b, mf_oxm_header(MFF_UDP_SRC, oxm),
                         flow->tp_src, match->wc.masks.tp_src);
-            nxm_put_16m(b, oxm ? OXM_OF_UDP_DST : NXM_OF_UDP_DST,
+            nxm_put_16m(b, mf_oxm_header(MFF_UDP_DST, oxm),
                         flow->tp_dst, match->wc.masks.tp_dst);
         } else if (flow->nw_proto == IPPROTO_SCTP) {
-            nxm_put_16m(b, OXM_OF_SCTP_SRC, flow->tp_src,
+            nxm_put_16m(b, mf_oxm_header(MFF_SCTP_SRC, oxm), flow->tp_src,
                         match->wc.masks.tp_src);
-            nxm_put_16m(b, OXM_OF_SCTP_DST, flow->tp_dst,
+            nxm_put_16m(b, mf_oxm_header(MFF_SCTP_DST, oxm), flow->tp_dst,
                         match->wc.masks.tp_dst);
-        } else if (flow->nw_proto == icmp_proto) {
+        } else if (is_icmpv4(flow)) {
             if (match->wc.masks.tp_src) {
-                nxm_put_8(b, icmp_type, ntohs(flow->tp_src));
+                nxm_put_8(b, mf_oxm_header(MFF_ICMPV4_TYPE, oxm),
+                          ntohs(flow->tp_src));
             }
             if (match->wc.masks.tp_dst) {
-                nxm_put_8(b, icmp_code, ntohs(flow->tp_dst));
+                nxm_put_8(b, mf_oxm_header(MFF_ICMPV4_CODE, oxm),
+                          ntohs(flow->tp_dst));
+            }
+        } else if (is_icmpv6(flow)) {
+            if (match->wc.masks.tp_src) {
+                nxm_put_8(b, mf_oxm_header(MFF_ICMPV6_TYPE, oxm),
+                          ntohs(flow->tp_src));
+            }
+            if (match->wc.masks.tp_dst) {
+                nxm_put_8(b, mf_oxm_header(MFF_ICMPV6_CODE, oxm),
+                          ntohs(flow->tp_dst));
+            }
+            if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
+                flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
+                nxm_put_ipv6(b, mf_oxm_header(MFF_ND_TARGET, oxm),
+                             &flow->nd_target, &match->wc.masks.nd_target);
+                if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)) {
+                    nxm_put_eth_masked(b, mf_oxm_header(MFF_ND_SLL, oxm),
+                                       flow->arp_sha, match->wc.masks.arp_sha);
+                }
+                if (flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
+                    nxm_put_eth_masked(b, mf_oxm_header(MFF_ND_TLL, oxm),
+                                       flow->arp_tha, match->wc.masks.arp_tha);
+                }
             }
         }
     }
@@ -557,6 +598,9 @@ nxm_put_ip(struct ofpbuf *b, const struct match *match,
  * Flow Stats Requests messages, a 'cookie' and 'cookie_mask' may be supplied.
  * Otherwise, 'cookie_mask' should be zero.
  *
+ * Specify 'oxm' as 0 to express the match in NXM format; otherwise, specify
+ * 'oxm' as the OpenFlow version number for the OXM format to use.
+ *
  * This function can cause 'b''s data to be reallocated.
  *
  * Returns the number of bytes appended to 'b', excluding padding.
@@ -564,32 +608,47 @@ nxm_put_ip(struct ofpbuf *b, const struct match *match,
  * If 'match' is a catch-all rule that matches every packet, then this function
  * appends nothing to 'b' and returns 0. */
 static int
-nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
+nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
            ovs_be64 cookie, ovs_be64 cookie_mask)
 {
     const struct flow *flow = &match->flow;
-    const size_t start_len = b->size;
+    const size_t start_len = ofpbuf_size(b);
     int match_len;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 23);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 26);
 
     /* Metadata. */
+    if (match->wc.masks.dp_hash) {
+        if (!oxm) {
+            nxm_put_32m(b, NXM_NX_DP_HASH, htonl(flow->dp_hash),
+                        htonl(match->wc.masks.dp_hash));
+        }
+    }
+
+    if (match->wc.masks.recirc_id) {
+        if (!oxm) {
+            nxm_put_32(b, NXM_NX_RECIRC_ID, htonl(flow->recirc_id));
+        }
+    }
+
     if (match->wc.masks.in_port.ofp_port) {
         ofp_port_t in_port = flow->in_port.ofp_port;
         if (oxm) {
-            nxm_put_32(b, OXM_OF_IN_PORT, ofputil_port_to_ofp11(in_port));
+            nxm_put_32(b, mf_oxm_header(MFF_IN_PORT_OXM, oxm),
+                       ofputil_port_to_ofp11(in_port));
         } else {
-            nxm_put_16(b, NXM_OF_IN_PORT, htons(ofp_to_u16(in_port)));
+            nxm_put_16(b, mf_oxm_header(MFF_IN_PORT, oxm),
+                       htons(ofp_to_u16(in_port)));
         }
     }
 
     /* Ethernet. */
-    nxm_put_eth_masked(b, oxm ? OXM_OF_ETH_SRC : NXM_OF_ETH_SRC,
+    nxm_put_eth_masked(b, mf_oxm_header(MFF_ETH_SRC, oxm),
                        flow->dl_src, match->wc.masks.dl_src);
-    nxm_put_eth_masked(b, oxm ? OXM_OF_ETH_DST : NXM_OF_ETH_DST,
+    nxm_put_eth_masked(b, mf_oxm_header(MFF_ETH_DST, oxm),
                        flow->dl_dst, match->wc.masks.dl_dst);
-    nxm_put_16m(b, oxm ? OXM_OF_ETH_TYPE : NXM_OF_ETH_TYPE,
+    nxm_put_16m(b, mf_oxm_header(MFF_ETH_TYPE, oxm),
                 ofputil_dl_type_to_openflow(flow->dl_type),
                 match->wc.masks.dl_type);
 
@@ -600,117 +659,87 @@ nx_put_raw(struct ofpbuf *b, bool oxm, const struct match *match,
         ovs_be16 mask = match->wc.masks.vlan_tci & VID_CFI_MASK;
 
         if (mask == htons(VLAN_VID_MASK | VLAN_CFI)) {
-            nxm_put_16(b, OXM_OF_VLAN_VID, vid);
+            nxm_put_16(b, mf_oxm_header(MFF_VLAN_VID, oxm), vid);
         } else if (mask) {
-            nxm_put_16m(b, OXM_OF_VLAN_VID, vid, mask);
+            nxm_put_16m(b, mf_oxm_header(MFF_VLAN_VID, oxm), vid, mask);
         }
 
         if (vid && vlan_tci_to_pcp(match->wc.masks.vlan_tci)) {
-            nxm_put_8(b, OXM_OF_VLAN_PCP, vlan_tci_to_pcp(flow->vlan_tci));
+            nxm_put_8(b, mf_oxm_header(MFF_VLAN_PCP, oxm),
+                      vlan_tci_to_pcp(flow->vlan_tci));
         }
 
     } else {
-        nxm_put_16m(b, NXM_OF_VLAN_TCI, flow->vlan_tci,
+        nxm_put_16m(b, mf_oxm_header(MFF_VLAN_TCI, oxm), flow->vlan_tci,
                     match->wc.masks.vlan_tci);
     }
 
     /* MPLS. */
     if (eth_type_mpls(flow->dl_type)) {
-        if (match->wc.masks.mpls_lse & htonl(MPLS_TC_MASK)) {
-            nxm_put_8(b, OXM_OF_MPLS_TC, mpls_lse_to_tc(flow->mpls_lse));
+        if (match->wc.masks.mpls_lse[0] & htonl(MPLS_TC_MASK)) {
+            nxm_put_8(b, mf_oxm_header(MFF_MPLS_TC, oxm),
+                      mpls_lse_to_tc(flow->mpls_lse[0]));
         }
 
-        if (match->wc.masks.mpls_lse & htonl(MPLS_BOS_MASK)) {
-            nxm_put_8(b, OXM_OF_MPLS_BOS, mpls_lse_to_bos(flow->mpls_lse));
+        if (match->wc.masks.mpls_lse[0] & htonl(MPLS_BOS_MASK)) {
+            nxm_put_8(b, mf_oxm_header(MFF_MPLS_BOS, oxm),
+                      mpls_lse_to_bos(flow->mpls_lse[0]));
         }
 
-        if (match->wc.masks.mpls_lse & htonl(MPLS_LABEL_MASK)) {
-            nxm_put_32(b, OXM_OF_MPLS_LABEL,
-                       htonl(mpls_lse_to_label(flow->mpls_lse)));
+        if (match->wc.masks.mpls_lse[0] & htonl(MPLS_LABEL_MASK)) {
+            nxm_put_32(b, mf_oxm_header(MFF_MPLS_LABEL, oxm),
+                       htonl(mpls_lse_to_label(flow->mpls_lse[0])));
         }
     }
 
     /* L3. */
-    if (flow->dl_type == htons(ETH_TYPE_IP)) {
-        /* IP. */
-        nxm_put_32m(b, oxm ? OXM_OF_IPV4_SRC : NXM_OF_IP_SRC,
-                    flow->nw_src, match->wc.masks.nw_src);
-        nxm_put_32m(b, oxm ? OXM_OF_IPV4_DST : NXM_OF_IP_DST,
-                    flow->nw_dst, match->wc.masks.nw_dst);
-        nxm_put_ip(b, match, IPPROTO_ICMP,
-                   oxm ? OXM_OF_ICMPV4_TYPE : NXM_OF_ICMP_TYPE,
-                   oxm ? OXM_OF_ICMPV4_CODE : NXM_OF_ICMP_CODE, oxm);
-    } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
-        /* IPv6. */
-        nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_SRC : NXM_NX_IPV6_SRC,
-                     &flow->ipv6_src, &match->wc.masks.ipv6_src);
-        nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_DST : NXM_NX_IPV6_DST,
-                     &flow->ipv6_dst, &match->wc.masks.ipv6_dst);
-        nxm_put_ip(b, match, IPPROTO_ICMPV6,
-                   oxm ? OXM_OF_ICMPV6_TYPE : NXM_NX_ICMPV6_TYPE,
-                   oxm ? OXM_OF_ICMPV6_CODE : NXM_NX_ICMPV6_CODE, oxm);
-
-        nxm_put_32m(b, oxm ? OXM_OF_IPV6_FLABEL : NXM_NX_IPV6_LABEL,
-                    flow->ipv6_label, match->wc.masks.ipv6_label);
-
-        if (flow->nw_proto == IPPROTO_ICMPV6
-            && (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
-                flow->tp_src == htons(ND_NEIGHBOR_ADVERT))) {
-            nxm_put_ipv6(b, oxm ? OXM_OF_IPV6_ND_TARGET : NXM_NX_ND_TARGET,
-                         &flow->nd_target, &match->wc.masks.nd_target);
-            if (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)) {
-                nxm_put_eth_masked(b, oxm ? OXM_OF_IPV6_ND_SLL : NXM_NX_ND_SLL,
-                                   flow->arp_sha, match->wc.masks.arp_sha);
-            }
-            if (flow->tp_src == htons(ND_NEIGHBOR_ADVERT)) {
-                nxm_put_eth_masked(b, oxm ? OXM_OF_IPV6_ND_TLL : NXM_NX_ND_TLL,
-                                   flow->arp_tha, match->wc.masks.arp_tha);
-            }
-        }
+    if (is_ip_any(flow)) {
+        nxm_put_ip(b, match, oxm);
     } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
                flow->dl_type == htons(ETH_TYPE_RARP)) {
         /* ARP. */
         if (match->wc.masks.nw_proto) {
-            nxm_put_16(b, oxm ? OXM_OF_ARP_OP : NXM_OF_ARP_OP,
+            nxm_put_16(b, mf_oxm_header(MFF_ARP_OP, oxm),
                        htons(flow->nw_proto));
         }
-        nxm_put_32m(b, oxm ? OXM_OF_ARP_SPA : NXM_OF_ARP_SPA,
+        nxm_put_32m(b, mf_oxm_header(MFF_ARP_SPA, oxm),
                     flow->nw_src, match->wc.masks.nw_src);
-        nxm_put_32m(b, oxm ? OXM_OF_ARP_TPA : NXM_OF_ARP_TPA,
+        nxm_put_32m(b, mf_oxm_header(MFF_ARP_TPA, oxm),
                     flow->nw_dst, match->wc.masks.nw_dst);
-        nxm_put_eth_masked(b, oxm ? OXM_OF_ARP_SHA : NXM_NX_ARP_SHA,
+        nxm_put_eth_masked(b, mf_oxm_header(MFF_ARP_SHA, oxm),
                            flow->arp_sha, match->wc.masks.arp_sha);
-        nxm_put_eth_masked(b, oxm ? OXM_OF_ARP_THA : NXM_NX_ARP_THA,
+        nxm_put_eth_masked(b, mf_oxm_header(MFF_ARP_THA, oxm),
                            flow->arp_tha, match->wc.masks.arp_tha);
     }
 
     /* Tunnel ID. */
-    nxm_put_64m(b, oxm ? OXM_OF_TUNNEL_ID : NXM_NX_TUN_ID,
+    nxm_put_64m(b, mf_oxm_header(MFF_TUN_ID, oxm),
                 flow->tunnel.tun_id, match->wc.masks.tunnel.tun_id);
 
     /* Other tunnel metadata. */
-    nxm_put_32m(b, NXM_NX_TUN_IPV4_SRC,
+    nxm_put_32m(b, mf_oxm_header(MFF_TUN_SRC, oxm),
                 flow->tunnel.ip_src, match->wc.masks.tunnel.ip_src);
-    nxm_put_32m(b, NXM_NX_TUN_IPV4_DST,
+    nxm_put_32m(b, mf_oxm_header(MFF_TUN_DST, oxm),
                 flow->tunnel.ip_dst, match->wc.masks.tunnel.ip_dst);
 
     /* Registers. */
     for (i = 0; i < FLOW_N_REGS; i++) {
-        nxm_put_32m(b, NXM_NX_REG(i),
+        nxm_put_32m(b, mf_oxm_header(MFF_REG0 + i, oxm),
                     htonl(flow->regs[i]), htonl(match->wc.masks.regs[i]));
     }
 
     /* Mark. */
-    nxm_put_32m(b, NXM_NX_PKT_MARK, htonl(flow->pkt_mark),
+    nxm_put_32m(b, mf_oxm_header(MFF_PKT_MARK, oxm), htonl(flow->pkt_mark),
                 htonl(match->wc.masks.pkt_mark));
 
     /* OpenFlow 1.1+ Metadata. */
-    nxm_put_64m(b, OXM_OF_METADATA, flow->metadata, match->wc.masks.metadata);
+    nxm_put_64m(b, mf_oxm_header(MFF_METADATA, oxm),
+                flow->metadata, match->wc.masks.metadata);
 
     /* Cookie. */
     nxm_put_64m(b, NXM_NX_COOKIE, cookie, cookie_mask);
 
-    match_len = b->size - start_len;
+    match_len = ofpbuf_size(b) - start_len;
     return match_len;
 }
 
@@ -728,32 +757,36 @@ int
 nx_put_match(struct ofpbuf *b, const struct match *match,
              ovs_be64 cookie, ovs_be64 cookie_mask)
 {
-    int match_len = nx_put_raw(b, false, match, cookie, cookie_mask);
+    int match_len = nx_put_raw(b, 0, match, cookie, cookie_mask);
 
-    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+    ofpbuf_put_zeros(b, PAD_SIZE(match_len, 8));
     return match_len;
 }
 
-
-/* Appends to 'b' an struct ofp11_match_header followed by the oxm format that
+/* Appends to 'b' an struct ofp11_match_header followed by the OXM format that
  * expresses 'cr', plus enough zero bytes to pad the data appended out to a
  * multiple of 8.
+ *
+ * OXM differs slightly among versions of OpenFlow.  Specify the OpenFlow
+ * version in use as 'version'.
  *
  * This function can cause 'b''s data to be reallocated.
  *
  * Returns the number of bytes appended to 'b', excluding the padding.  Never
  * returns zero. */
 int
-oxm_put_match(struct ofpbuf *b, const struct match *match)
+oxm_put_match(struct ofpbuf *b, const struct match *match,
+              enum ofp_version version)
 {
     int match_len;
     struct ofp11_match_header *omh;
-    size_t start_len = b->size;
+    size_t start_len = ofpbuf_size(b);
     ovs_be64 cookie = htonll(0), cookie_mask = htonll(0);
 
     ofpbuf_put_uninit(b, sizeof *omh);
-    match_len = nx_put_raw(b, true, match, cookie, cookie_mask) + sizeof *omh;
-    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+    match_len = (nx_put_raw(b, version, match, cookie, cookie_mask)
+                 + sizeof *omh);
+    ofpbuf_put_zeros(b, PAD_SIZE(match_len, 8));
 
     omh = ofpbuf_at(b, start_len, sizeof *omh);
     omh->type = htons(OFPMT_OXM);
@@ -820,7 +853,7 @@ nx_match_to_string(const uint8_t *p, unsigned int match_len)
 char *
 oxm_match_to_string(const struct ofpbuf *p, unsigned int match_len)
 {
-    const struct ofp11_match_header *omh = p->data;
+    const struct ofp11_match_header *omh = ofpbuf_data(p);
     uint16_t match_len_;
     struct ds s;
 
@@ -935,10 +968,10 @@ static int
 nx_match_from_string_raw(const char *s, struct ofpbuf *b)
 {
     const char *full_s = s;
-    const size_t start_len = b->size;
+    const size_t start_len = ofpbuf_size(b);
 
     if (!strcmp(s, "<any>")) {
-        /* Ensure that 'b->data' isn't actually null. */
+        /* Ensure that 'ofpbuf_data(b)' isn't actually null. */
         ofpbuf_prealloc_tailroom(b, 1);
         return 0;
     }
@@ -987,14 +1020,14 @@ nx_match_from_string_raw(const char *s, struct ofpbuf *b)
         s++;
     }
 
-    return b->size - start_len;
+    return ofpbuf_size(b) - start_len;
 }
 
 int
 nx_match_from_string(const char *s, struct ofpbuf *b)
 {
     int match_len = nx_match_from_string_raw(s, b);
-    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+    ofpbuf_put_zeros(b, PAD_SIZE(match_len, 8));
     return match_len;
 }
 
@@ -1003,11 +1036,11 @@ oxm_match_from_string(const char *s, struct ofpbuf *b)
 {
     int match_len;
     struct ofp11_match_header *omh;
-    size_t start_len = b->size;
+    size_t start_len = ofpbuf_size(b);
 
     ofpbuf_put_uninit(b, sizeof *omh);
     match_len = nx_match_from_string_raw(s, b) + sizeof *omh;
-    ofpbuf_put_zeros(b, ROUND_UP(match_len, 8) - match_len);
+    ofpbuf_put_zeros(b, PAD_SIZE(match_len, 8));
 
     omh = ofpbuf_at(b, start_len, sizeof *omh);
     omh->type = htons(OFPMT_OXM);
@@ -1372,8 +1405,9 @@ nx_stack_pop(struct ofpbuf *stack)
 {
     union mf_subvalue *v = NULL;
 
-    if (stack->size) {
-        stack->size -= sizeof *v;
+    if (ofpbuf_size(stack)) {
+
+        ofpbuf_set_size(stack, ofpbuf_size(stack) - sizeof *v);
         v = (union mf_subvalue *) ofpbuf_tail(stack);
     }
 

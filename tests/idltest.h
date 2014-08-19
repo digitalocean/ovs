@@ -44,6 +44,7 @@ enum {
 
 extern struct ovsdb_idl_column idltest_link1_columns[IDLTEST_LINK1_N_COLUMNS];
 
+const struct idltest_link1 *idltest_link1_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct idltest_link1 *idltest_link1_first(const struct ovsdb_idl *);
 const struct idltest_link1 *idltest_link1_next(const struct idltest_link1 *);
 #define IDLTEST_LINK1_FOR_EACH(ROW, IDL) \
@@ -100,6 +101,7 @@ enum {
 
 extern struct ovsdb_idl_column idltest_link2_columns[IDLTEST_LINK2_N_COLUMNS];
 
+const struct idltest_link2 *idltest_link2_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct idltest_link2 *idltest_link2_first(const struct ovsdb_idl *);
 const struct idltest_link2 *idltest_link2_next(const struct idltest_link2 *);
 #define IDLTEST_LINK2_FOR_EACH(ROW, IDL) \
@@ -195,6 +197,7 @@ enum {
 
 extern struct ovsdb_idl_column idltest_simple_columns[IDLTEST_SIMPLE_N_COLUMNS];
 
+const struct idltest_simple *idltest_simple_get_for_uuid(const struct ovsdb_idl *, const struct uuid *);
 const struct idltest_simple *idltest_simple_first(const struct ovsdb_idl *);
 const struct idltest_simple *idltest_simple_next(const struct idltest_simple *);
 #define IDLTEST_SIMPLE_FOR_EACH(ROW, IDL) \
@@ -263,5 +266,7 @@ extern struct ovsdb_idl_table_class idltest_table_classes[IDLTEST_N_TABLES];
 extern struct ovsdb_idl_class idltest_idl_class;
 
 void idltest_init(void);
+
+const char * idltest_get_db_version(void);
 
 #endif /* IDLTEST_IDL_HEADER */

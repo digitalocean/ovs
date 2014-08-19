@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  * Copyright (c) 2013 Simon Horman
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,20 +21,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dpif.h"
 #include "netlink.h"
 #include "ofpbuf.h"
 #include "odp-util.h"
 #include "packets.h"
+#include "flow.h"
 #include "unaligned.h"
 #include "util.h"
 
 static void
-odp_eth_set_addrs(struct ofpbuf *packet, const struct ovs_key_ethernet *eth_key)
+odp_eth_set_addrs(struct ofpbuf *packet,
+                  const struct ovs_key_ethernet *eth_key)
 {
-    struct eth_header *eh = packet->l2;
+    struct eth_header *eh = ofpbuf_l2(packet);
 
-    memcpy(eh->eth_src, eth_key->eth_src, sizeof eh->eth_src);
-    memcpy(eh->eth_dst, eth_key->eth_dst, sizeof eh->eth_dst);
+    if (eh) {
+        memcpy(eh->eth_src, eth_key->eth_src, sizeof eh->eth_src);
+        memcpy(eh->eth_dst, eth_key->eth_dst, sizeof eh->eth_dst);
+    }
 }
 
 static void
@@ -49,7 +54,7 @@ odp_set_tunnel_action(const struct nlattr *a, struct flow_tnl *tun_key)
 static void
 set_arp(struct ofpbuf *packet, const struct ovs_key_arp *arp_key)
 {
-    struct arp_eth_header *arp = packet->l3;
+    struct arp_eth_header *arp = ofpbuf_l3(packet);
 
     arp->ar_op = arp_key->arp_op;
     memcpy(arp->ar_sha, arp_key->arp_sha, ETH_ADDR_LEN);
@@ -60,7 +65,7 @@ set_arp(struct ofpbuf *packet, const struct ovs_key_arp *arp_key)
 
 static void
 odp_execute_set_action(struct ofpbuf *packet, const struct nlattr *a,
-                       struct flow *flow)
+                       struct pkt_metadata *md)
 {
     enum ovs_key_attr type = nl_attr_type(a);
     const struct ovs_key_ipv4 *ipv4_key;
@@ -71,15 +76,15 @@ odp_execute_set_action(struct ofpbuf *packet, const struct nlattr *a,
 
     switch (type) {
     case OVS_KEY_ATTR_PRIORITY:
-        flow->skb_priority = nl_attr_get_u32(a);
+        md->skb_priority = nl_attr_get_u32(a);
         break;
 
     case OVS_KEY_ATTR_TUNNEL:
-        odp_set_tunnel_action(a, &flow->tunnel);
+        odp_set_tunnel_action(a, &md->tunnel);
         break;
 
     case OVS_KEY_ATTR_SKB_MARK:
-        flow->pkt_mark = nl_attr_get_u32(a);
+        md->pkt_mark = nl_attr_get_u32(a);
         break;
 
     case OVS_KEY_ATTR_ETHERNET:
@@ -123,6 +128,14 @@ odp_execute_set_action(struct ofpbuf *packet, const struct nlattr *a,
         set_arp(packet, nl_attr_get_unspec(a, sizeof(struct ovs_key_arp)));
         break;
 
+    case OVS_KEY_ATTR_DP_HASH:
+        md->dp_hash = nl_attr_get_u32(a);
+        break;
+
+    case OVS_KEY_ATTR_RECIRC_ID:
+        md->recirc_id = nl_attr_get_u32(a);
+        break;
+
     case OVS_KEY_ATTR_UNSPEC:
     case OVS_KEY_ATTR_ENCAP:
     case OVS_KEY_ATTR_ETHERTYPE:
@@ -139,15 +152,15 @@ odp_execute_set_action(struct ofpbuf *packet, const struct nlattr *a,
 }
 
 static void
-odp_execute_actions__(void *dp, struct ofpbuf *packet, struct flow *key,
+odp_execute_actions__(void *dp, struct ofpbuf *packet, bool steal,
+                      struct pkt_metadata *,
                       const struct nlattr *actions, size_t actions_len,
-                      odp_output_cb output, odp_userspace_cb userspace,
-                      bool more_actions);
+                      odp_execute_cb dp_execute_action, bool more_actions);
 
 static void
-odp_execute_sample(void *dp, struct ofpbuf *packet, struct flow *key,
-                   const struct nlattr *action, odp_output_cb output,
-                   odp_userspace_cb userspace, bool more_actions)
+odp_execute_sample(void *dp, struct ofpbuf *packet, bool steal,
+                   struct pkt_metadata *md, const struct nlattr *action,
+                   odp_execute_cb dp_execute_action, bool more_actions)
 {
     const struct nlattr *subactions = NULL;
     const struct nlattr *a;
@@ -174,16 +187,16 @@ odp_execute_sample(void *dp, struct ofpbuf *packet, struct flow *key,
         }
     }
 
-    odp_execute_actions__(dp, packet, key, nl_attr_get(subactions),
-                          nl_attr_get_size(subactions), output, userspace,
+    odp_execute_actions__(dp, packet, steal, md, nl_attr_get(subactions),
+                          nl_attr_get_size(subactions), dp_execute_action,
                           more_actions);
 }
 
 static void
-odp_execute_actions__(void *dp, struct ofpbuf *packet, struct flow *key,
+odp_execute_actions__(void *dp, struct ofpbuf *packet, bool steal,
+                      struct pkt_metadata *md,
                       const struct nlattr *actions, size_t actions_len,
-                      odp_output_cb output, odp_userspace_cb userspace,
-                      bool more_actions)
+                      odp_execute_cb dp_execute_action, bool more_actions)
 {
     const struct nlattr *a;
     unsigned int left;
@@ -192,25 +205,44 @@ odp_execute_actions__(void *dp, struct ofpbuf *packet, struct flow *key,
         int type = nl_attr_type(a);
 
         switch ((enum ovs_action_attr) type) {
+            /* These only make sense in the context of a datapath. */
         case OVS_ACTION_ATTR_OUTPUT:
-            if (output) {
-                output(dp, packet, key, u32_to_odp(nl_attr_get_u32(a)));
+        case OVS_ACTION_ATTR_USERSPACE:
+        case OVS_ACTION_ATTR_RECIRC:
+            if (dp_execute_action) {
+                /* Allow 'dp_execute_action' to steal the packet data if we do
+                 * not need it any more. */
+                bool may_steal = steal && (!more_actions
+                                           && left <= NLA_ALIGN(a->nla_len)
+                                           && type != OVS_ACTION_ATTR_RECIRC);
+                dp_execute_action(dp, packet, md, a, may_steal);
             }
             break;
 
-        case OVS_ACTION_ATTR_USERSPACE: {
-            if (userspace) {
-                /* Allow 'userspace' to steal the packet data if we do not
-                 * need it any more. */
-                bool steal = !more_actions && left <= NLA_ALIGN(a->nla_len);
-                userspace(dp, packet, key, a, steal);
+        case OVS_ACTION_ATTR_HASH: {
+            const struct ovs_action_hash *hash_act = nl_attr_get(a);
+
+            /* Calculate a hash value directly.  This might not match the
+             * value computed by the datapath, but it is much less expensive,
+             * and the current use case (bonding) does not require a strict
+             * match to work properly. */
+            if (hash_act->hash_alg == OVS_HASH_ALG_L4) {
+                struct flow flow;
+                uint32_t hash;
+
+                flow_extract(packet, md, &flow);
+                hash = flow_hash_5tuple(&flow, hash_act->hash_basis);
+                md->dp_hash = hash ? hash : 1;
+            } else {
+                /* Assert on unknown hash algorithm.  */
+                OVS_NOT_REACHED();
             }
             break;
         }
 
         case OVS_ACTION_ATTR_PUSH_VLAN: {
             const struct ovs_action_push_vlan *vlan = nl_attr_get(a);
-            eth_push_vlan(packet, vlan->vlan_tci);
+            eth_push_vlan(packet, htons(ETH_TYPE_VLAN), vlan->vlan_tci);
             break;
         }
 
@@ -229,11 +261,11 @@ odp_execute_actions__(void *dp, struct ofpbuf *packet, struct flow *key,
             break;
 
         case OVS_ACTION_ATTR_SET:
-            odp_execute_set_action(packet, nl_attr_get(a), key);
+            odp_execute_set_action(packet, nl_attr_get(a), md);
             break;
 
         case OVS_ACTION_ATTR_SAMPLE:
-            odp_execute_sample(dp, packet, key, a, output, userspace,
+            odp_execute_sample(dp, packet, steal, md, a, dp_execute_action,
                                more_actions || left > NLA_ALIGN(a->nla_len));
             break;
 
@@ -245,10 +277,16 @@ odp_execute_actions__(void *dp, struct ofpbuf *packet, struct flow *key,
 }
 
 void
-odp_execute_actions(void *dp, struct ofpbuf *packet, struct flow *key,
+odp_execute_actions(void *dp, struct ofpbuf *packet, bool steal,
+                    struct pkt_metadata *md,
                     const struct nlattr *actions, size_t actions_len,
-                    odp_output_cb output, odp_userspace_cb userspace)
+                    odp_execute_cb dp_execute_action)
 {
-    odp_execute_actions__(dp, packet, key, actions, actions_len, output,
-                          userspace, false);
+    odp_execute_actions__(dp, packet, steal, md, actions, actions_len,
+                          dp_execute_action, false);
+
+    if (!actions_len && steal) {
+        /* Drop action. */
+        ofpbuf_delete(packet);
+    }
 }

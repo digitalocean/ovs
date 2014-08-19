@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,12 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "dynamic-string.h"
 #include "packets.h"
 #include "socket-util.h"
 #include "util.h"
@@ -40,22 +42,24 @@ static int
 new_tcp_stream(const char *name, int fd, int connect_status,
                struct stream **streamp)
 {
-    struct sockaddr_in local;
+    struct sockaddr_storage local;
     socklen_t local_len = sizeof local;
     int on = 1;
     int retval;
 
     /* Get the local IP and port information */
-    retval = getsockname(fd, (struct sockaddr *)&local, &local_len);
+    retval = getsockname(fd, (struct sockaddr *) &local, &local_len);
     if (retval) {
         memset(&local, 0, sizeof local);
     }
 
     retval = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
     if (retval) {
-        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name, ovs_strerror(errno));
-        close(fd);
-        return errno;
+        int error = sock_errno();
+        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s",
+                 name, sock_strerror(error));
+        closesocket(fd);
+        return error;
     }
 
     return new_fd_stream(name, fd, connect_status, streamp);
@@ -87,50 +91,106 @@ const struct stream_class tcp_stream_class = {
     NULL,                       /* run_wait */
     NULL,                       /* wait */
 };
+
+#ifdef _WIN32
+static int
+windows_open(const char *name, char *suffix, struct stream **streamp,
+             uint8_t dscp)
+{
+    int error, port;
+    FILE *file;
+    char *suffix_new, *path;
+
+    /* If the path does not contain a ':', assume it is relative to
+     * OVS_RUNDIR. */
+    if (!strchr(suffix, ':')) {
+        path = xasprintf("%s/%s", ovs_rundir(), suffix);
+    } else {
+        path = strdup(suffix);
+    }
+
+    file = fopen(path, "r");
+    if (!file) {
+        error = errno;
+        VLOG_DBG("%s: could not open %s (%s)", name, suffix,
+                 ovs_strerror(error));
+        return error;
+    }
+
+    error = fscanf(file, "%d", &port);
+    if (error != 1) {
+        VLOG_ERR("failed to read port from %s", suffix);
+        fclose(file);
+        return EINVAL;
+    }
+    fclose(file);
+
+    suffix_new = xasprintf("127.0.0.1:%d", port);
+
+    error = tcp_open(name, suffix_new, streamp, dscp);
+
+    free(suffix_new);
+    free(path);
+    return error;
+}
+
+const struct stream_class windows_stream_class = {
+    "unix",                     /* name */
+    false,                      /* needs_probes */
+    windows_open,                  /* open */
+    NULL,                       /* close */
+    NULL,                       /* connect */
+    NULL,                       /* recv */
+    NULL,                       /* send */
+    NULL,                       /* run */
+    NULL,                       /* run_wait */
+    NULL,                       /* wait */
+};
+#endif
 
 /* Passive TCP. */
 
-static int ptcp_accept(int fd, const struct sockaddr *sa, size_t sa_len,
-                       struct stream **streamp);
+static int ptcp_accept(int fd, const struct sockaddr_storage *,
+                       size_t, struct stream **streamp);
 
 static int
 ptcp_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
           uint8_t dscp)
 {
-    struct sockaddr_in sin;
-    char bound_name[128];
+    char bound_name[SS_NTOP_BUFSIZE + 16];
+    char addrbuf[SS_NTOP_BUFSIZE];
+    struct sockaddr_storage ss;
+    uint16_t port;
     int error;
     int fd;
 
-    fd = inet_open_passive(SOCK_STREAM, suffix, -1, &sin, dscp);
+    fd = inet_open_passive(SOCK_STREAM, suffix, -1, &ss, dscp);
     if (fd < 0) {
         return -fd;
     }
 
-    sprintf(bound_name, "ptcp:%"PRIu16":"IP_FMT,
-            ntohs(sin.sin_port), IP_ARGS(sin.sin_addr.s_addr));
+    port = ss_get_port(&ss);
+    snprintf(bound_name, sizeof bound_name, "ptcp:%"PRIu16":%s",
+             port, ss_format_address(&ss, addrbuf, sizeof addrbuf));
+
     error = new_fd_pstream(bound_name, fd, ptcp_accept, set_dscp, NULL,
                            pstreamp);
     if (!error) {
-        pstream_set_bound_port(*pstreamp, sin.sin_port);
+        pstream_set_bound_port(*pstreamp, htons(port));
     }
     return error;
 }
 
 static int
-ptcp_accept(int fd, const struct sockaddr *sa, size_t sa_len,
-            struct stream **streamp)
+ptcp_accept(int fd, const struct sockaddr_storage *ss,
+            size_t ss_len OVS_UNUSED, struct stream **streamp)
 {
-    const struct sockaddr_in *sin = ALIGNED_CAST(const struct sockaddr_in *,
-                                                 sa);
-    char name[128];
+    char name[SS_NTOP_BUFSIZE + 16];
+    char addrbuf[SS_NTOP_BUFSIZE];
 
-    if (sa_len == sizeof(struct sockaddr_in) && sin->sin_family == AF_INET) {
-        sprintf(name, "tcp:"IP_FMT, IP_ARGS(sin->sin_addr.s_addr));
-        sprintf(strchr(name, '\0'), ":%"PRIu16, ntohs(sin->sin_port));
-    } else {
-        strcpy(name, "tcp");
-    }
+    snprintf(name, sizeof name, "tcp:%s:%"PRIu16,
+             ss_format_address(ss, addrbuf, sizeof addrbuf),
+             ss_get_port(ss));
     return new_tcp_stream(name, fd, 0, streamp);
 }
 
@@ -144,3 +204,60 @@ const struct pstream_class ptcp_pstream_class = {
     NULL,
 };
 
+#ifdef _WIN32
+static int
+pwindows_open(const char *name OVS_UNUSED, char *suffix,
+              struct pstream **pstreamp, uint8_t dscp)
+{
+    int error;
+    char *suffix_new, *path;
+    FILE *file;
+    struct pstream *listener;
+
+    suffix_new = xstrdup("0:127.0.0.1");
+    error = ptcp_open(name, suffix_new, pstreamp, dscp);
+    if (error) {
+        goto exit;
+    }
+    listener = *pstreamp;
+
+    /* If the path does not contain a ':', assume it is relative to
+     * OVS_RUNDIR. */
+    if (!strchr(suffix, ':')) {
+        path = xasprintf("%s/%s", ovs_rundir(), suffix);
+    } else {
+        path = strdup(suffix);
+    }
+
+    file = fopen(path, "w");
+    if (!file) {
+        error = errno;
+        VLOG_DBG("could not open %s (%s)", path, ovs_strerror(error));
+        goto exit;
+    }
+
+    fprintf(file, "%d\n", ntohs(listener->bound_port));
+    if (fflush(file) == EOF) {
+        error = EIO;
+        VLOG_ERR("write failed for %s", path);
+        fclose(file);
+        goto exit;
+    }
+    fclose(file);
+    free(path);
+
+exit:
+    free(suffix_new);
+    return error;
+}
+
+const struct pstream_class pwindows_pstream_class = {
+    "punix",
+    false,
+    pwindows_open,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
+#endif

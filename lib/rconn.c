@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,12 +39,31 @@ COVERAGE_DEFINE(rconn_overflow);
 COVERAGE_DEFINE(rconn_queued);
 COVERAGE_DEFINE(rconn_sent);
 
+/* The connection states have the following meanings:
+ *
+ *    - S_VOID: No connection information is configured.
+ *
+ *    - S_BACKOFF: Waiting for a period of time before reconnecting.
+ *
+ *    - S_CONNECTING: A connection attempt is in progress and has not yet
+ *      succeeded or failed.
+ *
+ *    - S_ACTIVE: A connection has been established and appears to be healthy.
+ *
+ *    - S_IDLE: A connection has been established but has been idle for some
+ *      time.  An echo request has been sent, but no reply has yet been
+ *      received.
+ *
+ *    - S_DISCONNECTED: An unreliable connection has disconnected and cannot be
+ *      automatically retried.
+ */
 #define STATES                                  \
     STATE(VOID, 1 << 0)                         \
     STATE(BACKOFF, 1 << 1)                      \
     STATE(CONNECTING, 1 << 2)                   \
     STATE(ACTIVE, 1 << 3)                       \
-    STATE(IDLE, 1 << 4)
+    STATE(IDLE, 1 << 4)                         \
+    STATE(DISCONNECTED, 1 << 5)
 enum state {
 #define STATE(NAME, VALUE) S_##NAME = VALUE,
     STATES
@@ -580,6 +599,20 @@ run_IDLE(struct rconn *rc)
     }
 }
 
+static unsigned int
+timeout_DISCONNECTED(const struct rconn *rc OVS_UNUSED)
+    OVS_REQUIRES(rc->mutex)
+{
+    return UINT_MAX;
+}
+
+static void
+run_DISCONNECTED(struct rconn *rc OVS_UNUSED)
+    OVS_REQUIRES(rc->mutex)
+{
+    /* Nothing to do. */
+}
+
 /* Performs whatever activities are necessary to maintain 'rc': if 'rc' is
  * disconnected, attempts to (re)connect, backing off as necessary; if 'rc' is
  * connected, attempts to send packets in the send queue, if any. */
@@ -592,7 +625,15 @@ rconn_run(struct rconn *rc)
 
     ovs_mutex_lock(&rc->mutex);
     if (rc->vconn) {
+        int error;
+
         vconn_run(rc->vconn);
+
+        error = vconn_get_status(rc->vconn);
+        if (error) {
+            report_error(rc, error);
+            disconnect(rc, error);
+        }
     }
     for (i = 0; i < rc->n_monitors; ) {
         struct ofpbuf *msg;
@@ -708,10 +749,14 @@ rconn_send__(struct rconn *rc, struct ofpbuf *b,
     if (rconn_is_connected(rc)) {
         COVERAGE_INC(rconn_queued);
         copy_to_monitor(rc, b);
-        b->private_p = counter;
+
         if (counter) {
-            rconn_packet_counter_inc(counter, b->size);
+            rconn_packet_counter_inc(counter, ofpbuf_size(b));
         }
+
+        /* Reuse 'frame' as a private pointer while 'b' is in txq. */
+        ofpbuf_set_frame(b, counter);
+
         list_push_back(&rc->txq, &b->list_node);
 
         /* If the queue was empty before we added 'b', try to send some
@@ -846,7 +891,7 @@ rconn_get_target(const struct rconn *rc)
 bool
 rconn_is_alive(const struct rconn *rconn)
 {
-    return rconn->state != S_VOID;
+    return rconn->state != S_VOID && rconn->state != S_DISCONNECTED;
 }
 
 /* Returns true if 'rconn' is connected, false otherwise. */
@@ -1073,10 +1118,7 @@ rconn_packet_counter_n_bytes(const struct rconn_packet_counter *c)
 }
 
 /* Set rc->target and rc->name to 'target' and 'name', respectively.  If 'name'
- * is null, 'target' is used.
- *
- * Also, clear out the cached IP address and port information, since changing
- * the target also likely changes these values. */
+ * is null, 'target' is used. */
 static void
 rconn_set_target__(struct rconn *rc, const char *target, const char *name)
     OVS_REQUIRES(rc->mutex)
@@ -1094,17 +1136,19 @@ try_send(struct rconn *rc)
     OVS_REQUIRES(rc->mutex)
 {
     struct ofpbuf *msg = ofpbuf_from_list(rc->txq.next);
-    unsigned int n_bytes = msg->size;
-    struct rconn_packet_counter *counter = msg->private_p;
+    unsigned int n_bytes = ofpbuf_size(msg);
+    struct rconn_packet_counter *counter = msg->frame;
     int retval;
 
     /* Eagerly remove 'msg' from the txq.  We can't remove it from the list
      * after sending, if sending is successful, because it is then owned by the
      * vconn, which might have freed it already. */
     list_remove(&msg->list_node);
+    ofpbuf_set_frame(msg, NULL);
 
     retval = vconn_send(rc->vconn, msg);
     if (retval) {
+        ofpbuf_set_frame(msg, counter);
         list_push_front(&rc->txq, &msg->list_node);
         if (retval != EAGAIN) {
             report_error(rc, retval);
@@ -1154,13 +1198,15 @@ disconnect(struct rconn *rc, int error)
     OVS_REQUIRES(rc->mutex)
 {
     rc->last_error = error;
+    if (rc->vconn) {
+        vconn_close(rc->vconn);
+        rc->vconn = NULL;
+    }
     if (rc->reliable) {
         time_t now = time_now();
 
         if (rc->state & (S_CONNECTING | S_ACTIVE | S_IDLE)) {
             rc->last_disconnected = now;
-            vconn_close(rc->vconn);
-            rc->vconn = NULL;
             flush_queue(rc);
         }
 
@@ -1182,7 +1228,7 @@ disconnect(struct rconn *rc, int error)
         state_transition(rc, S_BACKOFF);
     } else {
         rc->last_disconnected = time_now();
-        rconn_disconnect__(rc);
+        state_transition(rc, S_DISCONNECTED);
     }
 }
 
@@ -1197,9 +1243,9 @@ flush_queue(struct rconn *rc)
     }
     while (!list_is_empty(&rc->txq)) {
         struct ofpbuf *b = ofpbuf_from_list(list_pop_front(&rc->txq));
-        struct rconn_packet_counter *counter = b->private_p;
+        struct rconn_packet_counter *counter = b->frame;
         if (counter) {
-            rconn_packet_counter_dec(counter, b->size);
+            rconn_packet_counter_dec(counter, ofpbuf_size(b));
         }
         COVERAGE_INC(rconn_discarded);
         ofpbuf_delete(b);
@@ -1309,7 +1355,7 @@ is_admitted_msg(const struct ofpbuf *b)
     enum ofptype type;
     enum ofperr error;
 
-    error = ofptype_decode(&type, b->data);
+    error = ofptype_decode(&type, ofpbuf_data(b));
     if (error) {
         return false;
     }
@@ -1336,6 +1382,8 @@ is_admitted_msg(const struct ofpbuf *b)
     case OFPTYPE_GROUP_FEATURES_STATS_REPLY:
     case OFPTYPE_TABLE_FEATURES_STATS_REQUEST:
     case OFPTYPE_TABLE_FEATURES_STATS_REPLY:
+    case OFPTYPE_BUNDLE_CONTROL:
+    case OFPTYPE_BUNDLE_ADD_MESSAGE:
         return false;
 
     case OFPTYPE_PACKET_IN:

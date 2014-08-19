@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,7 +70,7 @@ struct dpif_ipfix_flow_exporter_map_node {
 struct dpif_ipfix {
     struct dpif_ipfix_bridge_exporter bridge_exporter;
     struct hmap flow_exporter_map;  /* dpif_ipfix_flow_exporter_map_node. */
-    atomic_int ref_cnt;
+    struct ovs_refcount ref_cnt;
 };
 
 #define IPFIX_VERSION 0x000a
@@ -117,7 +117,8 @@ enum ipfix_proto_l3 {
 };
 enum ipfix_proto_l4 {
     IPFIX_PROTO_L4_UNKNOWN = 0,
-    IPFIX_PROTO_L4_TCP_UDP,
+    IPFIX_PROTO_L4_TCP_UDP_SCTP,
+    IPFIX_PROTO_L4_ICMP,
     NUM_IPFIX_PROTO_L4
 };
 
@@ -200,13 +201,21 @@ struct ipfix_data_record_flow_key_ipv6 {
 });
 BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_flow_key_ipv6) == 36);
 
-/* Part of data record flow key for TCP/UDP entities. */
+/* Part of data record flow key for TCP/UDP/SCTP entities. */
 OVS_PACKED(
-struct ipfix_data_record_flow_key_tcpudp {
+struct ipfix_data_record_flow_key_transport {
     ovs_be16 source_transport_port;  /* SOURCE_TRANSPORT_PORT */
     ovs_be16 destination_transport_port;  /* DESTINATION_TRANSPORT_PORT */
 });
-BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_flow_key_tcpudp) == 4);
+BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_flow_key_transport) == 4);
+
+/* Part of data record flow key for ICMP entities. */
+OVS_PACKED(
+struct ipfix_data_record_flow_key_icmp {
+    uint8_t icmp_type;  /* ICMP_TYPE_IPV4 / ICMP_TYPE_IPV6 */
+    uint8_t icmp_code;  /* ICMP_CODE_IPV4 / ICMP_CODE_IPV6 */
+});
+BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_flow_key_icmp) == 2);
 
 /* Cf. IETF RFC 5102 Section 5.11.3. */
 enum ipfix_flow_end_reason {
@@ -231,18 +240,21 @@ BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_aggregated_common) == 25);
 /* Part of data record for IP aggregated elements. */
 OVS_PACKED(
 struct ipfix_data_record_aggregated_ip {
+    ovs_be64 octet_delta_count;  /* OCTET_DELTA_COUNT */
     ovs_be64 octet_delta_sum_of_squares;  /* OCTET_DELTA_SUM_OF_SQUARES */
     ovs_be64 minimum_ip_total_length;  /* MINIMUM_IP_TOTAL_LENGTH */
     ovs_be64 maximum_ip_total_length;  /* MAXIMUM_IP_TOTAL_LENGTH */
 });
-BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_aggregated_ip) == 24);
+BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_aggregated_ip) == 32);
 
-#define MAX_FLOW_KEY_LEN                                 \
-    (sizeof(struct ipfix_data_record_flow_key_common)    \
-     + sizeof(struct ipfix_data_record_flow_key_vlan)    \
-     + sizeof(struct ipfix_data_record_flow_key_ip)      \
-     + sizeof(struct ipfix_data_record_flow_key_ipv6)    \
-     + sizeof(struct ipfix_data_record_flow_key_tcpudp))
+#define MAX_FLOW_KEY_LEN                                        \
+    (sizeof(struct ipfix_data_record_flow_key_common)           \
+     + sizeof(struct ipfix_data_record_flow_key_vlan)           \
+     + sizeof(struct ipfix_data_record_flow_key_ip)             \
+     + MAX(sizeof(struct ipfix_data_record_flow_key_ipv4),      \
+           sizeof(struct ipfix_data_record_flow_key_ipv6))      \
+     + MAX(sizeof(struct ipfix_data_record_flow_key_icmp),      \
+           sizeof(struct ipfix_data_record_flow_key_transport)))
 
 #define MAX_DATA_RECORD_LEN                                 \
     (MAX_FLOW_KEY_LEN                                       \
@@ -280,6 +292,7 @@ struct ipfix_flow_cache_entry {
     uint64_t flow_end_timestamp_usec;
     uint64_t packet_delta_count;
     uint64_t layer2_octet_delta_count;
+    uint64_t octet_delta_count;
     uint64_t octet_delta_sum_of_squares;  /* 0 if not IP. */
     uint16_t minimum_ip_total_length;  /* 0 if not IP. */
     uint16_t maximum_ip_total_length;  /* 0 if not IP. */
@@ -639,7 +652,7 @@ dpif_ipfix_create(void)
     di = xzalloc(sizeof *di);
     dpif_ipfix_bridge_exporter_init(&di->bridge_exporter);
     hmap_init(&di->flow_exporter_map);
-    atomic_init(&di->ref_cnt, 1);
+    ovs_refcount_init(&di->ref_cnt);
     return di;
 }
 
@@ -648,9 +661,7 @@ dpif_ipfix_ref(const struct dpif_ipfix *di_)
 {
     struct dpif_ipfix *di = CONST_CAST(struct dpif_ipfix *, di_);
     if (di) {
-        int orig;
-        atomic_add(&di->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&di->ref_cnt);
     }
     return di;
 }
@@ -683,15 +694,7 @@ dpif_ipfix_clear(struct dpif_ipfix *di) OVS_REQUIRES(mutex)
 void
 dpif_ipfix_unref(struct dpif_ipfix *di) OVS_EXCLUDED(mutex)
 {
-    int orig;
-
-    if (!di) {
-        return;
-    }
-
-    atomic_sub(&di->ref_cnt, 1, &orig);
-    ovs_assert(orig > 0);
-    if (orig == 1) {
+    if (di && ovs_refcount_unref(&di->ref_cnt) == 1) {
         ovs_mutex_lock(&mutex);
         dpif_ipfix_clear(di);
         dpif_ipfix_bridge_exporter_destroy(&di->bridge_exporter);
@@ -721,11 +724,11 @@ ipfix_send_msg(const struct collectors *collectors, struct ofpbuf *msg)
     struct ipfix_header *hdr;
 
     /* Adjust the length in the header. */
-    hdr = msg->data;
-    hdr->length = htons(msg->size);
+    hdr = ofpbuf_data(msg);
+    hdr->length = htons(ofpbuf_size(msg));
 
-    collectors_send(collectors, msg->data, msg->size);
-    msg->size = 0;
+    collectors_send(collectors, ofpbuf_data(msg), ofpbuf_size(msg));
+    ofpbuf_set_size(msg, 0);
 }
 
 static uint16_t
@@ -790,16 +793,25 @@ ipfix_define_template_fields(enum ipfix_proto_l2 l2, enum ipfix_proto_l3 l3,
         if (l3 == IPFIX_PROTO_L3_IPV4) {
             DEF(SOURCE_IPV4_ADDRESS);
             DEF(DESTINATION_IPV4_ADDRESS);
+            if (l4 == IPFIX_PROTO_L4_TCP_UDP_SCTP) {
+                DEF(SOURCE_TRANSPORT_PORT);
+                DEF(DESTINATION_TRANSPORT_PORT);
+            } else if (l4 == IPFIX_PROTO_L4_ICMP) {
+                DEF(ICMP_TYPE_IPV4);
+                DEF(ICMP_CODE_IPV4);
+            }
         } else {  /* l3 == IPFIX_PROTO_L3_IPV6 */
             DEF(SOURCE_IPV6_ADDRESS);
             DEF(DESTINATION_IPV6_ADDRESS);
             DEF(FLOW_LABEL_IPV6);
+            if (l4 == IPFIX_PROTO_L4_TCP_UDP_SCTP) {
+                DEF(SOURCE_TRANSPORT_PORT);
+                DEF(DESTINATION_TRANSPORT_PORT);
+            } else if (l4 == IPFIX_PROTO_L4_ICMP) {
+                DEF(ICMP_TYPE_IPV6);
+                DEF(ICMP_CODE_IPV6);
+            }
         }
-    }
-
-    if (l4 != IPFIX_PROTO_L4_UNKNOWN) {
-        DEF(SOURCE_TRANSPORT_PORT);
-        DEF(DESTINATION_TRANSPORT_PORT);
     }
 
     /* 2. Flow aggregated data. */
@@ -811,6 +823,7 @@ ipfix_define_template_fields(enum ipfix_proto_l2 l2, enum ipfix_proto_l3 l3,
     DEF(FLOW_END_REASON);
 
     if (l3 != IPFIX_PROTO_L3_UNKNOWN) {
+        DEF(OCTET_DELTA_COUNT);
         DEF(OCTET_DELTA_SUM_OF_SQUARES);
         DEF(MINIMUM_IP_TOTAL_LENGTH);
         DEF(MAXIMUM_IP_TOTAL_LENGTH);
@@ -839,7 +852,7 @@ ipfix_send_template_msg(struct dpif_ipfix_exporter *exporter,
 
     ipfix_init_header(export_time_sec, exporter->seq_number, obs_domain_id,
                       &msg);
-    set_hdr_offset = msg.size;
+    set_hdr_offset = ofpbuf_size(&msg);
 
     /* Add a Template Set. */
     set_hdr = ofpbuf_put_zeros(&msg, sizeof *set_hdr);
@@ -854,20 +867,20 @@ ipfix_send_template_msg(struct dpif_ipfix_exporter *exporter,
                     l4 != IPFIX_PROTO_L4_UNKNOWN) {
                     continue;
                 }
-                tmpl_hdr_offset = msg.size;
+                tmpl_hdr_offset = ofpbuf_size(&msg);
                 tmpl_hdr = ofpbuf_put_zeros(&msg, sizeof *tmpl_hdr);
                 tmpl_hdr->template_id = htons(
                     ipfix_get_template_id(l2, l3, l4));
                 field_count = ipfix_define_template_fields(l2, l3, l4, &msg);
                 tmpl_hdr = (struct ipfix_template_record_header*)
-                    ((uint8_t*)msg.data + tmpl_hdr_offset);
+                    ((uint8_t*)ofpbuf_data(&msg) + tmpl_hdr_offset);
                 tmpl_hdr->field_count = htons(field_count);
             }
         }
     }
 
-    set_hdr = (struct ipfix_set_header*)((uint8_t*)msg.data + set_hdr_offset);
-    set_hdr->length = htons(msg.size - set_hdr_offset);
+    set_hdr = (struct ipfix_set_header*)((uint8_t*)ofpbuf_data(&msg) + set_hdr_offset);
+    set_hdr->length = htons(ofpbuf_size(&msg) - set_hdr_offset);
 
     /* XXX: Add Options Template Sets, at least to define a Flow Keys
      * Option Template. */
@@ -955,6 +968,7 @@ ipfix_cache_aggregate_entries(struct ipfix_flow_cache_entry *from_entry,
     to_entry->packet_delta_count += from_entry->packet_delta_count;
     to_entry->layer2_octet_delta_count += from_entry->layer2_octet_delta_count;
 
+    to_entry->octet_delta_count += from_entry->octet_delta_count;
     to_entry->octet_delta_sum_of_squares +=
         from_entry->octet_delta_sum_of_squares;
 
@@ -1028,22 +1042,37 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
     switch(ntohs(flow->dl_type)) {
     case ETH_TYPE_IP:
         l3 = IPFIX_PROTO_L3_IPV4;
+        switch(flow->nw_proto) {
+        case IPPROTO_TCP:
+        case IPPROTO_UDP:
+        case IPPROTO_SCTP:
+            l4 = IPFIX_PROTO_L4_TCP_UDP_SCTP;
+            break;
+        case IPPROTO_ICMP:
+            l4 = IPFIX_PROTO_L4_ICMP;
+            break;
+        default:
+            l4 = IPFIX_PROTO_L4_UNKNOWN;
+        }
         break;
     case ETH_TYPE_IPV6:
         l3 = IPFIX_PROTO_L3_IPV6;
+        switch(flow->nw_proto) {
+        case IPPROTO_TCP:
+        case IPPROTO_UDP:
+        case IPPROTO_SCTP:
+            l4 = IPFIX_PROTO_L4_TCP_UDP_SCTP;
+            break;
+        case IPPROTO_ICMPV6:
+            l4 = IPFIX_PROTO_L4_ICMP;
+            break;
+        default:
+            l4 = IPFIX_PROTO_L4_UNKNOWN;
+        }
         break;
     default:
         l3 = IPFIX_PROTO_L3_UNKNOWN;
-    }
-
-    l4 = IPFIX_PROTO_L4_UNKNOWN;
-    if (l3 != IPFIX_PROTO_L3_UNKNOWN) {
-        switch(flow->nw_proto) {
-        case IPPROTO_TCP:  /* TCP */
-        case IPPROTO_UDP:  /* UDP */
-            l4 = IPFIX_PROTO_L4_TCP_UDP;
-            break;
-        }
+        l4 = IPFIX_PROTO_L4_UNKNOWN;
     }
 
     flow_key->obs_domain_id = obs_domain_id;
@@ -1055,7 +1084,7 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
 
     ethernet_header_length = (l2 == IPFIX_PROTO_L2_VLAN)
         ? VLAN_ETH_HEADER_LEN : ETH_HEADER_LEN;
-    ethernet_total_length = packet->size;
+    ethernet_total_length = ofpbuf_size(packet);
 
     /* Common Ethernet entities. */
     {
@@ -1095,6 +1124,7 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
 
         if (l3 == IPFIX_PROTO_L3_IPV4) {
             struct ipfix_data_record_flow_key_ipv4 *data_ipv4;
+
             data_ipv4 = ofpbuf_put_zeros(&msg, sizeof *data_ipv4);
             data_ipv4->source_ipv4_address = flow->nw_src;
             data_ipv4->destination_ipv4_address = flow->nw_dst;
@@ -1110,15 +1140,21 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
         }
     }
 
-    if (l4 != IPFIX_PROTO_L4_UNKNOWN) {
-        struct ipfix_data_record_flow_key_tcpudp *data_tcpudp;
+    if (l4 == IPFIX_PROTO_L4_TCP_UDP_SCTP) {
+        struct ipfix_data_record_flow_key_transport *data_transport;
 
-        data_tcpudp = ofpbuf_put_zeros(&msg, sizeof *data_tcpudp);
-        data_tcpudp->source_transport_port = flow->tp_src;
-        data_tcpudp->destination_transport_port = flow->tp_dst;
+        data_transport = ofpbuf_put_zeros(&msg, sizeof *data_transport);
+        data_transport->source_transport_port = flow->tp_src;
+        data_transport->destination_transport_port = flow->tp_dst;
+    } else if (l4 == IPFIX_PROTO_L4_ICMP) {
+        struct ipfix_data_record_flow_key_icmp *data_icmp;
+
+        data_icmp = ofpbuf_put_zeros(&msg, sizeof *data_icmp);
+        data_icmp->icmp_type = ntohs(flow->tp_src) & 0xff;
+        data_icmp->icmp_code = ntohs(flow->tp_dst) & 0xff;
     }
 
-    flow_key->flow_key_msg_part_size = msg.size;
+    flow_key->flow_key_msg_part_size = ofpbuf_size(&msg);
 
     {
         struct timeval now;
@@ -1139,9 +1175,15 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
     if (l3 != IPFIX_PROTO_L3_UNKNOWN) {
         uint16_t ip_total_length =
             ethernet_total_length - ethernet_header_length;
+        uint64_t octet_delta_count;
 
-        entry->octet_delta_sum_of_squares =
-            packet_delta_count * ip_total_length * ip_total_length;
+        /* Calculate the total matched octet count by considering as
+         * an approximation that all matched packets have the same
+         * length. */
+        octet_delta_count = packet_delta_count * ip_total_length;
+
+        entry->octet_delta_count = octet_delta_count;
+        entry->octet_delta_sum_of_squares = octet_delta_count * ip_total_length;
         entry->minimum_ip_total_length = ip_total_length;
         entry->maximum_ip_total_length = ip_total_length;
     } else {
@@ -1163,7 +1205,7 @@ ipfix_put_data_set(uint32_t export_time_sec,
     size_t set_hdr_offset;
     struct ipfix_set_header *set_hdr;
 
-    set_hdr_offset = msg->size;
+    set_hdr_offset = ofpbuf_size(msg);
 
     /* Put a Data Set. */
     set_hdr = ofpbuf_put_zeros(msg, sizeof *set_hdr);
@@ -1207,6 +1249,8 @@ ipfix_put_data_set(uint32_t export_time_sec,
 
         data_aggregated_ip = ofpbuf_put_zeros(
             msg, sizeof *data_aggregated_ip);
+        data_aggregated_ip->octet_delta_count = htonll(
+            entry->octet_delta_count);
         data_aggregated_ip->octet_delta_sum_of_squares = htonll(
             entry->octet_delta_sum_of_squares);
         data_aggregated_ip->minimum_ip_total_length = htonll(
@@ -1215,8 +1259,8 @@ ipfix_put_data_set(uint32_t export_time_sec,
             entry->maximum_ip_total_length);
     }
 
-    set_hdr = (struct ipfix_set_header*)((uint8_t*)msg->data + set_hdr_offset);
-    set_hdr->length = htons(msg->size - set_hdr_offset);
+    set_hdr = (struct ipfix_set_header*)((uint8_t*)ofpbuf_data(msg) + set_hdr_offset);
+    set_hdr->length = htons(ofpbuf_size(msg) - set_hdr_offset);
 }
 
 /* Send an IPFIX message with a single data record. */

@@ -34,6 +34,7 @@ struct flow_wildcards;
 struct nlattr;
 struct ofpbuf;
 struct simap;
+struct pkt_metadata;
 
 #define SLOW_PATH_REASONS                                               \
     /* These reasons are mutually exclusive. */                         \
@@ -142,12 +143,19 @@ int odp_flow_from_string(const char *s,
                          const struct simap *port_names,
                          struct ofpbuf *, struct ofpbuf *);
 
-void odp_flow_key_from_flow(struct ofpbuf *, const struct flow *,
-                            odp_port_t odp_in_port);
+void odp_flow_key_from_flow(struct ofpbuf *, const struct flow * flow,
+                            const struct flow *mask, odp_port_t odp_in_port);
 void odp_flow_key_from_mask(struct ofpbuf *, const struct flow *mask,
-                            const struct flow *flow, uint32_t odp_in_port);
+                            const struct flow *flow, uint32_t odp_in_port,
+                            size_t max_mpls_depth);
 
 uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
+
+/* Estimated space needed for metadata. */
+enum { ODP_KEY_METADATA_SIZE = 9 * 8 };
+void odp_key_from_pkt_metadata(struct ofpbuf *, const struct pkt_metadata *);
+void odp_key_to_pkt_metadata(const struct nlattr *key, size_t key_len,
+                              struct pkt_metadata *md);
 
 /* How well a kernel-provided flow key (a sequence of OVS_KEY_ATTR_*
  * attributes) matches OVS userspace expectations.
@@ -174,8 +182,7 @@ void commit_odp_tunnel_action(const struct flow *, struct flow *base,
 enum slow_path_reason commit_odp_actions(const struct flow *,
                                          struct flow *base,
                                          struct ofpbuf *odp_actions,
-                                         struct flow_wildcards *wc,
-                                         int *mpls_depth_delta);
+                                         struct flow_wildcards *wc);
 
 /* ofproto-dpif interface.
  *

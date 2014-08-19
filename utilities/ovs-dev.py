@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2013 Nicira, Inc.
+# Copyright (c) 2013, 2014 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ BUILD_GCC = OVS_SRC + "/_build-gcc"
 BUILD_CLANG = OVS_SRC + "/_build-clang"
 PATH = "%(ovs)s/utilities:%(ovs)s/ovsdb:%(ovs)s/vswitchd" % {"ovs": BUILD_GCC}
 
-ENV["CFLAGS"] = "-g -O0"
 ENV["PATH"] = PATH + ":" + ENV["PATH"]
 
 options = None
@@ -62,8 +61,9 @@ def conf():
 
     configure = ["../configure", "--prefix=" + ROOT, "--localstatedir=" + ROOT,
                  "--with-logdir=%s/log" % ROOT, "--with-rundir=%s/run" % ROOT,
-                 "--with-linux=/lib/modules/%s/build" % uname(),
-                 "--with-dbdir=" + ROOT]
+                 "--enable-silent-rules", "--with-dbdir=" + ROOT, "--silent"]
+
+    cflags = "-g -fno-omit-frame-pointer"
 
     if options.werror:
         configure.append("--enable-Werror")
@@ -74,6 +74,17 @@ def conf():
     if options.mandir:
         configure.append("--mandir=" + options.mandir)
 
+    if options.with_dpdk:
+        configure.append("--with-dpdk=" + options.with_dpdk)
+        cflags += " -Wno-cast-align -Wno-bad-function-cast" # DPDK warnings.
+
+    if options.optimize is None:
+        options.optimize = 0
+
+    cflags += " -O%d" % options.optimize
+
+    ENV["CFLAGS"] = cflags
+
     _sh("./boot.sh")
 
     try:
@@ -82,7 +93,7 @@ def conf():
         pass # Directory exists.
 
     os.chdir(BUILD_GCC)
-    _sh(*configure)
+    _sh(*(configure + ["--with-linux=/lib/modules/%s/build" % uname()]))
 
     try:
         _sh("clang --version", check=True)
@@ -272,7 +283,7 @@ Basic Configuration:
             libssl-dev gdb linux-headers-`uname -r`
 
     # Next clone the Open vSwitch source.
-    git clone git://git.openvswitch.org/openvswitch %(ovs)s
+    git clone https://github.com/openvswitch/ovs.git %(ovs)s
 
     # Setup environment variables.
     `%(v)s env`
@@ -320,6 +331,12 @@ def main():
                      action="store_true", help="configure with cached timing")
     group.add_option("--mandir", dest="mandir", metavar="MANDIR",
                      help="configure the man documentation install directory")
+    group.add_option("--with-dpdk", dest="with_dpdk", metavar="DPDK_BUILD",
+                     help="built with dpdk libraries located at DPDK_BUILD");
+
+    for i in range(4):
+        group.add_option("--O%d" % i, dest="optimize", action="store_const",
+                         const=i, help="compile with -O%d" % i)
     parser.add_option_group(group)
 
     group = optparse.OptionGroup(parser, "run")

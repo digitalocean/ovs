@@ -23,13 +23,47 @@
 #include <stdint.h>
 #include <string.h>
 #include "compiler.h"
-#include "flow.h"
 #include "openvswitch/types.h"
 #include "random.h"
+#include "hash.h"
 #include "util.h"
 
 struct ofpbuf;
 struct ds;
+
+/* Tunnel information used in flow key and metadata. */
+struct flow_tnl {
+    ovs_be64 tun_id;
+    ovs_be32 ip_src;
+    ovs_be32 ip_dst;
+    uint16_t flags;
+    uint8_t ip_tos;
+    uint8_t ip_ttl;
+};
+
+/* Unfortunately, a "struct flow" sometimes has to handle OpenFlow port
+ * numbers and other times datapath (dpif) port numbers.  This union allows
+ * access to both. */
+union flow_in_port {
+    odp_port_t odp_port;
+    ofp_port_t ofp_port;
+};
+
+/* Datapath packet metadata */
+struct pkt_metadata {
+    uint32_t recirc_id;         /* Recirculation id carried with the
+                                   recirculating packets. 0 for packets
+                                   received from the wire. */
+    uint32_t dp_hash;           /* hash value computed by the recirculation
+                                   action. */
+    struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. */
+    uint32_t skb_priority;      /* Packet priority for QoS. */
+    uint32_t pkt_mark;          /* Packet mark. */
+    union flow_in_port in_port; /* Input port. */
+};
+
+#define PKT_METADATA_INITIALIZER(PORT) \
+    (struct pkt_metadata){ 0, 0, { 0, 0, 0, 0, 0, 0}, 0, 0, {(PORT)} }
 
 bool dpid_from_string(const char *s, uint64_t *dpidp);
 
@@ -103,6 +137,11 @@ static inline uint64_t eth_addr_to_uint64(const uint8_t ea[ETH_ADDR_LEN])
             | ((uint64_t) ea[4] << 8)
             | ea[5]);
 }
+static inline uint64_t eth_addr_vlan_to_uint64(const uint8_t ea[ETH_ADDR_LEN],
+                                               uint16_t vlan)
+{
+    return (((uint64_t)vlan << 48) | eth_addr_to_uint64(ea));
+}
 static inline void eth_addr_from_uint64(uint64_t x, uint8_t ea[ETH_ADDR_LEN])
 {
     ea[0] = x >> 40;
@@ -134,16 +173,19 @@ static inline void eth_addr_nicira_random(uint8_t ea[ETH_ADDR_LEN])
     /* Set the top bit to indicate random Nicira address. */
     ea[3] |= 0x80;
 }
+static inline uint32_t hash_mac(const uint8_t ea[ETH_ADDR_LEN],
+                                const uint16_t vlan, const uint32_t basis)
+{
+    return hash_uint64_basis(eth_addr_vlan_to_uint64(ea, vlan), basis);
+}
 
 bool eth_addr_is_reserved(const uint8_t ea[ETH_ADDR_LEN]);
 bool eth_addr_from_string(const char *, uint8_t ea[ETH_ADDR_LEN]);
 
 void compose_rarp(struct ofpbuf *, const uint8_t eth_src[ETH_ADDR_LEN]);
 
-void eth_push_vlan(struct ofpbuf *, ovs_be16 tci);
+void eth_push_vlan(struct ofpbuf *, ovs_be16 tpid, ovs_be16 tci);
 void eth_pop_vlan(struct ofpbuf *);
-
-void set_ethertype(struct ofpbuf *packet, ovs_be16 eth_type);
 
 const char *eth_from_hex(const char *hex, struct ofpbuf **packetp);
 void eth_format_masked(const uint8_t eth[ETH_ADDR_LEN],
@@ -496,6 +538,7 @@ BUILD_ASSERT_DECL(UDP_HEADER_LEN == sizeof(struct udp_header));
 
 #define TCP_CTL(flags, offset) (htons((flags) | ((offset) << 12)))
 #define TCP_FLAGS(tcp_ctl) (ntohs(tcp_ctl) & 0x0fff)
+#define TCP_FLAGS_BE16(tcp_ctl) ((tcp_ctl) & htons(0x0fff))
 #define TCP_OFFSET(tcp_ctl) (ntohs(tcp_ctl) >> 12)
 
 #define TCP_HEADER_LEN 20
@@ -611,23 +654,6 @@ static inline bool dl_type_is_ip_any(ovs_be16 dl_type)
         || dl_type == htons(ETH_TYPE_IPV6);
 }
 
-static inline bool is_ip_any(const struct flow *flow)
-{
-    return dl_type_is_ip_any(flow->dl_type);
-}
-
-static inline bool is_icmpv4(const struct flow *flow)
-{
-    return (flow->dl_type == htons(ETH_TYPE_IP)
-            && flow->nw_proto == IPPROTO_ICMP);
-}
-
-static inline bool is_icmpv6(const struct flow *flow)
-{
-    return (flow->dl_type == htons(ETH_TYPE_IPV6)
-            && flow->nw_proto == IPPROTO_ICMPV6);
-}
-
 void format_ipv6_addr(char *addr_str, const struct in6_addr *addr);
 void print_ipv6_addr(struct ds *string, const struct in6_addr *addr);
 void print_ipv6_masked(struct ds *string, const struct in6_addr *addr,
@@ -653,7 +679,6 @@ void packet_set_tcp_port(struct ofpbuf *, ovs_be16 src, ovs_be16 dst);
 void packet_set_udp_port(struct ofpbuf *, ovs_be16 src, ovs_be16 dst);
 void packet_set_sctp_port(struct ofpbuf *, ovs_be16 src, ovs_be16 dst);
 
-uint16_t packet_get_tcp_flags(const struct ofpbuf *, const struct flow *);
 void packet_format_tcp_flags(struct ds *, uint16_t);
 const char *packet_tcp_flag_to_string(uint32_t flag);
 

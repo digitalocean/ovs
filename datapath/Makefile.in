@@ -57,6 +57,7 @@ subdir = datapath
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/absolute-header.m4 \
 	$(top_srcdir)/m4/ax_check_openssl.m4 \
+	$(top_srcdir)/m4/ax_func_posix_memalign.m4 \
 	$(top_srcdir)/m4/include_next.m4 $(top_srcdir)/m4/libtool.m4 \
 	$(top_srcdir)/m4/ltoptions.m4 $(top_srcdir)/m4/ltsugar.m4 \
 	$(top_srcdir)/m4/ltversion.m4 $(top_srcdir)/m4/lt~obsolete.m4 \
@@ -68,6 +69,12 @@ mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = $(top_builddir)/config.h
 CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
+AM_V_GEN = $(am__v_GEN_@AM_V@)
+am__v_GEN_ = $(am__v_GEN_@AM_DEFAULT_V@)
+am__v_GEN_0 = @echo "  GEN   " $@;
+AM_V_at = $(am__v_at_@AM_V@)
+am__v_at_ = $(am__v_at_@AM_DEFAULT_V@)
+am__v_at_0 = @
 SOURCES =
 DIST_SOURCES =
 RECURSIVE_TARGETS = all-recursive check-recursive dvi-recursive \
@@ -118,6 +125,7 @@ am__relativize = \
   reldir="$$dir2"
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
+AM_DEFAULT_VERBOSITY = @AM_DEFAULT_VERBOSITY@
 AR = @AR@
 AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
@@ -167,7 +175,9 @@ LTLIBOBJS = @LTLIBOBJS@
 MAKEINFO = @MAKEINFO@
 MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
+NEXT_AS_FIRST_DIRECTIVE_STDIO_H = @NEXT_AS_FIRST_DIRECTIVE_STDIO_H@
 NEXT_AS_FIRST_DIRECTIVE_STRING_H = @NEXT_AS_FIRST_DIRECTIVE_STRING_H@
+NEXT_STDIO_H = @NEXT_STDIO_H@
 NEXT_STRING_H = @NEXT_STRING_H@
 NM = @NM@
 NMEDIT = @NMEDIT@
@@ -188,6 +198,9 @@ PKG_CONFIG = @PKG_CONFIG@
 PKIDIR = @PKIDIR@
 PRAGMA_COLUMNS = @PRAGMA_COLUMNS@
 PRAGMA_SYSTEM_HEADER = @PRAGMA_SYSTEM_HEADER@
+PTHREAD_INCLUDES = @PTHREAD_INCLUDES@
+PTHREAD_LDFLAGS = @PTHREAD_LDFLAGS@
+PTHREAD_LIBS = @PTHREAD_LIBS@
 PYTHON = @PYTHON@
 RANLIB = @RANLIB@
 RUNDIR = @RUNDIR@
@@ -298,7 +311,6 @@ openvswitch_headers = compat.h datapath.h flow.h flow_netlink.h \
 	linux/compat/include/linux/if.h \
 	linux/compat/include/linux/if_arp.h \
 	linux/compat/include/linux/if_ether.h \
-	linux/compat/include/linux/if_tunnel.h \
 	linux/compat/include/linux/if_vlan.h \
 	linux/compat/include/linux/in.h \
 	linux/compat/include/linux/ip.h \
@@ -309,12 +321,14 @@ openvswitch_headers = compat.h datapath.h flow.h flow_netlink.h \
 	linux/compat/include/linux/list.h \
 	linux/compat/include/linux/log2.h \
 	linux/compat/include/linux/net.h \
+	linux/compat/include/linux/random.h \
 	linux/compat/include/linux/netdevice.h \
 	linux/compat/include/linux/netdev_features.h \
 	linux/compat/include/linux/netlink.h \
 	linux/compat/include/linux/poison.h \
 	linux/compat/include/linux/rculist.h \
 	linux/compat/include/linux/rcupdate.h \
+	linux/compat/include/linux/reciprocal_div.h \
 	linux/compat/include/linux/rtnetlink.h \
 	linux/compat/include/linux/sctp.h \
 	linux/compat/include/linux/skbuff.h \
@@ -361,9 +375,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --foreign datapath/Makefile
+	  $(AUTOMAKE) --gnu datapath/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \

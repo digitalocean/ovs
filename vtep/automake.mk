@@ -11,7 +11,7 @@ man_MANS += \
    vtep/vtep-ctl.8
 
 vtep_vtep_ctl_SOURCES = vtep/vtep-ctl.c
-vtep_vtep_ctl_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
+vtep_vtep_ctl_LDADD = lib/libopenvswitch.la
 
 # ovs-vtep
 scripts_SCRIPTS += \
@@ -34,7 +34,8 @@ if HAVE_DOT
 vtep/vtep.gv: ovsdb/ovsdb-dot.in vtep/vtep.ovsschema
 	$(OVSDB_DOT) --no-arrows $(srcdir)/vtep/vtep.ovsschema > $@
 vtep/vtep.pic: vtep/vtep.gv ovsdb/dot2pic
-	(dot -T plain < vtep/vtep.gv | $(srcdir)/ovsdb/dot2pic -f 3) > $@;
+	(dot -T plain < vtep/vtep.gv | $(PERL) $(srcdir)/ovsdb/dot2pic -f 3) > $@.tmp;
+	mv $@.tmp $@
 VTEP_PIC = vtep/vtep.pic
 VTEP_DOT_DIAGRAM_ARG = --er-diagram=$(VTEP_PIC)
 DISTCLEANFILES += vtep/vtep.gv vtep/vtep.pic
@@ -50,6 +51,7 @@ $(srcdir)/vtep/vtep.5: \
 	$(OVSDB_DOC) \
 		--title="vtep" \
 		$(VTEP_DOT_DIAGRAM_ARG) \
+		--version=$(VERSION) \
 		$(srcdir)/vtep/vtep.ovsschema \
 		$(srcdir)/vtep/vtep.xml > $@.tmp
 	mv $@.tmp $@

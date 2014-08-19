@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,7 +95,14 @@ match_wc_init(struct match *match, const struct flow *flow)
         memset(&wc->masks.nw_src, 0xff, sizeof wc->masks.nw_src);
         memset(&wc->masks.nw_dst, 0xff, sizeof wc->masks.nw_dst);
     } else if (eth_type_mpls(flow->dl_type)) {
-        memset(&wc->masks.mpls_lse, 0xff, sizeof wc->masks.mpls_lse);
+        int i;
+
+        for (i = 0; i < FLOW_MAX_MPLS_LABELS; i++) {
+            wc->masks.mpls_lse[i] = OVS_BE32_MAX;
+            if (flow->mpls_lse[i] & htonl(MPLS_BOS_MASK)) {
+                break;
+            }
+        }
     }
 
     if (flow->dl_type == htons(ETH_TYPE_ARP) ||
@@ -129,6 +136,7 @@ match_wc_init(struct match *match, const struct flow *flow)
         if (flow->nw_proto == IPPROTO_ICMPV6) {
             memset(&wc->masks.arp_sha, 0xff, sizeof wc->masks.arp_sha);
             memset(&wc->masks.arp_tha, 0xff, sizeof wc->masks.arp_tha);
+            memset(&wc->masks.nd_target, 0xff, sizeof wc->masks.nd_target);
         }
     }
 
@@ -155,6 +163,26 @@ void
 match_zero_wildcarded_fields(struct match *match)
 {
     flow_zero_wildcards(&match->flow, &match->wc);
+}
+
+void
+match_set_dp_hash(struct match *match, uint32_t value)
+{
+    match_set_dp_hash_masked(match, value, UINT32_MAX);
+}
+
+void
+match_set_dp_hash_masked(struct match *match, uint32_t value, uint32_t mask)
+{
+    match->wc.masks.dp_hash = mask;
+    match->flow.dp_hash = value & mask;
+}
+
+void
+match_set_recirc_id(struct match *match, uint32_t value)
+{
+    match->flow.recirc_id = value;
+    match->wc.masks.recirc_id = UINT32_MAX;
 }
 
 void
@@ -458,55 +486,71 @@ match_set_dl_vlan_pcp(struct match *match, uint8_t dl_vlan_pcp)
     match->wc.masks.vlan_tci |= htons(VLAN_CFI | VLAN_PCP_MASK);
 }
 
+/* Modifies 'match' so that the MPLS label 'idx' matches 'lse' exactly. */
+void
+match_set_mpls_lse(struct match *match, int idx, ovs_be32 lse)
+{
+    match->wc.masks.mpls_lse[idx] = OVS_BE32_MAX;
+    match->flow.mpls_lse[idx] = lse;
+}
+
 /* Modifies 'match' so that the MPLS label is wildcarded. */
 void
-match_set_any_mpls_label(struct match *match)
+match_set_any_mpls_label(struct match *match, int idx)
 {
-    match->wc.masks.mpls_lse &= ~htonl(MPLS_LABEL_MASK);
-    flow_set_mpls_label(&match->flow, htonl(0));
+    match->wc.masks.mpls_lse[idx] &= ~htonl(MPLS_LABEL_MASK);
+    flow_set_mpls_label(&match->flow, idx, htonl(0));
 }
 
 /* Modifies 'match' so that it matches only packets with an MPLS header whose
  * label equals the low 20 bits of 'mpls_label'. */
 void
-match_set_mpls_label(struct match *match, ovs_be32 mpls_label)
+match_set_mpls_label(struct match *match, int idx, ovs_be32 mpls_label)
 {
-    match->wc.masks.mpls_lse |= htonl(MPLS_LABEL_MASK);
-    flow_set_mpls_label(&match->flow, mpls_label);
+    match->wc.masks.mpls_lse[idx] |= htonl(MPLS_LABEL_MASK);
+    flow_set_mpls_label(&match->flow, idx, mpls_label);
 }
 
 /* Modifies 'match' so that the MPLS TC is wildcarded. */
 void
-match_set_any_mpls_tc(struct match *match)
+match_set_any_mpls_tc(struct match *match, int idx)
 {
-    match->wc.masks.mpls_lse &= ~htonl(MPLS_TC_MASK);
-    flow_set_mpls_tc(&match->flow, 0);
+    match->wc.masks.mpls_lse[idx] &= ~htonl(MPLS_TC_MASK);
+    flow_set_mpls_tc(&match->flow, idx, 0);
 }
 
 /* Modifies 'match' so that it matches only packets with an MPLS header whose
  * Traffic Class equals the low 3 bits of 'mpls_tc'. */
 void
-match_set_mpls_tc(struct match *match, uint8_t mpls_tc)
+match_set_mpls_tc(struct match *match, int idx, uint8_t mpls_tc)
 {
-    match->wc.masks.mpls_lse |= htonl(MPLS_TC_MASK);
-    flow_set_mpls_tc(&match->flow, mpls_tc);
+    match->wc.masks.mpls_lse[idx] |= htonl(MPLS_TC_MASK);
+    flow_set_mpls_tc(&match->flow, idx, mpls_tc);
 }
 
 /* Modifies 'match' so that the MPLS stack flag is wildcarded. */
 void
-match_set_any_mpls_bos(struct match *match)
+match_set_any_mpls_bos(struct match *match, int idx)
 {
-    match->wc.masks.mpls_lse &= ~htonl(MPLS_BOS_MASK);
-    flow_set_mpls_bos(&match->flow, 0);
+    match->wc.masks.mpls_lse[idx] &= ~htonl(MPLS_BOS_MASK);
+    flow_set_mpls_bos(&match->flow, idx, 0);
 }
 
 /* Modifies 'match' so that it matches only packets with an MPLS header whose
  * Stack Flag equals the lower bit of 'mpls_bos' */
 void
-match_set_mpls_bos(struct match *match, uint8_t mpls_bos)
+match_set_mpls_bos(struct match *match, int idx, uint8_t mpls_bos)
 {
-    match->wc.masks.mpls_lse |= htonl(MPLS_BOS_MASK);
-    flow_set_mpls_bos(&match->flow, mpls_bos);
+    match->wc.masks.mpls_lse[idx] |= htonl(MPLS_BOS_MASK);
+    flow_set_mpls_bos(&match->flow, idx, mpls_bos);
+}
+
+/* Modifies 'match' so that the MPLS LSE is wildcarded. */
+void
+match_set_any_mpls_lse(struct match *match, int idx)
+{
+    match->wc.masks.mpls_lse[idx] = htonl(0);
+    flow_set_mpls_lse(&match->flow, idx, htonl(0));
 }
 
 void
@@ -745,6 +789,34 @@ match_hash(const struct match *match, uint32_t basis)
     return flow_wildcards_hash(&match->wc, flow_hash(&match->flow, basis));
 }
 
+static bool
+match_has_default_recirc_id(const struct match *m)
+{
+    return m->flow.recirc_id == 0 && (m->wc.masks.recirc_id == UINT32_MAX ||
+                                      m->wc.masks.recirc_id == 0);
+}
+
+static bool
+match_has_default_dp_hash(const struct match *m)
+{
+    return ((m->flow.dp_hash | m->wc.masks.dp_hash) == 0);
+}
+
+/* Return true if the hidden fields of the match are set to the default values.
+ * The default values equals to those set up by match_init_hidden_fields(). */
+bool
+match_has_default_hidden_fields(const struct match *m)
+{
+    return match_has_default_recirc_id(m) && match_has_default_dp_hash(m);
+}
+
+void
+match_init_hidden_fields(struct match *m)
+{
+    match_set_recirc_id(m, 0);
+    match_set_dp_hash_masked(m, 0, 0);
+}
+
 static void
 format_eth_masked(struct ds *s, const char *name, const uint8_t eth[6],
                   const uint8_t mask[6])
@@ -790,6 +862,22 @@ format_be16_masked(struct ds *s, const char *name,
         } else {
             ds_put_format(s, "0x%"PRIx16"/0x%"PRIx16,
                           ntohs(value), ntohs(mask));
+        }
+        ds_put_char(s, ',');
+    }
+}
+
+static void
+format_be32_masked(struct ds *s, const char *name,
+                   ovs_be32 value, ovs_be32 mask)
+{
+    if (mask != htonl(0)) {
+        ds_put_format(s, "%s=", name);
+        if (mask == OVS_BE32_MAX) {
+            ds_put_format(s, "%"PRIu32, ntohl(value));
+        } else {
+            ds_put_format(s, "0x%"PRIx32"/0x%"PRIx32,
+                          ntohl(value), ntohl(mask));
         }
         ds_put_char(s, ',');
     }
@@ -856,13 +944,23 @@ match_format(const struct match *match, struct ds *s, unsigned int priority)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 23);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 26);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "priority=%u,", priority);
     }
 
     format_uint32_masked(s, "pkt_mark", f->pkt_mark, wc->masks.pkt_mark);
+
+    if (wc->masks.recirc_id) {
+        format_uint32_masked(s, "recirc_id", f->recirc_id,
+                             wc->masks.recirc_id);
+    }
+
+    if (f->dp_hash && wc->masks.dp_hash) {
+        format_uint32_masked(s, "dp_hash", f->dp_hash,
+                             wc->masks.dp_hash);
+    }
 
     if (wc->masks.skb_priority) {
         ds_put_format(s, "skb_priority=%#"PRIx32",", f->skb_priority);
@@ -1008,22 +1106,25 @@ match_format(const struct match *match, struct ds *s, unsigned int priority)
     if (wc->masks.nw_ttl) {
         ds_put_format(s, "nw_ttl=%"PRIu8",", f->nw_ttl);
     }
-    if (wc->masks.mpls_lse & htonl(MPLS_LABEL_MASK)) {
+    if (wc->masks.mpls_lse[0] & htonl(MPLS_LABEL_MASK)) {
         ds_put_format(s, "mpls_label=%"PRIu32",",
-                 mpls_lse_to_label(f->mpls_lse));
+                 mpls_lse_to_label(f->mpls_lse[0]));
     }
-    if (wc->masks.mpls_lse & htonl(MPLS_TC_MASK)) {
+    if (wc->masks.mpls_lse[0] & htonl(MPLS_TC_MASK)) {
         ds_put_format(s, "mpls_tc=%"PRIu8",",
-                 mpls_lse_to_tc(f->mpls_lse));
+                 mpls_lse_to_tc(f->mpls_lse[0]));
     }
-    if (wc->masks.mpls_lse & htonl(MPLS_TTL_MASK)) {
+    if (wc->masks.mpls_lse[0] & htonl(MPLS_TTL_MASK)) {
         ds_put_format(s, "mpls_ttl=%"PRIu8",",
-                 mpls_lse_to_ttl(f->mpls_lse));
+                 mpls_lse_to_ttl(f->mpls_lse[0]));
     }
-    if (wc->masks.mpls_lse & htonl(MPLS_BOS_MASK)) {
+    if (wc->masks.mpls_lse[0] & htonl(MPLS_BOS_MASK)) {
         ds_put_format(s, "mpls_bos=%"PRIu8",",
-                 mpls_lse_to_bos(f->mpls_lse));
+                 mpls_lse_to_bos(f->mpls_lse[0]));
     }
+    format_be32_masked(s, "mpls_lse1", f->mpls_lse[1], wc->masks.mpls_lse[1]);
+    format_be32_masked(s, "mpls_lse2", f->mpls_lse[2], wc->masks.mpls_lse[2]);
+
     switch (wc->masks.nw_frag) {
     case FLOW_NW_FRAG_ANY | FLOW_NW_FRAG_LATER:
         ds_put_format(s, "nw_frag=%s,",
@@ -1144,13 +1245,6 @@ minimatch_equal(const struct minimatch *a, const struct minimatch *b)
             && minimask_equal(&a->mask, &b->mask));
 }
 
-/* Returns a hash value for 'match', given 'basis'. */
-uint32_t
-minimatch_hash(const struct minimatch *match, uint32_t basis)
-{
-    return miniflow_hash(&match->flow, minimask_hash(&match->mask, basis));
-}
-
 /* Returns true if 'target' satisifies 'match', that is, if each bit for which
  * 'match' specifies a particular value has the correct value in 'target'.
  *
@@ -1162,8 +1256,8 @@ minimatch_matches_flow(const struct minimatch *match,
                        const struct flow *target)
 {
     const uint32_t *target_u32 = (const uint32_t *) target;
-    const uint32_t *flowp = match->flow.values;
-    const uint32_t *maskp = match->mask.masks.values;
+    const uint32_t *flowp = miniflow_get_u32_values(&match->flow);
+    const uint32_t *maskp = miniflow_get_u32_values(&match->mask.masks);
     uint64_t map;
 
     for (map = match->flow.map; map; map = zero_rightmost_1bit(map)) {
@@ -1173,32 +1267,6 @@ minimatch_matches_flow(const struct minimatch *match,
     }
 
     return true;
-}
-
-/* Returns a hash value for the bits of range [start, end) in 'minimatch',
- * given 'basis'.
- *
- * The hash values returned by this function are the same as those returned by
- * flow_hash_in_minimask_range(), only the form of the arguments differ. */
-uint32_t
-minimatch_hash_range(const struct minimatch *match, uint8_t start, uint8_t end,
-                     uint32_t *basis)
-{
-    unsigned int offset;
-    const uint32_t *p, *q;
-    uint32_t hash = *basis;
-    int n, i;
-
-    n = count_1bits(miniflow_get_map_in_range(&match->mask.masks, start, end,
-                                              &offset));
-    q = match->mask.masks.values + offset;
-    p = match->flow.values + offset;
-
-    for (i = 0; i < n; i++) {
-        hash = mhash_add(hash, p[i] & q[i]);
-    }
-    *basis = hash; /* Allow continuation from the unfinished value. */
-    return mhash_finish(hash, (offset + n) * 4);
 }
 
 /* Appends a string representation of 'match' to 's'.  If 'priority' is

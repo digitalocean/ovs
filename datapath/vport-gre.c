@@ -197,7 +197,7 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 	return iptunnel_xmit(rt, skb, saddr,
 			     OVS_CB(skb)->tun_key->ipv4_dst, IPPROTO_GRE,
 			     OVS_CB(skb)->tun_key->ipv4_tos,
-			     OVS_CB(skb)->tun_key->ipv4_ttl, df);
+			     OVS_CB(skb)->tun_key->ipv4_ttl, df, false);
 err_free_rt:
 	ip_rt_put(rt);
 error:
@@ -277,7 +277,7 @@ static void gre_tnl_destroy(struct vport *vport)
 
 	ovs_net = net_generic(net, ovs_net_id);
 
-	rcu_assign_pointer(ovs_net->vport_net.gre_vport, NULL);
+	RCU_INIT_POINTER(ovs_net->vport_net.gre_vport, NULL);
 	ovs_vport_deferred_free(vport);
 	gre_exit();
 }

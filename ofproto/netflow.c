@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ struct netflow {
 
     struct hmap flows;            /* Contains 'netflow_flows'. */
 
-    atomic_int ref_cnt;
+    struct ovs_refcount ref_cnt;
 };
 
 struct netflow_flow {
@@ -110,7 +110,7 @@ gen_netflow_rec(struct netflow *nf, struct netflow_flow *nf_flow,
     struct netflow_v5_header *nf_hdr;
     struct netflow_v5_record *nf_rec;
 
-    if (!nf->packet.size) {
+    if (!ofpbuf_size(&nf->packet)) {
         struct timespec now;
 
         time_wall_timespec(&now);
@@ -127,7 +127,7 @@ gen_netflow_rec(struct netflow *nf, struct netflow_flow *nf_flow,
         nf_hdr->sampling_interval = htons(0);
     }
 
-    nf_hdr = nf->packet.data;
+    nf_hdr = ofpbuf_data(&nf->packet);
     nf_hdr->count = htons(ntohs(nf_hdr->count) + 1);
 
     nf_rec = ofpbuf_put_zeros(&nf->packet, sizeof *nf_rec);
@@ -170,7 +170,7 @@ gen_netflow_rec(struct netflow *nf, struct netflow_flow *nf_flow,
 }
 
 void
-netflow_flow_update(struct netflow *nf, struct flow *flow,
+netflow_flow_update(struct netflow *nf, const struct flow *flow,
                     ofp_port_t output_iface,
                     const struct dpif_flow_stats *stats)
     OVS_EXCLUDED(mutex)
@@ -276,19 +276,6 @@ netflow_expire__(struct netflow *nf, struct netflow_flow *nf_flow)
 }
 
 void
-netflow_expire(struct netflow *nf, struct flow *flow) OVS_EXCLUDED(mutex)
-{
-    struct netflow_flow *nf_flow;
-
-    ovs_mutex_lock(&mutex);
-    nf_flow = netflow_flow_lookup(nf, flow);
-    if (nf_flow) {
-        netflow_expire__(nf, nf_flow);
-    }
-    ovs_mutex_unlock(&mutex);
-}
-
-void
 netflow_flow_clear(struct netflow *nf, struct flow *flow) OVS_EXCLUDED(mutex)
 {
     struct netflow_flow *nf_flow;
@@ -296,8 +283,7 @@ netflow_flow_clear(struct netflow *nf, struct flow *flow) OVS_EXCLUDED(mutex)
     ovs_mutex_lock(&mutex);
     nf_flow = netflow_flow_lookup(nf, flow);
     if (nf_flow) {
-        ovs_assert(!nf_flow->packet_count);
-        ovs_assert(!nf_flow->byte_count);
+        netflow_expire__(nf, nf_flow);
         hmap_remove(&nf->flows, &nf_flow->hmap_node);
         free(nf_flow);
     }
@@ -312,9 +298,9 @@ netflow_run__(struct netflow *nf) OVS_REQUIRES(mutex)
     long long int now = time_msec();
     struct netflow_flow *nf_flow, *next;
 
-    if (nf->packet.size) {
-        collectors_send(nf->collectors, nf->packet.data, nf->packet.size);
-        nf->packet.size = 0;
+    if (ofpbuf_size(&nf->packet)) {
+        collectors_send(nf->collectors, ofpbuf_data(&nf->packet), ofpbuf_size(&nf->packet));
+        ofpbuf_set_size(&nf->packet, 0);
     }
 
     if (!nf->active_timeout || now < nf->next_timeout) {
@@ -353,7 +339,7 @@ netflow_wait(struct netflow *nf) OVS_EXCLUDED(mutex)
     if (nf->active_timeout) {
         poll_timer_wait_until(nf->next_timeout);
     }
-    if (nf->packet.size) {
+    if (ofpbuf_size(&nf->packet)) {
         poll_immediate_wake();
     }
     ovs_mutex_unlock(&mutex);
@@ -404,7 +390,7 @@ netflow_create(void)
     nf->add_id_to_iface = false;
     nf->netflow_cnt = 0;
     hmap_init(&nf->flows);
-    atomic_init(&nf->ref_cnt, 1);
+    ovs_refcount_init(&nf->ref_cnt);
     ofpbuf_init(&nf->packet, 1500);
     atomic_add(&netflow_count, 1, &junk);
     return nf;
@@ -415,9 +401,7 @@ netflow_ref(const struct netflow *nf_)
 {
     struct netflow *nf = CONST_CAST(struct netflow *, nf_);
     if (nf) {
-        int orig;
-        atomic_add(&nf->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&nf->ref_cnt);
     }
     return nf;
 }
@@ -425,15 +409,9 @@ netflow_ref(const struct netflow *nf_)
 void
 netflow_unref(struct netflow *nf)
 {
-    int orig;
+    if (nf && ovs_refcount_unref(&nf->ref_cnt) == 1) {
+        int orig;
 
-    if (!nf) {
-        return;
-    }
-
-    atomic_sub(&nf->ref_cnt, 1, &orig);
-    ovs_assert(orig > 0);
-    if (orig == 1) {
         atomic_sub(&netflow_count, 1, &orig);
         collectors_destroy(nf->collectors);
         ofpbuf_uninit(&nf->packet);

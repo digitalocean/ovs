@@ -77,6 +77,7 @@ struct iface {
     char *name;                 /* Host network device name. */
     struct netdev *netdev;      /* Network device. */
     ofp_port_t ofp_port;        /* OpenFlow port number. */
+    uint64_t change_seq;
 
     /* These members are valid only within bridge_reconfigure(). */
     const char *type;           /* Usually same as cfg->type. */
@@ -160,10 +161,35 @@ static unsigned int idl_seqno;
 /* Track changes to port connectivity. */
 static uint64_t connectivity_seqno = LLONG_MIN;
 
+/* Status update to database.
+ *
+ * Some information in the database must be kept as up-to-date as possible to
+ * allow controllers to respond rapidly to network outages.  Those status are
+ * updated via the 'status_txn'.
+ *
+ * We use the global connectivity sequence number to detect the status change.
+ * Also, to prevent the status update from sending too much to the database,
+ * we check the return status of each update transaction and do not start new
+ * update if the previous transaction status is 'TXN_INCOMPLETE'.
+ *
+ * 'status_txn' is NULL if there is no ongoing status update.
+ *
+ * If the previous database transaction was incomplete or failed (is not
+ * 'TXN_SUCCESS' or 'TXN_UNCHANGED'), 'force_status_commit' is set to true.
+ * This means that 'status_txn' must be committed next iteration of bridge_run()
+ * even if the connectivity or netdev sequence numbers do not change.
+ */
+static struct ovsdb_idl_txn *status_txn;
+static bool force_status_commit = true;
+
+/* When the status update transaction returns 'TXN_INCOMPLETE', should register a
+ * timeout in 'STATUS_CHECK_AGAIN_MSEC' to check again. */
+#define STATUS_CHECK_AGAIN_MSEC 100
+
 /* Each time this timer expires, the bridge fetches interface and mirror
  * statistics and pushes them into the database. */
-#define IFACE_STATS_INTERVAL (5 * 1000) /* In milliseconds. */
-static long long int iface_stats_timer = LLONG_MIN;
+static int stats_timer_interval;
+static long long int stats_timer = LLONG_MIN;
 
 /* In some datapaths, creating and destroying OpenFlow ports can be extremely
  * expensive.  This can cause bridge_reconfigure() to take a long time during
@@ -194,7 +220,6 @@ static void bridge_del_ports(struct bridge *,
 static void bridge_add_ports(struct bridge *,
                              const struct shash *wanted_ports);
 
-static void bridge_configure_flow_miss_model(const char *opt);
 static void bridge_configure_datapath_id(struct bridge *);
 static void bridge_configure_netflow(struct bridge *);
 static void bridge_configure_forward_bpdu(struct bridge *);
@@ -248,18 +273,20 @@ static bool iface_is_internal(const struct ovsrec_interface *iface,
 static const char *iface_get_type(const struct ovsrec_interface *,
                                   const struct ovsrec_bridge *);
 static void iface_destroy(struct iface *);
+static void iface_destroy__(struct iface *);
 static struct iface *iface_lookup(const struct bridge *, const char *name);
 static struct iface *iface_find(const char *name);
 static struct iface *iface_from_ofp_port(const struct bridge *,
                                          ofp_port_t ofp_port);
-static void iface_set_mac(struct iface *);
+static void iface_set_mac(const struct bridge *, const struct port *, struct iface *);
 static void iface_set_ofport(const struct ovsrec_interface *, ofp_port_t ofport);
 static void iface_clear_db_record(const struct ovsrec_interface *if_cfg);
 static void iface_configure_qos(struct iface *, const struct ovsrec_qos *);
 static void iface_configure_cfm(struct iface *);
 static void iface_refresh_cfm_stats(struct iface *);
 static void iface_refresh_stats(struct iface *);
-static void iface_refresh_status(struct iface *);
+static void iface_refresh_netdev_status(struct iface *);
+static void iface_refresh_ofproto_status(struct iface *);
 static bool iface_is_synthetic(const struct iface *);
 static ofp_port_t iface_get_requested_ofp_port(
     const struct ovsrec_interface *);
@@ -355,7 +382,6 @@ bridge_init(const char *remote)
     ovsdb_idl_omit_alert(idl, &ovsrec_port_col_status);
     ovsdb_idl_omit_alert(idl, &ovsrec_port_col_statistics);
     ovsdb_idl_omit(idl, &ovsrec_port_col_external_ids);
-    ovsdb_idl_omit(idl, &ovsrec_port_col_fake_bridge);
 
     ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_admin_state);
     ovsdb_idl_omit_alert(idl, &ovsrec_interface_col_duplex);
@@ -467,12 +493,12 @@ collect_in_band_managers(const struct ovsrec_open_vswitch *ovs_cfg,
 
         managers = xmalloc(sset_count(&targets) * sizeof *managers);
         SSET_FOR_EACH (target, &targets) {
-            struct sockaddr_in *sin = &managers[n_managers];
+            struct sockaddr_storage ss;
 
-            if (stream_parse_target_with_default_port(target,
-                                                      OVSDB_OLD_PORT,
-                                                      sin)) {
-                n_managers++;
+            if (stream_parse_target_with_default_port(target, OVSDB_OLD_PORT,
+                                                      &ss)
+                && ss.ss_family == AF_INET) {
+                managers[n_managers++] = *(struct sockaddr_in *) &ss;
             }
         }
     }
@@ -495,13 +521,12 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
     ofproto_set_flow_limit(smap_get_int(&ovs_cfg->other_config, "flow-limit",
                                         OFPROTO_FLOW_LIMIT_DEFAULT));
+    ofproto_set_max_idle(smap_get_int(&ovs_cfg->other_config, "max-idle",
+                                      OFPROTO_MAX_IDLE_DEFAULT));
 
     ofproto_set_threads(
         smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0),
         smap_get_int(&ovs_cfg->other_config, "n-revalidator-threads", 0));
-
-    bridge_configure_flow_miss_model(smap_get(&ovs_cfg->other_config,
-                                              "force-miss-model"));
 
     /* Destroy "struct bridge"s, "struct port"s, and "struct iface"s according
      * to 'ovs_cfg', with only very minimal configuration otherwise.
@@ -579,7 +604,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
                 iface_set_ofport(iface->cfg, iface->ofp_port);
                 iface_configure_cfm(iface);
                 iface_configure_qos(iface, port->cfg->qos);
-                iface_set_mac(iface);
+                iface_set_mac(br, port, iface);
                 ofproto_port_set_bfd(br->ofproto, iface->ofp_port,
                                      &iface->cfg->bfd);
             }
@@ -594,13 +619,6 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
         bridge_configure_stp(br);
         bridge_configure_tables(br);
         bridge_configure_dp_desc(br);
-
-        if (smap_get(&br->cfg->other_config, "flow-eviction-threshold")) {
-            /* XXX: Remove this warning message eventually. */
-            VLOG_WARN_ONCE("As of June 2013, flow-eviction-threshold has been"
-                           " moved to the Open_vSwitch table.  Ignoring its"
-                           " setting in the bridge table.");
-        }
     }
     free(managers);
 
@@ -657,6 +675,9 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
     struct ofproto_port ofproto_port;
     struct ofproto_port_dump dump;
 
+    struct sset ofproto_ports;
+    struct port *port, *port_next;
+
     /* List of "ofp_port"s to delete.  We make a list instead of deleting them
      * right away because ofproto implementations aren't necessarily able to
      * iterate through a changing list of ports in an entirely robust way. */
@@ -666,10 +687,20 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
 
     del = NULL;
     n = allocated = 0;
+    sset_init(&ofproto_ports);
 
+    /* Main task: Iterate over the ports in 'br->ofproto' and remove the ports
+     * that are not configured in the database.  (This commonly happens when
+     * ports have been deleted, e.g. with "ovs-vsctl del-port".)
+     *
+     * Side tasks: Reconfigure the ports that are still in 'br'.  Delete ports
+     * that have the wrong OpenFlow port number (and arrange to add them back
+     * with the correct OpenFlow port number). */
     OFPROTO_PORT_FOR_EACH (&ofproto_port, &dump, br->ofproto) {
         ofp_port_t requested_ofp_port;
         struct iface *iface;
+
+        sset_add(&ofproto_ports, ofproto_port.name);
 
         iface = iface_lookup(br, ofproto_port.name);
         if (!iface) {
@@ -736,11 +767,37 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
         iface_destroy(iface);
         del = add_ofp_port(ofproto_port.ofp_port, del, &n, &allocated);
     }
-
     for (i = 0; i < n; i++) {
         ofproto_port_del(br->ofproto, del[i]);
     }
     free(del);
+
+    /* Iterate over this module's idea of interfaces in 'br'.  Remove any ports
+     * that we didn't see when we iterated through the datapath, i.e. ports
+     * that disappeared underneath use.  This is an unusual situation, but it
+     * can happen in some cases:
+     *
+     *     - An admin runs a command like "ovs-dpctl del-port" (which is a bad
+     *       idea but could happen).
+     *
+     *     - The port represented a device that disappeared, e.g. a tuntap
+     *       device destroyed via "tunctl -d", a physical Ethernet device
+     *       whose module was just unloaded via "rmmod", or a virtual NIC for a
+     *       VM whose VM was just terminated. */
+    HMAP_FOR_EACH_SAFE (port, port_next, hmap_node, &br->ports) {
+        struct iface *iface, *iface_next;
+
+        LIST_FOR_EACH_SAFE (iface, iface_next, port_elem, &port->ifaces) {
+            if (!sset_contains(&ofproto_ports, iface->name)) {
+                iface_destroy__(iface);
+            }
+        }
+
+        if (list_is_empty(&port->ifaces)) {
+            port_destroy(port);
+        }
+    }
+    sset_destroy(&ofproto_ports);
 }
 
 static void
@@ -829,15 +886,16 @@ port_configure(struct port *port)
             s.vlan_mode = PORT_VLAN_NATIVE_UNTAGGED;
         } else {
             /* This "can't happen" because ovsdb-server should prevent it. */
-            VLOG_ERR("unknown VLAN mode %s", cfg->vlan_mode);
+            VLOG_WARN("port %s: unknown VLAN mode %s, falling "
+                      "back to trunk mode", port->name, cfg->vlan_mode);
             s.vlan_mode = PORT_VLAN_TRUNK;
         }
     } else {
         if (s.vlan >= 0) {
             s.vlan_mode = PORT_VLAN_ACCESS;
             if (cfg->n_trunks) {
-                VLOG_ERR("port %s: ignoring trunks in favor of implicit vlan",
-                         port->name);
+                VLOG_WARN("port %s: ignoring trunks in favor of implicit vlan",
+                          port->name);
             }
         } else {
             s.vlan_mode = PORT_VLAN_TRUNK;
@@ -877,22 +935,6 @@ port_configure(struct port *port)
     free(s.slaves);
     free(s.trunks);
     free(s.lacp_slaves);
-}
-
-static void
-bridge_configure_flow_miss_model(const char *opt)
-{
-    enum ofproto_flow_miss_model model = OFPROTO_HANDLE_MISS_AUTO;
-
-    if (opt) {
-        if (!strcmp(opt, "with-facets")) {
-            model = OFPROTO_HANDLE_MISS_WITH_FACETS;
-        } else if (!strcmp(opt, "without-facets")) {
-            model = OFPROTO_HANDLE_MISS_WITHOUT_FACETS;
-        }
-    }
-
-    ofproto_set_flow_miss_model(model);
 }
 
 /* Pick local port hardware address and datapath ID for 'br'. */
@@ -1326,7 +1368,7 @@ bridge_configure_stp(struct bridge *br)
             }
         }
 
-        if (bitmap_scan(port_num_bitmap, 0, STP_MAX_PORTS) != STP_MAX_PORTS
+        if (bitmap_scan(port_num_bitmap, 1, 0, STP_MAX_PORTS) != STP_MAX_PORTS
                     && port_num_counter) {
             VLOG_ERR("bridge %s: must manually configure all STP port "
                      "IDs or none, disabling", br->name);
@@ -1403,10 +1445,8 @@ iface_set_netdev_config(const struct ovsrec_interface *iface_cfg,
     return netdev_set_config(netdev, &iface_cfg->options);
 }
 
-/* Opens a network device for 'if_cfg' and configures it.  If '*ofp_portp'
- * is OFPP_NONE, adds the network device to br->ofproto and stores the OpenFlow
- * port number in '*ofp_portp'; otherwise leaves br->ofproto and '*ofp_portp'
- * untouched.
+/* Opens a network device for 'if_cfg' and configures it.  Adds the network
+ * device to br->ofproto and stores the OpenFlow port number in '*ofp_portp'.
  *
  * If successful, returns 0 and stores the network device in '*netdevp'.  On
  * failure, returns a positive errno value and stores NULL in '*netdevp'. */
@@ -1448,8 +1488,7 @@ iface_do_create(const struct bridge *br,
     VLOG_INFO("bridge %s: added interface %s on port %d",
               br->name, iface_cfg->name, *ofp_portp);
 
-    if ((port_cfg->vlan_mode && !strcmp(port_cfg->vlan_mode, "splinter"))
-        || iface_is_internal(iface_cfg, br->cfg)) {
+    if (port_cfg->vlan_mode && !strcmp(port_cfg->vlan_mode, "splinter")) {
         netdev_turn_flags_on(netdev, NETDEV_UP, NULL);
     }
 
@@ -1508,7 +1547,6 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
 
     /* Populate initial status in database. */
     iface_refresh_stats(iface);
-    iface_refresh_status(iface);
 
     /* Add bond fake iface if necessary. */
     if (port_is_bond_fake_iface(port)) {
@@ -1571,30 +1609,14 @@ bridge_configure_mac_table(struct bridge *br)
 }
 
 static void
-bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
-                          struct iface **hw_addr_iface)
+find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
+                   const struct port *fake_br, struct iface **hw_addr_iface)
 {
     struct hmapx mirror_output_ports;
-    const char *hwaddr;
     struct port *port;
     bool found_addr = false;
     int error;
     int i;
-
-    *hw_addr_iface = NULL;
-
-    /* Did the user request a particular MAC? */
-    hwaddr = smap_get(&br->cfg->other_config, "hwaddr");
-    if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
-        if (eth_addr_is_multicast(ea)) {
-            VLOG_ERR("bridge %s: cannot set MAC address to multicast "
-                     "address "ETH_ADDR_FMT, br->name, ETH_ADDR_ARGS(ea));
-        } else if (eth_addr_is_zero(ea)) {
-            VLOG_ERR("bridge %s: cannot set MAC address to zero", br->name);
-        } else {
-            return;
-        }
-    }
 
     /* Mirror output ports don't participate in picking the local hardware
      * address.  ofproto can't help us find out whether a given port is a
@@ -1651,6 +1673,16 @@ bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
                 continue;
             }
 
+            /* For fake bridges we only choose from ports with the same tag */
+            if (fake_br && fake_br->cfg && fake_br->cfg->tag) {
+                if (!port->cfg->tag) {
+                    continue;
+                }
+                if (*port->cfg->tag != *fake_br->cfg->tag) {
+                    continue;
+                }
+            }
+
             /* Grab MAC. */
             error = netdev_get_etheraddr(iface->netdev, iface_ea);
             if (error) {
@@ -1677,6 +1709,30 @@ bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
     }
 
     hmapx_destroy(&mirror_output_ports);
+}
+
+static void
+bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
+                          struct iface **hw_addr_iface)
+{
+    const char *hwaddr;
+    *hw_addr_iface = NULL;
+
+    /* Did the user request a particular MAC? */
+    hwaddr = smap_get(&br->cfg->other_config, "hwaddr");
+    if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
+        if (eth_addr_is_multicast(ea)) {
+            VLOG_ERR("bridge %s: cannot set MAC address to multicast "
+                     "address "ETH_ADDR_FMT, br->name, ETH_ADDR_ARGS(ea));
+        } else if (eth_addr_is_zero(ea)) {
+            VLOG_ERR("bridge %s: cannot set MAC address to zero", br->name);
+        } else {
+            return;
+        }
+    }
+
+    /* Find a local hw address */
+    find_local_hw_addr(br, ea, NULL, hw_addr_iface);
 }
 
 /* Choose and returns the datapath ID for bridge 'br' given that the bridge
@@ -1748,21 +1804,27 @@ dpid_from_hash(const void *data, size_t n)
 }
 
 static void
-iface_refresh_status(struct iface *iface)
+iface_refresh_netdev_status(struct iface *iface)
 {
     struct smap smap;
 
     enum netdev_features current;
-    int64_t bps;
-    int mtu;
-    int64_t mtu_64;
+    enum netdev_flags flags;
+    const char *link_state;
     uint8_t mac[ETH_ADDR_LEN];
-    int64_t ifindex64;
-    int error;
+    int64_t bps, mtu_64, ifindex64, link_resets;
+    int mtu, error;
 
     if (iface_is_synthetic(iface)) {
         return;
     }
+
+    if (iface->change_seq == netdev_get_change_seq(iface->netdev)
+        && !force_status_commit) {
+        return;
+    }
+
+    iface->change_seq = netdev_get_change_seq(iface->netdev);
 
     smap_init(&smap);
 
@@ -1773,6 +1835,21 @@ iface_refresh_status(struct iface *iface)
     }
 
     smap_destroy(&smap);
+
+    error = netdev_get_flags(iface->netdev, &flags);
+    if (!error) {
+        const char *state = flags & NETDEV_UP ? "up" : "down";
+
+        ovsrec_interface_set_admin_state(iface->cfg, state);
+    } else {
+        ovsrec_interface_set_admin_state(iface->cfg, NULL);
+    }
+
+    link_state = netdev_get_carrier(iface->netdev) ? "up" : "down";
+    ovsrec_interface_set_link_state(iface->cfg, link_state);
+
+    link_resets = netdev_get_carrier_resets(iface->netdev);
+    ovsrec_interface_set_link_resets(iface->cfg, &link_resets, 1);
 
     error = netdev_get_features(iface->netdev, &current, NULL, NULL, NULL);
     bps = !error ? netdev_features_to_bps(current, 0) : 0;
@@ -1813,6 +1890,37 @@ iface_refresh_status(struct iface *iface)
     ovsrec_interface_set_ifindex(iface->cfg, &ifindex64, 1);
 }
 
+static void
+iface_refresh_ofproto_status(struct iface *iface)
+{
+    struct smap smap;
+    int current, error;
+
+    if (iface_is_synthetic(iface)) {
+        return;
+    }
+
+    current = ofproto_port_is_lacp_current(iface->port->bridge->ofproto,
+                                           iface->ofp_port);
+    if (current >= 0) {
+        bool bl = current;
+        ovsrec_interface_set_lacp_current(iface->cfg, &bl, 1);
+    } else {
+        ovsrec_interface_set_lacp_current(iface->cfg, NULL, 0);
+    }
+
+    iface_refresh_cfm_stats(iface);
+
+    smap_init(&smap);
+    error = ofproto_port_get_bfd_status(iface->port->bridge->ofproto,
+                                        iface->ofp_port, force_status_commit,
+                                        &smap);
+    if (error >= 0) {
+        ovsrec_interface_set_bfd_status(iface->cfg, &smap);
+    }
+    smap_destroy(&smap);
+}
+
 /* Writes 'iface''s CFM statistics to the database. 'iface' must not be
  * synthetic. */
 static void
@@ -1820,9 +1928,14 @@ iface_refresh_cfm_stats(struct iface *iface)
 {
     const struct ovsrec_interface *cfg = iface->cfg;
     struct ofproto_cfm_status status;
+    int error;
 
-    if (!ofproto_port_get_cfm_status(iface->port->bridge->ofproto,
-                                    iface->ofp_port, &status)) {
+    error = ofproto_port_get_cfm_status(iface->port->bridge->ofproto,
+                                        iface->ofp_port, force_status_commit,
+                                        &status);
+    if (error < 0) {
+        /* Do nothing if there is no status change since last update. */
+    } else if (error > 0) {
         ovsrec_interface_set_cfm_fault(cfg, NULL, 0);
         ovsrec_interface_set_cfm_fault_status(cfg, NULL, 0);
         ovsrec_interface_set_cfm_remote_opstate(cfg, NULL);
@@ -2122,142 +2235,6 @@ refresh_controller_status(void)
     ofproto_free_ofproto_controller_info(&info);
 }
 
-/* "Instant" stats.
- *
- * Some information in the database must be kept as up-to-date as possible to
- * allow controllers to respond rapidly to network outages.  We call these
- * statistics "instant" stats.
- *
- * We wish to update these statistics every INSTANT_INTERVAL_MSEC milliseconds,
- * assuming that they've changed.  The only means we have to determine whether
- * they have changed are:
- *
- *   - Try to commit changes to the database.  If nothing changed, then
- *     ovsdb_idl_txn_commit() returns TXN_UNCHANGED, otherwise some other
- *     value.
- *
- *   - instant_stats_run() is called late in the run loop, after anything that
- *     might change any of the instant stats.
- *
- * We use these two facts together to avoid waking the process up every
- * INSTANT_INTERVAL_MSEC whether there is any change or not.
- */
-
-/* Minimum interval between writing updates to the instant stats to the
- * database. */
-#define INSTANT_INTERVAL_MSEC 100
-
-/* Current instant stats database transaction, NULL if there is no ongoing
- * transaction. */
-static struct ovsdb_idl_txn *instant_txn;
-
-/* Next time (in msec on monotonic clock) at which we will update the instant
- * stats.  */
-static long long int instant_next_txn = LLONG_MIN;
-
-/* True if the run loop has run since we last saw that the instant stats were
- * unchanged, that is, this is true if we need to wake up at 'instant_next_txn'
- * to refresh the instant stats. */
-static bool instant_stats_could_have_changed;
-
-static void
-instant_stats_run(void)
-{
-    enum ovsdb_idl_txn_status status;
-
-    instant_stats_could_have_changed = true;
-
-    if (!instant_txn) {
-        struct bridge *br;
-        uint64_t seq;
-
-        if (time_msec() < instant_next_txn) {
-            return;
-        }
-        instant_next_txn = time_msec() + INSTANT_INTERVAL_MSEC;
-
-        seq = seq_read(connectivity_seq_get());
-        if (seq == connectivity_seqno) {
-            return;
-        }
-        connectivity_seqno = seq;
-
-        instant_txn = ovsdb_idl_txn_create(idl);
-        HMAP_FOR_EACH (br, node, &all_bridges) {
-            struct iface *iface;
-            struct port *port;
-
-            br_refresh_stp_status(br);
-
-            HMAP_FOR_EACH (port, hmap_node, &br->ports) {
-                port_refresh_stp_status(port);
-            }
-
-            HMAP_FOR_EACH (iface, name_node, &br->iface_by_name) {
-                enum netdev_flags flags;
-                struct smap smap;
-                const char *link_state;
-                int64_t link_resets;
-                int current, error;
-
-                if (iface_is_synthetic(iface)) {
-                    continue;
-                }
-
-                current = ofproto_port_is_lacp_current(br->ofproto,
-                                                       iface->ofp_port);
-                if (current >= 0) {
-                    bool bl = current;
-                    ovsrec_interface_set_lacp_current(iface->cfg, &bl, 1);
-                } else {
-                    ovsrec_interface_set_lacp_current(iface->cfg, NULL, 0);
-                }
-
-                error = netdev_get_flags(iface->netdev, &flags);
-                if (!error) {
-                    const char *state = flags & NETDEV_UP ? "up" : "down";
-                    ovsrec_interface_set_admin_state(iface->cfg, state);
-                } else {
-                    ovsrec_interface_set_admin_state(iface->cfg, NULL);
-                }
-
-                link_state = netdev_get_carrier(iface->netdev) ? "up" : "down";
-                ovsrec_interface_set_link_state(iface->cfg, link_state);
-
-                link_resets = netdev_get_carrier_resets(iface->netdev);
-                ovsrec_interface_set_link_resets(iface->cfg, &link_resets, 1);
-
-                iface_refresh_cfm_stats(iface);
-
-                smap_init(&smap);
-                ofproto_port_get_bfd_status(br->ofproto, iface->ofp_port,
-                                            &smap);
-                ovsrec_interface_set_bfd_status(iface->cfg, &smap);
-                smap_destroy(&smap);
-            }
-        }
-    }
-
-    status = ovsdb_idl_txn_commit(instant_txn);
-    if (status != TXN_INCOMPLETE) {
-        ovsdb_idl_txn_destroy(instant_txn);
-        instant_txn = NULL;
-    }
-    if (status == TXN_UNCHANGED) {
-        instant_stats_could_have_changed = false;
-    }
-}
-
-static void
-instant_stats_wait(void)
-{
-    if (instant_txn) {
-        ovsdb_idl_txn_wait(instant_txn);
-    } else if (instant_stats_could_have_changed) {
-        poll_timer_wait_until(instant_next_txn);
-    }
-}
-
 static void
 bridge_run__(void)
 {
@@ -2287,6 +2264,7 @@ bridge_run(void)
 
     bool vlan_splinters_changed;
     struct bridge *br;
+    int stats_interval;
 
     ovsrec_open_vswitch_init(&null_cfg);
 
@@ -2392,8 +2370,22 @@ bridge_run(void)
         }
     }
 
+    /* Statistics update interval should always be greater than or equal to
+     * 5000 ms. */
+    if (cfg) {
+        stats_interval = MAX(smap_get_int(&cfg->other_config,
+                                          "stats-update-interval",
+                                          5000), 5000);
+    } else {
+        stats_interval = 5000;
+    }
+    if (stats_timer_interval != stats_interval) {
+        stats_timer_interval = stats_interval;
+        stats_timer = LLONG_MIN;
+    }
+
     /* Refresh interface and mirror stats if necessary. */
-    if (time_msec() >= iface_stats_timer) {
+    if (time_msec() >= stats_timer) {
         if (cfg) {
             struct ovsdb_idl_txn *txn;
 
@@ -2407,7 +2399,6 @@ bridge_run(void)
 
                     LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
                         iface_refresh_stats(iface);
-                        iface_refresh_status(iface);
                     }
 
                     port_refresh_stp_stats(port);
@@ -2423,11 +2414,58 @@ bridge_run(void)
             ovsdb_idl_txn_destroy(txn); /* XXX */
         }
 
-        iface_stats_timer = time_msec() + IFACE_STATS_INTERVAL;
+        stats_timer = time_msec() + stats_timer_interval;
+    }
+
+    if (!status_txn) {
+        uint64_t seq;
+
+        /* Check the need to update status. */
+        seq = seq_read(connectivity_seq_get());
+        if (seq != connectivity_seqno || force_status_commit) {
+            connectivity_seqno = seq;
+            status_txn = ovsdb_idl_txn_create(idl);
+            HMAP_FOR_EACH (br, node, &all_bridges) {
+                struct port *port;
+
+                br_refresh_stp_status(br);
+                HMAP_FOR_EACH (port, hmap_node, &br->ports) {
+                    struct iface *iface;
+
+                    port_refresh_stp_status(port);
+                    LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
+                        iface_refresh_netdev_status(iface);
+                        iface_refresh_ofproto_status(iface);
+                    }
+                }
+            }
+        }
+    }
+
+    if (status_txn) {
+        enum ovsdb_idl_txn_status status;
+
+        status = ovsdb_idl_txn_commit(status_txn);
+
+        /* If the transaction is incomplete or fails, 'status_txn'
+         * needs to be committed next iteration of bridge_run() even if
+         * connectivity or netdev sequence numbers do not change. */
+        if (status == TXN_SUCCESS || status == TXN_UNCHANGED)
+        {
+            force_status_commit = false;
+        } else {
+            force_status_commit = true;
+        }
+
+        /* Do not destroy "status_txn" if the transaction is
+         * "TXN_INCOMPLETE". */
+        if (status != TXN_INCOMPLETE) {
+            ovsdb_idl_txn_destroy(status_txn);
+            status_txn = NULL;
+        }
     }
 
     run_system_stats();
-    instant_stats_run();
 }
 
 void
@@ -2454,11 +2492,21 @@ bridge_wait(void)
         HMAP_FOR_EACH (br, node, &all_bridges) {
             ofproto_wait(br->ofproto);
         }
-        poll_timer_wait_until(iface_stats_timer);
+
+        poll_timer_wait_until(stats_timer);
+    }
+
+    /* If the status database transaction is 'TXN_INCOMPLETE' or is
+     * unsuccessful, register a timeout in 'STATUS_CHECK_AGAIN_MSEC'.  Else,
+     * wait on the global connectivity sequence number.  Note, this also helps
+     * batch multiple status changes into one transaction. */
+    if (force_status_commit) {
+        poll_timer_wait_until(time_msec() + STATUS_CHECK_AGAIN_MSEC);
+    } else {
+        seq_wait(connectivity_seq_get(), connectivity_seqno);
     }
 
     system_stats_wait();
-    instant_stats_wait();
 }
 
 /* Adds some memory usage statistics for bridges into 'usage', for use with
@@ -2806,6 +2854,7 @@ bridge_ofproto_controller_for_mgmt(const struct bridge *br,
     oc->rate_limit = 0;
     oc->burst_limit = 0;
     oc->enable_async_msgs = true;
+    oc->dscp = 0;
 }
 
 /* Converts ovsrec_controller 'c' into an ofproto_controller in 'oc'.  */
@@ -2846,7 +2895,8 @@ bridge_configure_local_iface_netdev(struct bridge *br,
 
     /* If there's no local interface or no IP address, give up. */
     local_iface = iface_from_ofp_port(br, OFPP_LOCAL);
-    if (!local_iface || !c->local_ip || !inet_aton(c->local_ip, &ip)) {
+    if (!local_iface || !c->local_ip
+        || !inet_pton(AF_INET, c->local_ip, &ip)) {
         return;
     }
 
@@ -2856,7 +2906,7 @@ bridge_configure_local_iface_netdev(struct bridge *br,
 
     /* Configure the IP address and netmask. */
     if (!c->local_netmask
-        || !inet_aton(c->local_netmask, &mask)
+        || !inet_pton(AF_INET, c->local_netmask, &mask)
         || !mask.s_addr) {
         mask.s_addr = guess_netmask(ip.s_addr);
     }
@@ -2867,7 +2917,7 @@ bridge_configure_local_iface_netdev(struct bridge *br,
 
     /* Configure the default gateway. */
     if (c->local_gateway
-        && inet_aton(c->local_gateway, &gateway)
+        && inet_pton(AF_INET, c->local_gateway, &gateway)
         && gateway.s_addr) {
         if (!netdev_add_router(netdev, gateway)) {
             VLOG_INFO("bridge %s: configured gateway "IP_FMT,
@@ -3127,8 +3177,6 @@ bridge_configure_dp_desc(struct bridge *br)
 }
 
 /* Port functions. */
-
-static void iface_destroy__(struct iface *);
 
 static struct port *
 port_create(struct bridge *br, const struct ovsrec_port *cfg)
@@ -3491,21 +3539,33 @@ iface_from_ofp_port(const struct bridge *br, ofp_port_t ofp_port)
 /* Set Ethernet address of 'iface', if one is specified in the configuration
  * file. */
 static void
-iface_set_mac(struct iface *iface)
+iface_set_mac(const struct bridge *br, const struct port *port, struct iface *iface)
 {
-    uint8_t ea[ETH_ADDR_LEN];
+    uint8_t ea[ETH_ADDR_LEN], *mac = NULL;
+    struct iface *hw_addr_iface;
 
-    if (!strcmp(iface->type, "internal")
-        && iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, ea)) {
+    if (strcmp(iface->type, "internal")) {
+        return;
+    }
+
+    if (iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, ea)) {
+        mac = ea;
+    } else if (port->cfg->fake_bridge) {
+        /* Fake bridge and no MAC set in the configuration. Pick a local one. */
+        find_local_hw_addr(br, ea, port, &hw_addr_iface);
+        mac = ea;
+    }
+
+    if (mac) {
         if (iface->ofp_port == OFPP_LOCAL) {
             VLOG_ERR("interface %s: ignoring mac in Interface record "
                      "(use Bridge record to set local port's mac)",
                      iface->name);
-        } else if (eth_addr_is_multicast(ea)) {
+        } else if (eth_addr_is_multicast(mac)) {
             VLOG_ERR("interface %s: cannot set MAC to multicast address",
                      iface->name);
         } else {
-            int error = netdev_set_etheraddr(iface->netdev, ea);
+            int error = netdev_set_etheraddr(iface->netdev, mac);
             if (error) {
                 VLOG_ERR("interface %s: setting MAC failed (%s)",
                          iface->name, ovs_strerror(error));
@@ -3621,8 +3681,8 @@ iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
     }
 
     if (iface->ofp_port != OFPP_NONE) {
-        const struct ofproto_port_queue *port_queues = queues_buf.data;
-        size_t n_queues = queues_buf.size / sizeof *port_queues;
+        const struct ofproto_port_queue *port_queues = ofpbuf_data(&queues_buf);
+        size_t n_queues = ofpbuf_size(&queues_buf) / sizeof *port_queues;
 
         ofproto_port_set_queues(iface->port->bridge->ofproto, iface->ofp_port,
                                 port_queues, n_queues);
@@ -4082,7 +4142,7 @@ collect_splinter_vlans(const struct ovsrec_open_vswitch *ovs_cfg)
 
     sset_destroy(&splinter_ifaces);
 
-    if (bitmap_scan(splinter_vlans, 0, 4096) >= 4096) {
+    if (bitmap_scan(splinter_vlans, 1, 0, 4096) >= 4096) {
         free(splinter_vlans);
         return NULL;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@
 #include "unixctl.h"
 #include "util.h"
 #include "vlog.h"
+#include "ovstest.h"
 
 static void usage(void) NO_RETURN;
 static void parse_options(int argc, char *argv[]);
@@ -161,13 +162,13 @@ print_netflow(struct ofpbuf *buf)
         putchar('\n');
     }
 
-    if (buf->size) {
-        printf("%"PRIuSIZE" extra bytes after last record\n", buf->size);
+    if (ofpbuf_size(buf)) {
+        printf("%"PRIu32" extra bytes after last record\n", ofpbuf_size(buf));
     }
 }
 
-int
-main(int argc, char *argv[])
+static void
+test_netflow_main(int argc, char *argv[])
 {
     struct unixctl_server *server;
     enum { MAX_RECV = 1500 };
@@ -213,7 +214,7 @@ main(int argc, char *argv[])
 
         ofpbuf_clear(&buf);
         do {
-            retval = read(sock, buf.data, buf.allocated);
+            retval = read(sock, ofpbuf_data(&buf), buf.allocated);
         } while (retval < 0 && errno == EINTR);
         if (retval > 0) {
             ofpbuf_put_uninit(&buf, retval);
@@ -232,8 +233,6 @@ main(int argc, char *argv[])
         unixctl_server_wait(server);
         poll_block();
     }
-
-    return 0;
 }
 
 static void
@@ -298,3 +297,5 @@ test_netflow_exit(struct unixctl_conn *conn,
     *exiting = true;
     unixctl_command_reply(conn, NULL);
 }
+
+OVSTEST_REGISTER("test-netflow", test_netflow_main);

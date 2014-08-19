@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2010, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,12 +48,13 @@ VLOG_DEFINE_THIS_MODULE(system_stats);
 
 /* #ifdefs make it a pain to maintain code: you have to try to build both ways.
  * Thus, this file tries to compile as much of the code as possible regardless
- * of the target, by writing "if (LINUX_DATAPATH)" instead of "#ifdef
- * __linux__" where this is possible. */
-#ifdef LINUX_DATAPATH
+ * of the target, by writing "if (LINUX)" instead of "#ifdef __linux__" where
+ * this is possible. */
+#ifdef __linux__
+#define LINUX 1
 #include <asm/param.h>
 #else
-#define LINUX_DATAPATH 0
+#define LINUX 0
 #endif
 
 static void
@@ -84,7 +85,14 @@ get_page_size(void)
     static unsigned int cached;
 
     if (!cached) {
+#ifndef _WIN32
         long int value = sysconf(_SC_PAGESIZE);
+#else
+        long int value;
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        value = sysinfo.dwPageSize;
+#endif
         if (value >= 0) {
             cached = value;
         }
@@ -96,7 +104,7 @@ get_page_size(void)
 static void
 get_memory_stats(struct smap *stats)
 {
-    if (!LINUX_DATAPATH) {
+    if (!LINUX) {
         unsigned int pagesize = get_page_size();
 #ifdef _SC_PHYS_PAGES
         long int phys_pages = sysconf(_SC_PHYS_PAGES);
@@ -110,12 +118,20 @@ get_memory_stats(struct smap *stats)
 #endif
         int mem_total, mem_used;
 
+#ifndef _WIN32
         if (pagesize <= 0 || phys_pages <= 0 || avphys_pages <= 0) {
             return;
         }
 
         mem_total = phys_pages * (pagesize / 1024);
         mem_used = (phys_pages - avphys_pages) * (pagesize / 1024);
+#else
+        MEMORYSTATUS memory_status;
+        GlobalMemoryStatus(&memory_status);
+
+        mem_total = memory_status.dwTotalPhys;
+        mem_used = memory_status.dwTotalPhys - memory_status.dwAvailPhys;
+#endif
         smap_add_format(stats, "memory", "%d,%d", mem_total, mem_used);
     } else {
         static const char file_name[] = "/proc/meminfo";
@@ -174,7 +190,7 @@ get_boot_time(void)
     static long long int cache_expiration = LLONG_MIN;
     static long long int boot_time;
 
-    ovs_assert(LINUX_DATAPATH);
+    ovs_assert(LINUX);
 
     if (time_msec() >= cache_expiration) {
         static const char stat_file[] = "/proc/stat";
@@ -207,7 +223,7 @@ get_boot_time(void)
 static unsigned long long int
 ticks_to_ms(unsigned long long int ticks)
 {
-    ovs_assert(LINUX_DATAPATH);
+    ovs_assert(LINUX);
 
 #ifndef USER_HZ
 #define USER_HZ 100
@@ -240,7 +256,7 @@ get_raw_process_info(pid_t pid, struct raw_process_info *raw)
     FILE *stream;
     int n;
 
-    ovs_assert(LINUX_DATAPATH);
+    ovs_assert(LINUX);
 
     sprintf(file_name, "/proc/%lu/stat", (unsigned long int) pid);
     stream = fopen(file_name, "r");
@@ -326,7 +342,7 @@ count_crashes(pid_t pid)
     int crashes = 0;
     FILE *stream;
 
-    ovs_assert(LINUX_DATAPATH);
+    ovs_assert(LINUX);
 
     sprintf(file_name, "/proc/%lu/cmdline", (unsigned long int) pid);
     stream = fopen(file_name, "r");
@@ -369,7 +385,7 @@ get_process_info(pid_t pid, struct process_info *pinfo)
 {
     struct raw_process_info child;
 
-    ovs_assert(LINUX_DATAPATH);
+    ovs_assert(LINUX);
     if (!get_raw_process_info(pid, &child)) {
         return false;
     }
@@ -397,6 +413,7 @@ get_process_info(pid_t pid, struct process_info *pinfo)
 static void
 get_process_stats(struct smap *stats)
 {
+#ifndef _WIN32
     struct dirent *de;
     DIR *dir;
 
@@ -435,7 +452,7 @@ get_process_stats(struct smap *stats)
         key = xasprintf("process_%.*s",
                         (int) (extension - de->d_name), de->d_name);
         if (!smap_get(stats, key)) {
-            if (LINUX_DATAPATH && get_process_info(pid, &pinfo)) {
+            if (LINUX && get_process_info(pid, &pinfo)) {
                 smap_add_format(stats, key, "%lu,%lu,%lld,%d,%lld,%lld",
                                 pinfo.vsz, pinfo.rss, pinfo.cputime,
                                 pinfo.crashes, pinfo.booted, pinfo.uptime);
@@ -447,6 +464,7 @@ get_process_stats(struct smap *stats)
     }
 
     closedir(dir);
+#endif /* _WIN32 */
 }
 
 static void
@@ -524,7 +542,8 @@ system_stats_enable(bool enable)
         ovs_mutex_lock(&mutex);
         if (enable) {
             if (!started) {
-                xpthread_create(NULL, NULL, system_stats_thread_func, NULL);
+                ovs_thread_create("system_stats",
+                                  system_stats_thread_func, NULL);
                 latch_init(&latch);
                 started = true;
             }

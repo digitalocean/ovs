@@ -16,10 +16,12 @@ Upstream Authors (from AUTHORS):
   Andy Hill               hillad@gmail.com
   Andy Southgate          andy.southgate@citrix.com
   Andy Zhou               azhou@nicira.com
+  Anoob Soman             anoob.soman@citrix.com
   Ansis Atteka            aatteka@nicira.com
   Anupam Chanda           achanda@nicira.com
   Arun Sharma             arun.sharma@calsoftinc.com
   Aryan TaheriMonfared    aryan.taherimonfared@uis.no
+  Ashwin Swaminathan      ashwinds@arista.com
   Ben Pfaff               blp@nicira.com
   Brian Kruger            bkruger+ovsdev@gmail.com
   Bruce Davie             bsd@nicira.com
@@ -32,7 +34,10 @@ Upstream Authors (from AUTHORS):
   Dan Wendlandt           dan@nicira.com
   Daniel Hiltgen          daniel@netkine.com
   Daniel Roman            droman@nicira.com
+  Daniele Di Proietto     daniele.di.proietto@gmail.com
+  Daniele Venturino       daniele.venturino@m3s.it
   Danny Kukawka           danny.kukawka@bisect.de
+  Dave Tucker             dave@dtucker.co.uk
   David Erickson          derickso@stanford.edu
   David S. Miller         davem@davemloft.net
   David Yang              davidy@vmware.com
@@ -60,6 +65,8 @@ Upstream Authors (from AUTHORS):
   James P.                roampune@gmail.com
   James Page              james.page@ubuntu.com
   Jarno Rajahalme         jrajahalme@nicira.com
+  Jason Kölker            jason@koelker.net
+  Jasper Capel            jasper@capel.tv
   Jean Tourrilhes         jt@hpl.hp.com
   Jeremy Stribling        strib@nicira.com
   Jesse Gross             jesse@nicira.com
@@ -69,12 +76,16 @@ Upstream Authors (from AUTHORS):
   Jun Nakajima            jun.nakajima@intel.com
   Justin Pettit           jpettit@nicira.com
   Keith Amidon            keith@nicira.com
+  Ken Ajiro               ajiro@mxw.nes.nec.co.jp
+  Kmindg G                kmindg@gmail.com
   Krishna Kondaka         kkondaka@vmware.com
   Kyle Mestery            kmestery@cisco.com
   Leo Alterman            lalterman@nicira.com
   Linda Sun               lsun@vmware.com
+  Lior Neudorfer          lior@guardicore.com
   Lorand Jakab            lojakab@cisco.com
   Luca Giraudo            lgiraudo@nicira.com
+  Luigi Rizzo             rizzo@iet.unipi.it
   Mark Hamilton           mhamilton@nicira.com
   Martin Casado           casado@nicira.com
   Mehak Mahajan           mmahajan@nicira.com
@@ -82,6 +93,7 @@ Upstream Authors (from AUTHORS):
   Natasha Gude            natasha@nicira.com
   Neil McKee              neil.mckee@inmon.com
   Neil Zhu                zhuj@centecnetworks.com
+  Padmanabhan Krishnan    kprad1@yahoo.com
   Paraneetharan Chandrasekaran    paraneetharanc@gmail.com
   Paul Fazzone            pfazzone@nicira.com
   Paul Ingram             paul@nicira.com
@@ -90,6 +102,7 @@ Upstream Authors (from AUTHORS):
   pritesh                 pritesh.kothari@cisco.com
   Pravin B Shelar         pshelar@nicira.com
   Raju Subramanian        rsubramanian@nicira.com
+  Rami Rosen              ramirose@gmail.com
   Ravi Kerur              Ravi.Kerur@telekom.com
   Reid Price              reid@nicira.com
   Remko Tronçon           git@el-tramo.be
@@ -119,6 +132,7 @@ Upstream Authors (from AUTHORS):
   William Fulton
   YAMAMOTO Takashi        yamamoto@valinux.co.jp
   Yasuhito Takamiya       yasuhito@gmail.com
+  yinpeijun               yinpeijun@huawei.com
   Yu Zhiguo               yuzg@cn.fujitsu.com
   ZhengLingyun            konghuarukhr@163.com
   Zoltan Kiss             zoltan.kiss@citrix.com
@@ -133,6 +147,9 @@ Upstream Copyright Holders:
 	and authors listed above.
 	Copyright (c) 2011 Gaetano Catalli
 	Copyright (C) 2000-2003 Geoffrey Wossum (gwossum@acm.org)
+	Copyright (C) 2000 The NetBSD Foundation, Inc.
+	Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
+	Copyright (c) 1982, 1986, 1990, 1993 The Regents of the University of California.
 
 License:
 
@@ -196,6 +213,17 @@ License:
   version 2.
 
 	build-aux/cccl
+
+* The following files are licensed under the 2-clause BSD license.
+
+	lib/getopt_long.c
+	include/windows/getopt.h
+
+* The following files are licensed under the 3-clause BSD-license
+
+	include/windows/netinet/icmp6.h
+	include/windows/netinet/ip6.h
+	lib/strsep.c
 
 * The following components are dual-licensed under the
   GNU General Public License version 2 and the Apache License Version 2.0.

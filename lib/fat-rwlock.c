@@ -25,11 +25,6 @@
 #include "ovs-thread.h"
 #include "random.h"
 
-/* This system's cache line size, in bytes.
- * Being wrong hurts performance but not correctness. */
-#define CACHE_LINE_SIZE 64      /* Correct for most CPUs. */
-BUILD_ASSERT_DECL(IS_POW2(CACHE_LINE_SIZE));
-
 struct fat_rwlock_slot {
     /* Membership in rwlock's list of "struct fat_rwlock_slot"s.
      *
@@ -62,16 +57,6 @@ struct fat_rwlock_slot {
      * Accessed only by the slot's own thread, so no synchronization is
      * needed. */
     unsigned int depth;
-
-    /* To prevent two of these structures from accidentally occupying the same
-     * cache line (causing "false sharing"), we cache-align each of these data
-     * structures.  That requires malloc()ing extra space and throwing away
-     * some space at the beginning, which means that the pointer to this struct
-     * isn't necessarily the pointer to the beginning of the block, and so we
-     * need to retain the original pointer to free later.
-     *
-     * Accessed only by a single thread, so no synchronization is needed. */
-    void *base;                /* Pointer to pass to free() for this block.  */
 };
 
 static void
@@ -82,7 +67,7 @@ free_slot(struct fat_rwlock_slot *slot)
     }
 
     list_remove(&slot->list_node);
-    free(slot->base);
+    free_cacheline(slot);
 }
 
 static void
@@ -129,7 +114,6 @@ static struct fat_rwlock_slot *
 fat_rwlock_get_slot__(struct fat_rwlock *rwlock)
 {
     struct fat_rwlock_slot *slot;
-    void *base;
 
     /* Fast path. */
     slot = ovsthread_getspecific(rwlock->key);
@@ -139,21 +123,7 @@ fat_rwlock_get_slot__(struct fat_rwlock *rwlock)
 
     /* Slow path: create a new slot for 'rwlock' in this thread. */
 
-    /* Allocate room for:
-     *
-     *     - Up to CACHE_LINE_SIZE - 1 bytes before the per-thread, so that
-     *       the start of the slot doesn't potentially share a cache line.
-     *
-     *     - The slot itself.
-     *
-     *     - Space following the slot up to the end of the cache line, so
-     *       that the end of the slot doesn't potentially share a cache
-     *       line. */
-    base = xmalloc((CACHE_LINE_SIZE - 1)
-                   + ROUND_UP(sizeof *slot, CACHE_LINE_SIZE));
-    slot = (void *) ROUND_UP((uintptr_t) base, CACHE_LINE_SIZE);
-
-    slot->base = base;
+    slot = xmalloc_cacheline(sizeof *slot);
     slot->rwlock = rwlock;
     ovs_mutex_init(&slot->mutex);
     slot->depth = 0;

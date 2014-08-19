@@ -1,4 +1,4 @@
-/* Copyright (c) 2013 Nicira, Inc.
+/* Copyright (c) 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include <arpa/inet.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
+#include <sys/socket.h>
 
 #include "byte-order.h"
 #include "connectivity.h"
@@ -30,7 +31,6 @@
 #include "hmap.h"
 #include "list.h"
 #include "netdev.h"
-#include "netlink.h"
 #include "odp-util.h"
 #include "ofpbuf.h"
 #include "ovs-thread.h"
@@ -169,8 +169,10 @@ struct bfd {
 
     uint32_t rmt_disc;            /* bfd.RemoteDiscr. */
 
-    uint8_t eth_dst[ETH_ADDR_LEN];/* Ethernet destination address. */
-    bool eth_dst_set;             /* 'eth_dst' set through database. */
+    uint8_t local_eth_src[ETH_ADDR_LEN]; /* Local eth src address. */
+    uint8_t local_eth_dst[ETH_ADDR_LEN]; /* Local eth dst address. */
+
+    uint8_t rmt_eth_dst[ETH_ADDR_LEN];   /* Remote eth dst address. */
 
     ovs_be32 ip_src;              /* IPv4 source address. */
     ovs_be32 ip_dst;              /* IPv4 destination address. */
@@ -196,13 +198,19 @@ struct bfd {
     int forwarding_override;      /* Manual override of 'forwarding' status. */
 
     atomic_bool check_tnl_key;    /* Verify tunnel key of inbound packets? */
-    atomic_int ref_cnt;
+    struct ovs_refcount ref_cnt;
 
     /* When forward_if_rx is true, bfd_forwarding() will return
      * true as long as there are incoming packets received.
      * Note, forwarding_override still has higher priority. */
     bool forwarding_if_rx;
     long long int forwarding_if_rx_detect_time;
+
+    /* When 'bfd->forwarding_if_rx' is set, at least one bfd control packet
+     * is required to be received every 100 * bfd->cfg_min_rx.  If bfd
+     * control packet is not received within this interval, even if data
+     * packets are received, the bfd->forwarding will still be false. */
+    long long int demand_rx_bfd_time;
 
     /* BFD decay related variables. */
     bool in_decay;                /* True when bfd is in decay. */
@@ -214,6 +222,10 @@ struct bfd {
     long long int decay_detect_time; /* Decay detection time. */
 
     uint64_t flap_count;          /* Counts bfd forwarding flaps. */
+
+    /* True when the variables returned by bfd_get_status() are changed
+     * since last check. */
+    bool status_changed;
 };
 
 static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
@@ -241,6 +253,7 @@ static void bfd_put_details(struct ds *, const struct bfd *)
 static uint64_t bfd_rx_packets(const struct bfd *) OVS_REQUIRES(mutex);
 static void bfd_try_decay(struct bfd *) OVS_REQUIRES(mutex);
 static void bfd_decay_update(struct bfd *) OVS_REQUIRES(mutex);
+static void bfd_status_changed(struct bfd *) OVS_REQUIRES(mutex);
 
 static void bfd_forwarding_if_rx_update(struct bfd *) OVS_REQUIRES(mutex);
 static void bfd_unixctl_show(struct unixctl_conn *, int argc,
@@ -278,6 +291,20 @@ bfd_account_rx(struct bfd *bfd, const struct dpif_flow_stats *stats)
         bfd_forwarding__(bfd);
         ovs_mutex_unlock(&mutex);
     }
+}
+
+/* Returns and resets the 'bfd->status_changed'. */
+bool
+bfd_check_status_change(struct bfd *bfd) OVS_EXCLUDED(mutex)
+{
+    bool ret;
+
+    ovs_mutex_lock(&mutex);
+    ret = bfd->status_changed;
+    bfd->status_changed = false;
+    ovs_mutex_unlock(&mutex);
+
+    return ret;
 }
 
 /* Returns a 'smap' of key value pairs representing the status of 'bfd'
@@ -347,7 +374,7 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
         bfd->diag = DIAG_NONE;
         bfd->min_tx = 1000;
         bfd->mult = 3;
-        atomic_init(&bfd->ref_cnt, 1);
+        ovs_refcount_init(&bfd->ref_cnt);
         bfd->netdev = netdev_ref(netdev);
         bfd->rx_packets = bfd_rx_packets(bfd);
         bfd->in_decay = false;
@@ -363,7 +390,7 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
 
         bfd_set_state(bfd, STATE_DOWN, DIAG_NONE);
 
-        memcpy(bfd->eth_dst, eth_addr_bfd, ETH_ADDR_LEN);
+        bfd_status_changed(bfd);
     }
 
     atomic_store(&bfd->check_tnl_key,
@@ -413,27 +440,39 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
         need_poll = true;
     }
 
-    hwaddr = smap_get(cfg, "bfd_dst_mac");
-    if (hwaddr && eth_addr_from_string(hwaddr, ea) && !eth_addr_is_zero(ea)) {
-        memcpy(bfd->eth_dst, ea, ETH_ADDR_LEN);
-        bfd->eth_dst_set = true;
-    } else if (bfd->eth_dst_set) {
-        memcpy(bfd->eth_dst, eth_addr_bfd, ETH_ADDR_LEN);
-        bfd->eth_dst_set = false;
+    hwaddr = smap_get(cfg, "bfd_local_src_mac");
+    if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
+        memcpy(bfd->local_eth_src, ea, ETH_ADDR_LEN);
+    } else {
+        memset(bfd->local_eth_src, 0, ETH_ADDR_LEN);
+    }
+
+    hwaddr = smap_get(cfg, "bfd_local_dst_mac");
+    if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
+        memcpy(bfd->local_eth_dst, ea, ETH_ADDR_LEN);
+    } else {
+        memset(bfd->local_eth_dst, 0, ETH_ADDR_LEN);
+    }
+
+    hwaddr = smap_get(cfg, "bfd_remote_dst_mac");
+    if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
+        memcpy(bfd->rmt_eth_dst, ea, ETH_ADDR_LEN);
+    } else {
+        memset(bfd->rmt_eth_dst, 0, ETH_ADDR_LEN);
     }
 
     ip_src = smap_get(cfg, "bfd_src_ip");
     if (ip_src && bfd_lookup_ip(ip_src, &in_addr)) {
         memcpy(&bfd->ip_src, &in_addr, sizeof in_addr);
     } else {
-        bfd->ip_src = htonl(0xA9FE0100); /* 169.254.1.0. */
+        bfd->ip_src = htonl(0xA9FE0101); /* 169.254.1.1. */
     }
 
     ip_dst = smap_get(cfg, "bfd_dst_ip");
     if (ip_dst && bfd_lookup_ip(ip_dst, &in_addr)) {
         memcpy(&bfd->ip_dst, &in_addr, sizeof in_addr);
     } else {
-        bfd->ip_dst = htonl(0xA9FE0101); /* 169.254.1.1. */
+        bfd->ip_dst = htonl(0xA9FE0100); /* 169.254.1.0. */
     }
 
     forwarding_if_rx = smap_get_bool(cfg, "forwarding_if_rx", false);
@@ -458,9 +497,7 @@ bfd_ref(const struct bfd *bfd_)
 {
     struct bfd *bfd = CONST_CAST(struct bfd *, bfd_);
     if (bfd) {
-        int orig;
-        atomic_add(&bfd->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
+        ovs_refcount_ref(&bfd->ref_cnt);
     }
     return bfd;
 }
@@ -468,19 +505,14 @@ bfd_ref(const struct bfd *bfd_)
 void
 bfd_unref(struct bfd *bfd) OVS_EXCLUDED(mutex)
 {
-    if (bfd) {
-        int orig;
-
-        atomic_sub(&bfd->ref_cnt, 1, &orig);
-        ovs_assert(orig > 0);
-        if (orig == 1) {
-            ovs_mutex_lock(&mutex);
-            hmap_remove(all_bfds, &bfd->node);
-            netdev_close(bfd->netdev);
-            free(bfd->name);
-            free(bfd);
-            ovs_mutex_unlock(&mutex);
-        }
+    if (bfd && ovs_refcount_unref(&bfd->ref_cnt) == 1) {
+        ovs_mutex_lock(&mutex);
+        bfd_status_changed(bfd);
+        hmap_remove(all_bfds, &bfd->node);
+        netdev_close(bfd->netdev);
+        free(bfd->name);
+        free(bfd);
+        ovs_mutex_unlock(&mutex);
     }
 }
 
@@ -580,8 +612,14 @@ bfd_put_packet(struct bfd *bfd, struct ofpbuf *p,
 
     ofpbuf_reserve(p, 2); /* Properly align after the ethernet header. */
     eth = ofpbuf_put_uninit(p, sizeof *eth);
-    memcpy(eth->eth_src, eth_src, ETH_ADDR_LEN);
-    memcpy(eth->eth_dst, bfd->eth_dst, ETH_ADDR_LEN);
+    memcpy(eth->eth_src,
+           eth_addr_is_zero(bfd->local_eth_src) ? eth_src
+                                                : bfd->local_eth_src,
+           ETH_ADDR_LEN);
+    memcpy(eth->eth_dst,
+           eth_addr_is_zero(bfd->local_eth_dst) ? eth_addr_bfd
+                                                : bfd->local_eth_dst,
+           ETH_ADDR_LEN);
     eth->eth_type = htons(ETH_TYPE_IP);
 
     ip = ofpbuf_put_zeros(p, sizeof *ip);
@@ -637,7 +675,8 @@ bfd_should_process_flow(const struct bfd *bfd_, const struct flow *flow,
     bool check_tnl_key;
 
     memset(&wc->masks.dl_dst, 0xff, sizeof wc->masks.dl_dst);
-    if (bfd->eth_dst_set && memcmp(bfd->eth_dst, flow->dl_dst, ETH_ADDR_LEN)) {
+    if (!eth_addr_is_zero(bfd->rmt_eth_dst)
+        && memcmp(bfd->rmt_eth_dst, flow->dl_dst, ETH_ADDR_LEN)) {
         return false;
     }
 
@@ -663,6 +702,11 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
     enum flags flags;
     uint8_t version;
     struct msg *msg;
+    const uint8_t *l7 = ofpbuf_get_udp_payload(p);
+
+    if (!l7) {
+        return; /* No UDP payload. */
+    }
 
     /* This function is designed to follow section RFC 5880 6.8.6 closely. */
 
@@ -677,11 +721,11 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
         goto out;
     }
 
-    msg = ofpbuf_at(p, (uint8_t *)p->l7 - (uint8_t *)p->data, BFD_PACKET_LEN);
+    msg = ofpbuf_at(p, l7 - (uint8_t *)ofpbuf_data(p), BFD_PACKET_LEN);
     if (!msg) {
         VLOG_INFO_RL(&rl, "%s: Received too-short BFD control message (only "
                      "%"PRIdPTR" bytes long, at least %d required).",
-                     bfd->name, (uint8_t *) ofpbuf_tail(p) - (uint8_t *) p->l7,
+                     bfd->name, (uint8_t *) ofpbuf_tail(p) - l7,
                      BFD_PACKET_LEN);
         goto out;
     }
@@ -753,7 +797,7 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
     }
 
     if (bfd->rmt_state != rmt_state) {
-        seq_change(connectivity_seq_get());
+        bfd_status_changed(bfd);
     }
 
     bfd->rmt_disc = ntohl(msg->my_disc);
@@ -826,6 +870,10 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
     }
     /* XXX: RFC 5880 Section 6.8.6 Demand mode related calculations here. */
 
+    if (bfd->forwarding_if_rx) {
+        bfd->demand_rx_bfd_time = time_msec() + 100 * bfd->cfg_min_rx;
+    }
+
 out:
     bfd_forwarding__(bfd);
     ovs_mutex_unlock(&mutex);
@@ -861,22 +909,25 @@ bfd_set_netdev(struct bfd *bfd, const struct netdev *netdev)
 static bool
 bfd_forwarding__(struct bfd *bfd) OVS_REQUIRES(mutex)
 {
-    long long int time;
+    long long int now = time_msec();
+    bool forwarding_if_rx;
     bool last_forwarding = bfd->last_forwarding;
 
     if (bfd->forwarding_override != -1) {
         return bfd->forwarding_override == 1;
     }
 
-    time = bfd->forwarding_if_rx_detect_time;
-    bfd->last_forwarding = (bfd->state == STATE_UP
-                            || (bfd->forwarding_if_rx && time > time_msec()))
-                            && bfd->rmt_diag != DIAG_PATH_DOWN
-                            && bfd->rmt_diag != DIAG_CPATH_DOWN
-                            && bfd->rmt_diag != DIAG_RCPATH_DOWN;
+    forwarding_if_rx = bfd->forwarding_if_rx
+                       && bfd->forwarding_if_rx_detect_time > now
+                       && bfd->demand_rx_bfd_time > now;
+
+    bfd->last_forwarding = (bfd->state == STATE_UP || forwarding_if_rx)
+                           && bfd->rmt_diag != DIAG_PATH_DOWN
+                           && bfd->rmt_diag != DIAG_CPATH_DOWN
+                           && bfd->rmt_diag != DIAG_RCPATH_DOWN;
     if (bfd->last_forwarding != last_forwarding) {
         bfd->flap_count++;
-        seq_change(connectivity_seq_get());
+        bfd_status_changed(bfd);
     }
     return bfd->last_forwarding;
 }
@@ -885,7 +936,7 @@ bfd_forwarding__(struct bfd *bfd) OVS_REQUIRES(mutex)
 static bool
 bfd_lookup_ip(const char *host_name, struct in_addr *addr)
 {
-    if (!inet_aton(host_name, addr)) {
+    if (!inet_pton(AF_INET, host_name, addr)) {
         VLOG_ERR_RL(&rl, "\"%s\" is not a valid IP address", host_name);
         return false;
     }
@@ -1089,7 +1140,7 @@ bfd_set_state(struct bfd *bfd, enum state state, enum diag diag)
             bfd_decay_update(bfd);
         }
 
-        seq_change(connectivity_seq_get());
+        bfd_status_changed(bfd);
     }
 }
 
@@ -1134,6 +1185,14 @@ bfd_decay_update(struct bfd * bfd) OVS_REQUIRES(mutex)
     bfd->decay_rx_packets = bfd_rx_packets(bfd);
     bfd->decay_rx_ctl = 0;
     bfd->decay_detect_time = MAX(bfd->decay_min_rx, 2000) + time_msec();
+}
+
+/* Records the status change and changes the global connectivity seq. */
+static void
+bfd_status_changed(struct bfd *bfd) OVS_REQUIRES(mutex)
+{
+    seq_change(connectivity_seq_get());
+    bfd->status_changed = true;
 }
 
 static void
@@ -1283,9 +1342,11 @@ bfd_unixctl_set_forwarding_override(struct unixctl_conn *conn, int argc,
             goto out;
         }
         bfd->forwarding_override = forwarding_override;
+        bfd_status_changed(bfd);
     } else {
         HMAP_FOR_EACH (bfd, node, all_bfds) {
             bfd->forwarding_override = forwarding_override;
+            bfd_status_changed(bfd);
         }
     }
 

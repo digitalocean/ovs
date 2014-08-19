@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <poll.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "coverage.h"
@@ -46,6 +46,21 @@
 #include "stream.h"
 #include "timeval.h"
 #include "vlog.h"
+
+#ifdef _WIN32
+/* Ref: https://www.openssl.org/support/faq.html#PROG2
+ * Your application must link against the same version of the Win32 C-Runtime
+ * against which your openssl libraries were linked.  The default version for
+ * OpenSSL is /MD - "Multithreaded DLL". If we compile Open vSwitch with
+ * something other than /MD, instead of re-compiling OpenSSL
+ * toolkit, openssl/applink.c can be #included. Also, it is important
+ * to add CRYPTO_malloc_init prior first call to OpenSSL.
+ *
+ * XXX: The behavior of the following #include when Open vSwitch is
+ * compiled with /MD is not tested. */
+#include <openssl/applink.c>
+#define SHUT_RDWR SD_BOTH
+#endif
 
 VLOG_DEFINE_THIS_MODULE(stream_ssl);
 
@@ -67,6 +82,7 @@ struct ssl_stream
     enum ssl_state state;
     enum session_type type;
     int fd;
+    HANDLE wevent;
     SSL *ssl;
     struct ofpbuf *txbuf;
     unsigned int session_nr;
@@ -183,6 +199,8 @@ static void stream_ssl_set_ca_cert_file__(const char *file_name,
 static void ssl_protocol_cb(int write_p, int version, int content_type,
                             const void *, size_t, SSL *, void *sslv_);
 static bool update_ssl_config(struct ssl_config_file *, const char *file_name);
+static int sock_errno(void);
+static void clear_handle(int fd, HANDLE wevent);
 
 static short int
 want_to_poll_events(int want)
@@ -206,7 +224,7 @@ static int
 new_ssl_stream(const char *name, int fd, enum session_type type,
                enum ssl_state state, struct stream **streamp)
 {
-    struct sockaddr_in local;
+    struct sockaddr_storage local;
     socklen_t local_len = sizeof local;
     struct ssl_stream *sslv;
     SSL *ssl = NULL;
@@ -245,8 +263,9 @@ new_ssl_stream(const char *name, int fd, enum session_type type,
     /* Disable Nagle. */
     retval = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
     if (retval) {
-        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name, ovs_strerror(errno));
-        retval = errno;
+        retval = sock_errno();
+        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name,
+                 sock_strerror(retval));
         goto error;
     }
 
@@ -272,6 +291,11 @@ new_ssl_stream(const char *name, int fd, enum session_type type,
     sslv->state = state;
     sslv->type = type;
     sslv->fd = fd;
+#ifdef _WIN32
+    sslv->wevent = CreateEvent(NULL, FALSE, FALSE, NULL);
+#else
+    sslv->wevent = 0;
+#endif
     sslv->ssl = ssl;
     sslv->txbuf = NULL;
     sslv->rx_want = sslv->tx_want = SSL_NOTHING;
@@ -290,7 +314,7 @@ error:
     if (ssl) {
         SSL_free(ssl);
     }
-    close(fd);
+    closesocket(fd);
     return retval;
 }
 
@@ -500,7 +524,8 @@ ssl_close(struct stream *stream)
     ERR_clear_error();
 
     SSL_free(sslv->ssl);
-    close(sslv->fd);
+    clear_handle(sslv->fd, sslv->wevent);
+    closesocket(sslv->fd);
     free(sslv);
 }
 
@@ -627,14 +652,15 @@ ssl_do_tx(struct stream *stream)
 
     for (;;) {
         int old_state = SSL_get_state(sslv->ssl);
-        int ret = SSL_write(sslv->ssl, sslv->txbuf->data, sslv->txbuf->size);
+        int ret = SSL_write(sslv->ssl,
+                            ofpbuf_data(sslv->txbuf), ofpbuf_size(sslv->txbuf));
         if (old_state != SSL_get_state(sslv->ssl)) {
             sslv->rx_want = SSL_NOTHING;
         }
         sslv->tx_want = SSL_NOTHING;
         if (ret > 0) {
             ofpbuf_pull(sslv->txbuf, ret);
-            if (sslv->txbuf->size == 0) {
+            if (ofpbuf_size(sslv->txbuf) == 0) {
                 return 0;
             }
         } else {
@@ -691,7 +717,8 @@ ssl_run_wait(struct stream *stream)
     struct ssl_stream *sslv = ssl_stream_cast(stream);
 
     if (sslv->tx_want != SSL_NOTHING) {
-        poll_fd_wait(sslv->fd, want_to_poll_events(sslv->tx_want));
+        poll_fd_wait_event(sslv->fd, sslv->wevent,
+                           want_to_poll_events(sslv->tx_want));
     }
 }
 
@@ -707,14 +734,14 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
         } else {
             switch (sslv->state) {
             case STATE_TCP_CONNECTING:
-                poll_fd_wait(sslv->fd, POLLOUT);
+                poll_fd_wait_event(sslv->fd, sslv->wevent, POLLOUT);
                 break;
 
             case STATE_SSL_CONNECTING:
                 /* ssl_connect() called SSL_accept() or SSL_connect(), which
                  * set up the status that we test here. */
-                poll_fd_wait(sslv->fd,
-                             want_to_poll_events(SSL_want(sslv->ssl)));
+                poll_fd_wait_event(sslv->fd, sslv->wevent,
+                                   want_to_poll_events(SSL_want(sslv->ssl)));
                 break;
 
             default:
@@ -725,7 +752,8 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
 
     case STREAM_RECV:
         if (sslv->rx_want != SSL_NOTHING) {
-            poll_fd_wait(sslv->fd, want_to_poll_events(sslv->rx_want));
+            poll_fd_wait_event(sslv->fd, sslv->wevent,
+                               want_to_poll_events(sslv->rx_want));
         } else {
             poll_immediate_wake();
         }
@@ -765,6 +793,7 @@ struct pssl_pstream
 {
     struct pstream pstream;
     int fd;
+    HANDLE wevent;
 };
 
 const struct pstream_class pssl_pstream_class;
@@ -780,9 +809,11 @@ static int
 pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
           uint8_t dscp)
 {
+    char bound_name[SS_NTOP_BUFSIZE + 16];
+    char addrbuf[SS_NTOP_BUFSIZE];
+    struct sockaddr_storage ss;
     struct pssl_pstream *pssl;
-    struct sockaddr_in sin;
-    char bound_name[128];
+    uint16_t port;
     int retval;
     int fd;
 
@@ -791,17 +822,24 @@ pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
         return retval;
     }
 
-    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_OLD_PORT, &sin, dscp);
+    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_OLD_PORT, &ss, dscp);
     if (fd < 0) {
         return -fd;
     }
-    sprintf(bound_name, "pssl:%"PRIu16":"IP_FMT,
-            ntohs(sin.sin_port), IP_ARGS(sin.sin_addr.s_addr));
+
+    port = ss_get_port(&ss);
+    snprintf(bound_name, sizeof bound_name, "ptcp:%"PRIu16":%s",
+             port, ss_format_address(&ss, addrbuf, sizeof addrbuf));
 
     pssl = xmalloc(sizeof *pssl);
     pstream_init(&pssl->pstream, &pssl_pstream_class, bound_name);
-    pstream_set_bound_port(&pssl->pstream, sin.sin_port);
+    pstream_set_bound_port(&pssl->pstream, htons(port));
     pssl->fd = fd;
+#ifdef _WIN32
+    pssl->wevent = CreateEvent(NULL, FALSE, FALSE, NULL);
+#else
+    pssl->wevent = 0;
+#endif
     *pstreamp = &pssl->pstream;
     return 0;
 }
@@ -810,7 +848,8 @@ static void
 pssl_close(struct pstream *pstream)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    close(pssl->fd);
+    clear_handle(pssl->fd, pssl->wevent);
+    closesocket(pssl->fd);
     free(pssl);
 }
 
@@ -818,31 +857,36 @@ static int
 pssl_accept(struct pstream *pstream, struct stream **new_streamp)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    struct sockaddr_in sin;
-    socklen_t sin_len = sizeof sin;
-    char name[128];
+    char name[SS_NTOP_BUFSIZE + 16];
+    char addrbuf[SS_NTOP_BUFSIZE];
+    struct sockaddr_storage ss;
+    socklen_t ss_len = sizeof ss;
     int new_fd;
     int error;
 
-    new_fd = accept(pssl->fd, (struct sockaddr *) &sin, &sin_len);
+    new_fd = accept(pssl->fd, (struct sockaddr *) &ss, &ss_len);
     if (new_fd < 0) {
-        error = errno;
+        error = sock_errno();
+#ifdef _WIN32
+        if (error == WSAEWOULDBLOCK) {
+            error = EAGAIN;
+        }
+#endif
         if (error != EAGAIN) {
-            VLOG_DBG_RL(&rl, "accept: %s", ovs_strerror(error));
+            VLOG_DBG_RL(&rl, "accept: %s", sock_strerror(error));
         }
         return error;
     }
 
     error = set_nonblocking(new_fd);
     if (error) {
-        close(new_fd);
+        closesocket(new_fd);
         return error;
     }
 
-    sprintf(name, "ssl:"IP_FMT, IP_ARGS(sin.sin_addr.s_addr));
-    if (sin.sin_port != htons(OFP_OLD_PORT)) {
-        sprintf(strchr(name, '\0'), ":%"PRIu16, ntohs(sin.sin_port));
-    }
+    snprintf(name, sizeof name, "tcp:%s:%"PRIu16,
+             ss_format_address(&ss, addrbuf, sizeof addrbuf),
+             ss_get_port(&ss));
     return new_ssl_stream(name, new_fd, SERVER, STATE_SSL_CONNECTING,
                           new_streamp);
 }
@@ -851,7 +895,7 @@ static void
 pssl_wait(struct pstream *pstream)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    poll_fd_wait(pssl->fd, POLLIN);
+    poll_fd_wait_event(pssl->fd, pssl->wevent, POLLIN);
 }
 
 static int
@@ -899,6 +943,10 @@ do_ssl_init(void)
 {
     SSL_METHOD *method;
 
+#ifdef _WIN32
+    /* The following call is needed if we "#include <openssl/applink.c>". */
+    CRYPTO_malloc_init();
+#endif
     SSL_library_init();
     SSL_load_error_strings();
 
@@ -932,9 +980,17 @@ do_ssl_init(void)
         RAND_seed(seed, sizeof seed);
     }
 
-    /* New OpenSSL changed TLSv1_method() to return a "const" pointer, so the
-     * cast is needed to avoid a warning with those newer versions. */
-    method = CONST_CAST(SSL_METHOD *, TLSv1_method());
+    /* OpenSSL has a bunch of "connection methods": SSLv2_method(),
+     * SSLv3_method(), TLSv1_method(), SSLv23_method(), ...  Most of these
+     * support exactly one version of SSL, e.g. TLSv1_method() supports TLSv1
+     * only, not any earlier *or later* version.  The only exception is
+     * SSLv23_method(), which in fact supports *any* version of SSL and TLS.
+     * We don't want SSLv2 or SSLv3 support, so we turn it off below with
+     * SSL_CTX_set_options().
+     *
+     * The cast is needed to avoid a warning with newer versions of OpenSSL in
+     * which SSLv23_method() returns a "const" pointer. */
+    method = CONST_CAST(SSL_METHOD *, SSLv23_method());
     if (method == NULL) {
         VLOG_ERR("TLSv1_method: %s", ERR_error_string(ERR_get_error(), NULL));
         return ENOPROTOOPT;
@@ -1139,6 +1195,7 @@ read_cert_file(const char *file_name, X509 ***certs, size_t *n_certs)
             free(*certs);
             *certs = NULL;
             *n_certs = 0;
+            fclose(file);
             return EIO;
         }
 
@@ -1369,4 +1426,17 @@ ssl_protocol_cb(int write_p, int version OVS_UNUSED, int content_type,
              stream_get_name(&sslv->stream), ds_cstr(&details), len);
 
     ds_destroy(&details);
+}
+
+static void
+clear_handle(int fd OVS_UNUSED, HANDLE wevent OVS_UNUSED)
+{
+#ifdef _WIN32
+    if (fd) {
+        WSAEventSelect(fd, NULL, 0);
+    }
+    if (wevent) {
+        CloseHandle(wevent);
+    }
+#endif
 }

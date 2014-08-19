@@ -60,7 +60,16 @@ fi
 	fi
 done
 
-[ -f /var/lock/subsys/openvswitch ] || /sbin/service openvswitch start
+SERVICE_UNIT=/usr/lib/systemd/system/openvswitch-nonetwork.service
+if [ -f $SERVICE_UNIT ] && [ -x /usr/bin/systemctl ]; then
+	if ! systemctl --quiet is-active openvswitch-nonetwork.service; then
+		systemctl start openvswitch-nonetwork.service
+	fi
+else
+	if [ ! -f /var/lock/subsys/openvswitch ]; then
+		/sbin/service openvswitch start
+	fi
+fi
 
 case "$TYPE" in
 	OVSBridge)
@@ -74,6 +83,14 @@ case "$TYPE" in
 			${STP+-- set bridge "$DEVICE" stp_enable="${STP}"}
 		else
 			OVSBRIDGECONFIGURED="yes"
+		fi
+
+		# If MACADDR is provided in the interface configuration file,
+		# we need to set it using ovs-vsctl; setting it with the "ip"
+		# command in ifup-eth does not make the change persistent.
+		if [ -n "$MACADDR" ]; then
+			ovs-vsctl -t ${TIMEOUT} -- set bridge "$DEVICE" \
+				other-config:hwaddr="$MACADDR"
 		fi
 
 		# When dhcp is enabled, the assumption is that there will be a port to
@@ -126,6 +143,10 @@ case "$TYPE" in
 		ifup_ovs_bridge
 		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-port "$OVS_BRIDGE" "$DEVICE" $OVS_OPTIONS -- set Interface "$DEVICE" type=$OVS_TUNNEL_TYPE $OVS_TUNNEL_OPTIONS ${OVS_EXTRA+-- $OVS_EXTRA}
 		${OTHERSCRIPT} ${CONFIG} ${2}
+		;;
+	OVSPatchPort)
+		ifup_ovs_bridge
+		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-port "$OVS_BRIDGE" "$DEVICE" $OVS_OPTIONS -- set Interface "$DEVICE" type=patch options:peer="${OVS_PATCH_PEER}" ${OVS_EXTRA+-- $OVS_EXTRA}
 		;;
 	*)
 		echo $"Invalid OVS interface type $TYPE"

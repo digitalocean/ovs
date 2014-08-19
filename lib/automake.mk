@@ -8,6 +8,11 @@
 lib_LTLIBRARIES += lib/libopenvswitch.la
 
 lib_libopenvswitch_la_LIBADD = $(SSL_LIBS)
+
+if WIN32
+lib_libopenvswitch_la_LIBADD += ${PTHREAD_LIBS}
+endif
+
 lib_libopenvswitch_la_LDFLAGS = -release $(VERSION)
 
 lib_libopenvswitch_la_SOURCES = \
@@ -42,12 +47,14 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/csum.h \
 	lib/daemon.c \
 	lib/daemon.h \
+	lib/daemon-private.h \
 	lib/dhcp.h \
 	lib/dummy.c \
 	lib/dummy.h \
 	lib/dhparams.h \
 	lib/dirs.h \
 	lib/dpif-netdev.c \
+	lib/dpif-netdev.h \
 	lib/dpif-provider.h \
 	lib/dpif.c \
 	lib/dpif.h \
@@ -81,7 +88,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/jsonrpc.h \
 	lib/lacp.c \
 	lib/lacp.h \
-	lib/latch.c \
 	lib/latch.h \
 	lib/learn.c \
 	lib/learn.h \
@@ -136,12 +142,14 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovs-atomic-c11.h \
 	lib/ovs-atomic-clang.h \
 	lib/ovs-atomic-flag-gcc4.7+.h \
-	lib/ovs-atomic-gcc4+.c \
 	lib/ovs-atomic-gcc4+.h \
 	lib/ovs-atomic-gcc4.7+.h \
-	lib/ovs-atomic-pthreads.c \
+	lib/ovs-atomic-locked.c \
+	lib/ovs-atomic-locked.h \
 	lib/ovs-atomic-pthreads.h \
 	lib/ovs-atomic.h \
+	lib/ovs-rcu.c \
+	lib/ovs-rcu.h \
 	lib/ovs-thread.c \
 	lib/ovs-thread.h \
 	lib/ovsdb-data.c \
@@ -178,8 +186,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/shash.h \
 	lib/simap.c \
 	lib/simap.h \
-	lib/signals.c \
-	lib/signals.h \
 	lib/smap.c \
 	lib/smap.h \
 	lib/socket-util.c \
@@ -190,14 +196,13 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/sset.h \
 	lib/stp.c \
 	lib/stp.h \
-	lib/stream-fd.c \
 	lib/stream-fd.h \
 	lib/stream-provider.h \
 	lib/stream-ssl.h \
 	lib/stream-tcp.c \
-	lib/stream-unix.c \
 	lib/stream.c \
 	lib/stream.h \
+	lib/stdio.c \
 	lib/string.c \
 	lib/svec.c \
 	lib/svec.h \
@@ -236,7 +241,29 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/vswitch-idl.h \
 	lib/vtep-idl.c \
 	lib/vtep-idl.h
-EXTRA_DIST += lib/string.h.in
+
+if WIN32
+lib_libopenvswitch_la_SOURCES += \
+	lib/daemon-windows.c \
+	lib/getopt_long.c \
+	lib/getrusage-windows.c \
+	lib/latch-windows.c \
+	lib/route-table-stub.c \
+	lib/strsep.c \
+	lib/stream-fd-windows.c
+else
+lib_libopenvswitch_la_SOURCES += \
+	lib/daemon-unix.c \
+	lib/latch-unix.c \
+	lib/signals.c \
+	lib/signals.h \
+	lib/stream-fd-unix.c \
+	lib/stream-unix.c
+endif
+
+EXTRA_DIST += \
+	lib/stdio.h.in \
+	lib/string.h.in
 
 nodist_lib_libopenvswitch_la_SOURCES = \
 	lib/dirs.c
@@ -260,7 +287,7 @@ if HAVE_WNO_UNUSED_PARAMETER
 lib_libsflow_la_CFLAGS += -Wno-unused-parameter
 endif
 
-if LINUX_DATAPATH
+if LINUX
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpif-linux.c \
 	lib/dpif-linux.h \
@@ -275,6 +302,12 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/rtnetlink-link.h \
 	lib/route-table.c \
 	lib/route-table.h
+endif
+
+if DPDK_NETDEV
+lib_libopenvswitch_la_SOURCES += \
+       lib/netdev-dpdk.c \
+       lib/netdev-dpdk.h
 endif
 
 if HAVE_POSIX_AIO
@@ -325,6 +358,8 @@ MAN_FRAGMENTS += \
 	lib/memory-unixctl.man \
 	lib/ofp-version.man \
 	lib/ovs.tmac \
+	lib/service.man \
+	lib/service-syn.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl-bootstrap-syn.man \
 	lib/ssl-peer-ca-cert.man \
