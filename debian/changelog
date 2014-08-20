@@ -1,3 +1,16 @@
+openvswitch (2.3.0+git20140819-2) unstable; urgency=low
+
+  * debian/rules: Rerun checks on tests that fail the first time.  Skip
+    tests 711, 712, and 713 that seem to fail due to races on buildds.
+  * debian/patches/cfm-avoid-long-delay: Upstream patch to avoid
+    test failures in CFM tests due to "long delay" log messages at WARN level.
+  * debian/patches/ovs-appctl-log-options.patch,
+    debian/patches/disable-poll-loop-logging-for-long-output.patch:
+    Upstream patches to avoid test failures in tests that generate a ton
+    of output.
+
+ -- Ben Pfaff <pfaffben@debian.org>  Wed, 20 Aug 2014 08:31:11 -0700
+
 openvswitch (2.3.0+git20140819-1) unstable; urgency=low
 
   * New upstream release:

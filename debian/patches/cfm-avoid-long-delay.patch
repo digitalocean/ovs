@@ -1,0 +1,37 @@
+From df0e5f55763289e37f90d1f2464423f07478f372 Mon Sep 17 00:00:00 2001
+From: Ben Pfaff <blp@nicira.com>
+Date: Fri, 25 Jul 2014 09:19:17 -0700
+Subject: [PATCH] cfm: Reduce "long delay" message from WARN to INFO, to match
+ BFD behavior.
+
+These messages can cause the testsuite to fail on a busy build machine
+since the testsuite treats WARN or ERR log messages as failures.  BFD
+uses an INFO message instead of WARN, so this just changes CFM to match.
+
+Alternatively, the testsuite could ignore "long delay" messages (it ignores
+some other categories of messages).  In that case I'd expect that we'd
+want to change BFD to match CFM since I don't know of a reason why they
+should log differently.
+
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+Acked-by: Justin Pettit <jpettit@nicira.com>
+---
+ lib/cfm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/cfm.c b/lib/cfm.c
+index 7784369..d83a68c 100644
+--- a/lib/cfm.c
++++ b/lib/cfm.c
+@@ -613,7 +613,7 @@ cfm_compose_ccm(struct cfm *cfm, struct ofpbuf *packet,
+     if (cfm->last_tx) {
+         long long int delay = time_msec() - cfm->last_tx;
+         if (delay > (cfm->ccm_interval_ms * 3 / 2)) {
+-            VLOG_WARN("%s: long delay of %lldms (expected %dms) sending CCM"
++            VLOG_INFO("%s: long delay of %lldms (expected %dms) sending CCM"
+                       " seq %"PRIu32, cfm->name, delay, cfm->ccm_interval_ms,
+                       cfm->seq);
+         }
+-- 
+1.9.1
+
