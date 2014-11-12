@@ -1,0 +1,29 @@
+#!/bin/sh
+
+set -e
+
+echo "mod reload: "
+start openvswitch-force-reload-kmod 2>/dev/null
+echo "OK"
+
+echo "kernel modules loaded: "
+# Check that ovs loaded
+lsmod | grep "openvswitch"
+echo "OK"
+
+echo "Checking daemons: "
+pgrep ovs-vswitchd
+pgrep ovsdb-server
+echo "OK"
+
+# Validate messages in /var/log/syslog
+echo -n "kernel modules loaded correctly: "
+grep -q "openvswitch: Open vSwitch switching datapath" /var/log/syslog
+echo "OK"
+
+echo -n "running openflow tests using mininet"
+python `dirname $0`/openflow.py 2>&1
+echo "OK"
+
+# Clear syslog
+cp /dev/null /var/log/syslog

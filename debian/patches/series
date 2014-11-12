@@ -1,3 +1,4 @@
+xcp-interface-reconfigure.patch
 cfm-avoid-long-delay.patch
 ovs-appctl-log-options.patch
 disable-poll-loop-logging-for-long-output.patch

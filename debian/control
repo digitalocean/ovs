@@ -1,16 +1,18 @@
 Source: openvswitch
 Section: net
 Priority: extra
-Maintainer: Open vSwitch developers <dev@openvswitch.org>
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+XSBC-Original-Maintainer: Open vSwitch developers <dev@openvswitch.org>
 Uploaders: Ben Pfaff <pfaffben@debian.org>, Simon Horman <horms@debian.org>
 Build-Depends:
- debhelper (>= 8), dh-autoreconf, 
+ debhelper (>= 9~), dh-autoreconf, 
  autoconf (>= 2.64), automake (>= 1.10) | automake1.10, 
  libssl-dev, bzip2, openssl, graphviz,
  python-all (>= 2.6.6-3~), procps, python-qt4,
  python-zopeinterface, python-twisted-conch, libtool
-Standards-Version: 3.9.3
+Standards-Version: 3.9.5
 Homepage: http://openvswitch.org/
+XS-Testsuite: autopkgtest
 
 Package: openvswitch-common
 Architecture: linux-any
@@ -31,7 +33,7 @@ Description: Open vSwitch common components
 
 Package: openvswitch-switch
 Architecture: linux-any
-Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), kmod, procps, uuid-runtime, netbase, python-argparse
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, openvswitch-common (= ${binary:Version}), kmod | module-init-tools, procps, uuid-runtime, netbase, python-argparse
 Description: Open vSwitch switch implementations
  Open vSwitch is a production quality, multilayer, software-based,
  Ethernet virtual switch. It is designed to enable massive network
@@ -150,3 +152,22 @@ Description: Open vSwitch VTEP utilities
  .
  This package provides utilities that are useful to interact with a
  VTEP-configured database and a VTEP emulator.
+
+Package: openvswitch-testcontroller
+Architecture: linux-any
+Depends:
+ ${shlibs:Depends}, ${misc:Depends}, openvswitch-common (>= ${binary:Version})
+Breaks: openvswitch-test (<< 2.1.2-0ubuntu3)
+Replaces: openvswitch-test (<< 2.1.2-0ubuntu3)
+Description: Open vSwitch test controller implementation
+ Open vSwitch is a production quality, multilayer, software-based,
+ Ethernet virtual switch. It is designed to enable massive network
+ automation through programmatic extension, while still supporting
+ standard management interfaces and protocols (e.g. NetFlow, IPFIX,
+ sFlow, SPAN, RSPAN, CLI, LACP, 802.1ag). In addition, it is designed
+ to support distribution across multiple physical servers similar to
+ VMware's vNetwork distributed vswitch or Cisco's Nexus 1000V.
+ .
+ The Open vSwitch controller enables OpenFlow switches that connect to it
+ to act as MAC-learning Ethernet switches.  Note that the test controller
+ should be used for testing purposes only.

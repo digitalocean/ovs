@@ -70,6 +70,7 @@ build-indep-stamp: configure-stamp
 clean:
 	dh_testdir
 	dh_testroot
+	dh_autoreconf_clean
 	rm -f build-arch-stamp build-indep-stamp configure-stamp
 	rm -rf _debian
 	[ ! -f Makefile ] || $(MAKE) distclean
@@ -108,6 +109,7 @@ binary-common:
 	dh_installdebconf
 	dh_installlogrotate
 	dh_installinit -R
+	dh_installinit -popenvswitch-switch --name=openvswitch-force-reload-kmod --no-start
 	dh_installcron
 	dh_installman --language=C
 	dh_link
@@ -129,6 +131,22 @@ binary-arch: install-arch
 
 binary: binary-arch binary-indep
 .PHONY: build clean binary-indep binary-arch binary install install-indep install-arch configure
+
+
+# Helper target for creating snapshots from upstream git
+DATE=$(shell date +%Y%m%d)
+# Upstream branch to track
+BRANCH=branch-2.3
+
+get-orig-snapshot:
+	rm -Rf openvswitch-upstream
+	git clone https://github.com/openvswitch/ovs openvswitch-upstream
+	cd openvswitch-upstream && \
+		git checkout -b $(BRANCH) remotes/origin/$(BRANCH) && \
+		export UPSTREAM_VERSION=`head -1 NEWS | awk '{ print $$1 }' | sed 's/v//'` && \
+		git archive --format tgz --prefix=openvswitch-$$UPSTREAM_VERSION+git$(DATE)/ \
+			-o ../../openvswitch_$$UPSTREAM_VERSION+git$(DATE).orig.tar.gz $(BRANCH)
+	rm -Rf openvswitch-upstream
 
 # This GNU make extensions disables parallel builds for the current Makefile
 # but not for sub-Makefiles.  This is appropriate here because build-arch and
