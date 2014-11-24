@@ -1,3 +1,14 @@
+openvswitch (2.3.0+git20140819-2ubuntu2) vivid; urgency=medium
+
+  * Resolve DEP-8 test failures:
+    - d/tests/openflow.py: Explicitly configure switches to use
+      OpenFlow 1.0 protocol.
+    - d/tests/control: Version dependency on mininet >= 2.2.0~
+      to support specification of protocol version.
+  * d/tests/openflow.py: format to flake8 standard.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 24 Nov 2014 14:41:55 +0000
+
 openvswitch (2.3.0+git20140819-2ubuntu1) vivid; urgency=medium
 
   * Merge from Debian unstable, remaining changes:
