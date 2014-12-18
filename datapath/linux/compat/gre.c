@@ -268,6 +268,8 @@ int gre_cisco_unregister(struct gre_cisco_protocol *proto)
 
 #endif /* !HAVE_GRE_CISCO_REGISTER */
 
+#ifndef USE_KERNEL_TUNNEL_API
+
 /* GRE TX side. */
 static void gre_csum_fix(struct sk_buff *skb)
 {
@@ -292,6 +294,8 @@ struct sk_buff *gre_handle_offloads(struct sk_buff *skb, bool gre_csum)
 	if (skb_is_gso(skb)) {
 		if (gre_csum)
 			OVS_GSO_CB(skb)->fix_segment = gre_csum_fix;
+		else
+			OVS_GSO_CB(skb)->fix_segment = NULL;
 	} else {
 		if (skb->ip_summed == CHECKSUM_PARTIAL && gre_csum) {
 			err = skb_checksum_help(skb);
@@ -341,6 +345,7 @@ void gre_build_header(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
 		}
 	}
 }
+#endif
 
 #endif /* CONFIG_NET_IPGRE_DEMUX */
 

@@ -223,6 +223,7 @@ static struct mask_array *tbl_mask_array_alloc(int size)
 {
 	struct mask_array *new;
 
+	size = max(MASK_ARRAY_SIZE_MIN, size);
 	new = kzalloc(sizeof(struct mask_array) +
 		      sizeof(struct sw_flow_mask *) * size, GFP_KERNEL);
 	if (!new)
@@ -245,13 +246,14 @@ static int tbl_mask_array_realloc(struct flow_table *tbl, int size)
 
 	old = ovsl_dereference(tbl->mask_array);
 	if (old) {
-		int i;
+		int i, count = 0;
 
-		for (i = 0; i < min(old->max, new->max); i++)
-			new->masks[i] = old->masks[i];
+		for (i = 0; i < old->max; i++) {
+			if (ovsl_dereference(old->masks[i]))
+				new->masks[count++] = old->masks[i];
+		}
 
-		BUG_ON(old->count > new->max);
-		new->count = old->count;
+		new->count = count;
 	}
 	rcu_assign_pointer(tbl->mask_array, new);
 
@@ -259,47 +261,6 @@ static int tbl_mask_array_realloc(struct flow_table *tbl, int size)
 		call_rcu(&old->rcu, mask_array_rcu_cb);
 
 	return 0;
-}
-
-static void tbl_mask_array_delete_mask(struct mask_array *ma,
-				       const struct sw_flow_mask *mask)
-{
-	int i = 0;
-
-	/* Delete a mask pointer from the valid section.
-	 *
-	 * Also move the last entry in its place, so there is no
-	 * whole in the valid section.
-	 *
-	 * Notice the last entry still points to the original mask.
-	 *
-	 * <Note>: there is a small race window that may cause a mask
-	 * to be missed in a search. Imaging a core is
-	 * walking through the array, passing the index of deleting mask.
-	 * But before reaching the last entry, it is overwritten,
-	 * by another core that is adding a new mask, now the last entry
-	 * will point to the new mask. In this case, the moved up last
-	 * entry can be missed by the core walking the mask array.
-	 *
-	 * In case this missed mask would have led to successful
-	 * lookup, Hitting the race window could cause a packet to miss
-	 * kernel flow cache, and be sent to the user space.
-	 * </Note>
-	 */
-	for (i = 0; i < ma->count; i++)
-		if (mask == ovsl_dereference(ma->masks[i])) {
-			struct sw_flow_mask *last;
-
-			last = ovsl_dereference(ma->masks[ma->count - 1]);
-			rcu_assign_pointer(ma->masks[i], last);
-			ma->count--;
-			break;
-		}
-
-	/* Remove the deleted mask pointers from the invalid section. */
-	for (i = ma->count; i < ma->max; i++)
-		if (mask == ovsl_dereference(ma->masks[i]))
-			RCU_INIT_POINTER(ma->masks[i], NULL);
 }
 
 int ovs_flow_tbl_init(struct flow_table *table)
@@ -327,7 +288,7 @@ int ovs_flow_tbl_init(struct flow_table *table)
 	return 0;
 
 free_mask_array:
-	kfree((struct mask_array __force *)table->mask_array);
+	kfree(ma);
 free_mask_cache:
 	free_percpu(table->mask_cache);
 	return -ENOMEM;
@@ -555,6 +516,9 @@ static struct sw_flow *masked_flow_lookup(struct table_instance *ti,
 	return NULL;
 }
 
+/* Flow lookup does full lookup on flow table. It starts with
+ * mask from index passed in *index.
+ */
 static struct sw_flow *flow_lookup(struct flow_table *tbl,
 				   struct table_instance *ti,
 				   struct mask_array *ma,
@@ -562,15 +526,27 @@ static struct sw_flow *flow_lookup(struct flow_table *tbl,
 				   u32 *n_mask_hit,
 				   u32 *index)
 {
+	struct sw_flow_mask *mask;
 	struct sw_flow *flow;
 	int i;
 
-	for (i = 0; i < ma->max; i++) {
-		struct sw_flow_mask *mask;
+	if (*index < ma->max) {
+		mask = rcu_dereference_ovsl(ma->masks[*index]);
+		if (mask) {
+			flow = masked_flow_lookup(ti, key, mask, n_mask_hit);
+			if (flow)
+				return flow;
+		}
+	}
+
+	for (i = 0; i < ma->max; i++)  {
+
+		if (i == *index)
+			continue;
 
 		mask = rcu_dereference_ovsl(ma->masks[i]);
 		if (!mask)
-			break;
+			continue;
 
 		flow = masked_flow_lookup(ti, key, mask, n_mask_hit);
 		if (flow) { /* Found */
@@ -603,7 +579,7 @@ struct sw_flow *ovs_flow_tbl_lookup_stats(struct flow_table *tbl,
 
 	*n_mask_hit = 0;
 	if (unlikely(!skb_hash)) {
-		u32 __always_unused mask_index;
+		u32 mask_index = 0;
 
 		return flow_lookup(tbl, ti, ma, key, n_mask_hit, &mask_index);
 	}
@@ -618,24 +594,11 @@ struct sw_flow *ovs_flow_tbl_lookup_stats(struct flow_table *tbl,
 
 		e = &entries[index];
 		if (e->skb_hash == skb_hash) {
-			struct sw_flow_mask *cache;
-			int i = e->mask_index;
-
-			if (likely(i < ma->max)) {
-				cache = rcu_dereference(ma->masks[i]);
-				if (cache) {
-					flow = masked_flow_lookup(ti, key,
-							cache, n_mask_hit);
-					if (flow)
-						return flow;
-				}
-			}
-
-			/* Cache miss. This is the best cache
-			 * replacement candidate.  */
-			e->skb_hash = 0;
-			ce = e;
-			break;
+			flow = flow_lookup(tbl, ti, ma, key, n_mask_hit,
+					   &e->mask_index);
+			if (!flow)
+				e->skb_hash = 0;
+			return flow;
 		}
 
 		if (!ce || e->skb_hash < ce->skb_hash)
@@ -658,7 +621,7 @@ struct sw_flow *ovs_flow_tbl_lookup(struct flow_table *tbl,
 	struct table_instance *ti = rcu_dereference_ovsl(tbl->ti);
 	struct mask_array *ma = rcu_dereference_ovsl(tbl->mask_array);
 	u32 __always_unused n_mask_hit;
-	u32 __always_unused index;
+	u32 index = 0;
 
 	return flow_lookup(tbl, ti, ma, key, &n_mask_hit, &index);
 }
@@ -666,23 +629,22 @@ struct sw_flow *ovs_flow_tbl_lookup(struct flow_table *tbl,
 struct sw_flow *ovs_flow_tbl_lookup_exact(struct flow_table *tbl,
 					  struct sw_flow_match *match)
 {
-	struct table_instance *ti = rcu_dereference_ovsl(tbl->ti);
-	struct mask_array *ma = rcu_dereference_ovsl(tbl->mask_array);
-	struct sw_flow *flow;
-	u32 __always_unused n_mask_hit;
+	struct mask_array *ma = ovsl_dereference(tbl->mask_array);
 	int i;
 
 	/* Always called under ovs-mutex. */
-	for (i = 0; i < ma->count; i++) {
+	for (i = 0; i < ma->max; i++) {
+		struct table_instance *ti = ovsl_dereference(tbl->ti);
+		u32 __always_unused n_mask_hit;
 		struct sw_flow_mask *mask;
+		struct sw_flow *flow;
 
 		mask = ovsl_dereference(ma->masks[i]);
-		if (mask) {
-			flow = masked_flow_lookup(ti, match->key, mask, &n_mask_hit);
-			if (flow && ovs_flow_cmp_unmasked_key(flow, match)) { /* Found */
-				return flow;
-			}
-		}
+		if (!mask)
+			continue;
+		flow = masked_flow_lookup(ti, match->key, mask, &n_mask_hit);
+		if (flow && ovs_flow_cmp_unmasked_key(flow, match))
+			return flow;
 	}
 	return NULL;
 }
@@ -700,6 +662,23 @@ static struct table_instance *table_instance_expand(struct table_instance *ti)
 	return table_instance_rehash(ti, ti->n_buckets * 2);
 }
 
+static void tbl_mask_array_delete_mask(struct mask_array *ma,
+				       struct sw_flow_mask *mask)
+{
+	int i;
+
+	/* Remove the deleted mask pointers from the array */
+	for (i = 0; i < ma->max; i++) {
+		if (mask == ovsl_dereference(ma->masks[i])) {
+			RCU_INIT_POINTER(ma->masks[i], NULL);
+			ma->count--;
+			call_rcu(&mask->rcu, rcu_free_sw_flow_mask_cb);
+			return;
+		}
+	}
+	BUG();
+}
+
 /* Remove 'mask' from the mask list, if it is not needed any more. */
 static void flow_mask_remove(struct flow_table *tbl, struct sw_flow_mask *mask)
 {
@@ -715,16 +694,13 @@ static void flow_mask_remove(struct flow_table *tbl, struct sw_flow_mask *mask)
 			struct mask_array *ma;
 
 			ma = ovsl_dereference(tbl->mask_array);
-			/* Shrink the mask array if necessary. */
-			if (ma->max > MASK_ARRAY_SIZE_MIN * 2
-				&& ma->count <= ma->max / 4) {
-
-				tbl_mask_array_realloc(tbl, ma->max / 2);
-				ma = ovsl_dereference(tbl->mask_array);
-			}
-
 			tbl_mask_array_delete_mask(ma, mask);
-			call_rcu(&mask->rcu, rcu_free_sw_flow_mask_cb);
+
+			/* Shrink the mask array if necessary. */
+			if (ma->max >= (MASK_ARRAY_SIZE_MIN * 2) &&
+			    ma->count <= (ma->max / 3))
+				tbl_mask_array_realloc(tbl, ma->max / 2);
+
 		}
 	}
 }
@@ -772,7 +748,7 @@ static struct sw_flow_mask *flow_mask_find(const struct flow_table *tbl,
 	int i;
 
 	ma = ovsl_dereference(tbl->mask_array);
-	for (i = 0; i < ma->count; i++) {
+	for (i = 0; i < ma->max; i++) {
 		struct sw_flow_mask *t;
 
 		t = ovsl_dereference(ma->masks[i]);
@@ -792,6 +768,7 @@ static int flow_mask_insert(struct flow_table *tbl, struct sw_flow *flow,
 	mask = flow_mask_find(tbl, new);
 	if (!mask) {
 		struct mask_array *ma;
+		int i;
 
 		/* Allocate a new mask if none exsits. */
 		mask = mask_alloc();
@@ -807,7 +784,7 @@ static int flow_mask_insert(struct flow_table *tbl, struct sw_flow *flow,
 			int err;
 
 			err = tbl_mask_array_realloc(tbl, ma->max +
-							MASK_ARRAY_SIZE_MIN);
+							  MASK_ARRAY_SIZE_MIN);
 			if (err) {
 				kfree(mask);
 				return err;
@@ -815,8 +792,17 @@ static int flow_mask_insert(struct flow_table *tbl, struct sw_flow *flow,
 			ma = ovsl_dereference(tbl->mask_array);
 		}
 
-		rcu_assign_pointer(ma->masks[ma->count], mask);
-		ma->count++;
+		for (i = 0; i < ma->max; i++) {
+			struct sw_flow_mask *t;
+
+			t = ovsl_dereference(ma->masks[i]);
+			if (!t) {
+				rcu_assign_pointer(ma->masks[i], mask);
+				ma->count++;
+				break;
+			}
+		}
+
 	} else {
 		BUG_ON(!mask->ref_count);
 		mask->ref_count++;

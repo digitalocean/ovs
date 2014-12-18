@@ -81,7 +81,7 @@ static inline __be16 tnl_flags_to_gre_flags(__be16 tflags)
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0) */
 #endif /* HAVE_GRE_CISCO_REGISTER */
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
+#ifndef USE_KERNEL_TUNNEL_API
 
 #define gre_build_header rpl_gre_build_header
 void gre_build_header(struct sk_buff *skb, const struct tnl_ptk_info *tpi,
@@ -103,6 +103,17 @@ static inline int ip_gre_calc_hlen(__be16 o_flags)
 		addend += 4;
 	return addend;
 }
+#else
+static inline struct sk_buff *rpl_gre_handle_offloads(struct sk_buff *skb,
+						  bool gre_csum)
+{
+	if (skb->encapsulation && skb_is_gso(skb)) {
+		kfree_skb(skb);
+		return ERR_PTR(-ENOSYS);
+	}
+	return gre_handle_offloads(skb, gre_csum);
+}
+#define gre_handle_offloads rpl_gre_handle_offloads
 #endif
 
 #endif

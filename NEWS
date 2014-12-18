@@ -1,3 +1,11 @@
+v2.3.1 - 03 Dec 2014
+---------------------
+   - Compatibility with autoconf 2.63 (previously >=2.64)
+   - ovs-pki: Changed message digest algorithm from MD5 to SHA-1 because
+     MD5 is no longer secure and some operating systems have started to disable
+     it in OpenSSL.
+   - Keep active bond slave selection across OVS restart.
+
 v2.3.0 - 14 Aug 2014
 ---------------------
    - OpenFlow 1.1, 1.2, and 1.3 are now enabled by default in

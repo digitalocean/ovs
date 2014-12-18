@@ -29,6 +29,17 @@ if (ovs_vsctl --version) > /dev/null 2>&1; then :; else
     exit 0
 fi
 
+SERVICE_UNIT=/usr/lib/systemd/system/openvswitch-nonetwork.service
+if [ -f $SERVICE_UNIT ] && [ -x /usr/bin/systemctl ]; then
+    if ! systemctl --quiet is-active openvswitch-nonetwork.service; then
+        systemctl start openvswitch-nonetwork.service
+    fi
+else
+    if service openvswitch-switch status > /dev/null 2>&1; then
+        service openvswitch-switch start
+    fi
+fi
+
 if [ "${MODE}" = "start" ]; then
     eval OVS_EXTRA=\"${IF_OVS_EXTRA}\"
 

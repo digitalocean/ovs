@@ -397,8 +397,16 @@ AT_CHECK([ovs-ofctl -O OpenFlow12 -vwarn dump-group-features br0], [0], [stdout]
 AT_CHECK([STRIP_XIDS stdout], [0], [dnl
 OFPST_GROUP_FEATURES reply (OF1.2):
  Group table:
-    Types:  0x0
+    Types:  0xf
     Capabilities:  0x7
+    All group :
+        max_groups = 0xffffff00 actions=0x03ff9801
+    Select group :
+        max_groups = 0xffffff00 actions=0x00000000
+    Indirect group :
+        max_groups = 0xffffff00 actions=0x00000000
+    Fast Failover group :
+        max_groups = 0xffffff00 actions=0x00000000
 ])
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -600,7 +608,7 @@ AT_CHECK([ovs-ofctl add-flow -O OpenFlow11 br0 table=1,action=goto_table:2])
 # but at least it's the same code in ofpacts_check() that issues the error.
 AT_CHECK([ovs-ofctl add-flow -O OpenFlow11 br0 table=1,action=goto_table:1],
   [1], [],
-  [ovs-ofctl: actions are invalid with specified match (OFPBRC_BAD_TABLE_ID)
+  [ovs-ofctl: actions are invalid with specified match (OFPBIC_BAD_TABLE_ID)
 ])
 OVS_VSWITCHD_STOP
 AT_CLEANUP

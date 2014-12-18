@@ -1600,1265 +1600,1265 @@ static struct raw_info raw_infos[] = {
     {
         ofpraw_ofpt_hello_instances,
         1, 255,
-#line 109 "../lib/ofp-msgs.h"
+#line 109 "./lib/ofp-msgs.h"
         0,
-#line 109 "../lib/ofp-msgs.h"
+#line 109 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1608 "../lib/ofp-msgs.inc"
+#line 1608 "lib/ofp-msgs.inc"
         OFPTYPE_HELLO,
         "OFPT_HELLO",
     },
     {
         ofpraw_ofpt_error_instances,
         1, 255,
-#line 112 "../lib/ofp-msgs.h"
+#line 112 "./lib/ofp-msgs.h"
         sizeof(struct ofp_error_msg),
-#line 112 "../lib/ofp-msgs.h"
+#line 112 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1619 "../lib/ofp-msgs.inc"
+#line 1619 "lib/ofp-msgs.inc"
         OFPTYPE_ERROR,
         "OFPT_ERROR",
     },
     {
         ofpraw_ofpt_echo_request_instances,
         1, 255,
-#line 115 "../lib/ofp-msgs.h"
+#line 115 "./lib/ofp-msgs.h"
         0,
-#line 115 "../lib/ofp-msgs.h"
+#line 115 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1630 "../lib/ofp-msgs.inc"
+#line 1630 "lib/ofp-msgs.inc"
         OFPTYPE_ECHO_REQUEST,
         "OFPT_ECHO_REQUEST",
     },
     {
         ofpraw_ofpt_echo_reply_instances,
         1, 255,
-#line 118 "../lib/ofp-msgs.h"
+#line 118 "./lib/ofp-msgs.h"
         0,
-#line 118 "../lib/ofp-msgs.h"
+#line 118 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1641 "../lib/ofp-msgs.inc"
+#line 1641 "lib/ofp-msgs.inc"
         OFPTYPE_ECHO_REPLY,
         "OFPT_ECHO_REPLY",
     },
     {
         ofpraw_ofpt_features_request_instances,
         1, 6,
-#line 126 "../lib/ofp-msgs.h"
+#line 126 "./lib/ofp-msgs.h"
         0,
-#line 126 "../lib/ofp-msgs.h"
+#line 126 "./lib/ofp-msgs.h"
         0,
-#line 1652 "../lib/ofp-msgs.inc"
+#line 1652 "lib/ofp-msgs.inc"
         OFPTYPE_FEATURES_REQUEST,
         "OFPT_FEATURES_REQUEST",
     },
     {
         ofpraw_ofpt10_features_reply_instances,
         1, 1,
-#line 129 "../lib/ofp-msgs.h"
+#line 129 "./lib/ofp-msgs.h"
         sizeof(struct ofp_switch_features),
-#line 129 "../lib/ofp-msgs.h"
+#line 129 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_phy_port),
-#line 1663 "../lib/ofp-msgs.inc"
+#line 1663 "lib/ofp-msgs.inc"
         OFPTYPE_FEATURES_REPLY,
         "OFPT_FEATURES_REPLY",
     },
     {
         ofpraw_ofpt11_features_reply_instances,
         2, 3,
-#line 131 "../lib/ofp-msgs.h"
+#line 131 "./lib/ofp-msgs.h"
         sizeof(struct ofp_switch_features),
-#line 131 "../lib/ofp-msgs.h"
+#line 131 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_port),
-#line 1674 "../lib/ofp-msgs.inc"
+#line 1674 "lib/ofp-msgs.inc"
         OFPTYPE_FEATURES_REPLY,
         "OFPT_FEATURES_REPLY",
     },
     {
         ofpraw_ofpt13_features_reply_instances,
         4, 6,
-#line 133 "../lib/ofp-msgs.h"
+#line 133 "./lib/ofp-msgs.h"
         sizeof(struct ofp_switch_features),
-#line 133 "../lib/ofp-msgs.h"
+#line 133 "./lib/ofp-msgs.h"
         0,
-#line 1685 "../lib/ofp-msgs.inc"
+#line 1685 "lib/ofp-msgs.inc"
         OFPTYPE_FEATURES_REPLY,
         "OFPT_FEATURES_REPLY",
     },
     {
         ofpraw_ofpt_get_config_request_instances,
         1, 6,
-#line 136 "../lib/ofp-msgs.h"
+#line 136 "./lib/ofp-msgs.h"
         0,
-#line 136 "../lib/ofp-msgs.h"
+#line 136 "./lib/ofp-msgs.h"
         0,
-#line 1696 "../lib/ofp-msgs.inc"
+#line 1696 "lib/ofp-msgs.inc"
         OFPTYPE_GET_CONFIG_REQUEST,
         "OFPT_GET_CONFIG_REQUEST",
     },
     {
         ofpraw_ofpt_get_config_reply_instances,
         1, 6,
-#line 139 "../lib/ofp-msgs.h"
+#line 139 "./lib/ofp-msgs.h"
         sizeof(struct ofp_switch_config),
-#line 139 "../lib/ofp-msgs.h"
+#line 139 "./lib/ofp-msgs.h"
         0,
-#line 1707 "../lib/ofp-msgs.inc"
+#line 1707 "lib/ofp-msgs.inc"
         OFPTYPE_GET_CONFIG_REPLY,
         "OFPT_GET_CONFIG_REPLY",
     },
     {
         ofpraw_ofpt_set_config_instances,
         1, 6,
-#line 142 "../lib/ofp-msgs.h"
+#line 142 "./lib/ofp-msgs.h"
         sizeof(struct ofp_switch_config),
-#line 142 "../lib/ofp-msgs.h"
+#line 142 "./lib/ofp-msgs.h"
         0,
-#line 1718 "../lib/ofp-msgs.inc"
+#line 1718 "lib/ofp-msgs.inc"
         OFPTYPE_SET_CONFIG,
         "OFPT_SET_CONFIG",
     },
     {
         ofpraw_ofpt10_packet_in_instances,
         1, 1,
-#line 145 "../lib/ofp-msgs.h"
+#line 145 "./lib/ofp-msgs.h"
         offsetof(struct ofp10_packet_in, data),
-#line 145 "../lib/ofp-msgs.h"
+#line 145 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1729 "../lib/ofp-msgs.inc"
+#line 1729 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_IN,
         "OFPT_PACKET_IN",
     },
     {
         ofpraw_ofpt11_packet_in_instances,
         2, 2,
-#line 147 "../lib/ofp-msgs.h"
+#line 147 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_packet_in),
-#line 147 "../lib/ofp-msgs.h"
+#line 147 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1740 "../lib/ofp-msgs.inc"
+#line 1740 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_IN,
         "OFPT_PACKET_IN",
     },
     {
         ofpraw_ofpt12_packet_in_instances,
         3, 3,
-#line 149 "../lib/ofp-msgs.h"
+#line 149 "./lib/ofp-msgs.h"
         sizeof(struct ofp12_packet_in),
-#line 149 "../lib/ofp-msgs.h"
+#line 149 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1751 "../lib/ofp-msgs.inc"
+#line 1751 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_IN,
         "OFPT_PACKET_IN",
     },
     {
         ofpraw_ofpt13_packet_in_instances,
         4, 4,
-#line 151 "../lib/ofp-msgs.h"
+#line 151 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_packet_in),
-#line 151 "../lib/ofp-msgs.h"
+#line 151 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1762 "../lib/ofp-msgs.inc"
+#line 1762 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_IN,
         "OFPT_PACKET_IN",
     },
     {
         ofpraw_nxt_packet_in_instances,
         1, 6,
-#line 153 "../lib/ofp-msgs.h"
+#line 153 "./lib/ofp-msgs.h"
         sizeof(struct nx_packet_in),
-#line 153 "../lib/ofp-msgs.h"
+#line 153 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1773 "../lib/ofp-msgs.inc"
+#line 1773 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_IN,
         "NXT_PACKET_IN",
     },
     {
         ofpraw_ofpt10_flow_removed_instances,
         1, 1,
-#line 156 "../lib/ofp-msgs.h"
+#line 156 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_flow_removed),
-#line 156 "../lib/ofp-msgs.h"
+#line 156 "./lib/ofp-msgs.h"
         0,
-#line 1784 "../lib/ofp-msgs.inc"
+#line 1784 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_REMOVED,
         "OFPT_FLOW_REMOVED",
     },
     {
         ofpraw_ofpt11_flow_removed_instances,
         2, 6,
-#line 158 "../lib/ofp-msgs.h"
+#line 158 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_flow_removed),
-#line 158 "../lib/ofp-msgs.h"
+#line 158 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1795 "../lib/ofp-msgs.inc"
+#line 1795 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_REMOVED,
         "OFPT_FLOW_REMOVED",
     },
     {
         ofpraw_nxt_flow_removed_instances,
         1, 6,
-#line 160 "../lib/ofp-msgs.h"
+#line 160 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_removed),
-#line 160 "../lib/ofp-msgs.h"
+#line 160 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1806 "../lib/ofp-msgs.inc"
+#line 1806 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_REMOVED,
         "NXT_FLOW_REMOVED",
     },
     {
         ofpraw_ofpt10_port_status_instances,
         1, 1,
-#line 163 "../lib/ofp-msgs.h"
+#line 163 "./lib/ofp-msgs.h"
         sizeof(struct ofp_port_status) + sizeof(struct ofp10_phy_port),
-#line 163 "../lib/ofp-msgs.h"
+#line 163 "./lib/ofp-msgs.h"
         0,
-#line 1817 "../lib/ofp-msgs.inc"
+#line 1817 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATUS,
         "OFPT_PORT_STATUS",
     },
     {
         ofpraw_ofpt11_port_status_instances,
         2, 4,
-#line 165 "../lib/ofp-msgs.h"
+#line 165 "./lib/ofp-msgs.h"
         sizeof(struct ofp_port_status) + sizeof(struct ofp11_port),
-#line 165 "../lib/ofp-msgs.h"
+#line 165 "./lib/ofp-msgs.h"
         0,
-#line 1828 "../lib/ofp-msgs.inc"
+#line 1828 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATUS,
         "OFPT_PORT_STATUS",
     },
     {
         ofpraw_ofpt14_port_status_instances,
         5, 6,
-#line 167 "../lib/ofp-msgs.h"
+#line 167 "./lib/ofp-msgs.h"
         sizeof(struct ofp_port_status) + sizeof(struct ofp14_port),
-#line 167 "../lib/ofp-msgs.h"
+#line 167 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1839 "../lib/ofp-msgs.inc"
+#line 1839 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATUS,
         "OFPT_PORT_STATUS",
     },
     {
         ofpraw_ofpt10_packet_out_instances,
         1, 1,
-#line 170 "../lib/ofp-msgs.h"
+#line 170 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_packet_out),
-#line 170 "../lib/ofp-msgs.h"
+#line 170 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1850 "../lib/ofp-msgs.inc"
+#line 1850 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_OUT,
         "OFPT_PACKET_OUT",
     },
     {
         ofpraw_ofpt11_packet_out_instances,
         2, 6,
-#line 172 "../lib/ofp-msgs.h"
+#line 172 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_packet_out),
-#line 172 "../lib/ofp-msgs.h"
+#line 172 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 1861 "../lib/ofp-msgs.inc"
+#line 1861 "lib/ofp-msgs.inc"
         OFPTYPE_PACKET_OUT,
         "OFPT_PACKET_OUT",
     },
     {
         ofpraw_ofpt10_flow_mod_instances,
         1, 1,
-#line 175 "../lib/ofp-msgs.h"
+#line 175 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_flow_mod),
-#line 175 "../lib/ofp-msgs.h"
+#line 175 "./lib/ofp-msgs.h"
         sizeof(struct ofp_action_header),
-#line 1872 "../lib/ofp-msgs.inc"
+#line 1872 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MOD,
         "OFPT_FLOW_MOD",
     },
     {
         ofpraw_ofpt11_flow_mod_instances,
         2, 6,
-#line 177 "../lib/ofp-msgs.h"
+#line 177 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_flow_mod),
-#line 177 "../lib/ofp-msgs.h"
+#line 177 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_instruction),
-#line 1883 "../lib/ofp-msgs.inc"
+#line 1883 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MOD,
         "OFPT_FLOW_MOD",
     },
     {
         ofpraw_nxt_flow_mod_instances,
         1, 6,
-#line 179 "../lib/ofp-msgs.h"
+#line 179 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_mod),
-#line 179 "../lib/ofp-msgs.h"
+#line 179 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1894 "../lib/ofp-msgs.inc"
+#line 1894 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MOD,
         "NXT_FLOW_MOD",
     },
     {
         ofpraw_ofpt11_group_mod_instances,
         2, 6,
-#line 182 "../lib/ofp-msgs.h"
+#line 182 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_group_mod),
-#line 182 "../lib/ofp-msgs.h"
+#line 182 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1905 "../lib/ofp-msgs.inc"
+#line 1905 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_MOD,
         "OFPT_GROUP_MOD",
     },
     {
         ofpraw_ofpt10_port_mod_instances,
         1, 1,
-#line 185 "../lib/ofp-msgs.h"
+#line 185 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_port_mod),
-#line 185 "../lib/ofp-msgs.h"
+#line 185 "./lib/ofp-msgs.h"
         0,
-#line 1916 "../lib/ofp-msgs.inc"
+#line 1916 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_MOD,
         "OFPT_PORT_MOD",
     },
     {
         ofpraw_ofpt11_port_mod_instances,
         2, 4,
-#line 187 "../lib/ofp-msgs.h"
+#line 187 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_port_mod),
-#line 187 "../lib/ofp-msgs.h"
+#line 187 "./lib/ofp-msgs.h"
         0,
-#line 1927 "../lib/ofp-msgs.inc"
+#line 1927 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_MOD,
         "OFPT_PORT_MOD",
     },
     {
         ofpraw_ofpt14_port_mod_instances,
         5, 6,
-#line 189 "../lib/ofp-msgs.h"
+#line 189 "./lib/ofp-msgs.h"
         sizeof(struct ofp14_port_mod),
-#line 189 "../lib/ofp-msgs.h"
+#line 189 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1938 "../lib/ofp-msgs.inc"
+#line 1938 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_MOD,
         "OFPT_PORT_MOD",
     },
     {
         ofpraw_ofpt11_table_mod_instances,
         2, 4,
-#line 192 "../lib/ofp-msgs.h"
+#line 192 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_table_mod),
-#line 192 "../lib/ofp-msgs.h"
+#line 192 "./lib/ofp-msgs.h"
         0,
-#line 1949 "../lib/ofp-msgs.inc"
+#line 1949 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_MOD,
         "OFPT_TABLE_MOD",
     },
     {
         ofpraw_ofpt14_table_mod_instances,
         5, 6,
-#line 194 "../lib/ofp-msgs.h"
+#line 194 "./lib/ofp-msgs.h"
         sizeof(struct ofp14_table_mod),
-#line 194 "../lib/ofp-msgs.h"
+#line 194 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 1960 "../lib/ofp-msgs.inc"
+#line 1960 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_MOD,
         "OFPT_TABLE_MOD",
     },
     {
         ofpraw_ofpt10_barrier_request_instances,
         1, 1,
-#line 197 "../lib/ofp-msgs.h"
+#line 197 "./lib/ofp-msgs.h"
         0,
-#line 197 "../lib/ofp-msgs.h"
+#line 197 "./lib/ofp-msgs.h"
         0,
-#line 1971 "../lib/ofp-msgs.inc"
+#line 1971 "lib/ofp-msgs.inc"
         OFPTYPE_BARRIER_REQUEST,
         "OFPT_BARRIER_REQUEST",
     },
     {
         ofpraw_ofpt11_barrier_request_instances,
         2, 6,
-#line 199 "../lib/ofp-msgs.h"
+#line 199 "./lib/ofp-msgs.h"
         0,
-#line 199 "../lib/ofp-msgs.h"
+#line 199 "./lib/ofp-msgs.h"
         0,
-#line 1982 "../lib/ofp-msgs.inc"
+#line 1982 "lib/ofp-msgs.inc"
         OFPTYPE_BARRIER_REQUEST,
         "OFPT_BARRIER_REQUEST",
     },
     {
         ofpraw_ofpt10_barrier_reply_instances,
         1, 1,
-#line 202 "../lib/ofp-msgs.h"
+#line 202 "./lib/ofp-msgs.h"
         0,
-#line 202 "../lib/ofp-msgs.h"
+#line 202 "./lib/ofp-msgs.h"
         0,
-#line 1993 "../lib/ofp-msgs.inc"
+#line 1993 "lib/ofp-msgs.inc"
         OFPTYPE_BARRIER_REPLY,
         "OFPT_BARRIER_REPLY",
     },
     {
         ofpraw_ofpt11_barrier_reply_instances,
         2, 6,
-#line 204 "../lib/ofp-msgs.h"
+#line 204 "./lib/ofp-msgs.h"
         0,
-#line 204 "../lib/ofp-msgs.h"
+#line 204 "./lib/ofp-msgs.h"
         0,
-#line 2004 "../lib/ofp-msgs.inc"
+#line 2004 "lib/ofp-msgs.inc"
         OFPTYPE_BARRIER_REPLY,
         "OFPT_BARRIER_REPLY",
     },
     {
         ofpraw_ofpt10_queue_get_config_request_instances,
         1, 1,
-#line 207 "../lib/ofp-msgs.h"
+#line 207 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_queue_get_config_request),
-#line 207 "../lib/ofp-msgs.h"
+#line 207 "./lib/ofp-msgs.h"
         0,
-#line 2015 "../lib/ofp-msgs.inc"
+#line 2015 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_GET_CONFIG_REQUEST,
         "OFPT_QUEUE_GET_CONFIG_REQUEST",
     },
     {
         ofpraw_ofpt11_queue_get_config_request_instances,
         2, 6,
-#line 209 "../lib/ofp-msgs.h"
+#line 209 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_queue_get_config_request),
-#line 209 "../lib/ofp-msgs.h"
+#line 209 "./lib/ofp-msgs.h"
         0,
-#line 2026 "../lib/ofp-msgs.inc"
+#line 2026 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_GET_CONFIG_REQUEST,
         "OFPT_QUEUE_GET_CONFIG_REQUEST",
     },
     {
         ofpraw_ofpt10_queue_get_config_reply_instances,
         1, 1,
-#line 212 "../lib/ofp-msgs.h"
+#line 212 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_queue_get_config_reply),
-#line 212 "../lib/ofp-msgs.h"
+#line 212 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2037 "../lib/ofp-msgs.inc"
+#line 2037 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_GET_CONFIG_REPLY,
         "OFPT_QUEUE_GET_CONFIG_REPLY",
     },
     {
         ofpraw_ofpt11_queue_get_config_reply_instances,
         2, 6,
-#line 214 "../lib/ofp-msgs.h"
+#line 214 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_queue_get_config_reply),
-#line 214 "../lib/ofp-msgs.h"
+#line 214 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2048 "../lib/ofp-msgs.inc"
+#line 2048 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_GET_CONFIG_REPLY,
         "OFPT_QUEUE_GET_CONFIG_REPLY",
     },
     {
         ofpraw_ofpt12_role_request_instances,
         3, 6,
-#line 217 "../lib/ofp-msgs.h"
+#line 217 "./lib/ofp-msgs.h"
         sizeof(struct ofp12_role_request),
-#line 217 "../lib/ofp-msgs.h"
+#line 217 "./lib/ofp-msgs.h"
         0,
-#line 2059 "../lib/ofp-msgs.inc"
+#line 2059 "lib/ofp-msgs.inc"
         OFPTYPE_ROLE_REQUEST,
         "OFPT_ROLE_REQUEST",
     },
     {
         ofpraw_nxt_role_request_instances,
         1, 6,
-#line 219 "../lib/ofp-msgs.h"
+#line 219 "./lib/ofp-msgs.h"
         sizeof(struct nx_role_request),
-#line 219 "../lib/ofp-msgs.h"
+#line 219 "./lib/ofp-msgs.h"
         0,
-#line 2070 "../lib/ofp-msgs.inc"
+#line 2070 "lib/ofp-msgs.inc"
         OFPTYPE_ROLE_REQUEST,
         "NXT_ROLE_REQUEST",
     },
     {
         ofpraw_ofpt12_role_reply_instances,
         3, 6,
-#line 222 "../lib/ofp-msgs.h"
+#line 222 "./lib/ofp-msgs.h"
         sizeof(struct ofp12_role_request),
-#line 222 "../lib/ofp-msgs.h"
+#line 222 "./lib/ofp-msgs.h"
         0,
-#line 2081 "../lib/ofp-msgs.inc"
+#line 2081 "lib/ofp-msgs.inc"
         OFPTYPE_ROLE_REPLY,
         "OFPT_ROLE_REPLY",
     },
     {
         ofpraw_nxt_role_reply_instances,
         1, 6,
-#line 224 "../lib/ofp-msgs.h"
+#line 224 "./lib/ofp-msgs.h"
         sizeof(struct nx_role_request),
-#line 224 "../lib/ofp-msgs.h"
+#line 224 "./lib/ofp-msgs.h"
         0,
-#line 2092 "../lib/ofp-msgs.inc"
+#line 2092 "lib/ofp-msgs.inc"
         OFPTYPE_ROLE_REPLY,
         "NXT_ROLE_REPLY",
     },
     {
         ofpraw_ofpt13_get_async_request_instances,
         4, 6,
-#line 227 "../lib/ofp-msgs.h"
+#line 227 "./lib/ofp-msgs.h"
         0,
-#line 227 "../lib/ofp-msgs.h"
+#line 227 "./lib/ofp-msgs.h"
         0,
-#line 2103 "../lib/ofp-msgs.inc"
+#line 2103 "lib/ofp-msgs.inc"
         OFPTYPE_GET_ASYNC_REQUEST,
         "OFPT_GET_ASYNC_REQUEST",
     },
     {
         ofpraw_ofpt13_get_async_reply_instances,
         4, 6,
-#line 229 "../lib/ofp-msgs.h"
+#line 229 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_async_config),
-#line 229 "../lib/ofp-msgs.h"
+#line 229 "./lib/ofp-msgs.h"
         0,
-#line 2114 "../lib/ofp-msgs.inc"
+#line 2114 "lib/ofp-msgs.inc"
         OFPTYPE_GET_ASYNC_REPLY,
         "OFPT_GET_ASYNC_REPLY",
     },
     {
         ofpraw_ofpt13_set_async_instances,
         4, 6,
-#line 231 "../lib/ofp-msgs.h"
+#line 231 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_async_config),
-#line 231 "../lib/ofp-msgs.h"
+#line 231 "./lib/ofp-msgs.h"
         0,
-#line 2125 "../lib/ofp-msgs.inc"
+#line 2125 "lib/ofp-msgs.inc"
         OFPTYPE_SET_ASYNC_CONFIG,
         "OFPT_SET_ASYNC",
     },
     {
         ofpraw_nxt_set_async_config_instances,
         1, 6,
-#line 233 "../lib/ofp-msgs.h"
+#line 233 "./lib/ofp-msgs.h"
         sizeof(struct nx_async_config),
-#line 233 "../lib/ofp-msgs.h"
+#line 233 "./lib/ofp-msgs.h"
         0,
-#line 2136 "../lib/ofp-msgs.inc"
+#line 2136 "lib/ofp-msgs.inc"
         OFPTYPE_SET_ASYNC_CONFIG,
         "NXT_SET_ASYNC_CONFIG",
     },
     {
         ofpraw_ofpt13_meter_mod_instances,
         4, 6,
-#line 236 "../lib/ofp-msgs.h"
+#line 236 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_meter_mod),
-#line 236 "../lib/ofp-msgs.h"
+#line 236 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2147 "../lib/ofp-msgs.inc"
+#line 2147 "lib/ofp-msgs.inc"
         OFPTYPE_METER_MOD,
         "OFPT_METER_MOD",
     },
     {
         ofpraw_ofpt14_role_status_instances,
         5, 6,
-#line 239 "../lib/ofp-msgs.h"
+#line 239 "./lib/ofp-msgs.h"
         sizeof(struct ofp14_role_status),
-#line 239 "../lib/ofp-msgs.h"
+#line 239 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2158 "../lib/ofp-msgs.inc"
+#line 2158 "lib/ofp-msgs.inc"
         OFPTYPE_ROLE_STATUS,
         "OFPT_ROLE_STATUS",
     },
     {
         ofpraw_ofpt14_bundle_control_instances,
         5, 6,
-#line 242 "../lib/ofp-msgs.h"
+#line 242 "./lib/ofp-msgs.h"
         sizeof(struct ofp14_bundle_ctrl_msg),
-#line 242 "../lib/ofp-msgs.h"
+#line 242 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2169 "../lib/ofp-msgs.inc"
+#line 2169 "lib/ofp-msgs.inc"
         OFPTYPE_BUNDLE_CONTROL,
         "OFPT_BUNDLE_CONTROL",
     },
     {
         ofpraw_ofpt14_bundle_add_message_instances,
         5, 6,
-#line 245 "../lib/ofp-msgs.h"
+#line 245 "./lib/ofp-msgs.h"
         sizeof(struct ofp14_bundle_ctrl_msg),
-#line 245 "../lib/ofp-msgs.h"
+#line 245 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 2180 "../lib/ofp-msgs.inc"
+#line 2180 "lib/ofp-msgs.inc"
         OFPTYPE_BUNDLE_ADD_MESSAGE,
         "OFPT_BUNDLE_ADD_MESSAGE",
     },
     {
         ofpraw_ofpst_desc_request_instances,
         1, 6,
-#line 250 "../lib/ofp-msgs.h"
+#line 250 "./lib/ofp-msgs.h"
         0,
-#line 250 "../lib/ofp-msgs.h"
+#line 250 "./lib/ofp-msgs.h"
         0,
-#line 2191 "../lib/ofp-msgs.inc"
+#line 2191 "lib/ofp-msgs.inc"
         OFPTYPE_DESC_STATS_REQUEST,
         "OFPST_DESC request",
     },
     {
         ofpraw_ofpst_desc_reply_instances,
         1, 6,
-#line 253 "../lib/ofp-msgs.h"
+#line 253 "./lib/ofp-msgs.h"
         sizeof(struct ofp_desc_stats),
-#line 253 "../lib/ofp-msgs.h"
+#line 253 "./lib/ofp-msgs.h"
         0,
-#line 2202 "../lib/ofp-msgs.inc"
+#line 2202 "lib/ofp-msgs.inc"
         OFPTYPE_DESC_STATS_REPLY,
         "OFPST_DESC reply",
     },
     {
         ofpraw_ofpst10_flow_request_instances,
         1, 1,
-#line 256 "../lib/ofp-msgs.h"
+#line 256 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_flow_stats_request),
-#line 256 "../lib/ofp-msgs.h"
+#line 256 "./lib/ofp-msgs.h"
         0,
-#line 2213 "../lib/ofp-msgs.inc"
+#line 2213 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REQUEST,
         "OFPST_FLOW request",
     },
     {
         ofpraw_ofpst11_flow_request_instances,
         2, 6,
-#line 258 "../lib/ofp-msgs.h"
+#line 258 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_flow_stats_request),
-#line 258 "../lib/ofp-msgs.h"
+#line 258 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2224 "../lib/ofp-msgs.inc"
+#line 2224 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REQUEST,
         "OFPST_FLOW request",
     },
     {
         ofpraw_nxst_flow_request_instances,
         1, 1,
-#line 260 "../lib/ofp-msgs.h"
+#line 260 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_stats_request),
-#line 260 "../lib/ofp-msgs.h"
+#line 260 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2235 "../lib/ofp-msgs.inc"
+#line 2235 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REQUEST,
         "NXST_FLOW request",
     },
     {
         ofpraw_ofpst10_flow_reply_instances,
         1, 1,
-#line 263 "../lib/ofp-msgs.h"
+#line 263 "./lib/ofp-msgs.h"
         0,
-#line 263 "../lib/ofp-msgs.h"
+#line 263 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 2246 "../lib/ofp-msgs.inc"
+#line 2246 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REPLY,
         "OFPST_FLOW reply",
     },
     {
         ofpraw_ofpst11_flow_reply_instances,
         2, 3,
-#line 265 "../lib/ofp-msgs.h"
+#line 265 "./lib/ofp-msgs.h"
         0,
-#line 265 "../lib/ofp-msgs.h"
+#line 265 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 2257 "../lib/ofp-msgs.inc"
+#line 2257 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REPLY,
         "OFPST_FLOW reply",
     },
     {
         ofpraw_ofpst13_flow_reply_instances,
         4, 6,
-#line 267 "../lib/ofp-msgs.h"
+#line 267 "./lib/ofp-msgs.h"
         0,
-#line 267 "../lib/ofp-msgs.h"
+#line 267 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 2268 "../lib/ofp-msgs.inc"
+#line 2268 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REPLY,
         "OFPST_FLOW reply",
     },
     {
         ofpraw_nxst_flow_reply_instances,
         1, 1,
-#line 269 "../lib/ofp-msgs.h"
+#line 269 "./lib/ofp-msgs.h"
         0,
-#line 269 "../lib/ofp-msgs.h"
+#line 269 "./lib/ofp-msgs.h"
         sizeof(uint8_t),
-#line 2279 "../lib/ofp-msgs.inc"
+#line 2279 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_STATS_REPLY,
         "NXST_FLOW reply",
     },
     {
         ofpraw_ofpst10_aggregate_request_instances,
         1, 1,
-#line 272 "../lib/ofp-msgs.h"
+#line 272 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_flow_stats_request),
-#line 272 "../lib/ofp-msgs.h"
+#line 272 "./lib/ofp-msgs.h"
         0,
-#line 2290 "../lib/ofp-msgs.inc"
+#line 2290 "lib/ofp-msgs.inc"
         OFPTYPE_AGGREGATE_STATS_REQUEST,
         "OFPST_AGGREGATE request",
     },
     {
         ofpraw_ofpst11_aggregate_request_instances,
         2, 6,
-#line 274 "../lib/ofp-msgs.h"
+#line 274 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_flow_stats_request),
-#line 274 "../lib/ofp-msgs.h"
+#line 274 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2301 "../lib/ofp-msgs.inc"
+#line 2301 "lib/ofp-msgs.inc"
         OFPTYPE_AGGREGATE_STATS_REQUEST,
         "OFPST_AGGREGATE request",
     },
     {
         ofpraw_nxst_aggregate_request_instances,
         1, 1,
-#line 276 "../lib/ofp-msgs.h"
+#line 276 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_stats_request),
-#line 276 "../lib/ofp-msgs.h"
+#line 276 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2312 "../lib/ofp-msgs.inc"
+#line 2312 "lib/ofp-msgs.inc"
         OFPTYPE_AGGREGATE_STATS_REQUEST,
         "NXST_AGGREGATE request",
     },
     {
         ofpraw_ofpst_aggregate_reply_instances,
         1, 6,
-#line 279 "../lib/ofp-msgs.h"
+#line 279 "./lib/ofp-msgs.h"
         sizeof(struct ofp_aggregate_stats_reply),
-#line 279 "../lib/ofp-msgs.h"
+#line 279 "./lib/ofp-msgs.h"
         0,
-#line 2323 "../lib/ofp-msgs.inc"
+#line 2323 "lib/ofp-msgs.inc"
         OFPTYPE_AGGREGATE_STATS_REPLY,
         "OFPST_AGGREGATE reply",
     },
     {
         ofpraw_nxst_aggregate_reply_instances,
         1, 1,
-#line 281 "../lib/ofp-msgs.h"
+#line 281 "./lib/ofp-msgs.h"
         sizeof(struct ofp_aggregate_stats_reply),
-#line 281 "../lib/ofp-msgs.h"
+#line 281 "./lib/ofp-msgs.h"
         0,
-#line 2334 "../lib/ofp-msgs.inc"
+#line 2334 "lib/ofp-msgs.inc"
         OFPTYPE_AGGREGATE_STATS_REPLY,
         "NXST_AGGREGATE reply",
     },
     {
         ofpraw_ofpst_table_request_instances,
         1, 6,
-#line 284 "../lib/ofp-msgs.h"
+#line 284 "./lib/ofp-msgs.h"
         0,
-#line 284 "../lib/ofp-msgs.h"
+#line 284 "./lib/ofp-msgs.h"
         0,
-#line 2345 "../lib/ofp-msgs.inc"
+#line 2345 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_STATS_REQUEST,
         "OFPST_TABLE request",
     },
     {
         ofpraw_ofpst10_table_reply_instances,
         1, 1,
-#line 287 "../lib/ofp-msgs.h"
+#line 287 "./lib/ofp-msgs.h"
         0,
-#line 287 "../lib/ofp-msgs.h"
+#line 287 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_table_stats),
-#line 2356 "../lib/ofp-msgs.inc"
+#line 2356 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_STATS_REPLY,
         "OFPST_TABLE reply",
     },
     {
         ofpraw_ofpst11_table_reply_instances,
         2, 2,
-#line 289 "../lib/ofp-msgs.h"
+#line 289 "./lib/ofp-msgs.h"
         0,
-#line 289 "../lib/ofp-msgs.h"
+#line 289 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_table_stats),
-#line 2367 "../lib/ofp-msgs.inc"
+#line 2367 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_STATS_REPLY,
         "OFPST_TABLE reply",
     },
     {
         ofpraw_ofpst12_table_reply_instances,
         3, 3,
-#line 291 "../lib/ofp-msgs.h"
+#line 291 "./lib/ofp-msgs.h"
         0,
-#line 291 "../lib/ofp-msgs.h"
+#line 291 "./lib/ofp-msgs.h"
         sizeof(struct ofp12_table_stats),
-#line 2378 "../lib/ofp-msgs.inc"
+#line 2378 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_STATS_REPLY,
         "OFPST_TABLE reply",
     },
     {
         ofpraw_ofpst13_table_reply_instances,
         4, 6,
-#line 293 "../lib/ofp-msgs.h"
+#line 293 "./lib/ofp-msgs.h"
         0,
-#line 293 "../lib/ofp-msgs.h"
+#line 293 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_table_stats),
-#line 2389 "../lib/ofp-msgs.inc"
+#line 2389 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_STATS_REPLY,
         "OFPST_TABLE reply",
     },
     {
         ofpraw_ofpst10_port_request_instances,
         1, 1,
-#line 296 "../lib/ofp-msgs.h"
+#line 296 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_port_stats_request),
-#line 296 "../lib/ofp-msgs.h"
+#line 296 "./lib/ofp-msgs.h"
         0,
-#line 2400 "../lib/ofp-msgs.inc"
+#line 2400 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REQUEST,
         "OFPST_PORT request",
     },
     {
         ofpraw_ofpst11_port_request_instances,
         2, 6,
-#line 298 "../lib/ofp-msgs.h"
+#line 298 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_port_stats_request),
-#line 298 "../lib/ofp-msgs.h"
+#line 298 "./lib/ofp-msgs.h"
         0,
-#line 2411 "../lib/ofp-msgs.inc"
+#line 2411 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REQUEST,
         "OFPST_PORT request",
     },
     {
         ofpraw_ofpst10_port_reply_instances,
         1, 1,
-#line 301 "../lib/ofp-msgs.h"
+#line 301 "./lib/ofp-msgs.h"
         0,
-#line 301 "../lib/ofp-msgs.h"
+#line 301 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_port_stats),
-#line 2422 "../lib/ofp-msgs.inc"
+#line 2422 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REPLY,
         "OFPST_PORT reply",
     },
     {
         ofpraw_ofpst11_port_reply_instances,
         2, 3,
-#line 303 "../lib/ofp-msgs.h"
+#line 303 "./lib/ofp-msgs.h"
         0,
-#line 303 "../lib/ofp-msgs.h"
+#line 303 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_port_stats),
-#line 2433 "../lib/ofp-msgs.inc"
+#line 2433 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REPLY,
         "OFPST_PORT reply",
     },
     {
         ofpraw_ofpst13_port_reply_instances,
         4, 4,
-#line 305 "../lib/ofp-msgs.h"
+#line 305 "./lib/ofp-msgs.h"
         0,
-#line 305 "../lib/ofp-msgs.h"
+#line 305 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_port_stats),
-#line 2444 "../lib/ofp-msgs.inc"
+#line 2444 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REPLY,
         "OFPST_PORT reply",
     },
     {
         ofpraw_ofpst14_port_reply_instances,
         5, 6,
-#line 307 "../lib/ofp-msgs.h"
+#line 307 "./lib/ofp-msgs.h"
         0,
-#line 307 "../lib/ofp-msgs.h"
+#line 307 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2455 "../lib/ofp-msgs.inc"
+#line 2455 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_STATS_REPLY,
         "OFPST_PORT reply",
     },
     {
         ofpraw_ofpst10_queue_request_instances,
         1, 1,
-#line 310 "../lib/ofp-msgs.h"
+#line 310 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_queue_stats_request),
-#line 310 "../lib/ofp-msgs.h"
+#line 310 "./lib/ofp-msgs.h"
         0,
-#line 2466 "../lib/ofp-msgs.inc"
+#line 2466 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REQUEST,
         "OFPST_QUEUE request",
     },
     {
         ofpraw_ofpst11_queue_request_instances,
         2, 6,
-#line 312 "../lib/ofp-msgs.h"
+#line 312 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_queue_stats_request),
-#line 312 "../lib/ofp-msgs.h"
+#line 312 "./lib/ofp-msgs.h"
         0,
-#line 2477 "../lib/ofp-msgs.inc"
+#line 2477 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REQUEST,
         "OFPST_QUEUE request",
     },
     {
         ofpraw_ofpst10_queue_reply_instances,
         1, 1,
-#line 315 "../lib/ofp-msgs.h"
+#line 315 "./lib/ofp-msgs.h"
         0,
-#line 315 "../lib/ofp-msgs.h"
+#line 315 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_queue_stats),
-#line 2488 "../lib/ofp-msgs.inc"
+#line 2488 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REPLY,
         "OFPST_QUEUE reply",
     },
     {
         ofpraw_ofpst11_queue_reply_instances,
         2, 3,
-#line 317 "../lib/ofp-msgs.h"
+#line 317 "./lib/ofp-msgs.h"
         0,
-#line 317 "../lib/ofp-msgs.h"
+#line 317 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_queue_stats),
-#line 2499 "../lib/ofp-msgs.inc"
+#line 2499 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REPLY,
         "OFPST_QUEUE reply",
     },
     {
         ofpraw_ofpst13_queue_reply_instances,
         4, 4,
-#line 319 "../lib/ofp-msgs.h"
+#line 319 "./lib/ofp-msgs.h"
         0,
-#line 319 "../lib/ofp-msgs.h"
+#line 319 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_queue_stats),
-#line 2510 "../lib/ofp-msgs.inc"
+#line 2510 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REPLY,
         "OFPST_QUEUE reply",
     },
     {
         ofpraw_ofpst14_queue_reply_instances,
         5, 6,
-#line 321 "../lib/ofp-msgs.h"
+#line 321 "./lib/ofp-msgs.h"
         0,
-#line 321 "../lib/ofp-msgs.h"
+#line 321 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2521 "../lib/ofp-msgs.inc"
+#line 2521 "lib/ofp-msgs.inc"
         OFPTYPE_QUEUE_STATS_REPLY,
         "OFPST_QUEUE reply",
     },
     {
         ofpraw_ofpst11_group_request_instances,
         2, 6,
-#line 324 "../lib/ofp-msgs.h"
+#line 324 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_group_stats_request),
-#line 324 "../lib/ofp-msgs.h"
+#line 324 "./lib/ofp-msgs.h"
         0,
-#line 2532 "../lib/ofp-msgs.inc"
+#line 2532 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_STATS_REQUEST,
         "OFPST_GROUP request",
     },
     {
         ofpraw_ofpst11_group_reply_instances,
         2, 3,
-#line 327 "../lib/ofp-msgs.h"
+#line 327 "./lib/ofp-msgs.h"
         0,
-#line 327 "../lib/ofp-msgs.h"
+#line 327 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2543 "../lib/ofp-msgs.inc"
+#line 2543 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_STATS_REPLY,
         "OFPST_GROUP reply",
     },
     {
         ofpraw_ofpst13_group_reply_instances,
         4, 6,
-#line 329 "../lib/ofp-msgs.h"
+#line 329 "./lib/ofp-msgs.h"
         0,
-#line 329 "../lib/ofp-msgs.h"
+#line 329 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2554 "../lib/ofp-msgs.inc"
+#line 2554 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_STATS_REPLY,
         "OFPST_GROUP reply",
     },
     {
         ofpraw_ofpst11_group_desc_request_instances,
         2, 5,
-#line 332 "../lib/ofp-msgs.h"
+#line 332 "./lib/ofp-msgs.h"
         0,
-#line 332 "../lib/ofp-msgs.h"
+#line 332 "./lib/ofp-msgs.h"
         0,
-#line 2565 "../lib/ofp-msgs.inc"
+#line 2565 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_DESC_STATS_REQUEST,
         "OFPST_GROUP_DESC request",
     },
     {
         ofpraw_ofpst15_group_desc_request_instances,
         6, 6,
-#line 334 "../lib/ofp-msgs.h"
+#line 334 "./lib/ofp-msgs.h"
         sizeof(ovs_be32),
-#line 334 "../lib/ofp-msgs.h"
+#line 334 "./lib/ofp-msgs.h"
         0,
-#line 2576 "../lib/ofp-msgs.inc"
+#line 2576 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_DESC_STATS_REQUEST,
         "OFPST_GROUP_DESC request",
     },
     {
         ofpraw_ofpst11_group_desc_reply_instances,
         2, 6,
-#line 337 "../lib/ofp-msgs.h"
+#line 337 "./lib/ofp-msgs.h"
         0,
-#line 337 "../lib/ofp-msgs.h"
+#line 337 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2587 "../lib/ofp-msgs.inc"
+#line 2587 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_DESC_STATS_REPLY,
         "OFPST_GROUP_DESC reply",
     },
     {
         ofpraw_ofpst12_group_features_request_instances,
         3, 6,
-#line 340 "../lib/ofp-msgs.h"
+#line 340 "./lib/ofp-msgs.h"
         0,
-#line 340 "../lib/ofp-msgs.h"
+#line 340 "./lib/ofp-msgs.h"
         0,
-#line 2598 "../lib/ofp-msgs.inc"
+#line 2598 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_FEATURES_STATS_REQUEST,
         "OFPST_GROUP_FEATURES request",
     },
     {
         ofpraw_ofpst12_group_features_reply_instances,
         3, 6,
-#line 343 "../lib/ofp-msgs.h"
+#line 343 "./lib/ofp-msgs.h"
         sizeof(struct ofp12_group_features_stats),
-#line 343 "../lib/ofp-msgs.h"
+#line 343 "./lib/ofp-msgs.h"
         0,
-#line 2609 "../lib/ofp-msgs.inc"
+#line 2609 "lib/ofp-msgs.inc"
         OFPTYPE_GROUP_FEATURES_STATS_REPLY,
         "OFPST_GROUP_FEATURES reply",
     },
     {
         ofpraw_ofpst13_meter_request_instances,
         4, 6,
-#line 346 "../lib/ofp-msgs.h"
+#line 346 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_meter_multipart_request),
-#line 346 "../lib/ofp-msgs.h"
+#line 346 "./lib/ofp-msgs.h"
         0,
-#line 2620 "../lib/ofp-msgs.inc"
+#line 2620 "lib/ofp-msgs.inc"
         OFPTYPE_METER_STATS_REQUEST,
         "OFPST_METER request",
     },
     {
         ofpraw_ofpst13_meter_reply_instances,
         4, 6,
-#line 349 "../lib/ofp-msgs.h"
+#line 349 "./lib/ofp-msgs.h"
         0,
-#line 349 "../lib/ofp-msgs.h"
+#line 349 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2631 "../lib/ofp-msgs.inc"
+#line 2631 "lib/ofp-msgs.inc"
         OFPTYPE_METER_STATS_REPLY,
         "OFPST_METER reply",
     },
     {
         ofpraw_ofpst13_meter_config_request_instances,
         4, 6,
-#line 352 "../lib/ofp-msgs.h"
+#line 352 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_meter_multipart_request),
-#line 352 "../lib/ofp-msgs.h"
+#line 352 "./lib/ofp-msgs.h"
         0,
-#line 2642 "../lib/ofp-msgs.inc"
+#line 2642 "lib/ofp-msgs.inc"
         OFPTYPE_METER_CONFIG_STATS_REQUEST,
         "OFPST_METER_CONFIG request",
     },
     {
         ofpraw_ofpst13_meter_config_reply_instances,
         4, 6,
-#line 355 "../lib/ofp-msgs.h"
+#line 355 "./lib/ofp-msgs.h"
         0,
-#line 355 "../lib/ofp-msgs.h"
+#line 355 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2653 "../lib/ofp-msgs.inc"
+#line 2653 "lib/ofp-msgs.inc"
         OFPTYPE_METER_CONFIG_STATS_REPLY,
         "OFPST_METER_CONFIG reply",
     },
     {
         ofpraw_ofpst13_meter_features_request_instances,
         4, 6,
-#line 358 "../lib/ofp-msgs.h"
+#line 358 "./lib/ofp-msgs.h"
         0,
-#line 358 "../lib/ofp-msgs.h"
+#line 358 "./lib/ofp-msgs.h"
         0,
-#line 2664 "../lib/ofp-msgs.inc"
+#line 2664 "lib/ofp-msgs.inc"
         OFPTYPE_METER_FEATURES_STATS_REQUEST,
         "OFPST_METER_FEATURES request",
     },
     {
         ofpraw_ofpst13_meter_features_reply_instances,
         4, 6,
-#line 361 "../lib/ofp-msgs.h"
+#line 361 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_meter_features),
-#line 361 "../lib/ofp-msgs.h"
+#line 361 "./lib/ofp-msgs.h"
         0,
-#line 2675 "../lib/ofp-msgs.inc"
+#line 2675 "lib/ofp-msgs.inc"
         OFPTYPE_METER_FEATURES_STATS_REPLY,
         "OFPST_METER_FEATURES reply",
     },
     {
         ofpraw_ofpst13_table_features_request_instances,
         4, 6,
-#line 364 "../lib/ofp-msgs.h"
+#line 364 "./lib/ofp-msgs.h"
         0,
-#line 364 "../lib/ofp-msgs.h"
+#line 364 "./lib/ofp-msgs.h"
         0,
-#line 2686 "../lib/ofp-msgs.inc"
+#line 2686 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_FEATURES_STATS_REQUEST,
         "OFPST_TABLE_FEATURES request",
     },
     {
         ofpraw_ofpst13_table_features_reply_instances,
         4, 6,
-#line 367 "../lib/ofp-msgs.h"
+#line 367 "./lib/ofp-msgs.h"
         sizeof(struct ofp13_table_features),
-#line 367 "../lib/ofp-msgs.h"
+#line 367 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2697 "../lib/ofp-msgs.inc"
+#line 2697 "lib/ofp-msgs.inc"
         OFPTYPE_TABLE_FEATURES_STATS_REPLY,
         "OFPST_TABLE_FEATURES reply",
     },
     {
         ofpraw_ofpst10_port_desc_request_instances,
         1, 5,
-#line 370 "../lib/ofp-msgs.h"
+#line 370 "./lib/ofp-msgs.h"
         0,
-#line 370 "../lib/ofp-msgs.h"
+#line 370 "./lib/ofp-msgs.h"
         0,
-#line 2708 "../lib/ofp-msgs.inc"
+#line 2708 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_DESC_STATS_REQUEST,
         "OFPST_PORT_DESC request",
     },
     {
         ofpraw_ofpst15_port_desc_request_instances,
         6, 6,
-#line 372 "../lib/ofp-msgs.h"
+#line 372 "./lib/ofp-msgs.h"
         sizeof(ovs_be32),
-#line 372 "../lib/ofp-msgs.h"
+#line 372 "./lib/ofp-msgs.h"
         0,
-#line 2719 "../lib/ofp-msgs.inc"
+#line 2719 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_DESC_STATS_REQUEST,
         "OFPST_PORT_DESC request",
     },
     {
         ofpraw_ofpst10_port_desc_reply_instances,
         1, 1,
-#line 375 "../lib/ofp-msgs.h"
+#line 375 "./lib/ofp-msgs.h"
         0,
-#line 375 "../lib/ofp-msgs.h"
+#line 375 "./lib/ofp-msgs.h"
         sizeof(struct ofp10_phy_port),
-#line 2730 "../lib/ofp-msgs.inc"
+#line 2730 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_DESC_STATS_REPLY,
         "OFPST_PORT_DESC reply",
     },
     {
         ofpraw_ofpst11_port_desc_reply_instances,
         2, 4,
-#line 377 "../lib/ofp-msgs.h"
+#line 377 "./lib/ofp-msgs.h"
         0,
-#line 377 "../lib/ofp-msgs.h"
+#line 377 "./lib/ofp-msgs.h"
         sizeof(struct ofp11_port),
-#line 2741 "../lib/ofp-msgs.inc"
+#line 2741 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_DESC_STATS_REPLY,
         "OFPST_PORT_DESC reply",
     },
     {
         ofpraw_ofpst14_port_desc_reply_instances,
         5, 6,
-#line 379 "../lib/ofp-msgs.h"
+#line 379 "./lib/ofp-msgs.h"
         0,
-#line 379 "../lib/ofp-msgs.h"
+#line 379 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2752 "../lib/ofp-msgs.inc"
+#line 2752 "lib/ofp-msgs.inc"
         OFPTYPE_PORT_DESC_STATS_REPLY,
         "OFPST_PORT_DESC reply",
     },
     {
         ofpraw_nxt_set_flow_format_instances,
         1, 1,
-#line 387 "../lib/ofp-msgs.h"
+#line 387 "./lib/ofp-msgs.h"
         sizeof(struct nx_set_flow_format),
-#line 387 "../lib/ofp-msgs.h"
+#line 387 "./lib/ofp-msgs.h"
         0,
-#line 2763 "../lib/ofp-msgs.inc"
+#line 2763 "lib/ofp-msgs.inc"
         OFPTYPE_SET_FLOW_FORMAT,
         "NXT_SET_FLOW_FORMAT",
     },
     {
         ofpraw_nxt_flow_mod_table_id_instances,
         1, 6,
-#line 390 "../lib/ofp-msgs.h"
+#line 390 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_mod_table_id),
-#line 390 "../lib/ofp-msgs.h"
+#line 390 "./lib/ofp-msgs.h"
         0,
-#line 2774 "../lib/ofp-msgs.inc"
+#line 2774 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MOD_TABLE_ID,
         "NXT_FLOW_MOD_TABLE_ID",
     },
     {
         ofpraw_nxt_set_packet_in_format_instances,
         1, 6,
-#line 393 "../lib/ofp-msgs.h"
+#line 393 "./lib/ofp-msgs.h"
         sizeof(struct nx_set_packet_in_format),
-#line 393 "../lib/ofp-msgs.h"
+#line 393 "./lib/ofp-msgs.h"
         0,
-#line 2785 "../lib/ofp-msgs.inc"
+#line 2785 "lib/ofp-msgs.inc"
         OFPTYPE_SET_PACKET_IN_FORMAT,
         "NXT_SET_PACKET_IN_FORMAT",
     },
     {
         ofpraw_nxt_flow_age_instances,
         1, 6,
-#line 396 "../lib/ofp-msgs.h"
+#line 396 "./lib/ofp-msgs.h"
         0,
-#line 396 "../lib/ofp-msgs.h"
+#line 396 "./lib/ofp-msgs.h"
         0,
-#line 2796 "../lib/ofp-msgs.inc"
+#line 2796 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_AGE,
         "NXT_FLOW_AGE",
     },
     {
         ofpraw_nxt_set_controller_id_instances,
         1, 6,
-#line 399 "../lib/ofp-msgs.h"
+#line 399 "./lib/ofp-msgs.h"
         sizeof(struct nx_controller_id),
-#line 399 "../lib/ofp-msgs.h"
+#line 399 "./lib/ofp-msgs.h"
         0,
-#line 2807 "../lib/ofp-msgs.inc"
+#line 2807 "lib/ofp-msgs.inc"
         OFPTYPE_SET_CONTROLLER_ID,
         "NXT_SET_CONTROLLER_ID",
     },
     {
         ofpraw_nxt_flow_monitor_cancel_instances,
         1, 6,
-#line 402 "../lib/ofp-msgs.h"
+#line 402 "./lib/ofp-msgs.h"
         sizeof(struct nx_flow_monitor_cancel),
-#line 402 "../lib/ofp-msgs.h"
+#line 402 "./lib/ofp-msgs.h"
         0,
-#line 2818 "../lib/ofp-msgs.inc"
+#line 2818 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MONITOR_CANCEL,
         "NXT_FLOW_MONITOR_CANCEL",
     },
     {
         ofpraw_nxt_flow_monitor_paused_instances,
         1, 6,
-#line 405 "../lib/ofp-msgs.h"
+#line 405 "./lib/ofp-msgs.h"
         0,
-#line 405 "../lib/ofp-msgs.h"
+#line 405 "./lib/ofp-msgs.h"
         0,
-#line 2829 "../lib/ofp-msgs.inc"
+#line 2829 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MONITOR_PAUSED,
         "NXT_FLOW_MONITOR_PAUSED",
     },
     {
         ofpraw_nxt_flow_monitor_resumed_instances,
         1, 6,
-#line 408 "../lib/ofp-msgs.h"
+#line 408 "./lib/ofp-msgs.h"
         0,
-#line 408 "../lib/ofp-msgs.h"
+#line 408 "./lib/ofp-msgs.h"
         0,
-#line 2840 "../lib/ofp-msgs.inc"
+#line 2840 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MONITOR_RESUMED,
         "NXT_FLOW_MONITOR_RESUMED",
     },
     {
         ofpraw_nxst_flow_monitor_request_instances,
         1, 1,
-#line 416 "../lib/ofp-msgs.h"
+#line 416 "./lib/ofp-msgs.h"
         0,
-#line 416 "../lib/ofp-msgs.h"
+#line 416 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2851 "../lib/ofp-msgs.inc"
+#line 2851 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MONITOR_STATS_REQUEST,
         "NXST_FLOW_MONITOR request",
     },
     {
         ofpraw_nxst_flow_monitor_reply_instances,
         1, 1,
-#line 419 "../lib/ofp-msgs.h"
+#line 419 "./lib/ofp-msgs.h"
         0,
-#line 419 "../lib/ofp-msgs.h"
+#line 419 "./lib/ofp-msgs.h"
         sizeof(uint8_t[8]),
-#line 2862 "../lib/ofp-msgs.inc"
+#line 2862 "lib/ofp-msgs.inc"
         OFPTYPE_FLOW_MONITOR_STATS_REPLY,
         "NXST_FLOW_MONITOR reply",
     },

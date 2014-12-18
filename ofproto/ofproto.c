@@ -536,6 +536,7 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ovs_rwlock_init(&ofproto->groups_rwlock);
     hmap_init(&ofproto->groups);
     ovs_mutex_unlock(&ofproto_mutex);
+    ofproto->ogf.types = 0xf;
     ofproto->ogf.capabilities = OFPGFC_CHAINING | OFPGFC_SELECT_LIVENESS |
                                 OFPGFC_SELECT_WEIGHT;
     ofproto->ogf.max_groups[OFPGT11_ALL] = OFPG_MAX;
@@ -1480,6 +1481,15 @@ ofproto_run(struct ofproto *p)
 
             ovs_mutex_lock(&ofproto_mutex);
             fat_rwlock_rdlock(&table->cls.rwlock);
+
+            if (classifier_count(&table->cls) > 100000) {
+                static struct vlog_rate_limit count_rl =
+                    VLOG_RATE_LIMIT_INIT(1, 1);
+                VLOG_WARN_RL(&count_rl, "Table %"PRIuSIZE" has an excessive"
+                             " number of rules: %d", i,
+                             classifier_count(&table->cls));
+            }
+
             cls_cursor_init(&cursor, &table->cls, NULL);
             CLS_CURSOR_FOR_EACH (rule, cr, &cursor) {
                 if (rule->idle_timeout || rule->hard_timeout) {

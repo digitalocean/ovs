@@ -10644,6 +10644,19 @@ ovsrec_open_vswitch_columns_init(void)
 /* Port table. */
 
 static void
+ovsrec_port_parse_bond_active_slave(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
+{
+    struct ovsrec_port *row = ovsrec_port_cast(row_);
+
+    ovs_assert(inited);
+    if (datum->n >= 1) {
+        row->bond_active_slave = datum->keys[0].string;
+    } else {
+        row->bond_active_slave = NULL;
+    }
+}
+
+static void
 ovsrec_port_parse_bond_downdelay(struct ovsdb_idl_row *row_, const struct ovsdb_datum *datum)
 {
     struct ovsrec_port *row = ovsrec_port_cast(row_);
@@ -10899,6 +10912,12 @@ ovsrec_port_parse_vlan_mode(struct ovsdb_idl_row *row_, const struct ovsdb_datum
 }
 
 static void
+ovsrec_port_unparse_bond_active_slave(struct ovsdb_idl_row *row OVS_UNUSED)
+{
+    /* Nothing to do. */
+}
+
+static void
 ovsrec_port_unparse_bond_downdelay(struct ovsdb_idl_row *row OVS_UNUSED)
 {
     /* Nothing to do. */
@@ -11069,6 +11088,13 @@ ovsrec_port_insert(struct ovsdb_idl_txn *txn)
 
 
 void
+ovsrec_port_verify_bond_active_slave(const struct ovsrec_port *row)
+{
+    ovs_assert(inited);
+    ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_ACTIVE_SLAVE]);
+}
+
+void
 ovsrec_port_verify_bond_downdelay(const struct ovsrec_port *row)
 {
     ovs_assert(inited);
@@ -11185,6 +11211,29 @@ ovsrec_port_verify_vlan_mode(const struct ovsrec_port *row)
 {
     ovs_assert(inited);
     ovsdb_idl_txn_verify(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_VLAN_MODE]);
+}
+
+/* Returns the bond_active_slave column's value in 'row' as a struct ovsdb_datum.
+ * This is useful occasionally: for example, ovsdb_datum_find_key() is an
+ * easier and more efficient way to search for a given key than implementing
+ * the same operation on the "cooked" form in 'row'.
+ *
+ * 'key_type' must be OVSDB_TYPE_STRING.
+ * (This helps to avoid silent bugs if someone changes bond_active_slave's
+ * type without updating the caller.)
+ *
+ * The caller must not modify or free the returned value.
+ *
+ * Various kinds of changes can invalidate the returned value: modifying
+ * 'column' within 'row', deleting 'row', or completing an ongoing transaction.
+ * If the returned value is needed for a long time, it is best to make a copy
+ * of it with ovsdb_datum_clone(). */
+const struct ovsdb_datum *
+ovsrec_port_get_bond_active_slave(const struct ovsrec_port *row,
+	enum ovsdb_atomic_type key_type OVS_UNUSED)
+{
+    ovs_assert(key_type == OVSDB_TYPE_STRING);
+    return ovsdb_idl_read(&row->header_, &ovsrec_port_col_bond_active_slave);
 }
 
 /* Returns the bond_downdelay column's value in 'row' as a struct ovsdb_datum.
@@ -11591,6 +11640,25 @@ ovsrec_port_get_vlan_mode(const struct ovsrec_port *row,
 }
 
 void
+ovsrec_port_set_bond_active_slave(const struct ovsrec_port *row, const char *bond_active_slave)
+{
+    struct ovsdb_datum datum;
+    union ovsdb_atom key;
+
+    ovs_assert(inited);
+    if (bond_active_slave) {
+        datum.n = 1;
+        datum.keys = &key;
+        key.string = CONST_CAST(char *, bond_active_slave);
+    } else {
+        datum.n = 0;
+        datum.keys = NULL;
+    }
+    datum.values = NULL;
+    ovsdb_idl_txn_write_clone(&row->header_, &ovsrec_port_columns[OVSREC_PORT_COL_BOND_ACTIVE_SLAVE], &datum);
+}
+
+void
 ovsrec_port_set_bond_downdelay(const struct ovsrec_port *row, int64_t bond_downdelay)
 {
     struct ovsdb_datum datum;
@@ -11922,6 +11990,18 @@ static void
 ovsrec_port_columns_init(void)
 {
     struct ovsdb_idl_column *c;
+
+    /* Initialize ovsrec_port_col_bond_active_slave. */
+    c = &ovsrec_port_col_bond_active_slave;
+    c->name = "bond_active_slave";
+    ovsdb_base_type_init(&c->type.key, OVSDB_TYPE_STRING);
+    c->type.key.u.string.minLen = 0;
+    ovsdb_base_type_init(&c->type.value, OVSDB_TYPE_VOID);
+    c->type.n_min = 0;
+    c->type.n_max = 1;
+    c->mutable = true;
+    c->parse = ovsrec_port_parse_bond_active_slave;
+    c->unparse = ovsrec_port_unparse_bond_active_slave;
 
     /* Initialize ovsrec_port_col_bond_downdelay. */
     c = &ovsrec_port_col_bond_downdelay;
@@ -14050,6 +14130,6 @@ ovsrec_init(void)
 const char *
 ovsrec_get_db_version(void)
 {
-    return "7.6.0";
+    return "7.6.2";
 }
 

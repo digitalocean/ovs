@@ -293,7 +293,7 @@ void ovs_dp_process_received_packet(struct vport *p, struct sk_buff *skb)
 	OVS_CB(skb)->input_vport = p;
 
 	/* Extract flow from 'skb' into 'key'. */
-	error = ovs_flow_extract(skb, p->port_no, &key);
+	error = ovs_flow_key_extract(skb, &key);
 	if (unlikely(error)) {
 		kfree_skb(skb);
 		return;
@@ -339,15 +339,21 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 	struct dp_upcall_info later_info;
 	struct sw_flow_key later_key;
 	struct sk_buff *segs, *nskb;
+	struct ovs_skb_cb ovs_cb;
 	int err;
 
+	ovs_cb = *OVS_CB(skb);
 	segs = __skb_gso_segment(skb, NETIF_F_SG, false);
+	*OVS_CB(skb) = ovs_cb;
 	if (IS_ERR(segs))
 		return PTR_ERR(segs);
+	if (segs == NULL)
+		return -EINVAL;
 
 	/* Queue all of the segments. */
 	skb = segs;
 	do {
+		*OVS_CB(skb) = ovs_cb;
 		err = queue_userspace_packet(dp, skb, upcall_info);
 		if (err)
 			break;
@@ -429,7 +435,7 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 	struct sk_buff *user_skb; /* to be queued to userspace */
 	struct nlattr *nla;
 	struct genl_info info = {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
+#ifdef HAVE_GENLMSG_NEW_UNICAST
 		.dst_sk = ovs_dp_get_net(dp)->genl_sock,
 #endif
 		.snd_portid = upcall_info->portid,
@@ -570,13 +576,11 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	if (IS_ERR(flow))
 		goto err_kfree_skb;
 
-	err = ovs_flow_extract(packet, -1, &flow->key);
+	err = ovs_flow_key_extract_userspace(a[OVS_PACKET_ATTR_KEY], packet,
+					     &flow->key);
 	if (err)
 		goto err_flow_free;
 
-	err = ovs_nla_get_flow_metadata(flow, a[OVS_PACKET_ATTR_KEY]);
-	if (err)
-		goto err_flow_free;
 	acts = ovs_nla_alloc_flow_actions(nla_len(a[OVS_PACKET_ATTR_ACTIONS]));
 	err = PTR_ERR(acts);
 	if (IS_ERR(acts))
@@ -1274,7 +1278,7 @@ static size_t ovs_dp_cmd_msg_size(void)
 	return msgsize;
 }
 
-/* Called with ovs_mutex or RCU read lock. */
+/* Called with ovs_mutex. */
 static int ovs_dp_cmd_fill_info(struct datapath *dp, struct sk_buff *skb,
 				u32 portid, u32 seq, u32 flags, u8 cmd)
 {
@@ -1566,7 +1570,7 @@ static int ovs_dp_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	if (!reply)
 		return -ENOMEM;
 
-	rcu_read_lock();
+	ovs_lock();
 	dp = lookup_datapath(sock_net(skb->sk), info->userhdr, info->attrs);
 	if (IS_ERR(dp)) {
 		err = PTR_ERR(dp);
@@ -1575,12 +1579,12 @@ static int ovs_dp_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	err = ovs_dp_cmd_fill_info(dp, reply, info->snd_portid,
 				   info->snd_seq, 0, OVS_DP_CMD_NEW);
 	BUG_ON(err < 0);
-	rcu_read_unlock();
+	ovs_unlock();
 
 	return genlmsg_reply(reply, info);
 
 err_unlock_free:
-	rcu_read_unlock();
+	ovs_unlock();
 	kfree_skb(reply);
 	return err;
 }
@@ -1592,8 +1596,8 @@ static int ovs_dp_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	int skip = cb->args[0];
 	int i = 0;
 
-	rcu_read_lock();
-	list_for_each_entry_rcu(dp, &ovs_net->dps, list_node) {
+	ovs_lock();
+	list_for_each_entry(dp, &ovs_net->dps, list_node) {
 		if (i >= skip &&
 		    ovs_dp_cmd_fill_info(dp, skb, NETLINK_CB(cb->skb).portid,
 					 cb->nlh->nlmsg_seq, NLM_F_MULTI,
@@ -1601,7 +1605,7 @@ static int ovs_dp_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 			break;
 		i++;
 	}
-	rcu_read_unlock();
+	ovs_unlock();
 
 	cb->args[0] = i;
 

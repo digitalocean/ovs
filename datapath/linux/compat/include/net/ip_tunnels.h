@@ -2,8 +2,30 @@
 #define __NET_IP_TUNNELS_WRAPPER_H 1
 
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,12,0)
+#if defined(HAVE_GRE_HANDLE_OFFLOADS) && \
+     LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0) && \
+     defined(HAVE_VXLAN_XMIT_SKB)
+/* RHEL6 and RHEL7 both has backported tunnel API but RHEL6 has
+ * older version, so avoid using RHEL6 backports.
+ */
+#define USE_KERNEL_TUNNEL_API
+#endif
+
+#ifdef USE_KERNEL_TUNNEL_API
 #include_next <net/ip_tunnels.h>
+static inline int rpl_iptunnel_xmit(struct rtable *rt,
+                                    struct sk_buff *skb, __be32 src,
+                                    __be32 dst, __u8 proto, __u8 tos,
+                                    __u8 ttl, __be16 df, bool xnet)
+{
+#ifdef HAVE_IPTUNNEL_XMIT_NET
+	return iptunnel_xmit(NULL, rt, skb, src, dst, proto, tos, ttl, df);
+#else
+	return iptunnel_xmit(rt, skb, src, dst, proto, tos, ttl, df, xnet);
+#endif
+}
+#define iptunnel_xmit rpl_iptunnel_xmit
+
 #else
 
 #include <linux/if_tunnel.h>

@@ -175,11 +175,11 @@ static void update_ipv6_checksum(struct sk_buff *skb, u8 l4_proto,
 {
 	int transport_len = skb->len - skb_transport_offset(skb);
 
-	if (l4_proto == IPPROTO_TCP) {
+	if (l4_proto == NEXTHDR_TCP) {
 		if (likely(transport_len >= sizeof(struct tcphdr)))
 			inet_proto_csum_replace16(&tcp_hdr(skb)->check, skb,
 						  addr, new_addr, 1);
-	} else if (l4_proto == IPPROTO_UDP) {
+	} else if (l4_proto == NEXTHDR_UDP) {
 		if (likely(transport_len >= sizeof(struct udphdr))) {
 			struct udphdr *uh = udp_hdr(skb);
 
@@ -190,6 +190,10 @@ static void update_ipv6_checksum(struct sk_buff *skb, u8 l4_proto,
 					uh->check = CSUM_MANGLED_0;
 			}
 		}
+	} else if (l4_proto == NEXTHDR_ICMP) {
+		if (likely(transport_len >= sizeof(struct icmp6hdr)))
+			inet_proto_csum_replace16(&icmp6_hdr(skb)->icmp6_cksum,
+						  skb, addr, new_addr, 1);
 	}
 }
 
@@ -272,7 +276,7 @@ static int set_ipv6(struct sk_buff *skb, const struct ovs_key_ipv6 *ipv6_key)
 
 	if (memcmp(ipv6_key->ipv6_dst, daddr, sizeof(ipv6_key->ipv6_dst))) {
 		unsigned int offset = 0;
-		int flags = OVS_IP6T_FH_F_SKIP_RH;
+		int flags = IP6_FH_F_SKIP_RH;
 		bool recalc_csum = true;
 
 		if (ipv6_ext_hdr(nh->nexthdr))
@@ -554,18 +558,15 @@ static int execute_recirc(struct datapath *dp, struct sk_buff *skb,
 				 const struct nlattr *a)
 {
 	struct sw_flow_key recirc_key;
-	const struct vport *p = OVS_CB(skb)->input_vport;
-	uint32_t hash = OVS_CB(skb)->pkt_key->ovs_flow_hash;
 	int err;
 
-	err = ovs_flow_extract(skb, p->port_no, &recirc_key);
+	err = ovs_flow_key_extract_recirc(nla_get_u32(a), OVS_CB(skb)->pkt_key,
+					  skb, &recirc_key);
 	if (err) {
 		kfree_skb(skb);
 		return err;
 	}
 
-	recirc_key.ovs_flow_hash = hash;
-	recirc_key.recirc_id = nla_get_u32(a);
 
 	ovs_dp_process_packet_with_key(skb, &recirc_key, true);
 

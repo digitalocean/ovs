@@ -17,7 +17,7 @@ Summary: Open vSwitch Kernel Modules
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: OpenSource Security Ralf Spenneberg <ralf@os-s.net>
-Version: 2.3.0
+Version: 2.3.1
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: GPLv2

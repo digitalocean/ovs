@@ -1,3 +1,25 @@
+openvswitch (2.3.1-0ubuntu1) vivid; urgency=low
+
+   * New upstream release.
+   * d/rules,*.manpages: Rewrite to use more standard debhelper sequencing.
+   * d/automake.mk,openvswitch-switch.default,rules:
+     Rename openvswitch-switch.template -> openvswitch-switch.default.
+   * Enable systemd support:
+     - d/openvswitch-switch.service,
+       d/openvswitch-switch.openvswitch-nonetwork.service:
+       Systemd unit files, derived from RHEL versions.
+     - d/control: Add BD on dh-systemd.
+     - d/rules: Enable systemd helper, explicit no-start install of
+       openvswitch-nonetwork unit.
+     - d/ifupdown.sh: Tweak to support use with systemd ifinstalled.
+   * d/control: Bumped Standards-Version 3.9.6, no changes.
+   * d/tests/common: Drop module reload checks, as we always use the
+     in-tree kernel module now.
+   * d/python-openvswitch.*,openvswitch-test.*,automake.mk:
+     Tidy up install of Python components.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 18 Dec 2014 12:36:25 +0000
+
 openvswitch (2.3.0+git20140819-2ubuntu2) vivid; urgency=medium
 
   * Resolve DEP-8 test failures:

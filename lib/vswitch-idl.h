@@ -1326,6 +1326,9 @@ void ovsrec_open_vswitch_set_system_version(const struct ovsrec_open_vswitch *, 
 struct ovsrec_port {
 	struct ovsdb_idl_row header_;
 
+	/* bond_active_slave column. */
+	char *bond_active_slave;
+
 	/* bond_downdelay column. */
 	int64_t bond_downdelay;
 
@@ -1384,6 +1387,7 @@ struct ovsrec_port {
 };
 
 enum {
+    OVSREC_PORT_COL_BOND_ACTIVE_SLAVE,
     OVSREC_PORT_COL_BOND_DOWNDELAY,
     OVSREC_PORT_COL_BOND_FAKE_IFACE,
     OVSREC_PORT_COL_BOND_MODE,
@@ -1411,6 +1415,7 @@ enum {
 #define ovsrec_port_col_bond_downdelay (ovsrec_port_columns[OVSREC_PORT_COL_BOND_DOWNDELAY])
 #define ovsrec_port_col_interfaces (ovsrec_port_columns[OVSREC_PORT_COL_INTERFACES])
 #define ovsrec_port_col_other_config (ovsrec_port_columns[OVSREC_PORT_COL_OTHER_CONFIG])
+#define ovsrec_port_col_bond_active_slave (ovsrec_port_columns[OVSREC_PORT_COL_BOND_ACTIVE_SLAVE])
 #define ovsrec_port_col_bond_fake_iface (ovsrec_port_columns[OVSREC_PORT_COL_BOND_FAKE_IFACE])
 #define ovsrec_port_col_lacp (ovsrec_port_columns[OVSREC_PORT_COL_LACP])
 #define ovsrec_port_col_mac (ovsrec_port_columns[OVSREC_PORT_COL_MAC])
@@ -1440,6 +1445,7 @@ void ovsrec_port_init(struct ovsrec_port *);
 void ovsrec_port_delete(const struct ovsrec_port *);
 struct ovsrec_port *ovsrec_port_insert(struct ovsdb_idl_txn *);
 
+void ovsrec_port_verify_bond_active_slave(const struct ovsrec_port *);
 void ovsrec_port_verify_bond_downdelay(const struct ovsrec_port *);
 void ovsrec_port_verify_bond_fake_iface(const struct ovsrec_port *);
 void ovsrec_port_verify_bond_mode(const struct ovsrec_port *);
@@ -1461,6 +1467,7 @@ void ovsrec_port_verify_vlan_mode(const struct ovsrec_port *);
 /* Functions for fetching columns as "struct ovsdb_datum"s.  (This is
    rarely useful.  More often, it is easier to access columns by using
    the members of ovsrec_port directly.) */
+const struct ovsdb_datum *ovsrec_port_get_bond_active_slave(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_bond_downdelay(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_bond_fake_iface(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_bond_mode(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
@@ -1479,6 +1486,7 @@ const struct ovsdb_datum *ovsrec_port_get_tag(const struct ovsrec_port *, enum o
 const struct ovsdb_datum *ovsrec_port_get_trunks(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 const struct ovsdb_datum *ovsrec_port_get_vlan_mode(const struct ovsrec_port *, enum ovsdb_atomic_type key_type);
 
+void ovsrec_port_set_bond_active_slave(const struct ovsrec_port *, const char *bond_active_slave);
 void ovsrec_port_set_bond_downdelay(const struct ovsrec_port *, int64_t bond_downdelay);
 void ovsrec_port_set_bond_fake_iface(const struct ovsrec_port *, bool bond_fake_iface);
 void ovsrec_port_set_bond_mode(const struct ovsrec_port *, const char *bond_mode);

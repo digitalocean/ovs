@@ -24,7 +24,7 @@
 # rpmbuild -bb --without check xenserver/openvswitch-xen.spec
 
 %if %{?openvswitch_version:0}%{!?openvswitch_version:1}
-%define openvswitch_version 2.3.0
+%define openvswitch_version 2.3.1
 %endif
 
 %if %{?kernel_name:0}%{!?kernel_name:1}

@@ -1225,6 +1225,13 @@
           STP role of the port.
         </p>
       </column>
+
+      <column name="status" key="bond_active_slave">
+        <p>
+          For a bonded port, record the mac address of the current active slave.
+        </p>
+      </column>
+
     </group>
 
     <group title="Port Statistics">
@@ -1958,7 +1965,8 @@
 	</p>
 
 	<column name="bfd" key="enable" type='{"type": "boolean"}'>
-          True to enable BFD on this <ref table="Interface"/>.
+          True to enable BFD on this <ref table="Interface"/>.  If not
+          specified, BFD will not be enabled by default.
 	</column>
 
 	<column name="bfd" key="min_rx"
@@ -2027,7 +2035,7 @@
 	  default is <code>00:23:20:00:00:01</code>.
 	</column>
 
-	<column name="bfd" key="bfd_remoe_dst_mac">
+	<column name="bfd" key="bfd_remote_dst_mac">
 	  Set to an Ethernet address in the form
 	  <var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>
 	  to set the MAC used for checking the destination of received BFD packets.
@@ -2070,8 +2078,9 @@
 	</column>
 
 	<column name="bfd_status" key="diagnostic">
-	  In case of a problem, set to a short message that reports what the
-	  local BFD session thinks is wrong.
+	  In case of a problem, set to an error message that reports what the
+	  local BFD session thinks is wrong.  The error messages are defined
+	  in section 4.1 of [RFC 5880].
 	</column>
 
 	<column name="bfd_status" key="remote_state"
@@ -2081,8 +2090,9 @@
 	</column>
 
 	<column name="bfd_status" key="remote_diagnostic">
-	  In case of a problem, set to a short message that reports what the
-	  remote endpoint's BFD session thinks is wrong.
+	  In case of a problem, set to an error message that reports what the
+	  remote endpoint's BFD session thinks is wrong.  The error messages
+	  are defined in section 4.1 of [RFC 5880].
 	</column>
 
         <column name="bfd_status" key="flap_count"

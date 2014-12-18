@@ -23,9 +23,8 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
-	debian/openvswitch-switch.template \
+	debian/openvswitch-switch.default \
 	debian/openvswitch-switch.links \
-	debian/openvswitch-test.dirs \
 	debian/openvswitch-test.install \
 	debian/openvswitch-test.manpages \
 	debian/openvswitch-vtep.default \
@@ -34,7 +33,6 @@ EXTRA_DIST += \
 	debian/openvswitch-vtep.install \
 	debian/openvswitch-vtep.manpages \
 	debian/ovs-monitor-ipsec \
-	debian/python-openvswitch.dirs \
 	debian/python-openvswitch.install \
 	debian/rules \
 	debian/ifupdown.sh \
