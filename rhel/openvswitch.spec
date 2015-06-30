@@ -17,7 +17,7 @@ Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: Nicira, Inc.
-Version: 2.3.1
+Version: 2.3.2
 
 License: ASL 2.0
 Release: 1

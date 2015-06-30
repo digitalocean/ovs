@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@
 #include "ofproto-dpif-sflow.h"
 #include "ofproto-dpif-upcall.h"
 #include "ofproto-dpif-xlate.h"
+#include "ovs-rcu.h"
 #include "poll-loop.h"
 #include "seq.h"
 #include "simap.h"
@@ -238,6 +239,13 @@ COVERAGE_DEFINE(rev_port_toggled);
 COVERAGE_DEFINE(rev_flow_table);
 COVERAGE_DEFINE(rev_mac_learning);
 
+/* Stores mapping between 'recirc_id' and 'ofproto-dpif'. */
+struct dpif_backer_recirc_node {
+    struct hmap_node hmap_node;
+    struct ofproto_dpif *ofproto;
+    uint32_t recirc_id;
+};
+
 /* All datapaths of a given type share a single dpif backer instance. */
 struct dpif_backer {
     char *type;
@@ -256,6 +264,8 @@ struct dpif_backer {
 
     /* Recirculation. */
     struct recirc_id_pool *rid_pool;       /* Recirculation ID pool. */
+    struct hmap recirc_map;         /* Map of 'recirc_id's to 'ofproto's. */
+    struct ovs_mutex recirc_mutex;  /* Protects 'recirc_map'. */
     bool enable_recirc;   /* True if the datapath supports recirculation */
 
     /* True if the datapath supports variable-length
@@ -399,6 +409,8 @@ static void
 init(const struct shash *iface_hints)
 {
     struct shash_node *node;
+
+    fat_rwlock_init(&xlate_rwlock);
 
     /* Make a local copy, since we don't own 'iface_hints' elements. */
     SHASH_FOR_EACH(node, iface_hints) {
@@ -588,7 +600,7 @@ type_run(const char *type)
                 continue;
             }
 
-            ovs_rwlock_wrlock(&xlate_rwlock);
+            fat_rwlock_wrlock(&xlate_rwlock);
             xlate_ofproto_set(ofproto, ofproto->up.name,
                               ofproto->backer->dpif, ofproto->miss_rule,
                               ofproto->no_packet_in_rule, ofproto->ml,
@@ -621,7 +633,7 @@ type_run(const char *type)
                                  ofport->up.pp.config, ofport->up.pp.state,
                                  ofport->is_tunnel, ofport->may_enable);
             }
-            ovs_rwlock_unlock(&xlate_rwlock);
+            fat_rwlock_unlock(&xlate_rwlock);
         }
 
         udpif_revalidate(backer->udpif);
@@ -794,6 +806,26 @@ dealloc(struct ofproto *ofproto_)
     free(ofproto);
 }
 
+/* Called when 'ofproto' is destructed.  Checks for and clears any
+ * recirc_id leak. */
+static void
+dpif_backer_recirc_clear_ofproto(struct dpif_backer *backer,
+                                 struct ofproto_dpif *ofproto)
+{
+    struct dpif_backer_recirc_node *node;
+
+    ovs_mutex_lock(&backer->recirc_mutex);
+    HMAP_FOR_EACH (node, hmap_node, &backer->recirc_map) {
+        if (node->ofproto == ofproto) {
+            VLOG_ERR("recirc_id %"PRIu32", not freed when ofproto (%s) "
+                     "is destructed", node->recirc_id, ofproto->up.name);
+            hmap_remove(&backer->recirc_map, &node->hmap_node);
+            ovsrcu_postpone(free, node);
+        }
+    }
+    ovs_mutex_unlock(&backer->recirc_mutex);
+}
+
 static void
 close_dpif_backer(struct dpif_backer *backer)
 {
@@ -810,6 +842,8 @@ close_dpif_backer(struct dpif_backer *backer)
     hmap_destroy(&backer->odp_to_ofport_map);
     shash_find_and_delete(&all_dpif_backers, backer->type);
     recirc_id_pool_destroy(backer->rid_pool);
+    hmap_destroy(&backer->recirc_map);
+    ovs_mutex_destroy(&backer->recirc_mutex);
     free(backer->type);
     dpif_close(backer->dpif);
     free(backer);
@@ -921,6 +955,8 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     backer->variable_length_userdata = check_variable_length_userdata(backer);
     backer->max_mpls_depth = check_max_mpls_depth(backer);
     backer->rid_pool = recirc_id_pool_create();
+    ovs_mutex_init(&backer->recirc_mutex);
+    hmap_init(&backer->recirc_map);
 
     error = dpif_recv_set(backer->dpif, backer->recv_set_enable);
     if (error) {
@@ -1236,9 +1272,23 @@ add_internal_flows(struct ofproto_dpif *ofproto)
         return error;
     }
 
-    /* Continue non-recirculation rule lookups from table 0.
+    /* Drop any run away non-recirc rule lookups. Recirc_id has to be
+     * zero when reaching this rule.
      *
-     * (priority=2), recirc=0, actions=resubmit(, 0)
+     * (priority=2), recirc_id=0, actions=drop
+     */
+    ofpbuf_clear(&ofpacts);
+    match_init_catchall(&match);
+    match_set_recirc_id(&match, 0);
+    error = ofproto_dpif_add_internal_flow(ofproto, &match, 2, &ofpacts,
+                                           &unused_rulep);
+    if (error) {
+        return error;
+    }
+
+    /* Continue rule lookups for not-matched recirc rules from table 0.
+     *
+     * (priority=1), actions=resubmit(, 0)
      */
     resubmit = ofpact_put_RESUBMIT(&ofpacts);
     resubmit->ofpact.compat = 0;
@@ -1246,21 +1296,7 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     resubmit->table_id = 0;
 
     match_init_catchall(&match);
-    match_set_recirc_id(&match, 0);
 
-    error = ofproto_dpif_add_internal_flow(ofproto, &match, 2, &ofpacts,
-                                           &unused_rulep);
-    if (error) {
-        return error;
-    }
-
-    /* Drop any run away recirc rule lookups. Recirc_id has to be
-     * non-zero when reaching this rule.
-     *
-     * (priority=1), *, actions=drop
-     */
-    ofpbuf_clear(&ofpacts);
-    match_init_catchall(&match);
     error = ofproto_dpif_add_internal_flow(ofproto, &match, 1, &ofpacts,
                                            &unused_rulep);
 
@@ -1277,9 +1313,9 @@ destruct(struct ofproto *ofproto_)
     struct list pins;
 
     ofproto->backer->need_revalidate = REV_RECONFIGURE;
-    ovs_rwlock_wrlock(&xlate_rwlock);
+    fat_rwlock_wrlock(&xlate_rwlock);
     xlate_remove_ofproto(ofproto);
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
 
     /* Ensure that the upcall processing threads have no remaining references
      * to the ofproto or anything in it. */
@@ -1305,6 +1341,8 @@ destruct(struct ofproto *ofproto_)
         free(pin);
     }
     guarded_list_destroy(&ofproto->pins);
+
+    dpif_backer_recirc_clear_ofproto(ofproto->backer, ofproto);
 
     mbridge_unref(ofproto->mbridge);
 
@@ -1630,9 +1668,9 @@ port_destruct(struct ofport *port_)
     const char *dp_port_name;
 
     ofproto->backer->need_revalidate = REV_RECONFIGURE;
-    ovs_rwlock_wrlock(&xlate_rwlock);
+    fat_rwlock_wrlock(&xlate_rwlock);
     xlate_ofport_remove(port);
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
 
     dp_port_name = netdev_vport_get_dpif_port(port->up.netdev, namebuf,
                                               sizeof namebuf);
@@ -1728,6 +1766,7 @@ set_sflow(struct ofproto *ofproto_,
     struct dpif_sflow *ds = ofproto->sflow;
 
     if (sflow_options) {
+        uint32_t old_probability = ds ? dpif_sflow_get_probability(ds) : 0;
         if (!ds) {
             struct ofport_dpif *ofport;
 
@@ -1735,9 +1774,11 @@ set_sflow(struct ofproto *ofproto_,
             HMAP_FOR_EACH (ofport, up.hmap_node, &ofproto->up.ports) {
                 dpif_sflow_add_port(ds, &ofport->up, ofport->odp_port);
             }
-            ofproto->backer->need_revalidate = REV_RECONFIGURE;
         }
         dpif_sflow_set_options(ds, sflow_options);
+        if (dpif_sflow_get_probability(ds) != old_probability) {
+            ofproto->backer->need_revalidate = REV_RECONFIGURE;
+        }
     } else {
         if (ds) {
             dpif_sflow_unref(ds);
@@ -1783,14 +1824,12 @@ static int
 set_cfm(struct ofport *ofport_, const struct cfm_settings *s)
 {
     struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofport->up.ofproto);
+    struct cfm *old = ofport->cfm;
     int error = 0;
 
     if (s) {
         if (!ofport->cfm) {
-            struct ofproto_dpif *ofproto;
-
-            ofproto = ofproto_dpif_cast(ofport->up.ofproto);
-            ofproto->backer->need_revalidate = REV_RECONFIGURE;
             ofport->cfm = cfm_create(ofport->up.netdev);
         }
 
@@ -1804,6 +1843,9 @@ set_cfm(struct ofport *ofport_, const struct cfm_settings *s)
     cfm_unref(ofport->cfm);
     ofport->cfm = NULL;
 out:
+    if (ofport->cfm != old) {
+        ofproto->backer->need_revalidate = REV_RECONFIGURE;
+    }
     ofproto_dpif_monitor_port_update(ofport, ofport->bfd, ofport->cfm,
                                      ofport->up.pp.hw_addr);
     return error;
@@ -2155,7 +2197,7 @@ bundle_flush_macs(struct ofbundle *bundle, bool all_ofprotos)
     ofproto->backer->need_revalidate = REV_RECONFIGURE;
     ovs_rwlock_wrlock(&ml->rwlock);
     LIST_FOR_EACH_SAFE (mac, next_mac, lru_node, &ml->lrus) {
-        if (mac->port.p == bundle) {
+        if (mac_entry_get_port(ml, mac) == bundle) {
             if (all_ofprotos) {
                 struct ofproto_dpif *o;
 
@@ -2273,11 +2315,11 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     ofproto = bundle->ofproto;
-    mbridge_unregister_bundle(ofproto->mbridge, bundle->aux);
+    mbridge_unregister_bundle(ofproto->mbridge, bundle);
 
-    ovs_rwlock_wrlock(&xlate_rwlock);
+    fat_rwlock_wrlock(&xlate_rwlock);
     xlate_bundle_remove(bundle);
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
 
     LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
         bundle_del_port(port);
@@ -2530,7 +2572,7 @@ bundle_send_learning_packets(struct ofbundle *bundle)
     list_init(&packets);
     ovs_rwlock_rdlock(&ofproto->ml->rwlock);
     LIST_FOR_EACH (e, lru_node, &ofproto->ml->lrus) {
-        if (e->port.p != bundle) {
+        if (mac_entry_get_port(ofproto->ml, e) != bundle) {
             void *port_void;
 
             learning_packet = bond_compose_learning_packet(bundle->bond,
@@ -3200,16 +3242,7 @@ rule_dpif_lookup(struct ofproto_dpif *ofproto, struct flow *flow,
         if (wc) {
             wc->masks.recirc_id = UINT32_MAX;
         }
-
-        /* Start looking up from internal table for post recirculation flows
-         * or packets. We can also simply send all, including normal flows
-         * or packets to the internal table. They will not match any post
-         * recirculation rules except the 'catch all' rule that resubmit
-         * them to table 0.
-         *
-         * As an optimization, we send normal flows and packets to table 0
-         * directly, saving one table lookup.  */
-        table_id = flow->recirc_id ? TBL_INTERNAL : 0;
+        table_id = rule_dpif_lookup_get_init_table_id(flow);
     } else {
         table_id = 0;
     }
@@ -3787,7 +3820,7 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
     ds_put_cstr(&ds, " port  VLAN  MAC                Age\n");
     ovs_rwlock_rdlock(&ofproto->ml->rwlock);
     LIST_FOR_EACH (e, lru_node, &ofproto->ml->lrus) {
-        struct ofbundle *bundle = e->port.p;
+        struct ofbundle *bundle = mac_entry_get_port(ofproto->ml, e);
         char name[OFP_MAX_PORT_NAME_LEN];
 
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
@@ -4767,20 +4800,66 @@ odp_port_to_ofp_port(const struct ofproto_dpif *ofproto, odp_port_t odp_port)
     }
 }
 
+struct ofproto_dpif *
+ofproto_dpif_recirc_get_ofproto(const struct dpif_backer *backer,
+                                uint32_t recirc_id)
+{
+    struct dpif_backer_recirc_node *node;
+
+    ovs_mutex_lock(&backer->recirc_mutex);
+    node = CONTAINER_OF(hmap_first_with_hash(&backer->recirc_map, recirc_id),
+                        struct dpif_backer_recirc_node, hmap_node);
+    ovs_mutex_unlock(&backer->recirc_mutex);
+
+    return node ? node->ofproto : NULL;
+}
+
 uint32_t
 ofproto_dpif_alloc_recirc_id(struct ofproto_dpif *ofproto)
 {
     struct dpif_backer *backer = ofproto->backer;
+    uint32_t recirc_id = recirc_id_alloc(backer->rid_pool);
 
-    return  recirc_id_alloc(backer->rid_pool);
+    if (recirc_id) {
+        struct dpif_backer_recirc_node *node = xmalloc(sizeof *node);
+
+        node->recirc_id = recirc_id;
+        node->ofproto = ofproto;
+
+        ovs_mutex_lock(&backer->recirc_mutex);
+        hmap_insert(&backer->recirc_map, &node->hmap_node, node->recirc_id);
+        ovs_mutex_unlock(&backer->recirc_mutex);
+    }
+
+    return recirc_id;
 }
 
 void
 ofproto_dpif_free_recirc_id(struct ofproto_dpif *ofproto, uint32_t recirc_id)
 {
     struct dpif_backer *backer = ofproto->backer;
+    struct dpif_backer_recirc_node *node;
 
-    recirc_id_free(backer->rid_pool, recirc_id);
+    ovs_mutex_lock(&backer->recirc_mutex);
+    node = CONTAINER_OF(hmap_first_with_hash(&backer->recirc_map, recirc_id),
+                        struct dpif_backer_recirc_node, hmap_node);
+    if (node) {
+        hmap_remove(&backer->recirc_map, &node->hmap_node);
+        ovs_mutex_unlock(&backer->recirc_mutex);
+        recirc_id_free(backer->rid_pool, node->recirc_id);
+
+        if (node->ofproto != ofproto) {
+            VLOG_ERR("recirc_id %"PRIu32", freed by incorrect ofproto (%s),"
+                     " expect ofproto (%s)", node->recirc_id, ofproto->up.name,
+                     node->ofproto->up.name);
+        }
+
+        /* RCU postpone the free, since other threads may be referring
+         * to 'node' at same time. */
+        ovsrcu_postpone(free, node);
+    } else {
+        ovs_mutex_unlock(&backer->recirc_mutex);
+    }
 }
 
 int

@@ -17,8 +17,6 @@ Acked-by: Ansis Atteka <aatteka@nicira.com>
  utilities/ovs-appctl.c | 15 +++++++++++++--
  1 file changed, 13 insertions(+), 2 deletions(-)
 
-diff --git a/utilities/ovs-appctl.c b/utilities/ovs-appctl.c
-index a6fbebd..bb17ec2 100644
 --- a/utilities/ovs-appctl.c
 +++ b/utilities/ovs-appctl.c
 @@ -1,5 +1,5 @@
@@ -57,7 +55,7 @@ index a6fbebd..bb17ec2 100644
      const char *target;
      int e_options;
  
-@@ -124,7 +131,7 @@ parse_command_line(int argc, char *argv[])
+@@ -124,7 +131,7 @@ parse_command_line(int argc, char *argv[
      for (;;) {
          int option;
  
@@ -66,7 +64,7 @@ index a6fbebd..bb17ec2 100644
          if (option == -1) {
              break;
          }
-@@ -158,6 +165,8 @@ parse_command_line(int argc, char *argv[])
+@@ -158,6 +165,8 @@ parse_command_line(int argc, char *argv[
              ovs_print_version(0, 0);
              exit(EXIT_SUCCESS);
  
@@ -75,7 +73,7 @@ index a6fbebd..bb17ec2 100644
          case '?':
              exit(EXIT_FAILURE);
  
-@@ -165,6 +174,8 @@ parse_command_line(int argc, char *argv[])
+@@ -165,6 +174,8 @@ parse_command_line(int argc, char *argv[
              OVS_NOT_REACHED();
          }
      }
@@ -84,6 +82,3 @@ index a6fbebd..bb17ec2 100644
  
      if (optind >= argc) {
          ovs_fatal(0, "at least one non-option argument is required "
--- 
-1.9.1
-

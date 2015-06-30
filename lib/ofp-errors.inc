@@ -1297,6 +1297,8 @@ ofperr_of10_decode(uint32_t vendor, uint16_t type, uint16_t code)
         return OFPERR_OFPBAC_BAD_SET_ARGUMENT;
     case (0x2320ULL << 32) | (2 << 16) | 256:
         return OFPERR_NXBAC_MUST_BE_ZERO;
+    case (0x2320ULL << 32) | (0 << 16) | 263:
+        return OFPERR_OFPBMC_BAD_FIELD;
     case (0x2320ULL << 32) | (1 << 16) | 258:
         return OFPERR_OFPBMC_BAD_VALUE;
     case (0x2320ULL << 32) | (1 << 16) | 259:
@@ -1403,7 +1405,7 @@ static const struct ofperr_domain ofperr_of10 = {
         {       -1, -1,  -1 }, /* OFPBMC_BAD_DL_ADDR_MASK */
         {       -1, -1,  -1 }, /* OFPBMC_BAD_NW_ADDR_MASK */
         {       -1, -1,  -1 }, /* OFPBMC_BAD_WILDCARDS */
-        {       -1, -1,  -1 }, /* OFPBMC_BAD_FIELD */
+        {   0x2320,  0, 263 }, /* OFPBMC_BAD_FIELD */
         {   0x2320,  1, 258 }, /* OFPBMC_BAD_VALUE */
         {   0x2320,  1, 259 }, /* OFPBMC_BAD_MASK */
         {   0x2320,  1, 260 }, /* OFPBMC_BAD_PREREQ */

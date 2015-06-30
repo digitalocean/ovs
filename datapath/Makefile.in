@@ -327,7 +327,7 @@ openvswitch_headers = compat.h datapath.h flow.h flow_netlink.h \
 	linux/compat/include/net/ipv6.h \
 	linux/compat/include/net/net_namespace.h \
 	linux/compat/include/net/netlink.h \
-	linux/compat/include/net/sock.h \
+	linux/compat/include/net/sock.h linux/compat/include/net/udp.h \
 	linux/compat/include/net/vxlan.h \
 	linux/compat/include/net/sctp/checksum.h
 openvswitch_extras = \
@@ -353,9 +353,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --gnu datapath/Makefile
+	  $(AUTOMAKE) --foreign datapath/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,7 +66,7 @@ VLOG_DEFINE_THIS_MODULE(ofproto_dpif_xlate);
  * recursive or not. */
 #define MAX_RESUBMITS (MAX_RESUBMIT_RECURSION * MAX_RESUBMIT_RECURSION)
 
-struct ovs_rwlock xlate_rwlock = OVS_RWLOCK_INITIALIZER;
+struct fat_rwlock xlate_rwlock;
 
 struct xbridge {
     struct hmap_node hmap_node;   /* Node in global 'xbridges' map. */
@@ -634,10 +634,12 @@ xlate_receive(const struct dpif_backer *backer, struct ofpbuf *packet,
               struct dpif_sflow **sflow, struct netflow **netflow,
               odp_port_t *odp_in_port)
 {
+    struct ofproto_dpif *recv_ofproto = NULL;
+    struct ofproto_dpif *recirc_ofproto = NULL;
     const struct xport *xport;
     int error = ENODEV;
 
-    ovs_rwlock_rdlock(&xlate_rwlock);
+    fat_rwlock_rdlock(&xlate_rwlock);
     if (odp_flow_key_to_flow(key, key_len, flow) == ODP_FIT_ERROR) {
         error = EINVAL;
         goto exit;
@@ -655,6 +657,7 @@ xlate_receive(const struct dpif_backer *backer, struct ofpbuf *packet,
     if (!xport) {
         goto exit;
     }
+    recv_ofproto = xport->xbridge->ofproto;
 
     if (vsp_adjust_flow(xport->xbridge->ofproto, flow)) {
         if (packet) {
@@ -667,24 +670,58 @@ xlate_receive(const struct dpif_backer *backer, struct ofpbuf *packet,
     }
     error = 0;
 
+    /* When recirc_id is set in 'flow', checks whether the ofproto_dpif that
+     * corresponds to the recirc_id is same as the receiving bridge.  If they
+     * are the same, uses the 'recv_ofproto' and keeps the 'ofp_in_port' as
+     * assigned.  Otherwise, uses the 'recirc_ofproto' that owns recirc_id and
+     * assigns OFPP_NONE to 'ofp_in_port'.  Doing this is in that, the
+     * recirculated flow must be processced by the ofproto which originates
+     * the recirculation, and as bridges can only see their own ports, the
+     * in_port of the 'recv_ofproto' should not be passed to the
+     * 'recirc_ofproto'.
+     *
+     * Admittedly, setting the 'ofp_in_port' to OFPP_NONE limits the
+     * 'recirc_ofproto' from meaningfully matching on in_port of recirculated
+     * flow, and should be fixed in the near future.
+     *
+     * TODO: Restore the original patch port.
+     */
+    if (flow->recirc_id) {
+        recirc_ofproto = ofproto_dpif_recirc_get_ofproto(backer,
+                                                         flow->recirc_id);
+        /* Returns error if could not find recirculation bridge */
+        if (!recirc_ofproto) {
+            error = ENOENT;
+            goto exit;
+        }
+
+        if (recv_ofproto != recirc_ofproto) {
+            xport = NULL;
+            flow->in_port.ofp_port = OFPP_NONE;
+            if (odp_in_port) {
+                *odp_in_port = ODPP_NONE;
+            }
+        }
+    }
+
     if (ofproto) {
-        *ofproto = xport->xbridge->ofproto;
+        *ofproto = xport ? recv_ofproto : recirc_ofproto;
     }
 
     if (ipfix) {
-        *ipfix = dpif_ipfix_ref(xport->xbridge->ipfix);
+        *ipfix = xport ? dpif_ipfix_ref(xport->xbridge->ipfix) : NULL;
     }
 
     if (sflow) {
-        *sflow = dpif_sflow_ref(xport->xbridge->sflow);
+        *sflow = xport ? dpif_sflow_ref(xport->xbridge->sflow) : NULL;
     }
 
     if (netflow) {
-        *netflow = netflow_ref(xport->xbridge->netflow);
+        *netflow = xport ? netflow_ref(xport->xbridge->netflow) : NULL;
     }
 
 exit:
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
     return error;
 }
 
@@ -1346,7 +1383,7 @@ OVS_REQ_RDLOCK(ml->rwlock)
         }
     }
 
-    return mac->port.p != in_xbundle->ofbundle;
+    return mac_entry_get_port(ml, mac) != in_xbundle->ofbundle;
 }
 
 
@@ -1382,7 +1419,7 @@ OVS_REQ_WRLOCK(xbridge->ml->rwlock)
         }
     }
 
-    if (mac->port.p != in_xbundle->ofbundle) {
+    if (mac_entry_get_port(xbridge->ml, mac) != in_xbundle->ofbundle) {
         /* The log messages here could actually be useful in debugging,
          * so keep the rate limit relatively high. */
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
@@ -1392,8 +1429,7 @@ OVS_REQ_WRLOCK(xbridge->ml->rwlock)
                     xbridge->name, ETH_ADDR_ARGS(flow->dl_src),
                     in_xbundle->name, vlan);
 
-        mac->port.p = in_xbundle->ofbundle;
-        mac_learning_changed(xbridge->ml);
+        mac_entry_set_port(xbridge->ml, mac, in_xbundle->ofbundle);
     }
 }
 
@@ -1467,9 +1503,10 @@ is_admissible(struct xlate_ctx *ctx, struct xport *in_port,
         case BV_DROP_IF_MOVED:
             ovs_rwlock_rdlock(&xbridge->ml->rwlock);
             mac = mac_learning_lookup(xbridge->ml, flow->dl_src, vlan);
-            if (mac && mac->port.p != in_xbundle->ofbundle &&
-                (!is_gratuitous_arp(flow, &ctx->xout->wc)
-                 || mac_entry_is_grat_arp_locked(mac))) {
+            if (mac
+                && mac_entry_get_port(xbridge->ml, mac) != in_xbundle->ofbundle
+                && (!is_gratuitous_arp(flow, &ctx->xout->wc)
+                    || mac_entry_is_grat_arp_locked(mac))) {
                 ovs_rwlock_unlock(&xbridge->ml->rwlock);
                 xlate_report(ctx, "SLB bond thinks this packet looped back, "
                              "dropping");
@@ -1563,7 +1600,7 @@ xlate_normal(struct xlate_ctx *ctx)
     /* Determine output bundle. */
     ovs_rwlock_rdlock(&ctx->xbridge->ml->rwlock);
     mac = mac_learning_lookup(ctx->xbridge->ml, flow->dl_dst, vlan);
-    mac_port = mac ? mac->port.p : NULL;
+    mac_port = mac ? mac_entry_get_port(ctx->xbridge->ml, mac) : NULL;
     ovs_rwlock_unlock(&ctx->xbridge->ml->rwlock);
 
     if (mac_port) {
@@ -1846,6 +1883,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         const struct xport *peer = xport->peer;
         struct flow old_flow = ctx->xin->flow;
         enum slow_path_reason special;
+        uint8_t table_id = rule_dpif_lookup_get_init_table_id(&ctx->xin->flow);
 
         ctx->xbridge = peer->xbridge;
         flow->in_port.ofp_port = peer->ofp_port;
@@ -1859,14 +1897,16 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             ctx->xout->slow |= special;
         } else if (may_receive(peer, ctx)) {
             if (xport_stp_forward_state(peer)) {
-                xlate_table_action(ctx, flow->in_port.ofp_port, 0, true, true);
+                xlate_table_action(ctx, flow->in_port.ofp_port, table_id,
+                                   true, true);
             } else {
                 /* Forwarding is disabled by STP.  Let OFPP_NORMAL and the
                  * learning action look at the packet, then drop it. */
                 struct flow old_base_flow = ctx->base_flow;
                 size_t old_size = ofpbuf_size(&ctx->xout->odp_actions);
                 mirror_mask_t old_mirrors = ctx->xout->mirrors;
-                xlate_table_action(ctx, flow->in_port.ofp_port, 0, true, true);
+                xlate_table_action(ctx, flow->in_port.ofp_port, table_id,
+                                   true, true);
                 ctx->xout->mirrors = old_mirrors;
                 ctx->base_flow = old_base_flow;
                 ofpbuf_set_size(&ctx->xout->odp_actions, old_size);
@@ -2118,6 +2158,7 @@ xlate_group_bucket(struct xlate_ctx *ctx, const struct ofputil_bucket *bucket)
 {
     uint64_t action_list_stub[1024 / 8];
     struct ofpbuf action_list, action_set;
+    struct flow old_flow = ctx->xin->flow;
 
     ofpbuf_use_const(&action_set, bucket->ofpacts, bucket->ofpacts_len);
     ofpbuf_use_stub(&action_list, action_list_stub, sizeof action_list_stub);
@@ -2129,6 +2170,25 @@ xlate_group_bucket(struct xlate_ctx *ctx, const struct ofputil_bucket *bucket)
 
     ofpbuf_uninit(&action_set);
     ofpbuf_uninit(&action_list);
+
+    /* Roll back flow to previous state.
+     * This is equivalent to cloning the packet for each bucket.
+     *
+     * As a side effect any subsequently applied actions will
+     * also effectively be applied to a clone of the packet taken
+     * just before applying the all or indirect group.
+     *
+     * Note that group buckets are action sets, hence they cannot modify the
+     * main action set.  Also any stack actions are ignored when executing an
+     * action set, so group buckets cannot change the stack either. */
+    ctx->xin->flow = old_flow;
+
+    /* The fact that the group bucket exits (for any reason) does not mean that
+     * the translation after the group action should exit.  Specifically, if
+     * the group bucket recirculates (which typically modifies the packet), the
+     * actions after the group action must continue processing with the
+     * original, not the recirculated packet! */
+    ctx->exit = false;
 }
 
 static void
@@ -2136,19 +2196,11 @@ xlate_all_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
     const struct ofputil_bucket *bucket;
     const struct list *buckets;
-    struct flow old_flow = ctx->xin->flow;
 
     group_dpif_get_buckets(group, &buckets);
 
     LIST_FOR_EACH (bucket, list_node, buckets) {
         xlate_group_bucket(ctx, bucket);
-        /* Roll back flow to previous state.
-         * This is equivalent to cloning the packet for each bucket.
-         *
-         * As a side effect any subsequently applied actions will
-         * also effectively be applied to a clone of the packet taken
-         * just before applying the all or indirect group. */
-        ctx->xin->flow = old_flow;
     }
 }
 
@@ -3179,9 +3231,9 @@ void
 xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     OVS_EXCLUDED(xlate_rwlock)
 {
-    ovs_rwlock_rdlock(&xlate_rwlock);
+    fat_rwlock_rdlock(&xlate_rwlock);
     xlate_actions__(xin, xout);
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
 }
 
 /* Returns the maximum number of packets that the Linux kernel is willing to
@@ -3522,6 +3574,7 @@ xlate_actions__(struct xlate_in *xin, struct xlate_out *xout)
     ofpbuf_uninit(&ctx.stack);
     ofpbuf_uninit(&ctx.action_set);
 
+
     /* Clear the metadata and register wildcard masks, because we won't
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(wc);
@@ -3540,6 +3593,10 @@ xlate_actions__(struct xlate_in *xin, struct xlate_out *xout)
         wc->masks.tp_src &= htons(UINT8_MAX);
         wc->masks.tp_dst &= htons(UINT8_MAX);
     }
+    /* VLAN_TCI CFI bit must be matched if any of the TCI is matched. */
+    if (wc->masks.vlan_tci) {
+        wc->masks.vlan_tci |= htons(VLAN_CFI);
+    }
 }
 
 /* Sends 'packet' out 'ofport'.
@@ -3557,15 +3614,15 @@ xlate_send_packet(const struct ofport_dpif *ofport, struct ofpbuf *packet)
     flow_extract(packet, NULL, &flow);
     flow.in_port.ofp_port = OFPP_NONE;
 
-    ovs_rwlock_rdlock(&xlate_rwlock);
+    fat_rwlock_rdlock(&xlate_rwlock);
     xport = xport_lookup(ofport);
     if (!xport) {
-        ovs_rwlock_unlock(&xlate_rwlock);
+        fat_rwlock_unlock(&xlate_rwlock);
         return EINVAL;
     }
     output.port = xport->ofp_port;
     output.max_len = 0;
-    ovs_rwlock_unlock(&xlate_rwlock);
+    fat_rwlock_unlock(&xlate_rwlock);
 
     return ofproto_dpif_execute_actions(xport->xbridge->ofproto, &flow, NULL,
                                         &output.ofpact, sizeof output,

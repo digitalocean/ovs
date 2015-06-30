@@ -19,11 +19,9 @@ Acked-by: Justin Pettit <jpettit@nicira.com>
  lib/cfm.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/lib/cfm.c b/lib/cfm.c
-index 7784369..d83a68c 100644
 --- a/lib/cfm.c
 +++ b/lib/cfm.c
-@@ -613,7 +613,7 @@ cfm_compose_ccm(struct cfm *cfm, struct ofpbuf *packet,
+@@ -613,7 +613,7 @@ cfm_compose_ccm(struct cfm *cfm, struct
      if (cfm->last_tx) {
          long long int delay = time_msec() - cfm->last_tx;
          if (delay > (cfm->ccm_interval_ms * 3 / 2)) {
@@ -32,6 +30,3 @@ index 7784369..d83a68c 100644
                        " seq %"PRIu32, cfm->name, delay, cfm->ccm_interval_ms,
                        cfm->seq);
          }
--- 
-1.9.1
-

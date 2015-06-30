@@ -78,6 +78,18 @@ where:
     The "xen" flavor is the main running kernel flavor and the "kdump" flavor is
     the crashdump kernel flavor. Commonly, one would specify "xen" here.
 
+For XenServer 6.5 or above, the kernel version naming no longer contains
+KERNEL_FLAVOR.  In fact, only providing the `uname -r` output is enough.
+So, the final "rpmbuild" step changes to:
+
+   ```
+   KERNEL_UNAME=<`uname -r` output>
+   rpmbuild \
+        -D "kenel_uname $KERNEL_UNAME" \
+        -bb xenserver/openvswitch-xen.spec
+   ```
+
+
 Installing Open vSwitch for XenServer
 -------------------------------------
 

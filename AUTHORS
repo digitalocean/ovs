@@ -61,6 +61,7 @@ Ian Campbell            Ian.Campbell@citrix.com
 Isaku Yamahata          yamahata@valinux.co.jp
 James P.                roampune@gmail.com
 James Page              james.page@ubuntu.com
+Jan Vansteenkiste       jan@vstone.eu
 Jarno Rajahalme         jrajahalme@nicira.com
 Jason Kölker            jason@koelker.net
 Jasper Capel            jasper@capel.tv
@@ -127,7 +128,7 @@ Valient Gough           vgough@pobox.com
 Vivien Bernet-Rollande  vbr@soprive.net
 Wei Yongjun             yjwei@cn.fujitsu.com
 William Fulton
-YAMAMOTO Takashi        yamamoto@valinux.co.jp
+YAMAMOTO Takashi        yamamoto@midokura.com
 Yasuhito Takamiya       yasuhito@gmail.com
 yinpeijun               yinpeijun@huawei.com
 Yu Zhiguo               yuzg@cn.fujitsu.com
@@ -177,7 +178,7 @@ David Palma             palma@onesource.pt
 Derek Cormier           derek.cormier@lab.ntt.co.jp
 Dhaval Badiani          dbadiani@vmware.com
 DK Moon                 dkmoon@nicira.com
-Edwin Chiu              echiu@nicira.com
+Edwin Chiu              echiu@vmware.com
 Eivind Bulie Haanaes
 Eric Lopez              elopez@nicira.com
 Frido Roose             fr.roose@gmail.com
@@ -213,6 +214,7 @@ Joan Cirer              joan@ev0.net
 John Darrington         john@darrington.wattle.id.au
 John Galgay             john@galgay.net
 John Hurley             john.hurley@netronome.com
+K 華                    k940545@hotmail.com
 Kevin Mancuso           kevin.mancuso@rackspace.com
 Kiran Shanbhog          kiran@vmware.com
 Kirill Kabardin
@@ -253,6 +255,7 @@ Rob Sherwood            rob.sherwood@bigswitch.com
 Roger Leigh             rleigh@codelibre.net
 Rogério Vinhal Nunes
 Roman Sokolkov          rsokolkov@gmail.com
+Ronny L. Bull           bullrl@clarkson.edu
 Saul St. John           sstjohn@cs.wisc.edu
 Scott Hendricks         shendricks@nicira.com
 Sean Brady              sbrady@gtfservices.com
@@ -262,6 +265,9 @@ Simon Jouet             simon.jouet@gmail.com
 Spiro Kourtessis        spiro@vmware.com
 Sridhar Samudrala       samudrala.sridhar@gmail.com
 Srini Seetharaman       seethara@stanford.edu
+Sabyasachi Sengupta     Sabyasachi.Sengupta@alcatel-lucent.com
+Salvatore Cambria       salvatore.cambria@citrix.com
+Soner Sevinc            sevincs@vmware.com
 Stephen Hemminger       shemminger@vyatta.com
 Stephen Finucane        stephen.finucane@intel.com
 Suganya Ramachandran    suganyar@vmware.com
@@ -273,6 +279,7 @@ Torbjorn Tornkvist      kruskakli@gmail.com
 Valentin Bud            valentin@hackaserver.com
 Vasiliy Tolstov         v.tolstov@selfip.ru
 Vasu Dasari             vdasari@gmail.com
+Vijaya Mohan Guvva      vguvva@caviumnetworks.com
 Vishal Swarankar        vishal.swarnkar@gmail.com
 Vjekoslav Brajkovic     balkan@cs.washington.edu
 Voravit T.              voravit@kth.se

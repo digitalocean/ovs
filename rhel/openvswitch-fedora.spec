@@ -18,7 +18,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 2.3.1
+Version: 2.3.2
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: ASL 2.0
@@ -26,6 +26,13 @@ Release: 1%{?dist}
 Source: openvswitch-%{version}.tar.gz
 #Source1: openvswitch-init
 Buildroot: /tmp/openvswitch-fedora-rpm
+
+BuildRequires: autoconf
+BuildRequires: systemd-units openssl openssl-devel
+BuildRequires: python python-twisted-core python-zope-interface PyQt4
+BuildRequires: groff graphviz
+# make check dependencies
+BuildRequires: procps-ng
 
 Requires(post):  systemd-units
 Requires(preun): systemd-units
