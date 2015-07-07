@@ -21,7 +21,7 @@ override_dh_auto_configure:
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL) 1-710 714-' ||\
+	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL) 1-710 714-716 718-' ||\
                 $(MAKE) check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat tests/testsuite.log; \
