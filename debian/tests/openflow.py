@@ -1,11 +1,13 @@
 import unittest
 import logging
 from mininet.net import Mininet
+import mininet.log as log
 from mininet.node import OVSController, OVSKernelSwitch
 
 Switch = OVSKernelSwitch
 Controller = OVSController
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
+log.setLogLevel('info')
 
 
 class BasicOpenflowTest(unittest.TestCase):
@@ -32,10 +34,10 @@ class BasicOpenflowTest(unittest.TestCase):
 
         logging.info("Creating links")
         for h in hosts1:
-            s1.linkTo(h)
+            self.net.addLink(s1, h)
         for h in hosts2:
-            s2.linkTo(h)
-        s1.linkTo(s2)
+            self.net.addLink(s2, h)
+        self.net.addLink(s1, s2)
 
         logging.info("Starting network")
         self.net.start()

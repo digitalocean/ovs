@@ -1,3 +1,11 @@
+openvswitch (2.3.2-0ubuntu3) wily; urgency=medium
+
+  * d/tests/openflow.py: Use net.addLink to add links between switches and
+    hosts to ensure that they get cleanup up after use, fixing autopkgtest
+    failures. 
+
+ -- James Page <james.page@ubuntu.com>  Fri, 17 Jul 2015 12:48:25 +0100
+
 openvswitch (2.3.2-0ubuntu2) wily; urgency=medium
 
   * d/p/rules: Skip test 717 due to failure on powerpc - see
