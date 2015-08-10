@@ -22,7 +22,7 @@ AC_DEFUN([OVS_ENABLE_WERROR],
      [], [enable_Werror=no])
    AC_CONFIG_COMMANDS_PRE(
      [if test "X$enable_Werror" = Xyes; then
-        CFLAGS="$CFLAGS -Werror"
+        OVS_CFLAGS="$OVS_CFLAGS -Werror"
       fi])])
 
 dnl OVS_CHECK_LINUX
@@ -133,12 +133,14 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     fi
     AC_MSG_RESULT([$kversion])
 
-    if test "$version" -ge 3; then
-       if test "$version" = 3 && test "$patchlevel" -le 14; then
-          : # Linux 3.x
+    if test "$version" -ge 4; then
+       if test "$version" = 4 && test "$patchlevel" -le 0; then
+          : # Linux 4.x
        else
-         AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 3.14.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.0.x is not supported (please refer to the FAQ for advice)])
        fi
+    elif test "$version" = 3; then
+       : # Linux 3.x
     else
        if test "$version" -le 1 || test "$patchlevel" -le 5 || test "$sublevel" -le 31; then
          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version 2.6.32 or later is required])
@@ -170,12 +172,63 @@ AC_DEFUN([OVS_CHECK_DPDK], [
 
     DPDK_INCLUDE=$RTE_SDK/include
     DPDK_LIB_DIR=$RTE_SDK/lib
-    DPDK_LIBS="$DPDK_LIB_DIR/libintel_dpdk.a"
+    DPDK_LIB="-lintel_dpdk"
+    DPDK_EXTRA_LIB=""
 
-    LIBS="$DPDK_LIBS $LIBS"
-    CPPFLAGS="-I$DPDK_INCLUDE $CPPFLAGS"
+    AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([#include <$RTE_SDK/include/rte_config.h>
+#if !RTE_LIBRTE_VHOST_USER
+#error
+#endif], [])],
+                    [], [AC_DEFINE([VHOST_CUSE], [1], [DPDK vhost-cuse support enabled, vhost-user disabled.])
+                         DPDK_EXTRA_LIB="-lfuse"])
 
+    ovs_save_CFLAGS="$CFLAGS"
+    ovs_save_LDFLAGS="$LDFLAGS"
+    LDFLAGS="$LDFLAGS -L$DPDK_LIB_DIR"
+    CFLAGS="$CFLAGS -I$DPDK_INCLUDE"
+
+    # On some systems we have to add -ldl to link with dpdk
+    #
+    # This code, at first, tries to link without -ldl (""),
+    # then adds it and tries again.
+    # Before each attempt the search cache must be unset,
+    # otherwise autoconf will stick with the old result
+
+    found=false
+    save_LIBS=$LIBS
+    for extras in "" "-ldl"; do
+        LIBS="$DPDK_LIB $extras $save_LIBS $DPDK_EXTRA_LIB"
+        AC_LINK_IFELSE(
+           [AC_LANG_PROGRAM([#include <rte_config.h>
+                             #include <rte_eal.h>],
+                            [int rte_argc; char ** rte_argv;
+                             rte_eal_init(rte_argc, rte_argv);])],
+           [found=true])
+        if $found; then
+            break
+        fi
+    done
+    if $found; then :; else
+        AC_MSG_ERROR([cannot link with dpdk])
+    fi
+    CFLAGS="$ovs_save_CFLAGS"
+    LDFLAGS="$ovs_save_LDFLAGS"
+    OVS_LDFLAGS="$OVS_LDFLAGS -L$DPDK_LIB_DIR"
+    OVS_CFLAGS="$OVS_CFLAGS -I$DPDK_INCLUDE -mssse3"
+
+    # DPDK pmd drivers are not linked unless --whole-archive is used.
+    #
+    # This happens because the rest of the DPDK code doesn't use any symbol in
+    # the pmd driver objects, and the drivers register themselves using an
+    # __attribute__((constructor)) function.
+    #
+    # These options are specified inside a single -Wl directive to prevent
+    # autotools from reordering them.
+    DPDK_vswitchd_LDFLAGS=-Wl,--whole-archive,$DPDK_LIB,--no-whole-archive
+    AC_SUBST([DPDK_vswitchd_LDFLAGS])
     AC_DEFINE([DPDK_NETDEV], [1], [System uses the DPDK module.])
+
   else
     RTE_SDK=
   fi
@@ -222,7 +275,7 @@ dnl translated to uppercase.
 AC_DEFUN([OVS_FIND_FIELD_IFELSE], [
   AC_MSG_CHECKING([whether $2 has member $3 in $1])
   if test -f $1; then
-    awk '/$2.{/,/^}/' $1 2>/dev/null | grep '$3'
+    awk '/$2.{/,/^}/' $1 2>/dev/null | grep '$3' >/dev/null
     status=$?
     case $status in
       0)
@@ -250,16 +303,6 @@ AC_DEFUN([OVS_DEFINE], [
   echo '#define $1 1' >> datapath/linux/kcompat.h.new
 ])
 
-AC_DEFUN([OVS_CHECK_LOG2_H], [
-  AC_MSG_CHECKING([for $KSRC/include/linux/log2.h])
-  if test -e $KSRC/include/linux/log2.h; then
-    AC_MSG_RESULT([yes])
-    OVS_DEFINE([HAVE_LOG2_H])
-  else
-    AC_MSG_RESULT([no])
-  fi
-])
-
 dnl OVS_CHECK_LINUX_COMPAT
 dnl
 dnl Runs various Autoconf checks on the Linux 2.6 kernel source in
@@ -273,7 +316,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_CSUM_COPY_DBG])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [ERR_CAST])
-  OVS_GREP_IFELSE([$KSRC/include/linux/hash.h], [fast_hash_ops])
+  OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [IS_ERR_OR_NULL])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [eth_hw_addr_random])
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [ether_addr_copy])
@@ -283,6 +326,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/in.h], [ipv4_is_multicast])
   OVS_GREP_IFELSE([$KSRC/include/net/ip.h], [__ip_select_ident.*dst_entry],
                   [OVS_DEFINE([HAVE_IP_SELECT_IDENT_USING_DST_ENTRY])])
+  OVS_GREP_IFELSE([$KSRC/include/net/ip.h], [inet_get_local_port_range.*net],
+                  [OVS_DEFINE([HAVE_INET_GET_LOCAL_PORT_RANGE_USING_NET])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_disable_lro])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_stats])
@@ -291,6 +336,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [can_checksum_protocol])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [netdev_features_t])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [pcpu_sw_netstats])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hookfn.*nf_hook_ops],
+                  [OVS_DEFINE([HAVE_NF_HOOKFN_ARG_OPS])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32])
 
@@ -306,6 +353,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   # quoting rules.
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [[[^@]]proto_data_valid],
                   [OVS_DEFINE([HAVE_PROTO_DATA_VALID])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [kfree_skb_list])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [rxhash])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [u16.*rxhash],
                   [OVS_DEFINE([HAVE_U16_RXHASH])])
@@ -334,6 +382,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [int.skb_zerocopy(],
                   [OVS_DEFINE([HAVE_SKB_ZEROCOPY])])
   OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [l4_rxhash])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_ensure_writable])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_vlan_pop])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [skb_vlan_push])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/types.h], [bool],
                   [OVS_DEFINE([HAVE_BOOL_TYPE])])
@@ -345,48 +396,55 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_replace4])
   OVS_GREP_IFELSE([$KSRC/include/net/checksum.h], [csum_unfold])
 
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [genl_has_listeners])
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [mcgrp_offset])
   OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [parallel_ops])
   OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [genlmsg_new_unicast])
-  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [genl_notify.*genl_family],
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [netlink_has_listeners(net->genl_sock],
+                  [OVS_DEFINE([HAVE_GENL_HAS_LISTENERS_TAKES_NET])])
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [genlmsg_parse])
+  OVS_GREP_IFELSE([$KSRC/include/net/genetlink.h], [genl_notify.*family],
                   [OVS_DEFINE([HAVE_GENL_NOTIFY_TAKES_FAMILY])])
 
   OVS_FIND_FIELD_IFELSE([$KSRC/include/net/genetlink.h],
                         [genl_multicast_group], [id])
 
   OVS_GREP_IFELSE([$KSRC/include/net/gre.h], [gre_cisco_register])
-  OVS_GREP_IFELSE([$KSRC/include/net/gre.h], [gre_handle_offloads])
-  OVS_GREP_IFELSE([$KSRC/include/net/ip_tunnels.h], [iptunnel_xmit.*net],
-                  [OVS_DEFINE([HAVE_IPTUNNEL_XMIT_NET])])
-  OVS_GREP_IFELSE([$KSRC/include/net/ip_tunnels.h], [iptunnel_xmit.*sock],
-                  [OVS_DEFINE([HAVE_IPTUNNEL_XMIT_SOCK])])
-
   OVS_GREP_IFELSE([$KSRC/include/net/ipv6.h], [IP6_FH_F_SKIP_RH])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_get_be16])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be16])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be32])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_put_be64])
   OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_find_nested])
-  OVS_GREP_IFELSE([$KSRC/include/net/vxlan.h], [vxlan_xmit_skb])
-  OVS_GREP_IFELSE([$KSRC/include/net/vxlan.h], [vxlan_xmit_skb.*net],
-                  [OVS_DEFINE([HAVE_VXLAN_XMIT_SKB_NET])])
-
-  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_flow_src_port],
-                  [OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [inet_get_local_port_range(net],
-                                   [OVS_DEFINE([HAVE_UDP_FLOW_SRC_PORT])])])
+  OVS_GREP_IFELSE([$KSRC/include/net/netlink.h], [nla_is_last])
 
   OVS_GREP_IFELSE([$KSRC/include/net/sctp/checksum.h], [sctp_compute_cksum])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
                   [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [vlan_insert_tag_set_proto])
+  OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [__vlan_insert_tag])
 
-  OVS_GREP_IFELSE([$KSRC/include/linux/percpu.h], [this_cpu_ptr])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/u64_stats_sync.h], [u64_stats_fetch_begin_irq])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/openvswitch.h], [openvswitch_handle_frame_hook],
                   [OVS_DEFINE([HAVE_RHEL_OVS_HOOK])])
-
-  OVS_CHECK_LOG2_H
+  OVS_GREP_IFELSE([$KSRC/include/net/vxlan.h], [struct vxlan_metadata],
+                  [OVS_DEFINE([HAVE_VXLAN_METADATA])])
+  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_flow_src_port],
+                  [OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [inet_get_local_port_range(net],
+                                   [OVS_DEFINE([HAVE_UDP_FLOW_SRC_PORT])])])
+  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_v4_check])
+  OVS_GREP_IFELSE([$KSRC/include/net/udp.h], [udp_set_csum])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [ignore_df:1],
+                  [OVS_DEFINE([HAVE_IGNORE_DF_RENAME])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [SKB_GSO_GRE_CSUM],
+                  [OVS_DEFINE([HAVE_SKB_GSO_GRE_CSUM])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h], [SKB_GSO_UDP_TUNNEL_CSUM],
+                  [OVS_DEFINE([HAVE_SKB_GSO_UDP_TUNNEL_CSUM])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/netdevice.h], [NET_NAME_UNKNOWN],
+                  [OVS_DEFINE([HAVE_NET_NAME_UNKNOWN])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then
@@ -471,15 +529,23 @@ dnl gives unlimited permission to copy and/or distribute it,
 dnl with or without modifications, as long as this notice is preserved.
 
 AC_DEFUN([_OVS_CHECK_CC_OPTION], [dnl
-  m4_define([ovs_cv_name], [ovs_cv_[]m4_translit([$1], [-], [_])])dnl
+  m4_define([ovs_cv_name], [ovs_cv_[]m4_translit([$1], [-=], [__])])dnl
   AC_CACHE_CHECK([whether $CC accepts $1], [ovs_cv_name], 
     [ovs_save_CFLAGS="$CFLAGS"
      dnl Include -Werror in the compiler options, because without -Werror
      dnl clang's GCC-compatible compiler driver does not return a failure
      dnl exit status even though it complains about options it does not
      dnl understand.
+     dnl
+     dnl Also, check stderr as gcc exits with status 0 for options
+     dnl rejected at getopt level.
+     dnl    % touch /tmp/a.c
+     dnl    % gcc -g -c -Werror -Qunused-arguments /tmp/a.c; echo $?
+     dnl    gcc: unrecognized option '-Qunused-arguments'
+     dnl    0
+     dnl    %
      CFLAGS="$CFLAGS $WERROR $1"
-     AC_COMPILE_IFELSE([AC_LANG_PROGRAM(,)], [ovs_cv_name[]=yes], [ovs_cv_name[]=no])
+     AC_COMPILE_IFELSE([AC_LANG_PROGRAM(,)], [if test -s conftest.err && grep "unrecognized option" conftest.err; then ovs_cv_name[]=no; else ovs_cv_name[]=yes; fi], [ovs_cv_name[]=no])
      CFLAGS="$ovs_save_CFLAGS"])
   if test $ovs_cv_name = yes; then
     m4_if([$2], [], [:], [$2])

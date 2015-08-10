@@ -109,13 +109,13 @@ struct mac_entry {
 
     /* The following are marked guarded to prevent users from iterating over or
      * accessing a mac_entry without holding the parent mac_learning rwlock. */
-    struct list lru_node OVS_GUARDED; /* Element in 'lrus' list. */
+    struct ovs_list lru_node OVS_GUARDED; /* Element in 'lrus' list. */
 
     /* Learned port.
      *
      * The client-specified data is mlport->port. */
     struct mac_learning_port *mlport;
-    struct list port_lru_node; /* In mac_learning_port's "port_lru"s. */
+    struct ovs_list port_lru_node; /* In mac_learning_port's "port_lru"s. */
 };
 
 static inline void *mac_entry_get_port(const struct mac_learning *ml,
@@ -131,7 +131,7 @@ struct mac_learning_port {
     struct hmap_node hmap_node; /* In mac_learning's "ports_by_ptr". */
     struct heap_node heap_node; /* In mac_learning's "ports_by_usage". */
     void *port;                 /* Client-provided port pointer. */
-    struct list port_lrus;      /* Contains "struct mac_entry"s by port_lru. */
+    struct ovs_list port_lrus;  /* Contains "struct mac_entry"s by port_lru. */
 };
 
 /* Sets a gratuitous ARP lock on 'mac' that will expire in
@@ -151,7 +151,7 @@ static inline bool mac_entry_is_grat_arp_locked(const struct mac_entry *mac)
 /* MAC learning table. */
 struct mac_learning {
     struct hmap table;          /* Learning table. */
-    struct list lrus OVS_GUARDED; /* In-use entries, LRU at front. */
+    struct ovs_list lrus OVS_GUARDED; /* In-use entries, LRU at front. */
     uint32_t secret;            /* Secret for randomizing hash table. */
     unsigned long *flood_vlans; /* Bitmap of learning disabled VLANs. */
     unsigned int idle_time;     /* Max age before deleting an entry. */

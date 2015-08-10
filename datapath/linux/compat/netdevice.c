@@ -1,5 +1,8 @@
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
+#include <net/mpls.h>
+
+#include "gso.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
 #ifndef HAVE_CAN_CHECKSUM_PROTOCOL
@@ -55,7 +58,7 @@ netdev_features_t rpl_netif_skb_features(struct sk_buff *skb)
 	if (protocol == htons(ETH_P_8021Q)) {
 		struct vlan_ethhdr *veh = (struct vlan_ethhdr *)skb->data;
 		protocol = veh->h_vlan_encapsulated_proto;
-	} else if (!vlan_tx_tag_present(skb)) {
+	} else if (!skb_vlan_tag_present(skb)) {
 		return harmonize_features(skb, protocol, features);
 	}
 
@@ -69,9 +72,13 @@ netdev_features_t rpl_netif_skb_features(struct sk_buff *skb)
 		return harmonize_features(skb, protocol, features);
 	}
 }
+EXPORT_SYMBOL_GPL(rpl_netif_skb_features);
+#endif	/* kernel version < 2.6.38 */
 
-struct sk_buff *rpl_skb_gso_segment(struct sk_buff *skb,
-				    netdev_features_t features)
+#ifdef OVS_USE_COMPAT_GSO_SEGMENTATION
+struct sk_buff *rpl__skb_gso_segment(struct sk_buff *skb,
+				    netdev_features_t features,
+				    bool tx_path)
 {
 	int vlan_depth = ETH_HLEN;
 	__be16 type = skb->protocol;
@@ -89,13 +96,24 @@ struct sk_buff *rpl_skb_gso_segment(struct sk_buff *skb,
 		vlan_depth += VLAN_HLEN;
 	}
 
+	if (eth_p_mpls(type))
+		type = ovs_skb_get_inner_protocol(skb);
+
 	/* this hack needed to get regular skb_gso_segment() */
-#undef skb_gso_segment
 	skb_proto = skb->protocol;
 	skb->protocol = type;
 
+#ifdef HAVE___SKB_GSO_SEGMENT
+#undef __skb_gso_segment
+	skb_gso = __skb_gso_segment(skb, features, tx_path);
+#else
+#undef skb_gso_segment
 	skb_gso = skb_gso_segment(skb, features);
+#endif
+
 	skb->protocol = skb_proto;
 	return skb_gso;
 }
-#endif	/* kernel version < 2.6.38 */
+EXPORT_SYMBOL_GPL(rpl__skb_gso_segment);
+
+#endif	/* OVS_USE_COMPAT_GSO_SEGMENTATION */

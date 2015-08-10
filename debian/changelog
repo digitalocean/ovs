@@ -1,8 +1,20 @@
+openvswitch (2.4.0~git20150810.97bab95-0ubuntu1) wily; urgency=medium
+
+  * New upstream snapshot from 2.4 branch:
+    - d/*: Align any relevant packaging changes with upstream.
+  * d/*: wrap-and-sort.
+  * d/openvswitch-{common,vswitch}.install: Correct install location for
+    bash completion files.
+  * d/tests/openflow.py: Explicitly use ovs-testcontroller as provided
+    by 2.4.0 release.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 10 Aug 2015 11:35:15 +0100
+
 openvswitch (2.3.2-0ubuntu3) wily; urgency=medium
 
   * d/tests/openflow.py: Use net.addLink to add links between switches and
     hosts to ensure that they get cleanup up after use, fixing autopkgtest
-    failures. 
+    failures.
 
  -- James Page <james.page@ubuntu.com>  Fri, 17 Jul 2015 12:48:25 +0100
 

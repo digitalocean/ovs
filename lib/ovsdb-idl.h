@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,10 @@
  * requests to an OVSDB database server and parses the responses, converting
  * raw JSON into data structures that are easier for clients to digest.  Most
  * notably, references to rows via UUID become C pointers.
+ *
+ * The IDL always presents a consistent snapshot of the database to its client,
+ * that is, it won't present the effects of some part of a transaction applied
+ * at the database server without presenting all of its effects.
  *
  * The IDL also assists with issuing database transactions.  The client creates
  * a transaction, manipulates the IDL data structures, and commits or aborts
@@ -115,6 +119,8 @@ const struct ovsdb_datum *ovsdb_idl_get(const struct ovsdb_idl_row *,
                                         const struct ovsdb_idl_column *,
                                         enum ovsdb_atomic_type key_type,
                                         enum ovsdb_atomic_type value_type);
+bool ovsdb_idl_is_mutable(const struct ovsdb_idl_row *,
+                          const struct ovsdb_idl_column *);
 
 bool ovsdb_idl_row_is_synthetic(const struct ovsdb_idl_row *);
 
@@ -187,7 +193,7 @@ const char *ovsdb_idl_txn_status_to_string(enum ovsdb_idl_txn_status);
 
 struct ovsdb_idl_txn *ovsdb_idl_txn_create(struct ovsdb_idl *);
 void ovsdb_idl_txn_add_comment(struct ovsdb_idl_txn *, const char *, ...)
-    PRINTF_FORMAT (2, 3);
+    OVS_PRINTF_FORMAT (2, 3);
 void ovsdb_idl_txn_set_dry_run(struct ovsdb_idl_txn *);
 void ovsdb_idl_txn_increment(struct ovsdb_idl_txn *,
                              const struct ovsdb_idl_row *,

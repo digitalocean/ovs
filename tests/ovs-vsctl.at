@@ -159,8 +159,14 @@ AT_CHECK(
   [0], [], [stderr])
 AT_CHECK([grep -c 'terminating with signal' stderr], [0], [1
 ])
-AT_CHECK([kill -l `cat status`], [0], [ALRM
+if test "$IS_WIN32" = "yes"; then
+  AT_CHECK([cat status], [0], [3
 ])
+else
+  # 128 + SIGALRM
+  AT_CHECK([cat status], [0], [142
+])
+fi
 
 dnl Without --retry, we should retry for passive connections.
 AT_CHECK(
@@ -169,8 +175,14 @@ AT_CHECK(
   [0], [], [stderr])
 AT_CHECK([grep -c 'terminating with signal' stderr], [0], [1
 ])
-AT_CHECK([kill -l `cat status`], [0], [ALRM
+if test "$IS_WIN32" = "yes"; then
+  AT_CHECK([cat status], [0], [3
 ])
+else
+  # 128 + SIGALRM
+  AT_CHECK([cat status], [0], [142
+])
+fi
 AT_CLEANUP
 
 dnl ----------------------------------------------------------------------
@@ -471,6 +483,9 @@ AT_CHECK([RUN_OVS_VSCTL([--may-exist add-br xapi1 xxx $1])], [1], [],
 AT_CHECK([RUN_OVS_VSCTL([--may-exist add-br xapi1 xenbr0 10])], [1], [],
   [ovs-vsctl: "--may-exist add-br xapi1 xenbr0 10" but xapi1 is a VLAN bridge for the wrong VLAN $1
 ], [OVS_VSCTL_CLEANUP])
+AT_CHECK([RUN_OVS_VSCTL([--may-exist add-br dup xenbr0 $1])], [1], [],
+  [ovs-vsctl: bridge xenbr0 already has a child VLAN bridge xapi1 on VLAN $1
+], [OVS_VSCTL_CLEANUP])
 CHECK_BRIDGES([xapi1, xenbr0, $1], [xenbr0, xenbr0, 0])
 CHECK_PORTS([xenbr0], [eth0])
 CHECK_IFACES([xenbr0], [eth0])
@@ -620,7 +635,8 @@ AT_SETUP([database commands -- positive checks])
 AT_KEYWORDS([ovs-vsctl])
 OVS_VSCTL_SETUP
 AT_CHECK(
-  [RUN_OVS_VSCTL_TOGETHER([--id=@br0 create bridge name=br0],
+  [RUN_OVS_VSCTL_TOGETHER([--id=@br0 create bridge name=br123],
+                          [set b br123 name=br0],
                           [set o . bridges=@br0])],
   [0], [stdout], [], [OVS_VSCTL_CLEANUP])
 cp stdout out1
@@ -630,21 +646,27 @@ cp stdout out2
 AT_CHECK([${PERL} $srcdir/uuidfilt.pl out1 out2], [0],
   [[<0>
 
+
 _uuid               : <0>
+auto_attach         : []
 controller          : []
 datapath_id         : []
 datapath_type       : ""
+datapath_version    : ""
 external_ids        : {}
 fail_mode           : []
 flood_vlans         : []
 flow_tables         : {}
 ipfix               : []
+mcast_snooping_enable: false
 mirrors             : []
 name                : "br0"
 netflow             : []
 other_config        : {}
 ports               : []
 protocols           : []
+rstp_enable         : false
+rstp_status         : {}
 sflow               : []
 status              : {}
 stp_enable          : false
@@ -832,10 +854,10 @@ AT_CHECK([RUN_OVS_VSCTL([destroy bridge br2])],
 AT_CHECK([RUN_OVS_VSCTL([add in br1 name x])],
   [1], [], [ovs-vsctl: cannot modify read-only column name in table Interface
 ], [OVS_VSCTL_CLEANUP])
-AT_CHECK([RUN_OVS_VSCTL([set port br1 name br2])],
+AT_CHECK([RUN_OVS_VSCTL([set port br0 name=br2])],
   [1], [], [ovs-vsctl: cannot modify read-only column name in table Port
 ], [OVS_VSCTL_CLEANUP])
-AT_CHECK([RUN_OVS_VSCTL([remove bridge br1 name br1])],
+AT_CHECK([RUN_OVS_VSCTL([remove bridge br0 name br1])],
   [1], [], [ovs-vsctl: cannot modify read-only column name in table Bridge
 ], [OVS_VSCTL_CLEANUP])
 AT_CHECK([RUN_OVS_VSCTL([remove bridge br1 flood-vlans true])],
@@ -1126,20 +1148,25 @@ AT_CHECK([RUN_OVS_VSCTL([--id=@br0 create Bridge name=br0 -- add Open_vSwitch . 
 AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0],
   [[<0>
 _uuid               : <1>
+auto_attach         : []
 controller          : []
 datapath_id         : []
 datapath_type       : ""
+datapath_version    : ""
 external_ids        : {}
 fail_mode           : []
 flood_vlans         : []
 flow_tables         : {}
 ipfix               : []
+mcast_snooping_enable: false
 mirrors             : []
 name                : "br0"
 netflow             : []
 other_config        : {}
 ports               : []
 protocols           : []
+rstp_enable         : false
+rstp_status         : {}
 sflow               : []
 status              : {}
 stp_enable          : false
@@ -1172,8 +1199,9 @@ AT_CHECK([RUN_OVS_VSCTL(
 type                : linux-htb
 ], [], [OVS_VSCTL_CLEANUP])
 AT_CHECK([RUN_OVS_VSCTL(
-   [--columns=other_config list Queue | sort | xargs echo])], [0],
-[other_config : {max-rate=100000000, min-rate=100000000} other_config : {min-rate=500000000}
+   [--columns=other_config list Queue | sort | sed '/^$/d'])], [0],
+[other_config        : {max-rate="100000000", min-rate="100000000"}
+other_config        : {min-rate="500000000"}
 ], [], [OVS_VSCTL_CLEANUP])
 AT_CHECK([RUN_OVS_VSCTL(
    [clear Port a1 qos],
@@ -1206,10 +1234,11 @@ m4_foreach(
 [reserved_name],
 [[ovs-netdev],
 [ovs-dummy],
-[gre_system],
-[gre64_system],
-[lisp_system],
-[vxlan_system]],
+[genev_sys],
+[gre_sys],
+[gre64_sys],
+[lisp_sys],
+[vxlan_sys]],
 [
 # Try creating the port
 AT_CHECK([ovs-vsctl add-port br0 reserved_name], [0], [], [dnl
@@ -1238,15 +1267,18 @@ OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=gre \
                     -- add-port br0 p3 -- set Interface p3 type=lisp \
                     options:remote_ip=2.2.2.2 ofport_request=3 \
                     -- add-port br0 p4 -- set Interface p4 type=vxlan \
-                    options:remote_ip=2.2.2.2 ofport_request=4])
+                    options:remote_ip=2.2.2.2 ofport_request=4 \
+                    -- add-port br0 p5 -- set Interface p5 type=geneve \
+                    options:remote_ip=2.2.2.2 ofport_request=5])
 
 # Test creating all reserved tunnel port names
 m4_foreach(
 [reserved_name],
-[[gre_system],
-[gre64_system],
-[lisp_system],
-[vxlan_system]],
+[[genev_sys],
+[gre_sys],
+[gre64_sys],
+[lisp_sys],
+[vxlan_sys]],
 [
 # Try creating the port
 AT_CHECK([ovs-vsctl add-port br0 reserved_name], [0], [], [dnl
@@ -1263,4 +1295,22 @@ AT_CHECK([sed "/|bridge|WARN|/d" ovs-vswitchd.log > ovs-vswitchd.log], [0], [], 
 # Delete the port
 AT_CHECK([ovs-vsctl del-port br0 reserved_name], [0], [], [])])
 OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([naming in db commands])
+OVS_VSCTL_SETUP
+
+dnl First check that the database commands can refer to row by database UUID.
+AT_CHECK([RUN_OVS_VSCTL([add-br br0])])
+uuid=`[]RUN_OVS_VSCTL(get port br0 _uuid)`
+AT_CHECK([RUN_OVS_VSCTL([get port $uuid name])], [0], ["br0"
+])
+
+dnl Next check that, if a database row is given a name that has the same form
+dnl as the database UUIDs, the name can still be used to refer to rows.
+AT_CHECK([RUN_OVS_VSCTL([add-br 0fcd11a1-2ba8-4b38-a358-4bccf2bf3057])])
+AT_CHECK([RUN_OVS_VSCTL([get interface 0fcd11a1-2ba8-4b38-a358-4bccf2bf3057 type])], [0], [internal
+])
+
+OVS_VSCTL_CLEANUP
 AT_CLEANUP

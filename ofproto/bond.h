@@ -52,11 +52,10 @@ struct bond_settings {
     int up_delay;               /* ms before enabling an up slave. */
     int down_delay;             /* ms before disabling a down slave. */
 
-    /* Legacy compatibility. */
-    bool fake_iface;            /* Update fake stats for netdev 'name'? */
     bool lacp_fallback_ab_cfg;  /* Fallback to active-backup on LACP failure. */
 
-    uint8_t active_slave_mac[6];/* The MAC address of the interface
+    uint8_t active_slave_mac[ETH_ADDR_LEN];
+                                /* The MAC address of the interface
                                    that was active during the last
                                    ovs run. */
 };
@@ -82,11 +81,11 @@ void bond_slave_set_may_enable(struct bond *, void *slave_, bool may_enable);
 
 /* Special MAC learning support for SLB bonding. */
 bool bond_should_send_learning_packets(struct bond *);
-struct ofpbuf *bond_compose_learning_packet(struct bond *,
+struct dp_packet *bond_compose_learning_packet(struct bond *,
                                             const uint8_t eth_src[ETH_ADDR_LEN],
                                             uint16_t vlan, void **port_aux);
-bool bond_get_changed_active_slave(const char *name, uint8_t mac[6],
-                                        bool force);
+bool bond_get_changed_active_slave(const char *name, uint8_t mac[ETH_ADDR_LEN],
+                                   bool force);
 
 /* Packet processing. */
 enum bond_verdict {

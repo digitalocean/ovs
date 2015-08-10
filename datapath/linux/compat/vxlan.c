@@ -46,6 +46,7 @@
 #include <net/ip_tunnels.h>
 #include <net/icmp.h>
 #include <net/udp.h>
+#include <net/udp_tunnel.h>
 #include <net/rtnetlink.h>
 #include <net/route.h>
 #include <net/dsfield.h>
@@ -58,11 +59,8 @@
 #include "datapath.h"
 #include "gso.h"
 #include "vlan.h"
-#ifndef USE_KERNEL_TUNNEL_API
 
-#define VXLAN_HLEN (sizeof(struct udphdr) + sizeof(struct vxlanhdr))
-
-#define VXLAN_FLAGS 0x08000000	/* struct vxlanhdr.vx_flags required value. */
+#ifndef USE_UPSTREAM_VXLAN
 
 /* VXLAN protocol header */
 struct vxlanhdr {
@@ -75,18 +73,22 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct vxlan_sock *vs;
 	struct vxlanhdr *vxh;
+	u32 flags, vni;
+	struct vxlan_metadata md = {0};
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))
 		goto error;
 
-	/* Return packets with reserved bits set */
 	vxh = (struct vxlanhdr *)(udp_hdr(skb) + 1);
-	if (vxh->vx_flags != htonl(VXLAN_FLAGS) ||
-	    (vxh->vx_vni & htonl(0xff))) {
-		pr_warn("invalid vxlan flags=%#x vni=%#x\n",
-			ntohl(vxh->vx_flags), ntohl(vxh->vx_vni));
-		goto error;
+	flags = ntohl(vxh->vx_flags);
+	vni = ntohl(vxh->vx_vni);
+
+	if (flags & VXLAN_HF_VNI) {
+		flags &= ~VXLAN_HF_VNI;
+	} else {
+		/* VNI flag always required to be set */
+		goto bad_flags;
 	}
 
 	if (iptunnel_pull_header(skb, VXLAN_HLEN, htons(ETH_P_TEB)))
@@ -96,13 +98,48 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	if (!vs)
 		goto drop;
 
-	vs->rcv(vs, skb, vxh->vx_vni);
+	/* For backwards compatibility, only allow reserved fields to be
+	* used by VXLAN extensions if explicitly requested.
+	*/
+	if ((flags & VXLAN_HF_GBP) && (vs->flags & VXLAN_F_GBP)) {
+		struct vxlanhdr_gbp *gbp;
+
+		gbp = (struct vxlanhdr_gbp *)vxh;
+		md.gbp = ntohs(gbp->policy_id);
+
+		if (gbp->dont_learn)
+			md.gbp |= VXLAN_GBP_DONT_LEARN;
+
+		if (gbp->policy_applied)
+			md.gbp |= VXLAN_GBP_POLICY_APPLIED;
+
+		flags &= ~VXLAN_GBP_USED_BITS;
+	}
+
+	if (flags || (vni & 0xff)) {
+		/* If there are any unprocessed flags remaining treat
+		* this as a malformed packet. This behavior diverges from
+		* VXLAN RFC (RFC7348) which stipulates that bits in reserved
+		* in reserved fields are to be ignored. The approach here
+		* maintains compatbility with previous stack code, and also
+		* is more robust and provides a little more security in
+		* adding extensions to VXLAN.
+		*/
+
+		goto bad_flags;
+	}
+
+	md.vni = vxh->vx_vni;
+	vs->rcv(vs, skb, &md);
 	return 0;
 
 drop:
 	/* Consume bad packet */
 	kfree_skb(skb);
 	return 0;
+bad_flags:
+	pr_debug("invalid vxlan flags=%#x vni=%#x\n",
+		 ntohl(vxh->vx_flags), ntohl(vxh->vx_vni));
 
 error:
 	/* Return non vxlan pkt */
@@ -123,112 +160,72 @@ static void vxlan_set_owner(struct sock *sk, struct sk_buff *skb)
 	skb->destructor = vxlan_sock_put;
 }
 
-/* Compute source port for outgoing packet
- *   first choice to use L4 flow hash since it will spread
- *     better and maybe available from hardware
- *   secondary choice is to use jhash on the Ethernet header
- */
-__be16 vxlan_src_port(__u16 port_min, __u16 port_max, struct sk_buff *skb)
+static void vxlan_build_gbp_hdr(struct vxlanhdr *vxh, u32 vxflags,
+				struct vxlan_metadata *md)
 {
-	unsigned int range = (port_max - port_min) + 1;
-	u32 hash;
+	struct vxlanhdr_gbp *gbp;
 
-	hash = skb_get_hash(skb);
-	if (!hash)
-		hash = jhash(skb->data, 2 * ETH_ALEN,
-			     (__force u32) skb->protocol);
+	if (!md->gbp)
+		return;
 
-	return htons((((u64) hash * range) >> 32) + port_min);
+	gbp = (struct vxlanhdr_gbp *)vxh;
+	vxh->vx_flags |= htonl(VXLAN_HF_GBP);
+
+	if (md->gbp & VXLAN_GBP_DONT_LEARN)
+		gbp->dont_learn = 1;
+
+	if (md->gbp & VXLAN_GBP_POLICY_APPLIED)
+		gbp->policy_applied = 1;
+
+	gbp->policy_id = htons(md->gbp & VXLAN_GBP_ID_MASK);
 }
 
-static void vxlan_gso(struct sk_buff *skb)
-{
-	int udp_offset = skb_transport_offset(skb);
-	struct udphdr *uh;
-
-	uh = udp_hdr(skb);
-	uh->len = htons(skb->len - udp_offset);
-
-	/* csum segment if tunnel sets skb with csum. */
-	if (unlikely(uh->check)) {
-		struct iphdr *iph = ip_hdr(skb);
-
-		uh->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
-					       skb->len - udp_offset,
-					       IPPROTO_UDP, 0);
-		uh->check = csum_fold(skb_checksum(skb, udp_offset,
-				      skb->len - udp_offset, 0));
-
-		if (uh->check == 0)
-			uh->check = CSUM_MANGLED_0;
-
-	}
-	skb->ip_summed = CHECKSUM_NONE;
-}
-
-static int handle_offloads(struct sk_buff *skb)
-{
-	if (skb_is_gso(skb)) {
-		OVS_GSO_CB(skb)->fix_segment = vxlan_gso;
-	} else {
-		if (skb->ip_summed != CHECKSUM_PARTIAL)
-			skb->ip_summed = CHECKSUM_NONE;
-	}
-	return 0;
-}
-
-int vxlan_xmit_skb(struct vxlan_sock *vs,
-		   struct rtable *rt, struct sk_buff *skb,
-		   __be32 src, __be32 dst, __u8 tos, __u8 ttl, __be16 df,
-		   __be16 src_port, __be16 dst_port, __be32 vni)
+int rpl_vxlan_xmit_skb(struct vxlan_sock *vs,
+		       struct rtable *rt, struct sk_buff *skb,
+		       __be32 src, __be32 dst, __u8 tos, __u8 ttl, __be16 df,
+		       __be16 src_port, __be16 dst_port,
+		       struct vxlan_metadata *md, bool xnet, u32 vxflags)
 {
 	struct vxlanhdr *vxh;
-	struct udphdr *uh;
 	int min_headroom;
 	int err;
+	bool udp_sum = !!(vxflags & VXLAN_F_UDP_CSUM);
 
 	min_headroom = LL_RESERVED_SPACE(rt_dst(rt).dev) + rt_dst(rt).header_len
 			+ VXLAN_HLEN + sizeof(struct iphdr)
-			+ (vlan_tx_tag_present(skb) ? VLAN_HLEN : 0);
+			+ (skb_vlan_tag_present(skb) ? VLAN_HLEN : 0);
 
 	/* Need space for new headers (invalidates iph ptr) */
 	err = skb_cow_head(skb, min_headroom);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		kfree_skb(skb);
 		return err;
-
-	if (vlan_tx_tag_present(skb)) {
-		if (unlikely(!__vlan_put_tag(skb,
-						skb->vlan_proto,
-						vlan_tx_tag_get(skb))))
-			return -ENOMEM;
-
-		vlan_set_tci(skb, 0);
 	}
 
-	skb_reset_inner_headers(skb);
+	skb = vlan_hwaccel_push_inside(skb);
+	if (WARN_ON(!skb))
+		return -ENOMEM;
+
+	skb = udp_tunnel_handle_offloads(skb, udp_sum, true);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
 
 	vxh = (struct vxlanhdr *) __skb_push(skb, sizeof(*vxh));
-	vxh->vx_flags = htonl(VXLAN_FLAGS);
-	vxh->vx_vni = vni;
+	vxh->vx_flags = htonl(VXLAN_HF_VNI);
+	vxh->vx_vni = md->vni;
 
-	__skb_push(skb, sizeof(*uh));
-	skb_reset_transport_header(skb);
-	uh = udp_hdr(skb);
-
-	uh->dest = dst_port;
-	uh->source = src_port;
-
-	uh->len = htons(skb->len);
-	uh->check = 0;
+	if (vxflags & VXLAN_F_GBP)
+		vxlan_build_gbp_hdr(vxh, vxflags, md);
 
 	vxlan_set_owner(vs->sock->sk, skb);
 
-	err = handle_offloads(skb);
-	if (err)
-		return err;
+	ovs_skb_set_inner_protocol(skb, htons(ETH_P_TEB));
 
-	return iptunnel_xmit(rt, skb, src, dst, IPPROTO_UDP, tos, ttl, df, false);
+	return udp_tunnel_xmit_skb(rt, skb, src, dst, tos,
+				   ttl, df, src_port, dst_port, xnet,
+				   !udp_sum);
 }
+EXPORT_SYMBOL_GPL(rpl_vxlan_xmit_skb);
 
 static void rcu_free_vs(struct rcu_head *rcu)
 {
@@ -241,21 +238,46 @@ static void vxlan_del_work(struct work_struct *work)
 {
 	struct vxlan_sock *vs = container_of(work, struct vxlan_sock, del_work);
 
-	sk_release_kernel(vs->sock->sk);
+	udp_tunnel_sock_release(vs->sock);
 	call_rcu(&vs->rcu, rcu_free_vs);
 }
 
+static struct socket *vxlan_create_sock(struct net *net, bool ipv6,
+					__be16 port, u32 flags)
+{
+	struct socket *sock;
+	struct udp_port_cfg udp_conf;
+	int err;
+
+	memset(&udp_conf, 0, sizeof(udp_conf));
+
+	if (ipv6) {
+		udp_conf.family = AF_INET6;
+		/* The checksum flag is silently ignored but it
+		 * doesn't make sense here anyways because OVS enables
+		 * checksums on a finer granularity than per-socket.
+		 */
+	} else {
+		udp_conf.family = AF_INET;
+		udp_conf.local_ip.s_addr = htonl(INADDR_ANY);
+	}
+
+	udp_conf.local_udp_port = port;
+
+	/* Open UDP socket */
+	err = udp_sock_create(net, &udp_conf, &sock);
+	if (err < 0)
+		return ERR_PTR(err);
+
+	return sock;
+}
+
 static struct vxlan_sock *vxlan_socket_create(struct net *net, __be16 port,
-					      vxlan_rcv_t *rcv, void *data)
+					      vxlan_rcv_t *rcv, void *data, u32 flags)
 {
 	struct vxlan_sock *vs;
-	struct sock *sk;
-	struct sockaddr_in vxlan_addr = {
-		.sin_family = AF_INET,
-		.sin_addr.s_addr = htonl(INADDR_ANY),
-		.sin_port = port,
-	};
-	int rc;
+	struct socket *sock;
+	struct udp_tunnel_sock_cfg tunnel_cfg;
 
 	vs = kmalloc(sizeof(*vs), GFP_KERNEL);
 	if (!vs) {
@@ -265,54 +287,41 @@ static struct vxlan_sock *vxlan_socket_create(struct net *net, __be16 port,
 
 	INIT_WORK(&vs->del_work, vxlan_del_work);
 
-	/* Create UDP socket for encapsulation receive. */
-	rc = sock_create_kern(AF_INET, SOCK_DGRAM, IPPROTO_UDP, &vs->sock);
-	if (rc < 0) {
-		pr_debug("UDP socket create failed\n");
+	sock = vxlan_create_sock(net, false, port, flags);
+	if (IS_ERR(sock)) {
 		kfree(vs);
-		return ERR_PTR(rc);
+		return ERR_CAST(sock);
 	}
 
-	/* Put in proper namespace */
-	sk = vs->sock->sk;
-	sk_change_net(sk, net);
-
-	rc = kernel_bind(vs->sock, (struct sockaddr *) &vxlan_addr,
-			sizeof(vxlan_addr));
-	if (rc < 0) {
-		pr_debug("bind for UDP socket %pI4:%u (%d)\n",
-				&vxlan_addr.sin_addr, ntohs(vxlan_addr.sin_port), rc);
-		sk_release_kernel(sk);
-		kfree(vs);
-		return ERR_PTR(rc);
-	}
+	vs->sock = sock;
 	vs->rcv = rcv;
 	vs->data = data;
+	vs->flags = (flags & VXLAN_F_RCV_FLAGS);
 
-	/* Disable multicast loopback */
-	inet_sk(sk)->mc_loop = 0;
-	rcu_assign_sk_user_data(vs->sock->sk, vs);
+	tunnel_cfg.sk_user_data = vs;
+	tunnel_cfg.encap_type = 1;
+	tunnel_cfg.encap_rcv = vxlan_udp_encap_recv;
+	tunnel_cfg.encap_destroy = NULL;
 
-	/* Mark socket as an encapsulation socket. */
-	udp_sk(sk)->encap_type = 1;
-	udp_sk(sk)->encap_rcv = vxlan_udp_encap_recv;
-	udp_encap_enable();
+	setup_udp_tunnel_sock(net, sock, &tunnel_cfg);
+
 	return vs;
 }
 
-struct vxlan_sock *vxlan_sock_add(struct net *net, __be16 port,
-				  vxlan_rcv_t *rcv, void *data,
-				  bool no_share, bool ipv6)
+struct vxlan_sock *rpl_vxlan_sock_add(struct net *net, __be16 port,
+				      vxlan_rcv_t *rcv, void *data,
+				      bool no_share, u32 flags)
 {
-	return vxlan_socket_create(net, port, rcv, data);
+	return vxlan_socket_create(net, port, rcv, data, flags);
 }
+EXPORT_SYMBOL_GPL(rpl_vxlan_sock_add);
 
-void vxlan_sock_release(struct vxlan_sock *vs)
+void rpl_vxlan_sock_release(struct vxlan_sock *vs)
 {
 	ASSERT_OVSL();
-	rcu_assign_sk_user_data(vs->sock->sk, NULL);
 
 	queue_work(system_wq, &vs->del_work);
 }
+EXPORT_SYMBOL_GPL(rpl_vxlan_sock_release);
 
-#endif /* 3.12 */
+#endif /* !USE_UPSTREAM_VXLAN */

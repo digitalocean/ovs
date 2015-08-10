@@ -38,6 +38,8 @@ struct internal_dev {
 	struct vport *vport;
 };
 
+static struct vport_ops ovs_internal_vport_ops;
+
 static struct internal_dev *internal_dev_priv(struct net_device *netdev)
 {
 	return netdev_priv(netdev);
@@ -59,7 +61,8 @@ static struct net_device_stats *internal_dev_sys_stats(struct net_device *netdev
 	ovs_vport_get_stats(vport, &vport_stats);
 
 	/* The tx and rx stats need to be swapped because the
-	 * switch and host OS have opposite perspectives. */
+	 * switch and host OS have opposite perspectives.
+	 */
 	stats->rx_packets	= vport_stats.tx_packets;
 	stats->tx_packets	= vport_stats.rx_packets;
 	stats->rx_bytes		= vport_stats.tx_bytes;
@@ -142,6 +145,10 @@ static const struct net_device_ops internal_dev_netdev_ops = {
 #endif
 };
 
+static struct rtnl_link_ops internal_dev_link_ops __read_mostly = {
+	.kind = "openvswitch",
+};
+
 static void do_setup(struct net_device *netdev)
 {
 	ether_setup(netdev);
@@ -151,7 +158,8 @@ static void do_setup(struct net_device *netdev)
 	netdev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	netdev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 	netdev->destructor = internal_dev_destructor;
-	SET_ETHTOOL_OPS(netdev, &internal_dev_ethtool_ops);
+	netdev->ethtool_ops = &internal_dev_ethtool_ops;
+	netdev->rtnl_link_ops = &internal_dev_link_ops;
 	netdev->tx_queue_len = 0;
 
 	netdev->features = NETIF_F_LLTX | NETIF_F_SG | NETIF_F_FRAGLIST |
@@ -189,7 +197,7 @@ static struct vport *internal_dev_create(const struct vport_parms *parms)
 	netdev_vport = netdev_vport_priv(vport);
 
 	netdev_vport->dev = alloc_netdev(sizeof(struct internal_dev),
-					 parms->name, do_setup);
+					 parms->name, NET_NAME_UNKNOWN, do_setup);
 	if (!netdev_vport->dev) {
 		err = -ENOMEM;
 		goto error_free_vport;
@@ -248,10 +256,10 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 	}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,37)
-	if (vlan_tx_tag_present(skb)) {
-		if (unlikely(!__vlan_put_tag(skb,
-					     skb->vlan_proto,
-					     vlan_tx_tag_get(skb))))
+	if (skb_vlan_tag_present(skb)) {
+		if (unlikely(!vlan_insert_tag_set_proto(skb,
+							skb->vlan_proto,
+							skb_vlan_tag_get(skb))))
 			return 0;
 
 		if (skb->ip_summed == CHECKSUM_COMPLETE)
@@ -279,7 +287,7 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 	return len;
 }
 
-const struct vport_ops ovs_internal_vport_ops = {
+static struct vport_ops ovs_internal_vport_ops = {
 	.type		= OVS_VPORT_TYPE_INTERNAL,
 	.create		= internal_dev_create,
 	.destroy	= internal_dev_destroy,
@@ -298,4 +306,25 @@ struct vport *ovs_internal_dev_get_vport(struct net_device *netdev)
 		return NULL;
 
 	return internal_dev_priv(netdev)->vport;
+}
+
+int ovs_internal_dev_rtnl_link_register(void)
+{
+	int err;
+
+	err = rtnl_link_register(&internal_dev_link_ops);
+	if (err < 0)
+		return err;
+
+	err = ovs_vport_ops_register(&ovs_internal_vport_ops);
+	if (err < 0)
+		rtnl_link_unregister(&internal_dev_link_ops);
+
+	return err;
+}
+
+void ovs_internal_dev_rtnl_link_unregister(void)
+{
+	ovs_vport_ops_unregister(&ovs_internal_vport_ops);
+	rtnl_link_unregister(&internal_dev_link_ops);
 }

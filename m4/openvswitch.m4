@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,8 +30,20 @@ AC_DEFUN([OVS_CHECK_COVERAGE],
       esac],
      [coverage=false])
    if $coverage; then
-     CFLAGS="$CFLAGS -O0 --coverage"
-     LDFLAGS="$LDFLAGS --coverage"
+     # Autoconf by default puts "-g -O2" in CFLAGS.  We need to remove the -O2
+     # option for coverage to be useful.  This does it without otherwise
+     # interfering with anything that the user might have put there.
+     old_CFLAGS=$CFLAGS
+     CFLAGS=
+     for option in $old_CFLAGS; do
+        case $option in
+            (-O2) ;;
+            (*) CFLAGS="$CFLAGS $option" ;;
+        esac
+     done
+
+     OVS_CFLAGS="$OVS_CFLAGS --coverage"
+     OVS_LDFLAGS="$OVS_LDFLAGS --coverage"
    fi])
 
 dnl Checks for --enable-ndebug and defines NDEBUG if it is specified.
@@ -74,9 +86,12 @@ AC_DEFUN([OVS_CHECK_WIN32],
             AC_MSG_ERROR([Invalid --with-pthread value])
               ;;
             *)
-            PTHREAD_INCLUDES="-I$withval/include"
-            PTHREAD_LDFLAGS="-L$withval/lib/x86"
+            PTHREAD_WIN32_DIR=$withval/lib/x86
+            PTHREAD_WIN32_DIR_DLL=/${withval/:/}/dll/x86
+            PTHREAD_INCLUDES=-I$withval/include
+            PTHREAD_LDFLAGS=-L$PTHREAD_WIN32_DIR
             PTHREAD_LIBS="-lpthreadVC2"
+            AC_SUBST([PTHREAD_WIN32_DIR_DLL])
             AC_SUBST([PTHREAD_INCLUDES])
             AC_SUBST([PTHREAD_LDFLAGS])
             AC_SUBST([PTHREAD_LIBS])
@@ -86,11 +101,48 @@ AC_DEFUN([OVS_CHECK_WIN32],
             AC_MSG_ERROR([pthread directory not specified])
          ]
       )
+      AC_ARG_WITH([debug],
+         [AS_HELP_STRING([--with-debug],
+            [Build without compiler optimizations])],
+         [
+            MSVC_CFLAGS="-O0"
+            AC_SUBST([MSVC_CFLAGS])
+         ], [
+            MSVC_CFLAGS="-O2"
+            AC_SUBST([MSVC_CFLAGS])
+         ]
+      )
+
       AC_DEFINE([WIN32], [1], [Define to 1 if building on WIN32.])
       AH_BOTTOM([#ifdef WIN32
 #include "include/windows/windefs.h"
 #endif])
    fi])
+
+dnl OVS_CHECK_WINDOWS
+dnl
+dnl Configure Visual Studio solution build
+AC_DEFUN([OVS_CHECK_VISUAL_STUDIO_DDK], [
+AC_ARG_WITH([vstudiotarget],
+         [AS_HELP_STRING([--with-vstudiotarget=target_type],
+            [Target type: Debug/Release])],
+         [
+            case "$withval" in
+            "Release") ;;
+            "Debug") ;;
+            *) AC_MSG_ERROR([No valid Visual Studio configuration found]) ;;
+            esac
+
+            VSTUDIO_CONFIG=$withval
+         ], [
+            VSTUDIO_CONFIG=
+         ]
+      )
+
+  AC_SUBST([VSTUDIO_CONFIG])
+  AC_DEFINE([VSTUDIO_DDK], [1], [System uses the Visual Studio build target.])
+  AM_CONDITIONAL([VSTUDIO_DDK], [test -n "$VSTUDIO_CONFIG"])
+])
 
 dnl Checks for Netlink support.
 AC_DEFUN([OVS_CHECK_NETLINK],
@@ -192,25 +244,9 @@ AC_DEFUN([OVS_CHECK_BACKTRACE],
                   [AC_DEFINE([HAVE_BACKTRACE], [1],
                              [Define to 1 if you have backtrace(3).])])])
 
-dnl Checks for __malloc_hook, etc., supported by glibc.
-AC_DEFUN([OVS_CHECK_MALLOC_HOOKS],
-  [AC_CACHE_CHECK(
-    [whether libc supports hooks for malloc and related functions],
-    [ovs_cv_malloc_hooks],
-    [AC_COMPILE_IFELSE(
-      [AC_LANG_PROGRAM(
-         [#include <malloc.h>
-         ],
-         [(void) __malloc_hook;
-          (void) __realloc_hook;
-          (void) __free_hook;])],
-      [ovs_cv_malloc_hooks=yes],
-      [ovs_cv_malloc_hooks=no])])
-   if test $ovs_cv_malloc_hooks = yes; then
-     AC_DEFINE([HAVE_MALLOC_HOOKS], [1],
-               [Define to 1 if you have __malloc_hook, __realloc_hook, and
-                __free_hook in <malloc.h>.])
-   fi])
+dnl Defines HAVE_PERF_EVENT if linux/perf_event.h is found.
+AC_DEFUN([OVS_CHECK_PERF_EVENT],
+  [AC_CHECK_HEADERS([linux/perf_event.h])])
 
 dnl Checks for valgrind/valgrind.h.
 AC_DEFUN([OVS_CHECK_VALGRIND],
@@ -225,7 +261,7 @@ AC_DEFUN([OVS_CHECK_PYTHON],
         ovs_cv_python=$PYTHON
       else
         ovs_cv_python=no
-        for binary in python python2.4 python2.5; do
+        for binary in python python2.4 python2.5 python2.7; do
           ovs_save_IFS=$IFS; IFS=$PATH_SEPARATOR
           for dir in $PATH; do
             IFS=$ovs_save_IFS
@@ -449,3 +485,12 @@ dnl OVS_CHECK_INCLUDE_NEXT
 AC_DEFUN([OVS_CHECK_INCLUDE_NEXT],
   [AC_REQUIRE([gl_CHECK_NEXT_HEADERS])
    gl_CHECK_NEXT_HEADERS([$1])])
+
+dnl OVS_CHECK_PRAGMA_MESSAGE
+AC_DEFUN([OVS_CHECK_PRAGMA_MESSAGE],
+  [AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+   [[_Pragma("message(\"Checking for pragma message\")")
+   ]])],
+     [AC_DEFINE(HAVE_PRAGMA_MESSAGE,1,[Define if compiler supports #pragma
+     message directive])])
+  ])

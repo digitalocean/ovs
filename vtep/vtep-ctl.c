@@ -43,12 +43,12 @@
 #include "smap.h"
 #include "sset.h"
 #include "svec.h"
-#include "lib/vtep-idl.h"
+#include "vtep/vtep-idl.h"
 #include "table.h"
 #include "timeval.h"
 #include "util.h"
-#include "vconn.h"
-#include "vlog.h"
+#include "openvswitch/vconn.h"
+#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(vtep_ctl);
 
@@ -121,10 +121,10 @@ static struct table_style table_style = TABLE_STYLE_DEFAULT;
 static struct ovsdb_idl *the_idl;
 static struct ovsdb_idl_txn *the_idl_txn;
 
-static void vtep_ctl_exit(int status) NO_RETURN;
-static void vtep_ctl_fatal(const char *, ...) PRINTF_FORMAT(1, 2) NO_RETURN;
+OVS_NO_RETURN static void vtep_ctl_exit(int status);
+OVS_NO_RETURN static void vtep_ctl_fatal(const char *, ...) OVS_PRINTF_FORMAT(1, 2);
 static char *default_db(void);
-static void usage(void) NO_RETURN;
+OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[], struct shash *local_options);
 static bool might_write_to_db(char **argv);
 
@@ -168,7 +168,7 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
-    vlog_set_levels(&VLM_reconnect, VLF_ANY_FACILITY, VLL_WARN);
+    vlog_set_levels(&VLM_reconnect, VLF_ANY_DESTINATION, VLL_WARN);
     vteprec_init();
 
     /* Log our arguments.  This is often valuable for debugging systems. */
@@ -272,7 +272,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
     size_t n_options;
     size_t i;
 
-    tmp = long_options_to_short_options(global_long_options);
+    tmp = ovs_cmdl_long_options_to_short_options(global_long_options);
     short_options = xasprintf("+%s", tmp);
     free(tmp);
 
@@ -725,11 +725,11 @@ struct vtep_ctl_context {
 struct vtep_ctl_pswitch {
     const struct vteprec_physical_switch *ps_cfg;
     char *name;
-    struct list ports;          /* Contains "struct vteprec_physical_port"s. */
+    struct ovs_list ports;      /* Contains "struct vteprec_physical_port"s. */
 };
 
 struct vtep_ctl_port {
-    struct list ports_node;     /* In struct vtep_ctl_pswitch's 'ports' list. */
+    struct ovs_list ports_node; /* In struct vtep_ctl_pswitch's 'ports' list. */
     const struct vteprec_physical_port *port_cfg;
     struct vtep_ctl_pswitch *ps;
     struct shash bindings;      /* Maps from vlan to vtep_ctl_lswitch. */
@@ -749,12 +749,12 @@ struct vtep_ctl_mcast_mac {
     const struct vteprec_mcast_macs_remote *remote_cfg;
 
     const struct vteprec_physical_locator_set *ploc_set_cfg;
-    struct list locators;       /* Contains 'vtep_ctl_ploc's. */
+    struct ovs_list locators;   /* Contains 'vtep_ctl_ploc's. */
 };
 
 struct vtep_ctl_ploc {
-    struct list locators_node;  /* In struct vtep_ctl_ploc_set's 'locators'
-                                   list. */
+    struct ovs_list locators_node;  /* In struct vtep_ctl_ploc_set's 'locators'
+                                       list. */
     const struct vteprec_physical_locator *ploc_cfg;
 };
 
@@ -798,7 +798,7 @@ del_cached_port(struct vtep_ctl_context *ctx, struct vtep_ctl_port *port)
     char *cache_name = xasprintf("%s+%s", port->ps->name, port->port_cfg->name);
 
     list_remove(&port->ports_node);
-    shash_find_and_delete(&ctx->ports, port->port_cfg->name);
+    shash_find_and_delete(&ctx->ports, cache_name);
     vteprec_physical_port_delete(port->port_cfg);
     free(cache_name);
     free(port);
@@ -1076,6 +1076,7 @@ pre_get_info(struct vtep_ctl_context *ctx)
 
     ovsdb_idl_add_column(ctx->idl, &vteprec_physical_switch_col_name);
     ovsdb_idl_add_column(ctx->idl, &vteprec_physical_switch_col_ports);
+    ovsdb_idl_add_column(ctx->idl, &vteprec_physical_switch_col_tunnels);
 
     ovsdb_idl_add_column(ctx->idl, &vteprec_physical_port_col_name);
     ovsdb_idl_add_column(ctx->idl, &vteprec_physical_port_col_vlan_bindings);
@@ -1111,6 +1112,9 @@ pre_get_info(struct vtep_ctl_context *ctx)
                          &vteprec_physical_locator_col_dst_ip);
     ovsdb_idl_add_column(ctx->idl,
                          &vteprec_physical_locator_col_encapsulation_type);
+
+    ovsdb_idl_add_column(ctx->idl, &vteprec_tunnel_col_local);
+    ovsdb_idl_add_column(ctx->idl, &vteprec_tunnel_col_remote);
 }
 
 static void
@@ -1122,6 +1126,7 @@ vtep_ctl_context_populate_cache(struct vtep_ctl_context *ctx)
     const struct vteprec_ucast_macs_remote *ucast_remote_cfg;
     const struct vteprec_mcast_macs_local *mcast_local_cfg;
     const struct vteprec_mcast_macs_remote *mcast_remote_cfg;
+    const struct vteprec_tunnel *tunnel_cfg;
     struct sset pswitches, ports, lswitches;
     size_t i;
 
@@ -1245,6 +1250,15 @@ vtep_ctl_context_populate_cache(struct vtep_ctl_context *ctx)
                                            mcast_remote_cfg->locator_set,
                                            false);
         mcast_mac->remote_cfg = mcast_remote_cfg;
+    }
+
+    VTEPREC_TUNNEL_FOR_EACH (tunnel_cfg, ctx->idl) {
+        if (tunnel_cfg->local) {
+            add_ploc_to_cache(ctx, tunnel_cfg->local);
+        }
+        if (tunnel_cfg->remote) {
+            add_ploc_to_cache(ctx, tunnel_cfg->remote);
+        }
     }
 
     sset_init(&pswitches);
@@ -2283,6 +2297,10 @@ static const struct vtep_ctl_table_class tables[] = {
      {{&vteprec_table_physical_switch, &vteprec_physical_switch_col_name, NULL},
       {NULL, NULL, NULL}}},
 
+    {&vteprec_table_tunnel,
+     {{NULL, NULL, NULL},
+      {NULL, NULL, NULL}}},
+
     {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
 };
 
@@ -2568,7 +2586,7 @@ missing_operator_error(const char *arg, const char **allowed_operators,
  *
  * On success, returns NULL.  On failure, returned a malloc()'d string error
  * message and stores NULL into all of the nonnull output arguments. */
-static char * WARN_UNUSED_RESULT
+static char * OVS_WARN_UNUSED_RESULT
 parse_column_key_value(const char *arg,
                        const struct vtep_ctl_table_class *table,
                        const struct ovsdb_idl_column **columnp, char **keyp,

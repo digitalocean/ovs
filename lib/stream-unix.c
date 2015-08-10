@@ -33,7 +33,7 @@
 #include "util.h"
 #include "stream-provider.h"
 #include "stream-fd.h"
-#include "vlog.h"
+#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(stream_unix);
 
@@ -57,7 +57,8 @@ unix_open(const char *name, char *suffix, struct stream **streamp,
     }
 
     free(connect_path);
-    return new_fd_stream(name, fd, check_connection_completion(fd), streamp);
+    return new_fd_stream(name, fd, check_connection_completion(fd),
+                         AF_UNIX, streamp);
 }
 
 const struct stream_class unix_stream_class = {
@@ -93,7 +94,7 @@ punix_open(const char *name OVS_UNUSED, char *suffix,
         return errno;
     }
 
-    if (listen(fd, 10) < 0) {
+    if (listen(fd, 64) < 0) {
         error = errno;
         VLOG_ERR("%s: listen: %s", name, ovs_strerror(error));
         close(fd);
@@ -117,7 +118,7 @@ punix_accept(int fd, const struct sockaddr_storage *ss, size_t ss_len,
     } else {
         strcpy(name, "unix");
     }
-    return new_fd_stream(name, fd, 0, streamp);
+    return new_fd_stream(name, fd, 0, AF_UNIX, streamp);
 }
 
 const struct pstream_class punix_pstream_class = {

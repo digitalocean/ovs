@@ -49,7 +49,8 @@ static inline struct rtable *find_route(struct net *net,
 {
 	struct rtable *rt;
 	/* Tunnel configuration keeps DSCP part of TOS bits, But Linux
-	 * router expect RT_TOS bits only. */
+	 * router expect RT_TOS bits only.
+	 */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39)
 	struct flowi fl = { .nl_u = { .ip4_u = {
@@ -75,4 +76,14 @@ static inline struct rtable *find_route(struct net *net,
 	return rt;
 #endif
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+static inline bool skb_encapsulation(struct sk_buff *skb)
+{
+	return skb->encapsulation;
+}
+#else
+#define skb_encapsulation(skb) false
+#endif
+
 #endif /* compat.h */

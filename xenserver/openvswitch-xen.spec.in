@@ -1,6 +1,6 @@
 # Spec file for Open vSwitch.
 
-# Copyright (C) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -96,7 +96,7 @@ Open vSwitch Linux kernel module compiled against kernel version
 %setup -q -n openvswitch-%{openvswitch_version}
 
 %build
-./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{xen_version}/build --enable-ssl
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} --with-linux=/lib/modules/%{xen_version}/build --enable-ssl CFLAGS='-g -O2 -msse -msse2'
 make %{_smp_mflags}
 
 %install
@@ -149,14 +149,18 @@ cp -rf $RPM_BUILD_ROOT/usr/share/openvswitch/bugtool-plugins/* $RPM_BUILD_ROOT/e
 # Get rid of stuff we don't want to make RPM happy.
 rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-benchmark \
+    $RPM_BUILD_ROOT/usr/bin/ovs-testcontroller \
     $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/bin/ovs-pki \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
     $RPM_BUILD_ROOT/usr/share/man/man1/ovs-benchmark.1 \
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-testcontroller.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-pki.8 \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8
 (cd "$RPM_BUILD_ROOT" && rm -f usr/lib/lib*)
+(cd "$RPM_BUILD_ROOT" && rm -rf usr/include)
+(cd "$RPM_BUILD_ROOT" && rm -rf usr/lib/pkgconfig)
 
 install -d -m 755 $RPM_BUILD_ROOT/var/lib/openvswitch
 
@@ -434,6 +438,8 @@ exit 0
 
 %files
 %defattr(-,root,root)
+/etc/bash_completion.d/ovs-appctl-bashcomp.bash
+/etc/bash_completion.d/ovs-vsctl-bashcomp.bash
 /etc/init.d/openvswitch
 /etc/init.d/openvswitch-xapi-update
 /etc/xapi.d/plugins/openvswitch-cfg-update
@@ -464,6 +470,7 @@ exit 0
 /usr/bin/ovs-appctl
 /usr/bin/ovs-dpctl
 /usr/bin/ovs-dpctl-top
+/usr/bin/ovs-docker
 /usr/bin/ovs-ofctl
 /usr/bin/ovs-parse-backtrace
 /usr/bin/ovs-pcap
@@ -503,3 +510,4 @@ exit 0
 
 %files %{module_package}
 /lib/modules/%{xen_version}/extra/openvswitch/openvswitch.ko
+/lib/modules/%{xen_version}/extra/openvswitch/vport-*.ko

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<database title="Hardware VTEP Database">
+<database name="vtep" title="Hardware VTEP Database">
   <p>
     This schema specifies relations that a VTEP can use to integrate
     physical ports into logical switches maintained by a network
@@ -36,7 +36,22 @@
     exactly one record in the <ref table="Global"/> table.
 
     <column name="switches">
-      The physical switches managed by the VTEP.
+      <p>
+        The physical switch or switches managed by the VTEP.
+      </p>
+
+      <p>
+        When a physical switch integrates support for this VTEP schema, which
+        is expected to be the most common case, this column should point to one
+        <ref table="Physical_Switch"/> record that represents the switch
+        itself.  In another possible implementation, a server or a VM presents
+        a VTEP schema front-end interface to one or more physical switches,
+        presumably communicating with those physical switches over a
+        proprietary protocol.  In that case, this column would point to one
+        <ref table="Physical_Switch"/> for each physical switch, and the set
+        might change over time as the front-end server comes to represent a
+        differing set of switches.
+      </p>
     </column>
 
     <group title="Database Configuration">
@@ -75,7 +90,7 @@
           <dt><code>ssl:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
             <p>
-              The specified SSL <var>port</var> (default: 6632) on the host at
+              The specified SSL <var>port</var> (default: 6640) on the host at
               the given <var>ip</var>, which must be expressed as an IP address
               (not a DNS name).
             </p>
@@ -87,7 +102,7 @@
 
           <dt><code>tcp:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
-            The specified TCP <var>port</var> (default: 6632) on the host at
+            The specified TCP <var>port</var> (default: 6640) on the host at
             the given <var>ip</var>, which must be expressed as an IP address
             (not a DNS name).
           </dd>
@@ -95,7 +110,7 @@
           <dd>
             <p>
               Listens for SSL connections on the specified TCP <var>port</var>
-              (default: 6632).  If <var>ip</var>, which must be expressed as an
+              (default: 6640).  If <var>ip</var>, which must be expressed as an
               IP address (not a DNS name), is specified, then connections are
               restricted to the specified local IP address.
             </p>
@@ -103,7 +118,7 @@
           <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
           <dd>
             Listens for connections on the specified TCP <var>port</var>
-            (default: 6632).  If <var>ip</var>, which must be expressed as an
+            (default: 6640).  If <var>ip</var>, which must be expressed as an
             IP address (not a DNS name), is specified, then connections are
             restricted to the specified local IP address.
           </dd>
@@ -360,6 +375,7 @@
           Set to an Ethernet address in the form
           <var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>:<var>xx</var>
           to set the MAC expected as destination for received BFD packets.
+          The default is <code>00:23:20:00:00:01</code>.
         </column>
 
         <column name="bfd_config_local" key="bfd_dst_ip">
@@ -398,6 +414,7 @@
 
         <column name="bfd_params" key="enable" type='{"type": "boolean"}'>
           True to enable BFD on this tunnel.
+          The default is False.
         </column>
 
         <column name="bfd_params" key="min_rx"
@@ -459,6 +476,15 @@
         HSC clears all key-value pairs from <ref column="bfd_status"/>.
       </p>
 
+      <column name="bfd_status" key="enabled"
+        type='{"type": "boolean"}'>
+        Set to true if the BFD session has been successfully
+        enabled. Set to false if the VTEP cannot support BFD or has
+        insufficient resources to enable BFD on this tunnel. The NVC
+        will disable the BFD monitoring on the other side of the tunnel
+        once this value is set to false.
+      </column>
+
       <column name="bfd_status" key="state"
         type='{"type": "string",
               "enum": ["set", ["admin_down", "down", "init", "up"]]}'>
@@ -489,6 +515,11 @@
         In case of a problem, set to an error message that reports what the
         remote endpoint's BFD session thinks is wrong.  The error messages
         are defined in section 4.1 of [RFC 5880].
+      </column>
+
+      <column name="bfd_status" key="info">
+        A short message providing further information about the BFD status
+        (possibly including reasons why BFD could not be enabled).
       </column>
       </group>
     </group>
@@ -745,6 +776,10 @@
       addresses of the appropriate VTEP(s).
     </column>
 
+    <column name="ipaddr">
+      The IP address to which this MAC corresponds. Optional field for
+      the purpose of ARP supression.
+    </column>
   </table>
 
   <table name="Mcast_Macs_Remote" title="Multicast MACs (remote)">

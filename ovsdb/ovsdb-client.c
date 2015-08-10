@@ -47,7 +47,7 @@
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
-#include "vlog.h"
+#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_client);
 
@@ -74,7 +74,7 @@ static struct table_style table_style = TABLE_STYLE_DEFAULT;
 
 static const struct ovsdb_client_command *get_all_commands(void);
 
-static void usage(void) NO_RETURN;
+OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[]);
 static struct jsonrpc *open_jsonrpc(const char *server);
 static void fetch_dbs(struct jsonrpc *, struct svec *dbs);
@@ -86,7 +86,7 @@ main(int argc, char *argv[])
     const char *database;
     struct jsonrpc *rpc;
 
-    proctitle_init(argc, argv);
+    ovs_cmdl_proctitle_init(argc, argv);
     set_program_name(argv[0]);
     parse_options(argc, argv);
     fatal_ignore_sigpipe();
@@ -183,7 +183,7 @@ parse_options(int argc, char *argv[])
         TABLE_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
-    char *short_options = long_options_to_short_options(long_options);
+    char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
 
     for (;;) {
         int c;

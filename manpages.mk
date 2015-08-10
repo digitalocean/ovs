@@ -84,26 +84,6 @@ lib/common.man:
 lib/vlog-syn.man:
 lib/vlog.man:
 
-tests/test-controller.8: \
-	tests/test-controller.8.in \
-	lib/common.man \
-	lib/daemon.man \
-	lib/ssl-peer-ca-cert.man \
-	lib/ssl.man \
-	lib/unixctl.man \
-	lib/vconn-active.man \
-	lib/vconn-passive.man \
-	lib/vlog.man
-tests/test-controller.8.in:
-lib/common.man:
-lib/daemon.man:
-lib/ssl-peer-ca-cert.man:
-lib/ssl.man:
-lib/unixctl.man:
-lib/vconn-active.man:
-lib/vconn-passive.man:
-lib/vlog.man:
-
 utilities/bugtool/ovs-bugtool.8: \
 	utilities/bugtool/ovs-bugtool.8.in
 utilities/bugtool/ovs-bugtool.8.in:
@@ -127,9 +107,11 @@ utilities/ovs-dpctl-top.8.in:
 utilities/ovs-dpctl.8: \
 	utilities/ovs-dpctl.8.in \
 	lib/common.man \
+	lib/dpctl.man \
 	lib/vlog.man
 utilities/ovs-dpctl.8.in:
 lib/common.man:
+lib/dpctl.man:
 lib/vlog.man:
 
 utilities/ovs-l3ping.8: \
@@ -188,6 +170,28 @@ lib/common-syn.man:
 lib/common.man:
 utilities/ovs-vlan-bugs.man:
 
+utilities/ovs-testcontroller.8: \
+	utilities/ovs-testcontroller.8.in \
+	lib/common.man \
+	lib/daemon.man \
+	lib/ofp-version.man \
+	lib/ssl-peer-ca-cert.man \
+	lib/ssl.man \
+	lib/unixctl.man \
+	lib/vconn-active.man \
+	lib/vconn-passive.man \
+	lib/vlog.man
+utilities/ovs-testcontroller.8.in:
+lib/common.man:
+lib/daemon.man:
+lib/ofp-version.man:
+lib/ssl-peer-ca-cert.man:
+lib/ssl.man:
+lib/unixctl.man:
+lib/vconn-active.man:
+lib/vconn-passive.man:
+lib/vlog.man:
+
 utilities/ovs-vlan-bug-workaround.8: \
 	utilities/ovs-vlan-bug-workaround.8.in \
 	lib/common.man \
@@ -239,13 +243,16 @@ vswitchd/ovs-vswitchd.8: \
 	lib/common.man \
 	lib/coverage-unixctl.man \
 	lib/daemon.man \
+	lib/dpctl.man \
 	lib/memory-unixctl.man \
 	lib/service.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl.man \
+	lib/unixctl.man \
 	lib/vlog-unixctl.man \
 	lib/vlog.man \
 	ofproto/ofproto-dpif-unixctl.man \
+	ofproto/ofproto-tnl-unixctl.man \
 	ofproto/ofproto-unixctl.man \
 	ovsdb/remote-active.man \
 	ovsdb/remote-passive.man
@@ -253,13 +260,16 @@ vswitchd/ovs-vswitchd.8.in:
 lib/common.man:
 lib/coverage-unixctl.man:
 lib/daemon.man:
+lib/dpctl.man:
 lib/memory-unixctl.man:
 lib/service.man:
 lib/ssl-bootstrap.man:
 lib/ssl.man:
+lib/unixctl.man:
 lib/vlog-unixctl.man:
 lib/vlog.man:
 ofproto/ofproto-dpif-unixctl.man:
+ofproto/ofproto-tnl-unixctl.man:
 ofproto/ofproto-unixctl.man:
 ovsdb/remote-active.man:
 ovsdb/remote-passive.man:

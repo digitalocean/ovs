@@ -22,7 +22,7 @@ class BasicOpenflowTest(unittest.TestCase):
         self.net = Mininet(controller=Controller, switch=Switch)
 
         logging.info("Creating controllers")
-        self.net.addController('c1')
+        self.net.addController('c1', command='ovs-testcontroller')
 
         logging.info("Creating switches")
         s1 = self.net.addSwitch('s1', protocols="OpenFlow10")

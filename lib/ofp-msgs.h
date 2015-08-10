@@ -42,7 +42,7 @@
 #include "ofp-errors.h"
 #include "util.h"
 
-struct list;
+struct ovs_list;
 
 /* Raw identifiers for OpenFlow messages.
  *
@@ -148,7 +148,7 @@ enum ofpraw {
     OFPRAW_OFPT11_PACKET_IN,
     /* OFPT 1.2 (10): struct ofp12_packet_in, uint8_t[]. */
     OFPRAW_OFPT12_PACKET_IN,
-    /* OFPT 1.3 (10): struct ofp13_packet_in, uint8_t[]. */
+    /* OFPT 1.3+ (10): struct ofp13_packet_in, uint8_t[]. */
     OFPRAW_OFPT13_PACKET_IN,
     /* NXT 1.0+ (17): struct nx_packet_in, uint8_t[]. */
     OFPRAW_NXT_PACKET_IN,
@@ -172,15 +172,17 @@ enum ofpraw {
     /* OFPT 1.1+ (13): struct ofp11_packet_out, uint8_t[]. */
     OFPRAW_OFPT11_PACKET_OUT,
 
-    /* OFPT 1.0 (14): struct ofp10_flow_mod, struct ofp_action_header[]. */
+    /* OFPT 1.0 (14): struct ofp10_flow_mod, uint8_t[8][]. */
     OFPRAW_OFPT10_FLOW_MOD,
     /* OFPT 1.1+ (14): struct ofp11_flow_mod, struct ofp11_instruction[]. */
     OFPRAW_OFPT11_FLOW_MOD,
     /* NXT 1.0+ (13): struct nx_flow_mod, uint8_t[8][]. */
     OFPRAW_NXT_FLOW_MOD,
 
-    /* OFPT 1.1+ (15): struct ofp11_group_mod, uint8_t[8][]. */
+    /* OFPT 1.1-1.4 (15): struct ofp11_group_mod, uint8_t[8][]. */
     OFPRAW_OFPT11_GROUP_MOD,
+    /* OFPT 1.5+ (15): struct ofp15_group_mod, uint8_t[8][]. */
+    OFPRAW_OFPT15_GROUP_MOD,
 
     /* OFPT 1.0 (15): struct ofp10_port_mod. */
     OFPRAW_OFPT10_PORT_MOD,
@@ -379,6 +381,16 @@ enum ofpraw {
     /* OFPST 1.4+ (13): uint8_t[8][]. */
     OFPRAW_OFPST14_PORT_DESC_REPLY,
 
+    /* OFPST 1.4+ (16): uint8_t[8][]. */
+    OFPRAW_OFPST14_FLOW_MONITOR_REQUEST,
+    /* NXST 1.0 (2): uint8_t[8][]. */
+    OFPRAW_NXST_FLOW_MONITOR_REQUEST,
+
+    /* OFPST 1.4+ (16): uint8_t[8][]. */
+    OFPRAW_OFPST14_FLOW_MONITOR_REPLY,
+    /* NXST 1.0 (2): uint8_t[8][]. */
+    OFPRAW_NXST_FLOW_MONITOR_REPLY,
+
 /* Nicira extension messages.
  *
  * Nicira extensions that correspond to standard OpenFlow messages are listed
@@ -407,17 +419,6 @@ enum ofpraw {
 
     /* NXT 1.0+ (23): void. */
     OFPRAW_NXT_FLOW_MONITOR_RESUMED,
-
-/* Nicira extension statistics.
- *
- * Nicira extension statistics that correspond to standard OpenFlow statistics
- * are listed alongside the standard versions above. */
-
-    /* NXST 1.0 (2): uint8_t[8][]. */
-    OFPRAW_NXST_FLOW_MONITOR_REQUEST,
-
-    /* NXST 1.0 (2): uint8_t[8][]. */
-    OFPRAW_NXST_FLOW_MONITOR_REPLY,
 };
 
 /* Decoding messages into OFPRAW_* values. */
@@ -496,7 +497,8 @@ enum ofptype {
     OFPTYPE_FLOW_MOD,            /* OFPRAW_OFPT10_FLOW_MOD.
                                   * OFPRAW_OFPT11_FLOW_MOD.
                                   * OFPRAW_NXT_FLOW_MOD. */
-    OFPTYPE_GROUP_MOD,           /* OFPRAW_OFPT11_GROUP_MOD. */
+    OFPTYPE_GROUP_MOD,           /* OFPRAW_OFPT11_GROUP_MOD.
+                                  * OFPRAW_OFPT15_GROUP_MOD. */
     OFPTYPE_PORT_MOD,            /* OFPRAW_OFPT10_PORT_MOD.
                                   * OFPRAW_OFPT11_PORT_MOD.
                                   * OFPRAW_OFPT14_PORT_MOD. */
@@ -607,6 +609,11 @@ enum ofptype {
                                       * OFPRAW_OFPST11_PORT_DESC_REPLY.
                                       * OFPRAW_OFPST14_PORT_DESC_REPLY. */
 
+    OFPTYPE_FLOW_MONITOR_STATS_REQUEST, /* OFPRAW_OFPST14_FLOW_MONITOR_REQUEST.
+                                         * OFPRAW_NXST_FLOW_MONITOR_REQUEST. */
+    OFPTYPE_FLOW_MONITOR_STATS_REPLY,   /* OFPRAW_OFPST14_FLOW_MONITOR_REPLY.
+                                         * OFPRAW_NXST_FLOW_MONITOR_REPLY. */
+
     /* Nicira extensions. */
     OFPTYPE_SET_FLOW_FORMAT,      /* OFPRAW_NXT_SET_FLOW_FORMAT. */
     OFPTYPE_FLOW_MOD_TABLE_ID,    /* OFPRAW_NXT_FLOW_MOD_TABLE_ID. */
@@ -615,8 +622,6 @@ enum ofptype {
     OFPTYPE_SET_CONTROLLER_ID,    /* OFPRAW_NXT_SET_CONTROLLER_ID. */
 
     /* Flow monitor extension. */
-    OFPTYPE_FLOW_MONITOR_STATS_REQUEST, /* OFPRAW_NXST_FLOW_MONITOR_REQUEST. */
-    OFPTYPE_FLOW_MONITOR_STATS_REPLY,   /* OFPRAW_NXST_FLOW_MONITOR_REPLY. */
     OFPTYPE_FLOW_MONITOR_CANCEL,        /* OFPRAW_NXT_FLOW_MONITOR_CANCEL. */
     OFPTYPE_FLOW_MONITOR_PAUSED,        /* OFPRAW_NXT_FLOW_MONITOR_PAUSED. */
     OFPTYPE_FLOW_MONITOR_RESUMED,       /* OFPRAW_NXT_FLOW_MONITOR_RESUMED. */
@@ -656,15 +661,15 @@ bool ofpmsg_is_stat_request(const struct ofp_header *);
  * within 64 kB doesn't need any special treatment, so you might as well use
  * the ofpraw_alloc_*() functions.
  *
- * These functions work with a "struct list" of "struct ofpbuf"s, each of
+ * These functions work with a "struct ovs_list" of "struct ofpbuf"s, each of
  * which represents one part of a multipart message. */
-void ofpmp_init(struct list *, const struct ofp_header *request);
-struct ofpbuf *ofpmp_reserve(struct list *, size_t len);
-void *ofpmp_append(struct list *, size_t len);
-void ofpmp_postappend(struct list *, size_t start_ofs);
+void ofpmp_init(struct ovs_list *, const struct ofp_header *request);
+struct ofpbuf *ofpmp_reserve(struct ovs_list *, size_t len);
+void *ofpmp_append(struct ovs_list *, size_t len);
+void ofpmp_postappend(struct ovs_list *, size_t start_ofs);
 
-enum ofp_version ofpmp_version(struct list *);
-enum ofpraw ofpmp_decode_raw(struct list *);
+enum ofp_version ofpmp_version(struct ovs_list *);
+enum ofpraw ofpmp_decode_raw(struct ovs_list *);
 
 /* Decoding multipart replies. */
 uint16_t ofpmp_flags(const struct ofp_header *);

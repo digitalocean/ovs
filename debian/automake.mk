@@ -27,6 +27,14 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.links \
 	debian/openvswitch-test.install \
 	debian/openvswitch-test.manpages \
+	debian/openvswitch-testcontroller.README.Debian \
+	debian/openvswitch-testcontroller.default \
+	debian/openvswitch-testcontroller.dirs \
+	debian/openvswitch-testcontroller.init \
+	debian/openvswitch-testcontroller.install \
+	debian/openvswitch-testcontroller.manpages \
+	debian/openvswitch-testcontroller.postinst \
+	debian/openvswitch-testcontroller.postrm \
 	debian/openvswitch-vtep.default \
 	debian/openvswitch-vtep.dirs \
 	debian/openvswitch-vtep.init \
@@ -51,6 +59,7 @@ ALL_LOCAL += check-debian-changelog-version
 DIST_HOOKS += check-debian-changelog-version
 
 $(srcdir)/debian/copyright: AUTHORS debian/copyright.in
+	$(AM_V_GEN) \
 	{ sed -n -e '/%AUTHORS%/q' -e p < $(srcdir)/debian/copyright.in;   \
 	  sed '1,/^$$/d' $(srcdir)/AUTHORS |				   \
 		sed -n -e '/^$$/q' -e 's/^/  /p';			   \

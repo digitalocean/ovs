@@ -3,22 +3,23 @@ openvswitch_sources += \
 	linux/compat/exthdrs_core.c \
 	linux/compat/flex_array.c \
 	linux/compat/flow_dissector.c \
+	linux/compat/geneve.c \
 	linux/compat/gre.c \
 	linux/compat/gso.c \
 	linux/compat/genetlink-openvswitch.c \
-	linux/compat/hash.c \
-	linux/compat/hash-x86.c \
 	linux/compat/ip_tunnels_core.c \
 	linux/compat/netdevice.c \
 	linux/compat/net_namespace.c \
 	linux/compat/reciprocal_div.c \
 	linux/compat/skbuff-openvswitch.c \
+	linux/compat/stt.c \
+	linux/compat/udp.c \
+	linux/compat/udp_tunnel.c \
 	linux/compat/vxlan.c	\
 	linux/compat/utils.c
 openvswitch_headers += \
 	linux/compat/gso.h \
-	linux/compat/include/asm/hash.h \
-	linux/compat/include/asm/percpu.h \
+	linux/compat/include/linux/percpu.h \
 	linux/compat/include/linux/bug.h \
 	linux/compat/include/linux/compiler.h \
 	linux/compat/include/linux/compiler-gcc.h \
@@ -26,7 +27,6 @@ openvswitch_headers += \
 	linux/compat/include/linux/err.h \
 	linux/compat/include/linux/etherdevice.h \
 	linux/compat/include/linux/flex_array.h \
-	linux/compat/include/linux/hash.h \
 	linux/compat/include/linux/icmp.h \
 	linux/compat/include/linux/icmpv6.h \
 	linux/compat/include/linux/if.h \
@@ -40,12 +40,13 @@ openvswitch_headers += \
 	linux/compat/include/linux/kconfig.h \
 	linux/compat/include/linux/kernel.h \
 	linux/compat/include/linux/list.h \
-	linux/compat/include/linux/log2.h \
+	linux/compat/include/linux/mpls.h \
 	linux/compat/include/linux/net.h \
 	linux/compat/include/linux/random.h \
 	linux/compat/include/linux/netdevice.h \
 	linux/compat/include/linux/netdev_features.h \
 	linux/compat/include/linux/netlink.h \
+	linux/compat/include/linux/openvswitch.h \
 	linux/compat/include/linux/poison.h \
 	linux/compat/include/linux/rculist.h \
 	linux/compat/include/linux/rcupdate.h \
@@ -63,14 +64,19 @@ openvswitch_headers += \
 	linux/compat/include/net/dst.h \
 	linux/compat/include/net/flow_keys.h \
 	linux/compat/include/net/genetlink.h \
+	linux/compat/include/net/geneve.h \
 	linux/compat/include/net/gre.h \
 	linux/compat/include/net/inet_frag.h \
 	linux/compat/include/net/ip.h \
 	linux/compat/include/net/ip_tunnels.h \
 	linux/compat/include/net/ipv6.h \
+	linux/compat/include/net/mpls.h \
 	linux/compat/include/net/net_namespace.h \
 	linux/compat/include/net/netlink.h \
-	linux/compat/include/net/sock.h \
 	linux/compat/include/net/udp.h \
+	linux/compat/include/net/udp_tunnel.h \
+	linux/compat/include/net/sock.h \
+	linux/compat/include/net/stt.h \
 	linux/compat/include/net/vxlan.h \
 	linux/compat/include/net/sctp/checksum.h
+EXTRA_DIST += linux/compat/build-aux/export-check-whitelist

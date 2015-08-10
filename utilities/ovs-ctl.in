@@ -1,5 +1,5 @@
 #! /bin/sh
-# Copyright (C) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,13 +30,33 @@ done
 ## start ##
 ## ----- ##
 
+# Keep track of removed vports so we can reload them if needed
+removed_vports=""
+
+insert_mods () {
+    # Try loading openvswitch again.
+    action "Inserting openvswitch module" modprobe openvswitch
+
+    for vport in $removed_vports; do
+        # Don't treat failures to load vports as fatal error
+        action "Inserting $vport module" modprobe $vport || true
+    done
+}
+
 insert_mod_if_required () {
+    # If this kernel has no module support, expect we're done.
+    if test ! -e /proc/modules
+    then
+        log_success_msg "Kernel has no loadable module support. Skipping modprobe"
+        return 0
+    fi
+
     # If openvswitch is already loaded then we're done.
     test -e /sys/module/openvswitch -o -e /sys/module/openvswitch_mod && \
      return 0
 
     # Load openvswitch.  If that's successful then we're done.
-    action "Inserting openvswitch module" modprobe openvswitch && return 0
+    insert_mods && return 0
 
     # If the bridge module is loaded, then that might be blocking
     # openvswitch.  Try to unload it, if there are no bridges.
@@ -49,7 +69,7 @@ insert_mod_if_required () {
     action "removing bridge module" rmmod bridge || return 1
 
     # Try loading openvswitch again.
-    action "Inserting openvswitch module" modprobe openvswitch
+    insert_mods
 }
 
 ovs_vsctl () {
@@ -290,7 +310,10 @@ ovs_save () {
 }
 
 save_ofports_if_required () {
-    # Save ofports if we are upgrading from a pre-1.10 branch.
+    # Save OpenFlow port numbers if we are upgrading from a pre-1.10 branch.
+    #
+    # (Versions 1.10 and later save OpenFlow port numbers without assistance,
+    # so we don't have to do anything for them.
     case `ovs-appctl version | sed 1q` in
         "ovs-vswitchd (Open vSwitch) 1."[0-9].*)
             action "Saving ofport values" ovs_save save-ofports \
@@ -378,9 +401,11 @@ force_reload_kmod () {
         action "Removing datapath: $dp" ovs-dpctl del-dp "$dp"
     done
 
-    # For downgrading from branches > 2.3 back to 2.3
     for vport in `awk '/^vport_/ { print $1 }' /proc/modules`; do
         action "Removing $vport module" rmmod $vport
+        if ! grep -q $vport /proc/modules; then
+            removed_vports="$removed_vports $vport"
+        fi
     done
 
     # try both old and new names in case this is post upgrade
@@ -692,7 +717,7 @@ do
 done
 case $command in
     start)
-        start_ovsdb
+        start_ovsdb || exit 1
         start_forwarding
         add_managers
         ;;

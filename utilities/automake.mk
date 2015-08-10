@@ -1,9 +1,11 @@
 bin_PROGRAMS += \
 	utilities/ovs-appctl \
+	utilities/ovs-testcontroller \
 	utilities/ovs-dpctl \
 	utilities/ovs-ofctl \
 	utilities/ovs-vsctl
-bin_SCRIPTS += utilities/ovs-pki
+bin_SCRIPTS += utilities/ovs-docker \
+	utilities/ovs-pki
 if HAVE_PYTHON
 bin_SCRIPTS += \
 	utilities/ovs-dpctl-top \
@@ -20,25 +22,41 @@ scripts_SCRIPTS += \
 	utilities/ovs-save
 scripts_DATA += utilities/ovs-lib
 
+completion_SCRIPTS += \
+	utilities/ovs-appctl-bashcomp.bash \
+	utilities/ovs-vsctl-bashcomp.bash
+
+check_SCRIPTS += \
+	utilities/ovs-appctl-bashcomp.bash \
+	utilities/ovs-vsctl-bashcomp.bash
+
 utilities/ovs-lib: $(top_builddir)/config.status
 
+docs += utilities/ovs-command-bashcomp.INSTALL.md
 EXTRA_DIST += \
+	utilities/ovs-appctl-bashcomp.bash \
 	utilities/ovs-check-dead-ifs.in \
+	utilities/ovs-command-bashcomp.INSTALL.md \
 	utilities/ovs-ctl.in \
 	utilities/ovs-dev.py \
+	utilities/ovs-docker \
 	utilities/ovs-dpctl-top.in \
 	utilities/ovs-l3ping.in \
 	utilities/ovs-lib.in \
 	utilities/ovs-parse-backtrace.in \
 	utilities/ovs-pcap.in \
+	utilities/ovs-pipegen.py \
 	utilities/ovs-pki.in \
 	utilities/ovs-save \
 	utilities/ovs-tcpundump.in \
 	utilities/ovs-test.in \
-	utilities/ovs-vlan-test.in
+	utilities/ovs-vlan-test.in \
+	utilities/ovs-vsctl-bashcomp.bash \
+	utilities/qemu-wrap.py
 MAN_ROOTS += \
 	utilities/ovs-appctl.8.in \
 	utilities/ovs-benchmark.1.in \
+	utilities/ovs-testcontroller.8.in \
 	utilities/ovs-ctl.8 \
 	utilities/ovs-dpctl.8.in \
 	utilities/ovs-dpctl-top.8.in \
@@ -58,6 +76,7 @@ DISTCLEANFILES += \
 	utilities/ovs-ctl \
 	utilities/ovs-benchmark.1 \
 	utilities/ovs-check-dead-ifs \
+	utilities/ovs-testcontroller.8 \
 	utilities/ovs-dpctl.8 \
 	utilities/ovs-dpctl-top \
 	utilities/ovs-dpctl-top.8 \
@@ -83,6 +102,7 @@ man_MANS += \
 	utilities/ovs-appctl.8 \
 	utilities/ovs-benchmark.1 \
 	utilities/ovs-ctl.8 \
+	utilities/ovs-testcontroller.8 \
 	utilities/ovs-dpctl.8 \
 	utilities/ovs-dpctl-top.8 \
 	utilities/ovs-l3ping.8 \
@@ -98,6 +118,9 @@ man_MANS += \
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
+
+utilities_ovs_testcontroller_SOURCES = utilities/ovs-testcontroller.c
+utilities_ovs_testcontroller_LDADD = lib/libopenvswitch.la $(SSL_LIBS)
 
 utilities_ovs_dpctl_SOURCES = utilities/ovs-dpctl.c
 utilities_ovs_dpctl_LDADD = lib/libopenvswitch.la

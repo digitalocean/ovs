@@ -17,11 +17,11 @@ PARALLEL =
 endif
 
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-ssl $(DATAPATH_CONFIGURE_OPTS) 
+	dh_auto_configure -- --enable-ssl $(DATAPATH_CONFIGURE_OPTS)
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL) 1-710 714-716 718-' ||\
+	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL)' || \
                 $(MAKE) check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat tests/testsuite.log; \
@@ -31,13 +31,13 @@ endif
 
 override_dh_auto_build:
 	dh_auto_build -- distdir=openvswitch
-	
+
 override_dh_auto_clean:
 	rm -f python/ovs/*.pyc python/ovs/db/*.pyc
 	dh_auto_clean
 
 override_dh_install:
-	dh_install
+	dh_install --list-missing
 	cp debian/openvswitch-switch.default debian/openvswitch-switch/usr/share/openvswitch/switch/default.template
 
 override_dh_installinit:
@@ -51,14 +51,15 @@ override_dh_strip:
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track
-BRANCH=branch-2.3
+BRANCH=branch-2.4
 
 get-orig-snapshot:
 	rm -Rf openvswitch-upstream
 	git clone https://github.com/openvswitch/ovs openvswitch-upstream
 	cd openvswitch-upstream && \
 		git checkout -b $(BRANCH) remotes/origin/$(BRANCH) && \
+		export COMMIT=`git rev-parse --short HEAD` && \
 		export UPSTREAM_VERSION=`head -1 NEWS | awk '{ print $$1 }' | sed 's/v//'` && \
 		git archive --format tgz --prefix=openvswitch-$$UPSTREAM_VERSION+git$(DATE)/ \
-			-o ../../openvswitch_$$UPSTREAM_VERSION+git$(DATE).orig.tar.gz $(BRANCH)
+			-o ../../openvswitch_$$UPSTREAM_VERSION~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH)
 	rm -Rf openvswitch-upstream

@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2013, 2014 Nicira, Inc.
+# Copyright (c) 2013, 2014, 2015 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,14 +26,15 @@ OVS_SRC = HOME + "/ovs"
 ROOT = HOME + "/root"
 BUILD_GCC = OVS_SRC + "/_build-gcc"
 BUILD_CLANG = OVS_SRC + "/_build-clang"
-PATH = "%(ovs)s/utilities:%(ovs)s/ovsdb:%(ovs)s/vswitchd" % {"ovs": BUILD_GCC}
-
-ENV["PATH"] = PATH + ":" + ENV["PATH"]
 
 options = None
 parser = None
 commands = []
 
+def set_path(build):
+    PATH = "%(ovs)s/utilities:%(ovs)s/ovsdb:%(ovs)s/vswitchd" % {"ovs": build}
+
+    ENV["PATH"] = PATH + ":" + ENV["PATH"]
 
 def _sh(*args, **kwargs):
     print "------> " + " ".join(args)
@@ -81,7 +82,7 @@ def conf():
     if options.optimize is None:
         options.optimize = 0
 
-    cflags += " -O%d" % options.optimize
+    cflags += " -O%s" % str(options.optimize)
 
     ENV["CFLAGS"] = cflags
 
@@ -131,6 +132,7 @@ def conf():
     if clang:
         mf.write(make_str % BUILD_CLANG)
     mf.write("\t$(MAKE) -C %s %s $@\n" % (BUILD_GCC, c1))
+    mf.write("\ncheck-valgrind:\n")
     mf.write("\ncheck:\n")
     mf.write(make_str % BUILD_GCC)
     mf.close()
@@ -144,6 +146,18 @@ commands.append(make)
 
 
 def check():
+    flags = ""
+    if options.jobs:
+        flags += "-j%d " % options.jobs
+    else:
+        flags += "-j8 "
+    if options.tests:
+        for arg in str.split(options.tests):
+            if arg[0].isdigit():
+                flags += "%s " % arg
+            else:
+                flags += "-k %s " % arg
+    ENV["TESTSUITEFLAGS"] = flags
     make("check")
 commands.append(check)
 
@@ -203,7 +217,7 @@ def run():
         _sh("ovsdb-tool", "create", ROOT + "/conf.db",
             OVS_SRC + "/vswitchd/vswitch.ovsschema")
 
-    opts = ["--pidfile", "--log-file", "--enable-dummy"]
+    opts = ["--pidfile", "--log-file"]
 
     _sh(*(["ovsdb-server",
            "--remote=punix:%s/run/db.sock" % ROOT,
@@ -223,7 +237,14 @@ def run():
     _sh("ovs-vsctl --no-wait set Open_vSwitch %s ovs_version=%s"
         % (root_uuid, version))
 
-    cmd = [BUILD_GCC + "/vswitchd/ovs-vswitchd"]
+    build = BUILD_CLANG if options.clang else BUILD_GCC
+    cmd = [build + "/vswitchd/ovs-vswitchd"]
+
+    if options.dpdk:
+        cmd.append("--dpdk")
+        cmd.extend(options.dpdk)
+        cmd.append("--")
+
     if options.gdb:
         cmd = ["gdb", "--args"] + cmd
     elif options.valgrind:
@@ -232,7 +253,7 @@ def run():
                "--suppressions=%s/tests/openssl.supp" % OVS_SRC] + cmd
     else:
         cmd = ["sudo"] + cmd
-        opts = opts + ["-vconsole:off", "--detach"]
+        opts = opts + ["-vconsole:off", "--detach", "--enable-dummy"]
     _sh(*(cmd + opts))
 commands.append(run)
 
@@ -248,7 +269,8 @@ def modinst():
         pass  # Module isn't loaded
 
     try:
-        _sh("rm /lib/modules/%s/extra/openvswitch.ko" % uname())
+        _sh("rm -f /lib/modules/%s/extra/openvswitch.ko" % uname())
+        _sh("rm -f /lib/modules/%s/extra/vport-*.ko" % uname())
     except subprocess.CalledProcessError, e:
         pass  # Module isn't installed
 
@@ -258,6 +280,7 @@ def modinst():
 
     _sh("modprobe", "openvswitch")
     _sh("dmesg | grep openvswitch | tail -1")
+    _sh("find /lib/modules/%s/ -iname vport-*.ko -exec insmod '{}' \;" % uname())
 commands.append(modinst)
 
 
@@ -294,6 +317,11 @@ Basic Configuration:
     # Install the kernel module
     sudo insmod %(ovs)s/datapath/linux/openvswitch.ko
 
+    # If needed, manually load all required vport modules:
+    sudo insmod %(ovs)s/datapath/linux/vport-vxlan.ko
+    sudo insmod %(ovs)s/datapath/linux/vport-geneve.ko
+    [...]
+
     # Run the switch.
     %(v)s run
 
@@ -312,6 +340,16 @@ Commands:
     sys.exit(0)
 commands.append(doc)
 
+def parse_subargs(option, opt_str, value, parser):
+    subopts = []
+
+    while parser.rargs:
+        dpdkarg = parser.rargs.pop(0)
+        if dpdkarg == "--":
+            break
+        subopts.append(dpdkarg)
+
+    setattr(parser.values, option.dest, subopts)
 
 def main():
     global options
@@ -333,10 +371,21 @@ def main():
                      help="configure the man documentation install directory")
     group.add_option("--with-dpdk", dest="with_dpdk", metavar="DPDK_BUILD",
                      help="built with dpdk libraries located at DPDK_BUILD");
+    parser.add_option_group(group)
 
-    for i in range(4):
-        group.add_option("--O%d" % i, dest="optimize", action="store_const",
-                         const=i, help="compile with -O%d" % i)
+    group = optparse.OptionGroup(parser, "Optimization Flags")
+    for i in ["s", "g"] + range(4) + ["fast"]:
+        group.add_option("--O%s" % str(i), dest="optimize",
+                         action="store_const", const=i,
+                         help="compile with -O%s" % str(i))
+    parser.add_option_group(group)
+
+    group = optparse.OptionGroup(parser, "check")
+    group.add_option("-j", "--jobs", dest="jobs", metavar="N", type="int",
+                     help="Run N tests in parallel")
+    group.add_option("--tests", dest="tests", metavar="FILTER",
+                     help="""run specific tests and/or a test category
+                          eg, --tests=\"1-10 megaflow\"""")
     parser.add_option_group(group)
 
     group = optparse.OptionGroup(parser, "run")
@@ -344,6 +393,12 @@ def main():
                      help="run ovs-vswitchd under gdb")
     group.add_option("--valgrind", dest="valgrind", action="store_true",
                      help="run ovs-vswitchd under valgrind")
+    group.add_option("--dpdk", dest="dpdk", action="callback",
+                     callback=parse_subargs,
+                     help="run ovs-vswitchd with dpdk subopts (ended by --)")
+    group.add_option("--clang", dest="clang", action="store_true",
+                     help="Use binaries built by clang")
+
     parser.add_option_group(group)
 
     options, args = parser.parse_args()
@@ -352,6 +407,11 @@ def main():
         if arg not in cmd_names:
             print "Unknown argument " + arg
             doc()
+
+    if options.clang:
+        set_path(BUILD_CLANG)
+    else:
+        set_path(BUILD_GCC)
 
     try:
         os.chdir(OVS_SRC)

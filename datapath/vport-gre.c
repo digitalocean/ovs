@@ -31,6 +31,7 @@
 #include <linux/jhash.h>
 #include <linux/list.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/rculist.h>
 #include <net/net_namespace.h>
@@ -46,6 +47,9 @@
 
 #include "datapath.h"
 #include "vport.h"
+
+static struct vport_ops ovs_gre_vport_ops;
+static struct vport_ops ovs_gre64_vport_ops;
 
 /* Returns the least-significant 32 bits of a __be64. */
 static __be32 be64_get_low32(__be64 x)
@@ -66,12 +70,13 @@ static struct sk_buff *__build_header(struct sk_buff *skb,
 				      int tunnel_hlen,
 				      __be32 seq, __be16 gre64_flag)
 {
-	const struct ovs_key_ipv4_tunnel *tun_key = OVS_CB(skb)->tun_key;
+	const struct ovs_key_ipv4_tunnel *tun_key;
 	struct tnl_ptk_info tpi;
 
+	tun_key = &OVS_CB(skb)->egress_tun_info->tunnel;
 	skb = gre_handle_offloads(skb, !!(tun_key->tun_flags & TUNNEL_CSUM));
 	if (IS_ERR(skb))
-		return NULL;
+		return skb;
 
 	tpi.flags = filter_tnl_flags(tun_key->tun_flags) | gre64_flag;
 
@@ -96,7 +101,7 @@ static __be64 key_to_tunnel_id(__be32 key, __be32 seq)
 static int gre_rcv(struct sk_buff *skb,
 		   const struct tnl_ptk_info *tpi)
 {
-	struct ovs_key_ipv4_tunnel tun_key;
+	struct ovs_tunnel_info tun_info;
 	struct ovs_net *ovs_net;
 	struct vport *vport;
 	__be64 key;
@@ -110,9 +115,10 @@ static int gre_rcv(struct sk_buff *skb,
 		return PACKET_REJECT;
 
 	key = key_to_tunnel_id(tpi->key, tpi->seq);
-	ovs_flow_tun_key_init(&tun_key, ip_hdr(skb), key, filter_tnl_flags(tpi->flags));
+	ovs_flow_tun_info_init(&tun_info, ip_hdr(skb), 0, 0, key,
+			       filter_tnl_flags(tpi->flags), NULL, 0);
 
-	ovs_vport_receive(vport, skb, &tun_key);
+	ovs_vport_receive(vport, skb, &tun_info);
 	return PACKET_RCVD;
 }
 
@@ -139,6 +145,7 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 		  int tunnel_hlen,
 		  __be32 seq, __be16 gre64_flag)
 {
+	struct ovs_key_ipv4_tunnel *tun_key;
 	struct rtable *rt;
 	int min_headroom;
 	__be16 df;
@@ -146,12 +153,11 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 	int err;
 
 	/* Route lookup */
-	saddr = OVS_CB(skb)->tun_key->ipv4_src;
+	tun_key = &OVS_CB(skb)->egress_tun_info->tunnel;
+	saddr = tun_key->ipv4_src;
 	rt = find_route(ovs_dp_get_net(vport->dp),
-			&saddr,
-			OVS_CB(skb)->tun_key->ipv4_dst,
-			IPPROTO_GRE,
-			OVS_CB(skb)->tun_key->ipv4_tos,
+			&saddr, tun_key->ipv4_dst,
+			IPPROTO_GRE, tun_key->ipv4_tos,
 			skb->mark);
 	if (IS_ERR(rt)) {
 		err = PTR_ERR(rt);
@@ -160,7 +166,7 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 
 	min_headroom = LL_RESERVED_SPACE(rt_dst(rt).dev) + rt_dst(rt).header_len
 			+ tunnel_hlen + sizeof(struct iphdr)
-			+ (vlan_tx_tag_present(skb) ? VLAN_HLEN : 0);
+			+ (skb_vlan_tag_present(skb) ? VLAN_HLEN : 0);
 
 	if (skb_headroom(skb) < min_headroom || skb_header_cloned(skb)) {
 		int head_delta = SKB_DATA_ALIGN(min_headroom -
@@ -172,11 +178,12 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 			goto err_free_rt;
 	}
 
-	if (vlan_tx_tag_present(skb)) {
-		if (unlikely(!__vlan_put_tag(skb,
-					     skb->vlan_proto,
-					     vlan_tx_tag_get(skb)))) {
+	if (skb_vlan_tag_present(skb)) {
+		if (unlikely(!vlan_insert_tag_set_proto(skb,
+							skb->vlan_proto,
+							skb_vlan_tag_get(skb)))) {
 			err = -ENOMEM;
+			skb = NULL;
 			goto err_free_rt;
 		}
 		vlan_set_tci(skb, 0);
@@ -184,23 +191,23 @@ static int __send(struct vport *vport, struct sk_buff *skb,
 
 	/* Push Tunnel header. */
 	skb = __build_header(skb, tunnel_hlen, seq, gre64_flag);
-	if (unlikely(!skb)) {
-		err = 0;
+	if (IS_ERR(skb)) {
+		err = PTR_ERR(skb);
+		skb = NULL;
 		goto err_free_rt;
 	}
 
-	df = OVS_CB(skb)->tun_key->tun_flags & TUNNEL_DONT_FRAGMENT ?
-		htons(IP_DF) : 0;
+	df = tun_key->tun_flags & TUNNEL_DONT_FRAGMENT ? htons(IP_DF) : 0;
+	skb->ignore_df = 1;
 
-	skb->local_df = 1;
-
-	return iptunnel_xmit(rt, skb, saddr,
-			     OVS_CB(skb)->tun_key->ipv4_dst, IPPROTO_GRE,
-			     OVS_CB(skb)->tun_key->ipv4_tos,
-			     OVS_CB(skb)->tun_key->ipv4_ttl, df, false);
+	return iptunnel_xmit(skb->sk, rt, skb, saddr,
+			     tun_key->ipv4_dst, IPPROTO_GRE,
+			     tun_key->ipv4_tos,
+			     tun_key->ipv4_ttl, df, false);
 err_free_rt:
 	ip_rt_put(rt);
 error:
+	kfree_skb(skb);
 	return err;
 }
 
@@ -286,20 +293,33 @@ static int gre_send(struct vport *vport, struct sk_buff *skb)
 {
 	int hlen;
 
-	if (unlikely(!OVS_CB(skb)->tun_key))
+	if (unlikely(!OVS_CB(skb)->egress_tun_info)) {
+		kfree_skb(skb);
 		return -EINVAL;
+	}
 
-	hlen = ip_gre_calc_hlen(OVS_CB(skb)->tun_key->tun_flags);
+	hlen = ip_gre_calc_hlen(OVS_CB(skb)->egress_tun_info->tunnel.tun_flags);
 
 	return __send(vport, skb, hlen, 0, 0);
 }
 
-const struct vport_ops ovs_gre_vport_ops = {
-	.type		= OVS_VPORT_TYPE_GRE,
-	.create		= gre_create,
-	.destroy	= gre_tnl_destroy,
-	.get_name	= gre_get_name,
-	.send		= gre_send,
+static int gre_get_egress_tun_info(struct vport *vport, struct sk_buff *skb,
+				   struct ovs_tunnel_info *egress_tun_info)
+{
+	return ovs_tunnel_get_egress_info(egress_tun_info,
+					  ovs_dp_get_net(vport->dp),
+					  OVS_CB(skb)->egress_tun_info,
+					  IPPROTO_GRE, skb->mark, 0, 0);
+}
+
+static struct vport_ops ovs_gre_vport_ops = {
+	.type			= OVS_VPORT_TYPE_GRE,
+	.create			= gre_create,
+	.destroy		= gre_tnl_destroy,
+	.get_name		= gre_get_name,
+	.send			= gre_send,
+	.get_egress_tun_info	= gre_get_egress_tun_info,
+	.owner			= THIS_MODULE,
 };
 
 /* GRE64 vport. */
@@ -310,6 +330,7 @@ static struct vport *gre64_create(const struct vport_parms *parms)
 	struct vport *vport;
 	int err;
 
+	pr_warn_once("GRE64 tunnel protocol is deprecated.");
 	err = gre_init();
 	if (err)
 		return ERR_PTR(err);
@@ -360,21 +381,54 @@ static int gre64_send(struct vport *vport, struct sk_buff *skb)
 		   GRE_HEADER_SECTION;		/* GRE SEQ */
 	__be32 seq;
 
-	if (unlikely(!OVS_CB(skb)->tun_key))
+	if (unlikely(!OVS_CB(skb)->egress_tun_info)) {
+		kfree_skb(skb);
 		return -EINVAL;
+	}
 
-	if (OVS_CB(skb)->tun_key->tun_flags & TUNNEL_CSUM)
+	if (OVS_CB(skb)->egress_tun_info->tunnel.tun_flags & TUNNEL_CSUM)
 		hlen += GRE_HEADER_SECTION;
 
-	seq = be64_get_high32(OVS_CB(skb)->tun_key->tun_id);
+	seq = be64_get_high32(OVS_CB(skb)->egress_tun_info->tunnel.tun_id);
 	return __send(vport, skb, hlen, seq, (TUNNEL_KEY|TUNNEL_SEQ));
 }
 
-const struct vport_ops ovs_gre64_vport_ops = {
-	.type		= OVS_VPORT_TYPE_GRE64,
-	.create		= gre64_create,
-	.destroy	= gre64_tnl_destroy,
-	.get_name	= gre_get_name,
-	.send		= gre64_send,
+static struct vport_ops ovs_gre64_vport_ops = {
+	.type			= OVS_VPORT_TYPE_GRE64,
+	.create			= gre64_create,
+	.destroy		= gre64_tnl_destroy,
+	.get_name		= gre_get_name,
+	.send			= gre64_send,
+	.get_egress_tun_info	= gre_get_egress_tun_info,
+	.owner			= THIS_MODULE,
 };
+
+static int __init ovs_gre_tnl_init(void)
+{
+	int err;
+
+	err = ovs_vport_ops_register(&ovs_gre_vport_ops);
+	if (err < 0)
+		return err;
+
+	err = ovs_vport_ops_register(&ovs_gre64_vport_ops);
+	if (err < 0)
+		ovs_vport_ops_unregister(&ovs_gre_vport_ops);
+
+	return err;
+}
+
+static void __exit ovs_gre_tnl_exit(void)
+{
+	ovs_vport_ops_unregister(&ovs_gre64_vport_ops);
+	ovs_vport_ops_unregister(&ovs_gre_vport_ops);
+}
+
+module_init(ovs_gre_tnl_init);
+module_exit(ovs_gre_tnl_exit);
+
+MODULE_DESCRIPTION("OVS: GRE switching port");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("vport-type-3");
+MODULE_ALIAS("vport-type-104");
 #endif

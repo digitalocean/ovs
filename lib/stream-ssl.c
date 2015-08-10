@@ -45,7 +45,7 @@
 #include "stream-provider.h"
 #include "stream.h"
 #include "timeval.h"
-#include "vlog.h"
+#include "openvswitch/vlog.h"
 
 #ifdef _WIN32
 /* Ref: https://www.openssl.org/support/faq.html#PROG2
@@ -82,7 +82,6 @@ struct ssl_stream
     enum ssl_state state;
     enum session_type type;
     int fd;
-    HANDLE wevent;
     SSL *ssl;
     struct ofpbuf *txbuf;
     unsigned int session_nr;
@@ -200,7 +199,6 @@ static void ssl_protocol_cb(int write_p, int version, int content_type,
                             const void *, size_t, SSL *, void *sslv_);
 static bool update_ssl_config(struct ssl_config_file *, const char *file_name);
 static int sock_errno(void);
-static void clear_handle(int fd, HANDLE wevent);
 
 static short int
 want_to_poll_events(int want)
@@ -224,11 +222,8 @@ static int
 new_ssl_stream(const char *name, int fd, enum session_type type,
                enum ssl_state state, struct stream **streamp)
 {
-    struct sockaddr_storage local;
-    socklen_t local_len = sizeof local;
     struct ssl_stream *sslv;
     SSL *ssl = NULL;
-    int on = 1;
     int retval;
 
     /* Check for all the needful configuration. */
@@ -254,19 +249,11 @@ new_ssl_stream(const char *name, int fd, enum session_type type,
         goto error;
     }
 
-    /* Get the local IP and port information */
-    retval = getsockname(fd, (struct sockaddr *) &local, &local_len);
-    if (retval) {
-        memset(&local, 0, sizeof local);
-    }
-
-    /* Disable Nagle. */
-    retval = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
-    if (retval) {
-        retval = sock_errno();
-        VLOG_ERR("%s: setsockopt(TCP_NODELAY): %s", name,
-                 sock_strerror(retval));
-        goto error;
+    /* Disable Nagle.
+     * On windows platforms, this can only be called upon TCP connected.
+     */
+    if (state == STATE_SSL_CONNECTING) {
+        setsockopt_tcp_nodelay(fd);
     }
 
     /* Create and configure OpenSSL stream. */
@@ -291,11 +278,6 @@ new_ssl_stream(const char *name, int fd, enum session_type type,
     sslv->state = state;
     sslv->type = type;
     sslv->fd = fd;
-#ifdef _WIN32
-    sslv->wevent = CreateEvent(NULL, FALSE, FALSE, NULL);
-#else
-    sslv->wevent = 0;
-#endif
     sslv->ssl = ssl;
     sslv->txbuf = NULL;
     sslv->rx_want = sslv->tx_want = SSL_NOTHING;
@@ -335,7 +317,7 @@ ssl_open(const char *name, char *suffix, struct stream **streamp, uint8_t dscp)
         return error;
     }
 
-    error = inet_open_active(SOCK_STREAM, suffix, OFP_OLD_PORT, NULL, &fd,
+    error = inet_open_active(SOCK_STREAM, suffix, OFP_PORT, NULL, &fd,
                              dscp);
     if (fd >= 0) {
         int state = error ? STATE_TCP_CONNECTING : STATE_SSL_CONNECTING;
@@ -455,6 +437,7 @@ ssl_connect(struct stream *stream)
             return retval;
         }
         sslv->state = STATE_SSL_CONNECTING;
+        setsockopt_tcp_nodelay(sslv->fd);
         /* Fall through. */
 
     case STATE_SSL_CONNECTING:
@@ -524,7 +507,6 @@ ssl_close(struct stream *stream)
     ERR_clear_error();
 
     SSL_free(sslv->ssl);
-    clear_handle(sslv->fd, sslv->wevent);
     closesocket(sslv->fd);
     free(sslv);
 }
@@ -652,15 +634,14 @@ ssl_do_tx(struct stream *stream)
 
     for (;;) {
         int old_state = SSL_get_state(sslv->ssl);
-        int ret = SSL_write(sslv->ssl,
-                            ofpbuf_data(sslv->txbuf), ofpbuf_size(sslv->txbuf));
+        int ret = SSL_write(sslv->ssl, sslv->txbuf->data, sslv->txbuf->size);
         if (old_state != SSL_get_state(sslv->ssl)) {
             sslv->rx_want = SSL_NOTHING;
         }
         sslv->tx_want = SSL_NOTHING;
         if (ret > 0) {
             ofpbuf_pull(sslv->txbuf, ret);
-            if (ofpbuf_size(sslv->txbuf) == 0) {
+            if (sslv->txbuf->size == 0) {
                 return 0;
             }
         } else {
@@ -717,8 +698,7 @@ ssl_run_wait(struct stream *stream)
     struct ssl_stream *sslv = ssl_stream_cast(stream);
 
     if (sslv->tx_want != SSL_NOTHING) {
-        poll_fd_wait_event(sslv->fd, sslv->wevent,
-                           want_to_poll_events(sslv->tx_want));
+        poll_fd_wait(sslv->fd, want_to_poll_events(sslv->tx_want));
     }
 }
 
@@ -734,14 +714,14 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
         } else {
             switch (sslv->state) {
             case STATE_TCP_CONNECTING:
-                poll_fd_wait_event(sslv->fd, sslv->wevent, POLLOUT);
+                poll_fd_wait(sslv->fd, POLLOUT);
                 break;
 
             case STATE_SSL_CONNECTING:
                 /* ssl_connect() called SSL_accept() or SSL_connect(), which
                  * set up the status that we test here. */
-                poll_fd_wait_event(sslv->fd, sslv->wevent,
-                                   want_to_poll_events(SSL_want(sslv->ssl)));
+                poll_fd_wait(sslv->fd,
+                               want_to_poll_events(SSL_want(sslv->ssl)));
                 break;
 
             default:
@@ -752,8 +732,7 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
 
     case STREAM_RECV:
         if (sslv->rx_want != SSL_NOTHING) {
-            poll_fd_wait_event(sslv->fd, sslv->wevent,
-                               want_to_poll_events(sslv->rx_want));
+            poll_fd_wait(sslv->fd, want_to_poll_events(sslv->rx_want));
         } else {
             poll_immediate_wake();
         }
@@ -793,7 +772,6 @@ struct pssl_pstream
 {
     struct pstream pstream;
     int fd;
-    HANDLE wevent;
 };
 
 const struct pstream_class pssl_pstream_class;
@@ -822,7 +800,7 @@ pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
         return retval;
     }
 
-    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_OLD_PORT, &ss, dscp);
+    fd = inet_open_passive(SOCK_STREAM, suffix, OFP_PORT, &ss, dscp, true);
     if (fd < 0) {
         return -fd;
     }
@@ -835,11 +813,6 @@ pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
     pstream_init(&pssl->pstream, &pssl_pstream_class, bound_name);
     pstream_set_bound_port(&pssl->pstream, htons(port));
     pssl->fd = fd;
-#ifdef _WIN32
-    pssl->wevent = CreateEvent(NULL, FALSE, FALSE, NULL);
-#else
-    pssl->wevent = 0;
-#endif
     *pstreamp = &pssl->pstream;
     return 0;
 }
@@ -848,7 +821,6 @@ static void
 pssl_close(struct pstream *pstream)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    clear_handle(pssl->fd, pssl->wevent);
     closesocket(pssl->fd);
     free(pssl);
 }
@@ -895,7 +867,7 @@ static void
 pssl_wait(struct pstream *pstream)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    poll_fd_wait_event(pssl->fd, pssl->wevent, POLLIN);
+    poll_fd_wait(pssl->fd, POLLIN);
 }
 
 const struct pstream_class pssl_pstream_class = {
@@ -999,6 +971,7 @@ do_ssl_init(void)
     SSL_CTX_set_mode(ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
                        NULL);
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
 
     return 0;
 }
@@ -1418,17 +1391,4 @@ ssl_protocol_cb(int write_p, int version OVS_UNUSED, int content_type,
              stream_get_name(&sslv->stream), ds_cstr(&details), len);
 
     ds_destroy(&details);
-}
-
-static void
-clear_handle(int fd OVS_UNUSED, HANDLE wevent OVS_UNUSED)
-{
-#ifdef _WIN32
-    if (fd) {
-        WSAEventSelect(fd, NULL, 0);
-    }
-    if (wevent) {
-        CloseHandle(wevent);
-    }
-#endif
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #define MATCH_H 1
 
 #include "flow.h"
+#include "packets.h"
 
 struct ds;
 
@@ -45,11 +46,16 @@ void match_set_dp_hash(struct match *, uint32_t value);
 void match_set_dp_hash_masked(struct match *, uint32_t value, uint32_t mask);
 
 void match_set_recirc_id(struct match *, uint32_t value);
-void match_set_recirc_id_masked(struct match *, uint32_t value, uint32_t mask);
+
+void match_set_conj_id(struct match *, uint32_t value);
 
 void match_set_reg(struct match *, unsigned int reg_idx, uint32_t value);
 void match_set_reg_masked(struct match *, unsigned int reg_idx,
                           uint32_t value, uint32_t mask);
+void match_set_xreg(struct match *, unsigned int xreg_idx, uint64_t value);
+void match_set_xreg_masked(struct match *, unsigned int xreg_idx,
+                           uint64_t value, uint64_t mask);
+void match_set_actset_output(struct match *, ofp_port_t actset_output);
 void match_set_metadata(struct match *, ovs_be64 metadata);
 void match_set_metadata_masked(struct match *,
                                ovs_be64 metadata, ovs_be64 mask);
@@ -65,17 +71,21 @@ void match_set_tun_tos(struct match *match, uint8_t tos);
 void match_set_tun_tos_masked(struct match *match, uint8_t tos, uint8_t mask);
 void match_set_tun_flags(struct match *match, uint16_t flags);
 void match_set_tun_flags_masked(struct match *match, uint16_t flags, uint16_t mask);
+void match_set_tun_gbp_id_masked(struct match *match, ovs_be16 gbp_id, ovs_be16 mask);
+void match_set_tun_gbp_id(struct match *match, ovs_be16 gbp_id);
+void match_set_tun_gbp_flags_masked(struct match *match, uint8_t flags, uint8_t mask);
+void match_set_tun_gbp_flags(struct match *match, uint8_t flags);
 void match_set_in_port(struct match *, ofp_port_t ofp_port);
 void match_set_pkt_mark(struct match *, uint32_t pkt_mark);
 void match_set_pkt_mark_masked(struct match *, uint32_t pkt_mark, uint32_t mask);
 void match_set_skb_priority(struct match *, uint32_t skb_priority);
 void match_set_dl_type(struct match *, ovs_be16);
-void match_set_dl_src(struct match *, const uint8_t[6]);
-void match_set_dl_src_masked(struct match *, const uint8_t dl_src[6],
-                             const uint8_t mask[6]);
-void match_set_dl_dst(struct match *, const uint8_t[6]);
-void match_set_dl_dst_masked(struct match *, const uint8_t dl_dst[6],
-                             const uint8_t mask[6]);
+void match_set_dl_src(struct match *, const uint8_t[ETH_ADDR_LEN]);
+void match_set_dl_src_masked(struct match *, const uint8_t dl_src[ETH_ADDR_LEN],
+                             const uint8_t mask[ETH_ADDR_LEN]);
+void match_set_dl_dst(struct match *, const uint8_t[ETH_ADDR_LEN]);
+void match_set_dl_dst_masked(struct match *, const uint8_t dl_dst[ETH_ADDR_LEN],
+                             const uint8_t mask[ETH_ADDR_LEN]);
 void match_set_dl_tci(struct match *, ovs_be16 tci);
 void match_set_dl_tci_masked(struct match *, ovs_be16 tci, ovs_be16 mask);
 void match_set_any_vid(struct match *);
@@ -111,14 +121,14 @@ void match_set_nw_frag(struct match *, uint8_t nw_frag);
 void match_set_nw_frag_masked(struct match *, uint8_t nw_frag, uint8_t mask);
 void match_set_icmp_type(struct match *, uint8_t);
 void match_set_icmp_code(struct match *, uint8_t);
-void match_set_arp_sha(struct match *, const uint8_t[6]);
+void match_set_arp_sha(struct match *, const uint8_t[ETH_ADDR_LEN]);
 void match_set_arp_sha_masked(struct match *,
-                              const uint8_t arp_sha[6],
-                              const uint8_t mask[6]);
-void match_set_arp_tha(struct match *, const uint8_t[6]);
+                              const uint8_t arp_sha[ETH_ADDR_LEN],
+                              const uint8_t mask[ETH_ADDR_LEN]);
+void match_set_arp_tha(struct match *, const uint8_t[ETH_ADDR_LEN]);
 void match_set_arp_tha_masked(struct match *,
-                              const uint8_t arp_tha[6],
-                              const uint8_t mask[6]);
+                              const uint8_t arp_tha[ETH_ADDR_LEN],
+                              const uint8_t mask[ETH_ADDR_LEN]);
 void match_set_ipv6_src(struct match *, const struct in6_addr *);
 void match_set_ipv6_src_masked(struct match *, const struct in6_addr *,
                                const struct in6_addr *);
@@ -137,8 +147,8 @@ uint32_t match_hash(const struct match *, uint32_t basis);
 void match_init_hidden_fields(struct match *);
 bool match_has_default_hidden_fields(const struct match *);
 
-void match_format(const struct match *, struct ds *, unsigned int priority);
-char *match_to_string(const struct match *, unsigned int priority);
+void match_format(const struct match *, struct ds *, int priority);
+char *match_to_string(const struct match *, int priority);
 void match_print(const struct match *);
 
 /* Compressed match. */
@@ -170,8 +180,7 @@ bool minimatch_equal(const struct minimatch *a, const struct minimatch *b);
 
 bool minimatch_matches_flow(const struct minimatch *, const struct flow *);
 
-void minimatch_format(const struct minimatch *, struct ds *,
-                      unsigned int priority);
-char *minimatch_to_string(const struct minimatch *, unsigned int priority);
+void minimatch_format(const struct minimatch *, struct ds *, int priority);
+char *minimatch_to_string(const struct minimatch *, int priority);
 
 #endif /* match.h */

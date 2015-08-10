@@ -1,5 +1,5 @@
+docs += tutorial/Tutorial.md
 EXTRA_DIST += \
-	tutorial/Tutorial \
 	tutorial/ovs-sandbox \
 	tutorial/t-setup \
 	tutorial/t-stage0 \
@@ -9,4 +9,4 @@ EXTRA_DIST += \
 	tutorial/t-stage4
 
 sandbox: all
-	cd $(srcdir)/tutorial && ./ovs-sandbox -b $(abs_builddir)
+	cd $(srcdir)/tutorial && MAKE=$(MAKE) ./ovs-sandbox -b $(abs_builddir) $(SANDBOXFLAGS)

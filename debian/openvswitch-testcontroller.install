@@ -1,1 +1,1 @@
-tests/test-controller usr/bin
+usr/bin/ovs-testcontroller

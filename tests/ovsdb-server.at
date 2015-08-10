@@ -42,6 +42,7 @@ AT_BANNER([ovsdb-server miscellaneous features])
 
 AT_SETUP([truncating corrupted database log])
 AT_KEYWORDS([ovsdb server positive unix])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [stdout], [ignore])
@@ -89,6 +90,7 @@ AT_CLEANUP
 
 AT_SETUP([truncating database log with bad transaction])
 AT_KEYWORDS([ovsdb server positive unix])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [stdout], [ignore])
@@ -161,7 +163,7 @@ ordinals
 ], [ignore], [test ! -e pid || kill `cat pid`])
 AT_CHECK(
   [[ovstest test-jsonrpc request unix:socket get_schema [\"nonexistent\"]]], [0],
-  [[{"error":null,"id":0,"result":{"details":"get_schema request specifies unknown database nonexistent","error":"unknown database","syntax":"[\"nonexistent\"]"}}
+  [[{"error":{"details":"get_schema request specifies unknown database nonexistent","error":"unknown database","syntax":"[\"nonexistent\"]"},"id":0,"result":null}
 ]], [], [test ! -e pid || kill `cat pid`])
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
@@ -194,10 +196,17 @@ AT_CHECK([ovsdb-client list-tables unix:socket constraints], [0], [ignore], [ign
 AT_CHECK([ovsdb-client list-tables unix:socket ordinals], [0], [ignore], [ignore])
 
 # Add an already added database.
-AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-db db2], 2, [],
+if test $IS_WIN32 = "yes"; then
+  AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-db db2], 2, [],
+  [I/O error: db2: failed to lock lockfile (Resource deadlock avoided)
+ovs-appctl: ovsdb-server: server returned an error
+])
+else
+  AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-db db2], 2, [],
   [db2: already open
 ovs-appctl: ovsdb-server: server returned an error
 ])
+fi
 
 # Add a non-existing database.
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-db db3], 2, [], [stderr])
@@ -246,6 +255,7 @@ AT_CLEANUP
 
 AT_SETUP([ovsdb-server/add-db with --monitor])
 AT_KEYWORDS([ovsdb server positive])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 # Start ovsdb-server, initially with one db.
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 OVS_LOGDIR=`pwd`; export OVS_LOGDIR
@@ -278,6 +288,7 @@ AT_CLEANUP
 
 AT_SETUP([ovsdb-server/add-db and remove-db with --monitor])
 AT_KEYWORDS([ovsdb server positive])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 # Start ovsdb-server, initially with one db.
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 OVS_LOGDIR=`pwd`; export OVS_LOGDIR
@@ -349,8 +360,8 @@ AT_CHECK(
         "uuid-name": "x",
         "row": {"target": "punix:socket2"}}]']], [0], [ignore], [ignore])
 ON_EXIT([kill `cat ovsdb-server.pid`])
-AT_CHECK([ovsdb-server --enable-dummy --detach --no-chdir --pidfile --remote=db:mydb,Root,managers --remote=db:mydb,Root,manager_options --log-file db], [0], [ignore], [ignore])
-for i in 1 2 3 4 5 6; do ovs-appctl -t ovsdb-server time/warp 1000; done
+AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --remote=db:mydb,Root,managers --remote=db:mydb,Root,manager_options --log-file db], [0], [ignore], [ignore])
+ovs-appctl -t ovsdb-server time/warp 6000 1000
 AT_CHECK(
   [[ovsdb-client transact unix:socket1 \
      '["mydb",
@@ -382,14 +393,22 @@ AT_CHECK([ovsdb-server --detach --no-chdir --pidfile db])
 
 AT_CHECK([test ! -e socket1])
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-remote punix:socket1])
-OVS_WAIT_UNTIL([test -S socket1])
+if test "$IS_WIN32" = "yes"; then
+  OVS_WAIT_UNTIL([test -s socket1])
+else
+  OVS_WAIT_UNTIL([test -S socket1])
+fi
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/list-remotes],
   [0], [punix:socket1
 ])
 
 AT_CHECK([test ! -e socket2])
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-remote punix:socket2])
-OVS_WAIT_UNTIL([test -S socket2])
+if test "$IS_WIN32" = "yes"; then
+  OVS_WAIT_UNTIL([test -s socket2])
+else
+  OVS_WAIT_UNTIL([test -S socket2])
+fi
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/list-remotes],
   [0], [punix:socket1
 punix:socket2
@@ -402,7 +421,11 @@ ovs-appctl: ovsdb-server: server returned an error
 
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/remove-remote punix:socket1])
 OVS_WAIT_UNTIL([test ! -e socket1])
-AT_CHECK([test -S socket2])
+if test "$IS_WIN32" = "yes"; then
+  AT_CHECK([test -s socket2])
+else
+  AT_CHECK([test -S socket2])
+fi
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/list-remotes],
   [0], [punix:socket2
 ])
@@ -415,6 +438,7 @@ AT_CLEANUP
 
 AT_SETUP([ovsdb-server/add-remote with --monitor])
 AT_KEYWORDS([ovsdb server positive])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 # Start ovsdb-server, initially with no remotes.
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 OVS_LOGDIR=`pwd`; export OVS_LOGDIR
@@ -445,6 +469,7 @@ AT_CLEANUP
 
 AT_SETUP([ovsdb-server/add-remote and remove-remote with --monitor])
 AT_KEYWORDS([ovsdb server positive])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 # Start ovsdb-server, initially with no remotes.
 OVS_RUNDIR=`pwd`; export OVS_RUNDIR
 OVS_LOGDIR=`pwd`; export OVS_LOGDIR
@@ -480,7 +505,10 @@ AT_CLEANUP
 AT_SETUP([SSL db: implementation])
 AT_KEYWORDS([ovsdb server positive ssl $5])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
-PKIDIR=$abs_top_builddir/tests
+# For this test, we pass PKIDIR through a ovsdb-tool transact and
+# msys on Windows does not convert the path style automatically.
+# So, do that forcefully with a 'pwd -W' (called through pwd() function).
+PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[ 	'\"
 \\]"])
 AT_DATA([schema],
@@ -723,6 +751,13 @@ add_ports () {
 add=`add_ports`
 
 AT_CAPTURE_FILE([ovsdb-client.err])
+AT_CAPTURE_FILE([ovsdb-client-nonblock.err])
+
+
+# Start an ovsdb-client monitoring all changes to the database,
+# By default, it is non-blocking, and will get update message
+# for each ovsdb-server transaactions.
+AT_CHECK([ovsdb-client --detach --no-chdir --pidfile=nonblock.pid monitor ALL >ovsdb-client-nonblock.out 2>ovsdb-client-nonblock.err])
 
 # Start an ovsdb-client monitoring all changes to the database,
 # make it block to force the buffers to fill up, and then execute
@@ -735,8 +770,10 @@ for i in `seq 1 $n_iterations`; do
 done
 AT_CHECK([ovs-appctl -t ovsdb-client ovsdb-client/unblock])
 OVS_WAIT_UNTIL([grep "\"xyzzy$counter\"" ovsdb-client.out])
+OVS_WAIT_UNTIL([grep "\"xyzzy$counter\"" ovsdb-client-nonblock.out])
 AT_CHECK([ovs-appctl -t ovsdb-client exit])
 OVS_WAIT_WHILE([test -e ovsdb-client.pid])
+AT_CHECK([kill `cat nonblock.pid`])
 
 # Count the number of updates in the ovsdb-client output, by counting
 # the number of changes to the Open_vSwitch table.  (All of our
@@ -745,8 +782,11 @@ OVS_WAIT_WHILE([test -e ovsdb-client.pid])
 #
 # Check that the counter is what we expect.
 logged_updates=`grep -c '^Open_vSwitch' ovsdb-client.out`
-echo "logged_updates=$logged_updates (expected less than $n_updates)"
-AT_CHECK([test $logged_updates -lt $n_updates])
+logged_nonblock_updates=`grep -c '^Open_vSwitch' ovsdb-client-nonblock.out`
+echo "logged_nonblock_updates=$logged_nonblock_updates (expected less or equal to $n_updates)"
+echo "logged_updates=$logged_updates (expected less than $logged_nonblock_updates)"
+AT_CHECK([test $logged_nonblock_updates -le $n_updates])
+AT_CHECK([test $logged_updates -lt $logged_nonblock_updates])
 AT_CHECK_UNQUOTED([ovs-vsctl get open_vswitch . system_version], [0],
   ["xyzzy$counter"
 ])
@@ -939,6 +979,7 @@ AT_BANNER([OVSDB -- transactions on transient ovsdb-server])
 # TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
 m4_define([OVSDB_CHECK_EXECUTION], 
   [AT_SETUP([$1])
+   AT_SKIP_IF([test "$IS_WIN32" = "yes"])
    AT_KEYWORDS([ovsdb server positive transient $5])
    OVS_RUNDIR=`pwd`; export OVS_RUNDIR
    $2 > schema

@@ -43,16 +43,15 @@
 #include <sys/sysctl.h>
 #if defined(__NetBSD__)
 #include <net/route.h>
-#include <netinet/in.h>
 #include <netinet/if_inarp.h>
 #endif
 
 #include "rtbsd.h"
 #include "coverage.h"
+#include "dp-packet.h"
 #include "dpif-netdev.h"
 #include "dynamic-string.h"
 #include "fatal-signal.h"
-#include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "ovs-thread.h"
 #include "packets.h"
@@ -61,7 +60,7 @@
 #include "socket-util.h"
 #include "svec.h"
 #include "util.h"
-#include "vlog.h"
+#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(netdev_bsd);
 
@@ -248,7 +247,7 @@ cache_notifier_ref(void)
 
     if (!cache_notifier_refcount) {
         ret = rtbsd_notifier_register(&netdev_bsd_cache_notifier,
-                                                netdev_bsd_cache_cb, NULL);
+                                      netdev_bsd_cache_cb, NULL);
         if (ret) {
             return ret;
         }
@@ -361,7 +360,7 @@ netdev_bsd_construct_tap(struct netdev *netdev_)
 
     /* Turn device UP */
     ifr_set_flags(&ifr, IFF_UP);
-    strncpy(ifr.ifr_name, kernel_name, sizeof ifr.ifr_name);
+    ovs_strlcpy(ifr.ifr_name, kernel_name, sizeof ifr.ifr_name);
     error = af_inet_ioctl(SIOCSIFFLAGS, &ifr);
     if (error) {
         destroy_tap(netdev->tap_fd, kernel_name);
@@ -569,20 +568,20 @@ proc_pkt(u_char *args_, const struct pcap_pkthdr *hdr, const u_char *packet)
  * from rxq->pcap.
  */
 static int
-netdev_rxq_bsd_recv_pcap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
+netdev_rxq_bsd_recv_pcap(struct netdev_rxq_bsd *rxq, struct dp_packet *buffer)
 {
     struct pcap_arg arg;
     int ret;
 
     /* prepare the pcap argument to store the packet */
-    arg.size = ofpbuf_tailroom(buffer);
-    arg.data = ofpbuf_data(buffer);
+    arg.size = dp_packet_tailroom(buffer);
+    arg.data = dp_packet_data(buffer);
 
     for (;;) {
         ret = pcap_dispatch(rxq->pcap_handle, 1, proc_pkt, (u_char *) &arg);
 
         if (ret > 0) {
-            ofpbuf_set_size(buffer, ofpbuf_size(buffer) + arg.retval);
+            dp_packet_set_size(buffer, dp_packet_size(buffer) + arg.retval);
             return 0;
         }
         if (ret == -1) {
@@ -601,14 +600,14 @@ netdev_rxq_bsd_recv_pcap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
  * 'rxq->fd' is initialized with the tap file descriptor.
  */
 static int
-netdev_rxq_bsd_recv_tap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
+netdev_rxq_bsd_recv_tap(struct netdev_rxq_bsd *rxq, struct dp_packet *buffer)
 {
-    size_t size = ofpbuf_tailroom(buffer);
+    size_t size = dp_packet_tailroom(buffer);
 
     for (;;) {
-        ssize_t retval = read(rxq->fd, ofpbuf_data(buffer), size);
+        ssize_t retval = read(rxq->fd, dp_packet_data(buffer), size);
         if (retval >= 0) {
-            ofpbuf_set_size(buffer, ofpbuf_size(buffer) + retval);
+            dp_packet_set_size(buffer, dp_packet_size(buffer) + retval);
             return 0;
         } else if (errno != EINTR) {
             if (errno != EAGAIN) {
@@ -621,11 +620,12 @@ netdev_rxq_bsd_recv_tap(struct netdev_rxq_bsd *rxq, struct ofpbuf *buffer)
 }
 
 static int
-netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct ofpbuf **packet, int *c)
+netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet **packets,
+                    int *c)
 {
     struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
     struct netdev *netdev = rxq->up.netdev;
-    struct ofpbuf *buffer;
+    struct dp_packet *packet;
     ssize_t retval;
     int mtu;
 
@@ -633,17 +633,18 @@ netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct ofpbuf **packet, int *c)
         mtu = ETH_PAYLOAD_MAX;
     }
 
-    buffer = ofpbuf_new_with_headroom(VLAN_ETH_HEADER_LEN + mtu, DP_NETDEV_HEADROOM);
-
+    packet = dp_packet_new_with_headroom(VLAN_ETH_HEADER_LEN + mtu,
+                                           DP_NETDEV_HEADROOM);
     retval = (rxq->pcap_handle
-            ? netdev_rxq_bsd_recv_pcap(rxq, buffer)
-            : netdev_rxq_bsd_recv_tap(rxq, buffer));
+            ? netdev_rxq_bsd_recv_pcap(rxq, packet)
+            : netdev_rxq_bsd_recv_tap(rxq, packet));
 
     if (retval) {
-        ofpbuf_delete(buffer);
+        dp_packet_delete(packet);
     } else {
-        dp_packet_pad(buffer);
-        packet[0] = buffer;
+        dp_packet_pad(packet);
+        dp_packet_set_rss_hash(packet, 0);
+        packets[0] = packet;
         *c = 1;
     }
     return retval;
@@ -682,13 +683,13 @@ netdev_bsd_rxq_drain(struct netdev_rxq *rxq_)
  * system or a tap device.
  */
 static int
-netdev_bsd_send(struct netdev *netdev_, struct ofpbuf *pkt, bool may_steal)
+netdev_bsd_send(struct netdev *netdev_, int qid OVS_UNUSED,
+                struct dp_packet **pkts, int cnt, bool may_steal)
 {
     struct netdev_bsd *dev = netdev_bsd_cast(netdev_);
     const char *name = netdev_get_name(netdev_);
-    const void *data = ofpbuf_data(pkt);
-    size_t size = ofpbuf_size(pkt);
     int error;
+    int i;
 
     ovs_mutex_lock(&dev->mutex);
     if (dev->tap_fd < 0 && !dev->pcap) {
@@ -697,35 +698,43 @@ netdev_bsd_send(struct netdev *netdev_, struct ofpbuf *pkt, bool may_steal)
         error = 0;
     }
 
-    while (!error) {
-        ssize_t retval;
-        if (dev->tap_fd >= 0) {
-            retval = write(dev->tap_fd, data, size);
-        } else {
-            retval = pcap_inject(dev->pcap, data, size);
-        }
-        if (retval < 0) {
-            if (errno == EINTR) {
-                continue;
+    for (i = 0; i < cnt; i++) {
+        const void *data = dp_packet_data(pkts[i]);
+        size_t size = dp_packet_size(pkts[i]);
+
+        while (!error) {
+            ssize_t retval;
+            if (dev->tap_fd >= 0) {
+                retval = write(dev->tap_fd, data, size);
             } else {
-                error = errno;
-                if (error != EAGAIN) {
-                    VLOG_WARN_RL(&rl, "error sending Ethernet packet on %s: "
-                                 "%s", name, ovs_strerror(error));
-                }
+                retval = pcap_inject(dev->pcap, data, size);
             }
-        } else if (retval != size) {
-            VLOG_WARN_RL(&rl, "sent partial Ethernet packet (%"PRIuSIZE" bytes of "
-                         "%"PRIuSIZE") on %s", retval, size, name);
-            error = EMSGSIZE;
-        } else {
-            break;
+            if (retval < 0) {
+                if (errno == EINTR) {
+                    continue;
+                } else {
+                    error = errno;
+                    if (error != EAGAIN) {
+                        VLOG_WARN_RL(&rl, "error sending Ethernet packet on"
+                                     " %s: %s", name, ovs_strerror(error));
+                    }
+                }
+            } else if (retval != size) {
+                VLOG_WARN_RL(&rl, "sent partial Ethernet packet "
+                                  "(%"PRIuSIZE" bytes of "
+                                  "%"PRIuSIZE") on %s", retval, size, name);
+                error = EMSGSIZE;
+            } else {
+                break;
+            }
         }
     }
 
     ovs_mutex_unlock(&dev->mutex);
     if (may_steal) {
-        ofpbuf_delete(pkt);
+        for (i = 0; i < cnt; i++) {
+            dp_packet_delete(pkts[i]);
+        }
     }
 
     return error;
@@ -737,7 +746,7 @@ netdev_bsd_send(struct netdev *netdev_, struct ofpbuf *pkt, bool may_steal)
  * with netdev_send().
  */
 static void
-netdev_bsd_send_wait(struct netdev *netdev_)
+netdev_bsd_send_wait(struct netdev *netdev_, int qid OVS_UNUSED)
 {
     struct netdev_bsd *dev = netdev_bsd_cast(netdev_);
 
@@ -862,8 +871,8 @@ netdev_bsd_get_carrier(const struct netdev *netdev_, bool *carrier)
         struct ifmediareq ifmr;
 
         memset(&ifmr, 0, sizeof(ifmr));
-        strncpy(ifmr.ifm_name, netdev_get_kernel_name(netdev_),
-                sizeof ifmr.ifm_name);
+        ovs_strlcpy(ifmr.ifm_name, netdev_get_kernel_name(netdev_),
+                    sizeof ifmr.ifm_name);
 
         error = af_inet_ioctl(SIOCGIFMEDIA, &ifmr);
         if (!error) {
@@ -1008,8 +1017,8 @@ netdev_bsd_get_stats(const struct netdev *netdev_, struct netdev_stats *stats)
     int error;
 
     memset(&ifdr, 0, sizeof(ifdr));
-    strncpy(ifdr.ifdr_name, netdev_get_kernel_name(netdev_),
-            sizeof(ifdr.ifdr_name));
+    ovs_strlcpy(ifdr.ifdr_name, netdev_get_kernel_name(netdev_),
+                sizeof(ifdr.ifdr_name));
     error = af_link_ioctl(SIOCGIFDATA, &ifdr);
     if (!error) {
         convert_stats(netdev_, stats, &ifdr.ifdr_data);
@@ -1113,7 +1122,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
     /* XXX Look into SIOCGIFCAP instead of SIOCGIFMEDIA */
 
     memset(&ifmr, 0, sizeof(ifmr));
-    strncpy(ifmr.ifm_name, netdev_get_name(netdev), sizeof ifmr.ifm_name);
+    ovs_strlcpy(ifmr.ifm_name, netdev_get_name(netdev), sizeof ifmr.ifm_name);
 
     /* We make two SIOCGIFMEDIA ioctl calls.  The first to determine the
      * number of supported modes, and a second with a buffer to retrieve
@@ -1549,6 +1558,11 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
     NULL, /* get_config */                           \
     NULL, /* set_config */                           \
     NULL, /* get_tunnel_config */                    \
+    NULL, /* build header */                         \
+    NULL, /* push header */                          \
+    NULL, /* pop header */                           \
+    NULL, /* get_numa_id */                          \
+    NULL, /* set_multiq */                           \
                                                      \
     netdev_bsd_send,                                 \
     netdev_bsd_send_wait,                            \
@@ -1562,7 +1576,6 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
     NULL, /* get_carrier_resets */                   \
     NULL, /* set_miimon_interval */                  \
     netdev_bsd_get_stats,                            \
-    NULL, /* set_stats */                            \
                                                      \
     GET_FEATURES,                                    \
     NULL, /* set_advertisement */                    \
@@ -1705,7 +1718,7 @@ set_etheraddr(const char *netdev_name OVS_UNUSED, int hwaddr_family OVS_UNUSED,
     int error;
 
     memset(&ifr, 0, sizeof ifr);
-    strncpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
+    ovs_strlcpy(ifr.ifr_name, netdev_name, sizeof ifr.ifr_name);
     ifr.ifr_addr.sa_family = hwaddr_family;
     ifr.ifr_addr.sa_len = hwaddr_len;
     memcpy(ifr.ifr_addr.sa_data, mac, hwaddr_len);
@@ -1731,7 +1744,7 @@ set_etheraddr(const char *netdev_name OVS_UNUSED, int hwaddr_family OVS_UNUSED,
         return EOPNOTSUPP;
     }
     memset(&req, 0, sizeof(req));
-    strncpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
+    ovs_strlcpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
     req.addr.ss_len = sizeof(req.addr);
     req.addr.ss_family = hwaddr_family;
     sdl = (struct sockaddr_dl *)&req.addr;
@@ -1747,7 +1760,7 @@ set_etheraddr(const char *netdev_name OVS_UNUSED, int hwaddr_family OVS_UNUSED,
     oldaddr = req.addr;
 
     memset(&req, 0, sizeof(req));
-    strncpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
+    ovs_strlcpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
     req.flags = IFLR_ACTIVE;
     sdl = (struct sockaddr_dl *)&req.addr;
     sdl->sdl_len = offsetof(struct sockaddr_dl, sdl_data) + hwaddr_len;
@@ -1760,7 +1773,7 @@ set_etheraddr(const char *netdev_name OVS_UNUSED, int hwaddr_family OVS_UNUSED,
     }
 
     memset(&req, 0, sizeof(req));
-    strncpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
+    ovs_strlcpy(req.iflr_name, netdev_name, sizeof(req.iflr_name));
     req.addr = oldaddr;
     return af_link_ioctl(SIOCDLIFADDR, &req);
 #else
