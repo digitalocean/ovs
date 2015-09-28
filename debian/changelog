@@ -1,3 +1,17 @@
+openvswitch (2.4.0-0ubuntu2) wily; urgency=medium
+
+  * Install ovs-vswitchd binary using alternatives for all architectures
+    to support use of alternative DPDK enabled binaries (LP: #1499759):
+    - d/rules: Move ovs-vswitchd to /usr/lib/openvswitch-switch.
+    - d/openvswitch-switch.{postinst,prerm}: Install binary using
+      alternatives.
+    - d/openvswitch-switch.default: Add some example DPDK options
+      (disabled by default).
+    - d/p/ovs-ctl-dpdk.patch: Splice in DPDK options to ovs-vswitchd
+      startup arguments if provided.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 28 Sep 2015 16:29:30 +0100
+
 openvswitch (2.4.0-0ubuntu1) wily; urgency=medium
 
   * Update to 2.4.0 release from previous snapshot.

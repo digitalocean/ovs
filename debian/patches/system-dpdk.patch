@@ -1,0 +1,18 @@
+Description: Tweak dpdk integration for packaged versions of dpdk
+Author: James Page <james.page@ubuntu.com>
+Forwarded: not-needed
+
+--- a/acinclude.m4
++++ b/acinclude.m4
+@@ -170,9 +170,9 @@ AC_DEFUN([OVS_CHECK_DPDK], [
+   if test X"$with_dpdk" != X; then
+     RTE_SDK=$with_dpdk
+ 
+-    DPDK_INCLUDE=$RTE_SDK/include
++    DPDK_INCLUDE=$RTE_SDK/include/dpdk
+     DPDK_LIB_DIR=$RTE_SDK/lib
+-    DPDK_LIB="-lintel_dpdk"
++    DPDK_LIB="-ldpdk"
+     DPDK_EXTRA_LIB=""
+ 
+     AC_COMPILE_IFELSE(

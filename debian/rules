@@ -44,6 +44,9 @@ override_dh_auto_clean:
 override_dh_install:
 	dh_install --list-missing
 	cp debian/openvswitch-switch.default debian/openvswitch-switch/usr/share/openvswitch/switch/default.template
+	mkdir -p $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch
+	mv $(CURDIR)/debian/openvswitch-switch/usr/sbin/ovs-vswitchd \
+		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
 
 override_dh_installinit:
 	dh_installinit -R
