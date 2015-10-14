@@ -32,11 +32,15 @@ pre-start script
   fi
   set "$@" $OVS_CTL_OPTS
   "$@"
+  BRIDGES=$(ifquery --allow ovs --list)
+  [ $BRIDGES ] && ifup --allow ovs $BRIDGES
 end script
 
 post-stop script
   . /usr/share/openvswitch/scripts/ovs-lib
   test -e /etc/default/openvswitch-switch && . /etc/default/openvswitch-switch
 
+  BRIDGES=$(ifquery --allow ovs --list)
+  [ $BRIDGES ] && ifdown --allow ovs $BRIDGES
   ovs_ctl stop
 end script

@@ -1,3 +1,10 @@
+openvswitch (2.4.0-0ubuntu3) wily; urgency=medium
+
+  [ Brian Turek ]
+  * Add ifupdown hooks for upstart script. (LP: #1314887)
+
+ -- Chris J Arges <chris.j.arges@canonical.com>  Wed, 14 Oct 2015 13:51:13 -0500
+
 openvswitch (2.4.0-0ubuntu2) wily; urgency=medium
 
   * Install ovs-vswitchd binary using alternatives for all architectures
