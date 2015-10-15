@@ -1,3 +1,10 @@
+openvswitch (2.4.0-0ubuntu4) wily; urgency=medium
+
+  [ Arata Notsu ]
+  * Fix ifupdown hooks in cases where BRIDGE is not defined. (LP: #1314887)
+
+ -- Chris J Arges <chris.j.arges@canonical.com>  Thu, 15 Oct 2015 15:03:34 -0500
+
 openvswitch (2.4.0-0ubuntu3) wily; urgency=medium
 
   [ Brian Turek ]
