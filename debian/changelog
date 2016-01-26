@@ -1,3 +1,9 @@
+openvswitch (2.4.0-0ubuntu5) xenial; urgency=high
+
+  * Skip tests on s390x, for the same reason as powerpc see 1483572.
+
+ -- Dimitri John Ledkov <xnox@ubuntu.com>  Tue, 26 Jan 2016 10:38:48 +0000
+
 openvswitch (2.4.0-0ubuntu4) wily; urgency=medium
 
   [ Arata Notsu ]
