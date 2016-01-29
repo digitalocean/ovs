@@ -584,6 +584,15 @@ count_cpu_cores(void)
 
     return n_cores > 0 ? n_cores : 0;
 }
+
+/* Returns 'true' if current thread is PMD thread. */
+bool
+thread_is_pmd(void)
+{
+    const char *name = get_subprogram_name();
+    return !strncmp(name, "pmd", 3);
+}
+
 
 /* ovsthread_key. */
 
@@ -665,7 +674,7 @@ ovsthread_key_destruct__(void *slots_)
     n = n_keys;
     ovs_mutex_unlock(&key_mutex);
 
-    for (i = 0; i < n / L2_SIZE; i++) {
+    for (i = 0; i < DIV_ROUND_UP(n, L2_SIZE); i++) {
         free(slots->p1[i]);
     }
     free(slots);

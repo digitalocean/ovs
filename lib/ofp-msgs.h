@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -226,20 +226,29 @@ enum ofpraw {
     /* NXT 1.0+ (11): struct nx_role_request. */
     OFPRAW_NXT_ROLE_REPLY,
 
-    /* OFPT 1.3+ (26): void. */
+    /* OFPT 1.3 (26): void. */
     OFPRAW_OFPT13_GET_ASYNC_REQUEST,
-    /* OFPT 1.3+ (27): struct ofp13_async_config. */
+    /* OFPT 1.4+ (26): void. */
+    OFPRAW_OFPT14_GET_ASYNC_REQUEST,
+    /* OFPT 1.3 (27): struct ofp13_async_config. */
     OFPRAW_OFPT13_GET_ASYNC_REPLY,
-    /* OFPT 1.3+ (28): struct ofp13_async_config. */
+    /* OFPT 1.4+ (27): struct ofp14_async_config, uint8_t[8][]. */
+    OFPRAW_OFPT14_GET_ASYNC_REPLY,
+    /* OFPT 1.3 (28): struct ofp13_async_config. */
     OFPRAW_OFPT13_SET_ASYNC,
     /* NXT 1.0+ (19): struct nx_async_config. */
     OFPRAW_NXT_SET_ASYNC_CONFIG,
+    /* OFPT 1.4+ (28): struct ofp14_async_config, uint8_t[8][]. */
+    OFPRAW_OFPT14_SET_ASYNC,
 
     /* OFPT 1.3+ (29): struct ofp13_meter_mod, uint8_t[8][]. */
     OFPRAW_OFPT13_METER_MOD,
 
     /* OFPT 1.4+ (30): struct ofp14_role_status, uint8_t[8][]. */
     OFPRAW_OFPT14_ROLE_STATUS,
+
+    /* OFPT 1.4+ (32): struct ofp14_requestforward, uint8_t[8][]. */
+    OFPRAW_OFPT14_REQUESTFORWARD,
 
     /* OFPT 1.4+ (33): struct ofp14_bundle_ctrl_msg, uint8_t[8][]. */
     OFPRAW_OFPT14_BUNDLE_CONTROL,
@@ -333,7 +342,7 @@ enum ofpraw {
 
     /* OFPST 1.1-1.4 (7): void. */
     OFPRAW_OFPST11_GROUP_DESC_REQUEST,
-    /* OFPST 1.5+ (7): ovs_be32. */
+    /* OFPST 1.5+ (7): struct ofp15_group_desc_request. */
     OFPRAW_OFPST15_GROUP_DESC_REQUEST,
 
     /* OFPST 1.1+ (7): uint8_t[8][]. */
@@ -369,9 +378,15 @@ enum ofpraw {
     /* OFPST 1.3+ (12): struct ofp13_table_features, uint8_t[8][]. */
     OFPRAW_OFPST13_TABLE_FEATURES_REPLY,
 
+    /* OFPST 1.4+ (14): void. */
+    OFPRAW_OFPST14_TABLE_DESC_REQUEST,
+
+    /* OFPST 1.4+ (14): struct ofp14_table_desc, uint8_t[8][]. */
+    OFPRAW_OFPST14_TABLE_DESC_REPLY,
+
     /* OFPST 1.0-1.4 (13): void. */
     OFPRAW_OFPST10_PORT_DESC_REQUEST,
-    /* OFPST 1.5+ (13): ovs_be32. */
+    /* OFPST 1.5+ (13): struct ofp15_port_desc_request. */
     OFPRAW_OFPST15_PORT_DESC_REQUEST,
 
     /* OFPST 1.0 (13): struct ofp10_phy_port[]. */
@@ -419,6 +434,15 @@ enum ofpraw {
 
     /* NXT 1.0+ (23): void. */
     OFPRAW_NXT_FLOW_MONITOR_RESUMED,
+
+    /* NXT 1.0+ (24): struct nx_tlv_table_mod, struct nx_tlv_map[]. */
+    OFPRAW_NXT_TLV_TABLE_MOD,
+
+    /* NXT 1.0+ (25): void. */
+    OFPRAW_NXT_TLV_TABLE_REQUEST,
+
+    /* NXT 1.0+ (26): struct nx_tlv_table_reply, struct nx_tlv_map[]. */
+    OFPRAW_NXT_TLV_TABLE_REPLY,
 };
 
 /* Decoding messages into OFPRAW_* values. */
@@ -524,16 +548,22 @@ enum ofptype {
                                    * OFPRAW_NXT_ROLE_REPLY. */
 
     /* Asynchronous message configuration. */
-    OFPTYPE_GET_ASYNC_REQUEST,    /* OFPRAW_OFPT13_GET_ASYNC_REQUEST. */
-    OFPTYPE_GET_ASYNC_REPLY,      /* OFPRAW_OFPT13_GET_ASYNC_REPLY. */
+    OFPTYPE_GET_ASYNC_REQUEST,    /* OFPRAW_OFPT13_GET_ASYNC_REQUEST.
+                                   * OFPRAW_OFPT14_GET_ASYNC_REQUEST. */
+    OFPTYPE_GET_ASYNC_REPLY,      /* OFPRAW_OFPT13_GET_ASYNC_REPLY.
+                                   * OFPRAW_OFPT14_GET_ASYNC_REPLY. */
     OFPTYPE_SET_ASYNC_CONFIG,     /* OFPRAW_NXT_SET_ASYNC_CONFIG.
-                                   * OFPRAW_OFPT13_SET_ASYNC. */
+                                   * OFPRAW_OFPT13_SET_ASYNC.
+                                   * OFPRAW_OFPT14_SET_ASYNC. */
 
     /* Meters and rate limiters configuration messages. */
     OFPTYPE_METER_MOD,            /* OFPRAW_OFPT13_METER_MOD. */
 
     /* Controller role change event messages. */
     OFPTYPE_ROLE_STATUS,          /* OFPRAW_OFPT14_ROLE_STATUS. */
+
+    /* Request forwarding by the switch. */
+    OFPTYPE_REQUESTFORWARD,       /* OFPRAW_OFPT14_REQUESTFORWARD. */
 
     OFPTYPE_BUNDLE_CONTROL,       /* OFPRAW_OFPT14_BUNDLE_CONTROL. */
 
@@ -602,6 +632,10 @@ enum ofptype {
 
     OFPTYPE_TABLE_FEATURES_STATS_REPLY, /* OFPRAW_OFPST13_TABLE_FEATURES_REPLY. */
 
+    OFPTYPE_TABLE_DESC_REQUEST,      /* OFPRAW_OFPST14_TABLE_DESC_REQUEST. */
+
+    OFPTYPE_TABLE_DESC_REPLY,        /* OFPRAW_OFPST14_TABLE_DESC_REPLY. */
+
     OFPTYPE_PORT_DESC_STATS_REQUEST, /* OFPRAW_OFPST10_PORT_DESC_REQUEST.
                                       * OFPRAW_OFPST15_PORT_DESC_REQUEST. */
 
@@ -620,6 +654,9 @@ enum ofptype {
     OFPTYPE_SET_PACKET_IN_FORMAT, /* OFPRAW_NXT_SET_PACKET_IN_FORMAT. */
     OFPTYPE_FLOW_AGE,             /* OFPRAW_NXT_FLOW_AGE. */
     OFPTYPE_SET_CONTROLLER_ID,    /* OFPRAW_NXT_SET_CONTROLLER_ID. */
+    OFPTYPE_NXT_TLV_TABLE_MOD, /* OFPRAW_NXT_TLV_TABLE_MOD. */
+    OFPTYPE_NXT_TLV_TABLE_REQUEST, /* OFPRAW_NXT_TLV_TABLE_REQUEST. */
+    OFPTYPE_NXT_TLV_TABLE_REPLY, /* OFPRAW_NXT_TLV_TABLE_REPLY. */
 
     /* Flow monitor extension. */
     OFPTYPE_FLOW_MONITOR_CANCEL,        /* OFPRAW_NXT_FLOW_MONITOR_CANCEL. */
@@ -631,6 +668,9 @@ enum ofptype {
 enum ofperr ofptype_decode(enum ofptype *, const struct ofp_header *);
 enum ofperr ofptype_pull(enum ofptype *, struct ofpbuf *);
 enum ofptype ofptype_from_ofpraw(enum ofpraw);
+
+/* Information about OFTYPE_* values. */
+const char *ofptype_get_name(enum ofptype);
 
 /* OpenFlow message properties. */
 void ofpmsg_update_length(struct ofpbuf *);

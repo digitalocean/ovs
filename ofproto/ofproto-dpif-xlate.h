@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,88 +38,12 @@ struct mcast_snooping;
 struct xlate_cache;
 
 struct xlate_out {
-    /* Wildcards relevant in translation.  Any fields that were used to
-     * calculate the action must be set for caching and kernel
-     * wildcarding to work.  For example, if the flow lookup involved
-     * performing the "normal" action on IPv4 and ARP packets, 'wc'
-     * would have the 'in_port' (always set), 'dl_type' (flow match),
-     * 'vlan_tci' (normal action), and 'dl_dst' (normal action) fields
-     * set. */
-    struct flow_wildcards wc;
-
     enum slow_path_reason slow; /* 0 if fast path may be used. */
     bool fail_open;             /* Initial rule is fail open? */
-    bool has_learn;             /* Actions include NXAST_LEARN? */
-    bool has_normal;            /* Actions output to OFPP_NORMAL? */
-    bool has_fin_timeout;       /* Actions include NXAST_FIN_TIMEOUT? */
-    ofp_port_t nf_output_iface; /* Output interface index for NetFlow. */
-    mirror_mask_t mirrors;      /* Bitmap of associated mirrors. */
 
-    /* Recirculation IDs on which references are held. */
-    unsigned n_recircs;
-    union {
-        uint32_t recirc[2];   /* When n_recircs == 1 or 2 */
-        uint32_t *recircs;    /* When 'n_recircs' > 2 */
-    };
-
-    uint64_t odp_actions_stub[256 / 8];
-    struct ofpbuf odp_actions_buf;
-    struct ofpbuf *odp_actions;
+    struct recirc_refs recircs; /* Recirc action IDs on which references are
+                                 * held. */
 };
-
-/* Helpers to abstract the recirculation union away. */
-static inline void
-xlate_out_add_recirc(struct xlate_out *xout, uint32_t id)
-{
-    if (OVS_LIKELY(xout->n_recircs < ARRAY_SIZE(xout->recirc))) {
-        xout->recirc[xout->n_recircs++] = id;
-    } else {
-        if (xout->n_recircs == ARRAY_SIZE(xout->recirc)) {
-            uint32_t *recircs = xmalloc(sizeof xout->recirc + sizeof id);
-
-            memcpy(recircs, xout->recirc, sizeof xout->recirc);
-            xout->recircs = recircs;
-        } else {
-            xout->recircs = xrealloc(xout->recircs,
-                                     (xout->n_recircs + 1) * sizeof id);
-        }
-        xout->recircs[xout->n_recircs++] = id;
-    }
-}
-
-static inline const uint32_t *
-xlate_out_get_recircs(const struct xlate_out *xout)
-{
-    if (OVS_LIKELY(xout->n_recircs <= ARRAY_SIZE(xout->recirc))) {
-        return xout->recirc;
-    } else {
-        return xout->recircs;
-    }
-}
-
-static inline void
-xlate_out_take_recircs(struct xlate_out *xout)
-{
-    if (OVS_UNLIKELY(xout->n_recircs > ARRAY_SIZE(xout->recirc))) {
-        free(xout->recircs);
-    }
-    xout->n_recircs = 0;
-}
-
-static inline void
-xlate_out_free_recircs(struct xlate_out *xout)
-{
-    if (OVS_LIKELY(xout->n_recircs <= ARRAY_SIZE(xout->recirc))) {
-        for (int i = 0; i < xout->n_recircs; i++) {
-            recirc_free_id(xout->recirc[i]);
-        }
-    } else {
-        for (int i = 0; i < xout->n_recircs; i++) {
-            recirc_free_id(xout->recircs[i]);
-        }
-        free(xout->recircs);
-    }
-}
 
 struct xlate_in {
     struct ofproto_dpif *ofproto;
@@ -139,12 +63,6 @@ struct xlate_in {
      * or if we are accounting for packets that the datapath has processed, but
      * not if we are just revalidating. */
     bool may_learn;
-
-    /* If the caller of xlate_actions() doesn't need the flow_wildcards
-     * contained in struct xlate_out.  'skip_wildcards' can be set to true
-     * disabling the expensive wildcard computation.  When true, 'wc' in struct
-     * xlate_out is undefined and should not be read. */
-    bool skip_wildcards;
 
     /* The rule initiating translation or NULL. If both 'rule' and 'ofpacts'
      * are NULL, xlate_actions() will do the initial rule lookup itself. */
@@ -177,7 +95,8 @@ struct xlate_in {
      * significant decision, e.g. to explain why OFPP_NORMAL translation
      * dropped a packet.  'recurse' is the resubmit recursion depth at time of
      * invocation. */
-    void (*report_hook)(struct xlate_in *, const char *s, int recurse);
+    void (*report_hook)(struct xlate_in *, int recurse,
+                        const char *format, va_list args);
 
     /* If nonnull, flow translation credits the specified statistics to each
      * rule reached through a resubmit or OFPP_TABLE action.
@@ -185,6 +104,20 @@ struct xlate_in {
      * This is normally null so the client has to set it manually after
      * calling xlate_in_init(). */
     const struct dpif_flow_stats *resubmit_stats;
+
+    /* Recursion and resubmission levels carried over from a pre-existing
+     * translation of a related flow. An example of when this can occur is
+     * the translation of an ARP packet that was generated as the result of
+     * outputting to a tunnel port. In this case, the original flow going to
+     * the tunnel is the related flow. Since the two flows are different, they
+     * should not use the same xlate_ctx structure. However, we still need
+     * limit the maximum recursion across the entire translation.
+     *
+     * These fields are normally set to zero, so the client has to set them
+     * manually after calling xlate_in_init(). In that case, they should be
+     * copied from the same-named fields in the related flow's xlate_ctx. */
+    int recurse;
+    int resubmits;
 
     /* If nonnull, flow translation populates this cache with references to all
      * modules that are affected by translation. This 'xlate_cache' may be
@@ -195,10 +128,18 @@ struct xlate_in {
      * calling xlate_in_init(). */
     struct xlate_cache *xcache;
 
-    /* Allows callers to optionally supply their own buffer for the resulting
-     * odp_actions stored in xlate_out.  If NULL, the default buffer will be
-     * used. */
+    /* If nonnull, flow translation puts the resulting datapath actions in this
+     * buffer.  If null, flow translation will not produce datapath actions. */
     struct ofpbuf *odp_actions;
+
+    /* If nonnull, flow translation populates this with wildcards relevant in
+     * translation.  Any fields that were used to calculate the action are set,
+     * to allow caching and kernel wildcarding to work.  For example, if the
+     * flow lookup involved performing the "normal" action on IPv4 and ARP
+     * packets, 'wc' would have the 'in_port' (always set), 'dl_type' (flow
+     * match), 'vlan_tci' (normal action), and 'dl_dst' (normal action) fields
+     * set. */
+    struct flow_wildcards *wc;
 
     /* The recirculation context related to this translation, as returned by
      * xlate_lookup. */
@@ -240,13 +181,27 @@ int xlate_lookup(const struct dpif_backer *, const struct flow *,
                  struct dpif_sflow **, struct netflow **,
                  ofp_port_t *ofp_in_port);
 
-void xlate_actions(struct xlate_in *, struct xlate_out *);
+enum xlate_error {
+    XLATE_OK = 0,
+    XLATE_BRIDGE_NOT_FOUND,
+    XLATE_RECURSION_TOO_DEEP,
+    XLATE_TOO_MANY_RESUBMITS,
+    XLATE_STACK_TOO_DEEP,
+    XLATE_NO_RECIRCULATION_CONTEXT,
+    XLATE_RECIRCULATION_CONFLICT,
+    XLATE_TOO_MANY_MPLS_LABELS,
+};
+
+const char *xlate_strerror(enum xlate_error error);
+
+enum xlate_error xlate_actions(struct xlate_in *, struct xlate_out *);
+
 void xlate_in_init(struct xlate_in *, struct ofproto_dpif *,
                    const struct flow *, ofp_port_t in_port, struct rule_dpif *,
-                   uint16_t tcp_flags, const struct dp_packet *packet);
+                   uint16_t tcp_flags, const struct dp_packet *packet,
+                   struct flow_wildcards *, struct ofpbuf *odp_actions);
 void xlate_out_uninit(struct xlate_out *);
 void xlate_actions_for_side_effects(struct xlate_in *);
-void xlate_out_copy(struct xlate_out *dst, const struct xlate_out *src);
 
 int xlate_send_packet(const struct ofport_dpif *, struct dp_packet *);
 

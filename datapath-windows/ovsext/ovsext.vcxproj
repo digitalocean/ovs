@@ -76,9 +76,11 @@
     <ClInclude Include="Checksum.h" />
     <ClInclude Include="Datapath.h" />
     <ClInclude Include="Debug.h" />
+    <ClInclude Include="DpInternal.h" />
     <ClInclude Include="Ethernet.h" />
     <ClInclude Include="Event.h" />
     <ClInclude Include="Flow.h" />
+    <ClInclude Include="Gre.h" />
     <ClInclude Include="IpHelper.h" />
     <ClInclude Include="Jhash.h" />
     <ClInclude Include="Netlink/Netlink.h" />
@@ -171,6 +173,7 @@
     <ClCompile Include="Driver.c" />
     <ClCompile Include="Event.c" />
     <ClCompile Include="Flow.c" />
+    <ClCompile Include="Gre.c" />
     <ClCompile Include="IpHelper.c" />
     <ClCompile Include="Jhash.c" />
     <ClCompile Include="Netlink/Netlink.c" />

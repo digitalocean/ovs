@@ -1,3 +1,24 @@
+openvswitch (2.5.0~git20160129.46a88d9-0ubuntu1) xenial; urgency=medium
+
+  * [099b995] d/rules: Switch to 2.5 branch for snapshots.
+  * [aee4d60] Imported upstream snapshot 2.5.0~git20160129.46a88d9
+  * [b5d8f41] d/p/*: Refresh patches.
+  * [97855b9] d/control,ovn*: Sync packaging changes from upstream for
+              experimental OVN support.
+  * [5c2ef1d] d/*.init: Tidy up init.d-script-does-not-source-init-functions
+              lint.
+  * [f3434f7] d/control: Add dh-python to BD's.
+  * [81a7cca] d/control: Fixup breaks/replaces for upgrades.
+  * [c19cf60] d/*.init Ensure _SYSTEMCTL_SKIP_REDIRECT is set prior to
+              inclusion of init-functions.
+  * [a7d5430] d/openvswitch-switch.openvswitch-nonetwork.service: Pass
+              OVS_CTL_OPTS instead of OPTIONS to ovs-ctl on startup.
+  * [d19098f] d/p/ovs-ctl-dpdk.patch: Sort out tab/space formatting.
+  * [9e3989e] d/control: Add libcap-ng-dev to BD's to support running
+              ovs daemons as non-root users.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 29 Jan 2016 11:44:50 +0100
+
 openvswitch (2.4.0-0ubuntu5) xenial; urgency=high
 
   * Skip tests on s390x, for the same reason as powerpc see 1483572.

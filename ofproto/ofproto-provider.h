@@ -246,8 +246,24 @@ struct oftable {
     struct hmap eviction_groups_by_id;
     struct heap eviction_groups_by_size;
 
-    /* Table configuration. */
+    /* Flow table miss handling configuration. */
     ATOMIC(enum ofputil_table_miss) miss_config;
+
+    /* Eviction is enabled if either the client (vswitchd) enables it or an
+     * OpenFlow controller enables it; thus, a nonzero value indicates that
+     * eviction is enabled.  */
+#define EVICTION_CLIENT  (1 << 0)  /* Set to 1 if client enables eviction. */
+#define EVICTION_OPENFLOW (1 << 1) /* Set to 1 if OpenFlow enables eviction. */
+    unsigned int eviction;
+
+    /* If true, vacancy events are enabled; otherwise they are disabled. */
+    bool vacancy_enabled;
+
+    /* Non-zero values for vacancy_up and vacancy_down indicates that vacancy
+     * is enabled by table-mod, else these values are set to zero when
+     * vacancy is disabled */
+    uint8_t vacancy_down; /* Vacancy threshold when space decreases (%). */
+    uint8_t vacancy_up;   /* Vacancy threshold when space increases (%). */
 
     atomic_ulong n_matched;
     atomic_ulong n_missed;
@@ -354,7 +370,7 @@ struct rule {
     uint16_t idle_timeout OVS_GUARDED; /* In seconds from ->used. */
 
     /* Eviction precedence. */
-    uint16_t importance OVS_GUARDED;
+    const uint16_t importance;
 
     /* Removal reason for sending flow removed message.
      * Used only if 'flags' has OFPUTIL_FF_SEND_FLOW_REM set and if the
@@ -612,7 +628,7 @@ void ofproto_group_delete_all(struct ofproto *);
  * not yet been uninitialized, so the "destruct" function may refer to it.  The
  * "destruct" function is not allowed to fail.
  *
- * Each "dealloc" function frees raw memory that was allocated by the the
+ * Each "dealloc" function frees raw memory that was allocated by the
  * "alloc" function.  The memory's base and derived members might not have ever
  * been initialized (but if "construct" returned successfully, then it has been
  * "destruct"ed already).  The "dealloc" function is not allowed to fail.
@@ -1755,7 +1771,23 @@ extern const struct ofproto_class ofproto_dpif_class;
 int ofproto_class_register(const struct ofproto_class *);
 int ofproto_class_unregister(const struct ofproto_class *);
 
-enum ofperr ofproto_flow_mod(struct ofproto *, struct ofputil_flow_mod *)
+/* flow_mod with execution context. */
+struct ofproto_flow_mod {
+    struct ofputil_flow_mod fm;
+
+    cls_version_t version;              /* Version in which changes take
+                                         * effect. */
+    struct rule_collection old_rules;   /* Affected rules. */
+    struct rule_collection new_rules;   /* Replacement rules. */
+};
+
+/* port_mod with execution context. */
+struct ofproto_port_mod {
+    struct ofputil_port_mod pm;
+    struct ofport *port;                /* Affected port. */
+};
+
+enum ofperr ofproto_flow_mod(struct ofproto *, struct ofproto_flow_mod *)
     OVS_EXCLUDED(ofproto_mutex);
 void ofproto_add_flow(struct ofproto *, const struct match *, int priority,
                       const struct ofpact *ofpacts, size_t ofpacts_len)
@@ -1764,6 +1796,9 @@ void ofproto_delete_flow(struct ofproto *, const struct match *, int priority)
     OVS_EXCLUDED(ofproto_mutex);
 void ofproto_flush_flows(struct ofproto *);
 
+enum ofperr ofproto_check_ofpacts(struct ofproto *,
+                                  const struct ofpact ofpacts[],
+                                  size_t ofpacts_len);
 
 static inline const struct rule_actions *
 rule_get_actions(const struct rule *rule)

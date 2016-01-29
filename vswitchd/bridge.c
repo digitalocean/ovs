@@ -48,6 +48,7 @@
 #include "ofproto/ofproto.h"
 #include "ovs-numa.h"
 #include "poll-loop.h"
+#include "if-notifier.h"
 #include "seq.h"
 #include "sha1.h"
 #include "shash.h"
@@ -115,8 +116,8 @@ struct bridge {
     struct hmap_node node;      /* In 'all_bridges'. */
     char *name;                 /* User-specified arbitrary name. */
     char *type;                 /* Datapath type. */
-    uint8_t ea[ETH_ADDR_LEN];   /* Bridge Ethernet Address. */
-    uint8_t default_ea[ETH_ADDR_LEN]; /* Default MAC. */
+    struct eth_addr ea;         /* Bridge Ethernet Address. */
+    struct eth_addr default_ea; /* Default MAC. */
     const struct ovsrec_bridge *cfg;
 
     /* OpenFlow switch processing. */
@@ -217,6 +218,12 @@ static long long int stats_timer = LLONG_MIN;
 #define AA_REFRESH_INTERVAL (1000) /* In milliseconds. */
 static long long int aa_refresh_timer = LLONG_MIN;
 
+/* Whenever system interfaces are added, removed or change state, the bridge
+ * will be reconfigured.
+ */
+static struct if_notifier *ifnotifier;
+static bool ifaces_changed = false;
+
 static void add_del_bridges(const struct ovsrec_open_vswitch *);
 static void bridge_run__(void);
 static void bridge_create(const struct ovsrec_bridge *);
@@ -252,11 +259,10 @@ static bool bridge_aa_need_refresh(struct bridge *);
 static void bridge_configure_remotes(struct bridge *,
                                      const struct sockaddr_in *managers,
                                      size_t n_managers);
-static void bridge_pick_local_hw_addr(struct bridge *,
-                                      uint8_t ea[ETH_ADDR_LEN],
+static void bridge_pick_local_hw_addr(struct bridge *, struct eth_addr *ea,
                                       struct iface **hw_addr_iface);
 static uint64_t bridge_pick_datapath_id(struct bridge *,
-                                        const uint8_t bridge_ea[ETH_ADDR_LEN],
+                                        const struct eth_addr bridge_ea,
                                         struct iface *hw_addr_iface);
 static uint64_t dpid_from_hash(const void *, size_t nbytes);
 static bool bridge_has_bond_fake_iface(const struct bridge *,
@@ -375,6 +381,12 @@ bridge_init_ofproto(const struct ovsrec_open_vswitch *cfg)
     shash_destroy_free_data(&iface_hints);
     initialized = true;
 }
+
+static void
+if_change_cb(void *aux OVS_UNUSED)
+{
+    ifaces_changed = true;
+}
 
 /* Public functions. */
 
@@ -478,6 +490,7 @@ bridge_init(const char *remote)
     stp_init();
     lldp_init();
     rstp_init();
+    ifnotifier = if_notifier_create(if_change_cb, NULL);
 }
 
 void
@@ -485,6 +498,7 @@ bridge_exit(void)
 {
     struct bridge *br, *next_br;
 
+    if_notifier_destroy(ifnotifier);
     HMAP_FOR_EACH_SAFE (br, next_br, node, &all_bridges) {
         bridge_destroy(br);
     }
@@ -997,13 +1011,13 @@ port_configure(struct port *port)
 static void
 bridge_configure_datapath_id(struct bridge *br)
 {
-    uint8_t ea[ETH_ADDR_LEN];
+    struct eth_addr ea;
     uint64_t dpid;
     struct iface *local_iface;
     struct iface *hw_addr_iface;
     char *dpid_string;
 
-    bridge_pick_local_hw_addr(br, ea, &hw_addr_iface);
+    bridge_pick_local_hw_addr(br, &ea, &hw_addr_iface);
     local_iface = iface_from_ofp_port(br, OFPP_LOCAL);
     if (local_iface) {
         int error = netdev_set_etheraddr(local_iface->netdev, ea);
@@ -1014,7 +1028,7 @@ bridge_configure_datapath_id(struct bridge *br)
                         br->name, ovs_strerror(error));
         }
     }
-    memcpy(br->ea, ea, ETH_ADDR_LEN);
+    br->ea = ea;
 
     dpid = bridge_pick_datapath_id(br, ea, hw_addr_iface);
     if (dpid != ofproto_get_datapath_id(br->ofproto)) {
@@ -1032,8 +1046,9 @@ bridge_configure_datapath_id(struct bridge *br)
 static uint32_t
 bridge_get_allowed_versions(struct bridge *br)
 {
-    if (!br->cfg->n_protocols)
+    if (!br->cfg->n_protocols) {
         return 0;
+    }
 
     return ofputil_versions_from_strings(br->cfg->protocols,
                                          br->cfg->n_protocols);
@@ -1459,9 +1474,9 @@ bridge_configure_stp(struct bridge *br, bool enable_stp)
 
         config_str = smap_get(&br->cfg->other_config, "stp-system-id");
         if (config_str) {
-            uint8_t ea[ETH_ADDR_LEN];
+            struct eth_addr ea;
 
-            if (eth_addr_from_string(config_str, ea)) {
+            if (eth_addr_from_string(config_str, &ea)) {
                 br_s.system_id = eth_addr_to_uint64(ea);
             } else {
                 br_s.system_id = eth_addr_to_uint64(br->ea);
@@ -1552,9 +1567,9 @@ bridge_configure_rstp(struct bridge *br, bool enable_rstp)
 
         config_str = smap_get(&br->cfg->other_config, "rstp-address");
         if (config_str) {
-            uint8_t ea[ETH_ADDR_LEN];
+            struct eth_addr ea;
 
-            if (eth_addr_from_string(config_str, ea)) {
+            if (eth_addr_from_string(config_str, &ea)) {
                 br_s.address = eth_addr_to_uint64(ea);
             }
             else {
@@ -1938,7 +1953,7 @@ bridge_configure_mcast_snooping(struct bridge *br)
 }
 
 static void
-find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
+find_local_hw_addr(const struct bridge *br, struct eth_addr *ea,
                    const struct port *fake_br, struct iface **hw_addr_iface)
 {
     struct hmapx mirror_output_ports;
@@ -1962,7 +1977,7 @@ find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
     /* Otherwise choose the minimum non-local MAC address among all of the
      * interfaces. */
     HMAP_FOR_EACH (port, hmap_node, &br->ports) {
-        uint8_t iface_ea[ETH_ADDR_LEN];
+        struct eth_addr iface_ea;
         struct iface *candidate;
         struct iface *iface;
 
@@ -1973,12 +1988,13 @@ find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
 
         /* Choose the MAC address to represent the port. */
         iface = NULL;
-        if (port->cfg->mac && eth_addr_from_string(port->cfg->mac, iface_ea)) {
+        if (port->cfg->mac && eth_addr_from_string(port->cfg->mac,
+                                                   &iface_ea)) {
             /* Find the interface with this Ethernet address (if any) so that
              * we can provide the correct devname to the caller. */
             LIST_FOR_EACH (candidate, port_elem, &port->ifaces) {
-                uint8_t candidate_ea[ETH_ADDR_LEN];
-                if (!netdev_get_etheraddr(candidate->netdev, candidate_ea)
+                struct eth_addr candidate_ea;
+                if (!netdev_get_etheraddr(candidate->netdev, &candidate_ea)
                     && eth_addr_equals(iface_ea, candidate_ea)) {
                     iface = candidate;
                 }
@@ -2013,7 +2029,7 @@ find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
             }
 
             /* Grab MAC. */
-            error = netdev_get_etheraddr(iface->netdev, iface_ea);
+            error = netdev_get_etheraddr(iface->netdev, &iface_ea);
             if (error) {
                 continue;
             }
@@ -2024,16 +2040,16 @@ find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
             !eth_addr_is_local(iface_ea) &&
             !eth_addr_is_reserved(iface_ea) &&
             !eth_addr_is_zero(iface_ea) &&
-            (!found_addr || eth_addr_compare_3way(iface_ea, ea) < 0))
+            (!found_addr || eth_addr_compare_3way(iface_ea, *ea) < 0))
         {
-            memcpy(ea, iface_ea, ETH_ADDR_LEN);
+            *ea = iface_ea;
             *hw_addr_iface = iface;
             found_addr = true;
         }
     }
 
     if (!found_addr) {
-        memcpy(ea, br->default_ea, ETH_ADDR_LEN);
+        *ea = br->default_ea;
         *hw_addr_iface = NULL;
     }
 
@@ -2041,7 +2057,7 @@ find_local_hw_addr(const struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
 }
 
 static void
-bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
+bridge_pick_local_hw_addr(struct bridge *br, struct eth_addr *ea,
                           struct iface **hw_addr_iface)
 {
     const char *hwaddr;
@@ -2050,10 +2066,10 @@ bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
     /* Did the user request a particular MAC? */
     hwaddr = smap_get(&br->cfg->other_config, "hwaddr");
     if (hwaddr && eth_addr_from_string(hwaddr, ea)) {
-        if (eth_addr_is_multicast(ea)) {
+        if (eth_addr_is_multicast(*ea)) {
             VLOG_ERR("bridge %s: cannot set MAC address to multicast "
-                     "address "ETH_ADDR_FMT, br->name, ETH_ADDR_ARGS(ea));
-        } else if (eth_addr_is_zero(ea)) {
+                     "address "ETH_ADDR_FMT, br->name, ETH_ADDR_ARGS(*ea));
+        } else if (eth_addr_is_zero(*ea)) {
             VLOG_ERR("bridge %s: cannot set MAC address to zero", br->name);
         } else {
             return;
@@ -2071,7 +2087,7 @@ bridge_pick_local_hw_addr(struct bridge *br, uint8_t ea[ETH_ADDR_LEN],
  * 'hw_addr_iface' must be passed in as a null pointer. */
 static uint64_t
 bridge_pick_datapath_id(struct bridge *br,
-                        const uint8_t bridge_ea[ETH_ADDR_LEN],
+                        const struct eth_addr bridge_ea,
                         struct iface *hw_addr_iface)
 {
     /*
@@ -2124,12 +2140,14 @@ bridge_pick_datapath_id(struct bridge *br,
 static uint64_t
 dpid_from_hash(const void *data, size_t n)
 {
-    uint8_t hash[SHA1_DIGEST_SIZE];
+    union {
+        uint8_t bytes[SHA1_DIGEST_SIZE];
+        struct eth_addr ea;
+    } hash;
 
-    BUILD_ASSERT_DECL(sizeof hash >= ETH_ADDR_LEN);
-    sha1_bytes(data, n, hash);
-    eth_addr_mark_random(hash);
-    return eth_addr_to_uint64(hash);
+    sha1_bytes(data, n, hash.bytes);
+    eth_addr_mark_random(&hash.ea);
+    return eth_addr_to_uint64(hash.ea);
 }
 
 static void
@@ -2140,7 +2158,7 @@ iface_refresh_netdev_status(struct iface *iface)
     enum netdev_features current;
     enum netdev_flags flags;
     const char *link_state;
-    uint8_t mac[ETH_ADDR_LEN];
+    struct eth_addr mac;
     int64_t bps, mtu_64, ifindex64, link_resets;
     int mtu, error;
 
@@ -2200,7 +2218,7 @@ iface_refresh_netdev_status(struct iface *iface)
         ovsrec_interface_set_mtu(iface->cfg, NULL, 0);
     }
 
-    error = netdev_get_etheraddr(iface->netdev, mac);
+    error = netdev_get_etheraddr(iface->netdev, &mac);
     if (!error) {
         char mac_string[32];
 
@@ -2576,14 +2594,14 @@ port_refresh_rstp_status(struct port *port)
 static void
 port_refresh_bond_status(struct port *port, bool force_update)
 {
-    uint8_t mac[ETH_ADDR_LEN];
+    struct eth_addr mac;
 
     /* Return if port is not a bond */
     if (list_is_singleton(&port->ifaces)) {
         return;
     }
 
-    if (bond_get_changed_active_slave(port->name, mac, force_update)) {
+    if (bond_get_changed_active_slave(port->name, &mac, force_update)) {
         struct ds mac_s;
 
         ds_init(&mac_s);
@@ -2877,6 +2895,8 @@ bridge_run(void)
 
     ovsdb_idl_run(idl);
 
+    if_notifier_run();
+
     if (ovsdb_idl_is_lock_contended(idl)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         struct bridge *br, *next_br;
@@ -2943,8 +2963,11 @@ bridge_run(void)
         }
     }
 
-    if (ovsdb_idl_get_seqno(idl) != idl_seqno || vlan_splinters_changed) {
+    if (ovsdb_idl_get_seqno(idl) != idl_seqno || vlan_splinters_changed
+        || ifaces_changed) {
         struct ovsdb_idl_txn *txn;
+
+        ifaces_changed = false;
 
         idl_seqno = ovsdb_idl_get_seqno(idl);
         txn = ovsdb_idl_txn_create(idl);
@@ -3000,6 +3023,11 @@ bridge_wait(void)
     ovsdb_idl_wait(idl);
     if (daemonize_txn) {
         ovsdb_idl_txn_wait(daemonize_txn);
+    }
+
+    if_notifier_wait();
+    if (ifaces_changed) {
+        poll_immediate_wake();
     }
 
     sset_init(&types);
@@ -3150,8 +3178,8 @@ bridge_create(const struct ovsrec_bridge *br_cfg)
 
     /* Derive the default Ethernet address from the bridge's UUID.  This should
      * be unique and it will be stable between ovs-vswitchd runs.  */
-    memcpy(br->default_ea, &br_cfg->header_.uuid, ETH_ADDR_LEN);
-    eth_addr_mark_random(br->default_ea);
+    memcpy(&br->default_ea, &br_cfg->header_.uuid, ETH_ADDR_LEN);
+    eth_addr_mark_random(&br->default_ea);
 
     hmap_init(&br->ports);
     hmap_init(&br->ifaces);
@@ -3534,18 +3562,20 @@ bridge_configure_remotes(struct bridge *br,
                     continue;
                 }
             } else {
-               whitelist = xasprintf("punix:%s/%s.controller",
+               whitelist = xasprintf("punix:%s/%s.",
                                      ovs_rundir(), br->name);
-               if (!equal_pathnames(c->target, whitelist, SIZE_MAX)) {
+               if (!equal_pathnames(c->target, whitelist, strlen(whitelist))
+                   || strchr(c->target + strlen(whitelist), '/')) {
                    /* Prevent remote ovsdb-server users from accessing
                     * arbitrary Unix domain sockets and overwriting arbitrary
                     * local files. */
                    VLOG_ERR_RL(&rl, "bridge %s: Not adding Unix domain socket "
                                   "controller \"%s\" due to possibility of "
                                   "overwriting local files. Instead, specify "
-                                  "whitelisted \"%s\" or connect to "
-                                  "\"unix:%s/%s.mgmt\" (which is always "
-                                  "available without special configuration).",
+                                  "path in whitelisted format \"%s*\" or "
+                                  "connect to \"unix:%s/%s.mgmt\" (which is "
+                                  "always available without special "
+                                  "configuration).",
                                   br->name, c->target, whitelist,
                                   ovs_rundir(), br->name);
                    free(whitelist);
@@ -3604,6 +3634,7 @@ bridge_configure_tables(struct bridge *br)
         s.name = NULL;
         s.max_flows = UINT_MAX;
         s.groups = NULL;
+        s.enable_eviction = false;
         s.n_groups = 0;
         s.n_prefix_fields = 0;
         memset(s.prefix_fields, ~0, sizeof(s.prefix_fields));
@@ -3615,9 +3646,10 @@ bridge_configure_tables(struct bridge *br)
             if (cfg->n_flow_limit && *cfg->flow_limit < UINT_MAX) {
                 s.max_flows = *cfg->flow_limit;
             }
-            if (cfg->overflow_policy
-                && !strcmp(cfg->overflow_policy, "evict")) {
 
+            s.enable_eviction = (cfg->overflow_policy
+                                 && !strcmp(cfg->overflow_policy, "evict"));
+            if (cfg->n_groups) {
                 s.groups = xmalloc(cfg->n_groups * sizeof *s.groups);
                 for (k = 0; k < cfg->n_groups; k++) {
                     const char *string = cfg->groups[k];
@@ -3637,6 +3669,7 @@ bridge_configure_tables(struct bridge *br)
                     }
                 }
             }
+
             /* Prefix lookup fields. */
             s.n_prefix_fields = 0;
             for (k = 0; k < cfg->n_prefixes; k++) {
@@ -4058,7 +4091,7 @@ port_configure_lacp(struct port *port, struct lacp_settings *s)
             return NULL;
         }
     } else {
-        memcpy(s->id, port->bridge->ea, ETH_ADDR_LEN);
+        s->id = port->bridge->ea;
     }
 
     if (eth_addr_is_zero(s->id)) {
@@ -4177,7 +4210,7 @@ port_configure_bond(struct port *port, struct bond_settings *s)
     if (!mac_s || !ovs_scan(mac_s, ETH_ADDR_SCAN_FMT,
                             ETH_ADDR_SCAN_ARGS(s->active_slave_mac))) {
         /* OVSDB did not store the last active interface */
-        memset(s->active_slave_mac, 0, sizeof(s->active_slave_mac));
+        s->active_slave_mac = eth_addr_zero;
     }
 }
 
@@ -4308,19 +4341,19 @@ iface_from_ofp_port(const struct bridge *br, ofp_port_t ofp_port)
 static void
 iface_set_mac(const struct bridge *br, const struct port *port, struct iface *iface)
 {
-    uint8_t ea[ETH_ADDR_LEN], *mac = NULL;
+    struct eth_addr ea, *mac = NULL;
     struct iface *hw_addr_iface;
 
     if (strcmp(iface->type, "internal")) {
         return;
     }
 
-    if (iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, ea)) {
-        mac = ea;
+    if (iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, &ea)) {
+        mac = &ea;
     } else if (port->cfg->fake_bridge) {
         /* Fake bridge and no MAC set in the configuration. Pick a local one. */
-        find_local_hw_addr(br, ea, port, &hw_addr_iface);
-        mac = ea;
+        find_local_hw_addr(br, &ea, port, &hw_addr_iface);
+        mac = &ea;
     }
 
     if (mac) {
@@ -4328,11 +4361,11 @@ iface_set_mac(const struct bridge *br, const struct port *port, struct iface *if
             VLOG_ERR("interface %s: ignoring mac in Interface record "
                      "(use Bridge record to set local port's mac)",
                      iface->name);
-        } else if (eth_addr_is_multicast(mac)) {
+        } else if (eth_addr_is_multicast(*mac)) {
             VLOG_ERR("interface %s: cannot set MAC to multicast address",
                      iface->name);
         } else {
-            int error = netdev_set_etheraddr(iface->netdev, mac);
+            int error = netdev_set_etheraddr(iface->netdev, *mac);
             if (error) {
                 VLOG_ERR("interface %s: setting MAC failed (%s)",
                          iface->name, ovs_strerror(error));

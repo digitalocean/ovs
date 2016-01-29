@@ -10,7 +10,6 @@ VTEP_IDL_FILES = \
 vtep/vtep-idl.ovsidl: $(VTEP_IDL_FILES)
 	$(AM_V_GEN)$(OVSDB_IDLC) annotate $(VTEP_IDL_FILES) > $@.tmp && \
 	mv $@.tmp $@
-CLEANFILES += vtep/vtep-idl.c vtep/vtep-idl.h
 
 # libvtep
 lib_LTLIBRARIES += vtep/libvtep.la
@@ -18,7 +17,7 @@ vtep_libvtep_la_LDFLAGS = \
 	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
 	-Wl,--version-script=$(top_builddir)/vtep/libvtep.sym \
 	$(AM_LDFLAGS)
-vtep_libvtep_la_SOURCES = \
+nodist_vtep_libvtep_la_SOURCES = \
 	vtep/vtep-idl.c \
 	vtep/vtep-idl.h
 
@@ -81,13 +80,5 @@ vtep/vtep.5: \
 # Version checking for vtep.ovsschema.
 ALL_LOCAL += vtep/vtep.ovsschema.stamp
 vtep/vtep.ovsschema.stamp: vtep/vtep.ovsschema
-	@sum=`sed '/cksum/d' $? | cksum`; \
-	expected=`sed -n 's/.*"cksum": "\(.*\)".*/\1/p' $?`; \
-	if test "X$$sum" = "X$$expected"; then \
-	  touch $@; \
-	else \
-	  ln=`sed -n '/"cksum":/=' $?`; \
-	  echo >&2 "$?:$$ln: The checksum \"$$sum\" was calculated from the schema file and does not match cksum field in the schema file - you should probably update the version number and the checksum in the schema file with the value listed here."; \
-	  exit 1; \
-	fi
+	$(srcdir)/build-aux/cksum-schema-check $? $@
 CLEANFILES += vtep/vtep.ovsschema.stamp

@@ -105,7 +105,7 @@ struct netdev_dummy {
     /* Protects all members below. */
     struct ovs_mutex mutex OVS_ACQ_AFTER(dummy_list_mutex);
 
-    uint8_t hwaddr[ETH_ADDR_LEN] OVS_GUARDED;
+    struct eth_addr hwaddr OVS_GUARDED;
     int mtu OVS_GUARDED;
     struct netdev_stats stats OVS_GUARDED;
     enum netdev_flags flags OVS_GUARDED;
@@ -116,6 +116,7 @@ struct netdev_dummy {
     FILE *tx_pcap, *rxq_pcap OVS_GUARDED;
 
     struct in_addr address, netmask;
+    struct in6_addr ipv6;
     struct ovs_list rxes OVS_GUARDED; /* List of child "netdev_rxq_dummy"s. */
 };
 
@@ -388,7 +389,7 @@ dummy_packet_conn_set_config(struct dummy_packet_conn *conn,
     if (stream) {
         int error;
         struct stream *active_stream;
-        struct reconnect *reconnect;;
+        struct reconnect *reconnect;
 
         reconnect = reconnect_create(time_msec());
         reconnect_set_name(reconnect, stream);
@@ -651,12 +652,12 @@ netdev_dummy_construct(struct netdev *netdev_)
 
     ovs_mutex_init(&netdev->mutex);
     ovs_mutex_lock(&netdev->mutex);
-    netdev->hwaddr[0] = 0xaa;
-    netdev->hwaddr[1] = 0x55;
-    netdev->hwaddr[2] = n >> 24;
-    netdev->hwaddr[3] = n >> 16;
-    netdev->hwaddr[4] = n >> 8;
-    netdev->hwaddr[5] = n;
+    netdev->hwaddr.ea[0] = 0xaa;
+    netdev->hwaddr.ea[1] = 0x55;
+    netdev->hwaddr.ea[2] = n >> 24;
+    netdev->hwaddr.ea[3] = n >> 16;
+    netdev->hwaddr.ea[4] = n >> 8;
+    netdev->hwaddr.ea[5] = n;
     netdev->mtu = 1500;
     netdev->flags = 0;
     netdev->ifindex = -EOPNOTSUPP;
@@ -725,7 +726,20 @@ netdev_dummy_get_in4(const struct netdev *netdev_,
     *address = netdev->address;
     *netmask = netdev->netmask;
     ovs_mutex_unlock(&netdev->mutex);
-    return 0;
+
+    return address->s_addr ? 0 : EADDRNOTAVAIL;
+}
+
+static int
+netdev_dummy_get_in6(const struct netdev *netdev_, struct in6_addr *in6)
+{
+    struct netdev_dummy *netdev = netdev_dummy_cast(netdev_);
+
+    ovs_mutex_lock(&netdev->mutex);
+    *in6 = netdev->ipv6;
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return ipv6_addr_is_set(in6) ? 0 : EADDRNOTAVAIL;
 }
 
 static int
@@ -737,6 +751,18 @@ netdev_dummy_set_in4(struct netdev *netdev_, struct in_addr address,
     ovs_mutex_lock(&netdev->mutex);
     netdev->address = address;
     netdev->netmask = netmask;
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_dummy_set_in6(struct netdev *netdev_, struct in6_addr *in6)
+{
+    struct netdev_dummy *netdev = netdev_dummy_cast(netdev_);
+
+    ovs_mutex_lock(&netdev->mutex);
+    netdev->ipv6 = *in6;
     ovs_mutex_unlock(&netdev->mutex);
 
     return 0;
@@ -854,7 +880,7 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet **arr,
     ovs_mutex_unlock(&netdev->mutex);
 
     dp_packet_pad(packet);
-    dp_packet_set_rss_hash(packet, 0);
+    dp_packet_rss_invalidate(packet);
 
     arr[0] = packet;
     *c = 1;
@@ -931,6 +957,23 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
 
         dummy_packet_conn_send(&dev->conn, buffer, size);
 
+        /* Reply to ARP requests for 'dev''s assigned IP address. */
+        if (dev->address.s_addr) {
+            struct dp_packet packet;
+            struct flow flow;
+
+            dp_packet_use_const(&packet, buffer, size);
+            flow_extract(&packet, &flow);
+            if (flow.dl_type == htons(ETH_TYPE_ARP)
+                && flow.nw_proto == ARP_OP_REQUEST
+                && flow.nw_dst == dev->address.s_addr) {
+                struct dp_packet *reply = dp_packet_new(0);
+                compose_arp(reply, ARP_OP_REPLY, dev->hwaddr, flow.dl_src,
+                            false, flow.nw_dst, flow.nw_src);
+                netdev_dummy_queue_packet(dev, reply);
+            }
+        }
+
         if (dev->tx_pcap) {
             struct dp_packet packet;
 
@@ -952,14 +995,13 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
 }
 
 static int
-netdev_dummy_set_etheraddr(struct netdev *netdev,
-                           const uint8_t mac[ETH_ADDR_LEN])
+netdev_dummy_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
 {
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
     if (!eth_addr_equals(dev->hwaddr, mac)) {
-        memcpy(dev->hwaddr, mac, ETH_ADDR_LEN);
+        dev->hwaddr = mac;
         netdev_change_seq_changed(netdev);
     }
     ovs_mutex_unlock(&dev->mutex);
@@ -968,13 +1010,12 @@ netdev_dummy_set_etheraddr(struct netdev *netdev,
 }
 
 static int
-netdev_dummy_get_etheraddr(const struct netdev *netdev,
-                           uint8_t mac[ETH_ADDR_LEN])
+netdev_dummy_get_etheraddr(const struct netdev *netdev, struct eth_addr *mac)
 {
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    memcpy(mac, dev->hwaddr, ETH_ADDR_LEN);
+    *mac = dev->hwaddr;
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
@@ -1117,7 +1158,7 @@ static const struct netdev_class dummy_class = {
 
     netdev_dummy_get_in4,       /* get_in4 */
     NULL,                       /* set_in4 */
-    NULL,                       /* get_in6 */
+    netdev_dummy_get_in6,       /* get_in6 */
     NULL,                       /* add_router */
     NULL,                       /* get_next_hop */
     NULL,                       /* get_status */
@@ -1396,20 +1437,62 @@ netdev_dummy_ip4addr(struct unixctl_conn *conn, int argc OVS_UNUSED,
             netdev_dummy_set_in4(netdev, ip, mask);
             unixctl_command_reply(conn, "OK");
         } else {
-            unixctl_command_reply(conn, "Invalid parameters");
+            unixctl_command_reply_error(conn, "Invalid parameters");
         }
+    } else {
+        unixctl_command_reply_error(conn, "Unknown Dummy Interface");
+    }
 
+    netdev_close(netdev);
+}
+
+static void
+netdev_dummy_ip6addr(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                     const char *argv[], void *aux OVS_UNUSED)
+{
+    struct netdev *netdev = netdev_from_name(argv[1]);
+
+    if (netdev && is_dummy_class(netdev->netdev_class)) {
+        char ip6_s[IPV6_SCAN_LEN + 1];
+        struct in6_addr ip6;
+
+        if (ovs_scan(argv[2], IPV6_SCAN_FMT, ip6_s) &&
+            inet_pton(AF_INET6, ip6_s, &ip6) == 1) {
+            netdev_dummy_set_in6(netdev, &ip6);
+            unixctl_command_reply(conn, "OK");
+        } else {
+            unixctl_command_reply_error(conn, "Invalid parameters");
+        }
         netdev_close(netdev);
     } else {
         unixctl_command_reply_error(conn, "Unknown Dummy Interface");
-        netdev_close(netdev);
-        return;
     }
 
+    netdev_close(netdev);
+}
+
+
+static void
+netdev_dummy_override(const char *type)
+{
+    if (!netdev_unregister_provider(type)) {
+        struct netdev_class *class;
+        int error;
+
+        class = xmemdup(&dummy_class, sizeof dummy_class);
+        class->type = xstrdup(type);
+        error = netdev_register_provider(class);
+        if (error) {
+            VLOG_ERR("%s: failed to register netdev provider (%s)",
+                     type, ovs_strerror(error));
+            free(CONST_CAST(char *, class->type));
+            free(class);
+        }
+    }
 }
 
 void
-netdev_dummy_register(bool override)
+netdev_dummy_register(enum dummy_level level)
 {
     unixctl_command_register("netdev-dummy/receive", "name packet|flow...",
                              2, INT_MAX, netdev_dummy_receive, NULL);
@@ -1422,34 +1505,24 @@ netdev_dummy_register(bool override)
     unixctl_command_register("netdev-dummy/ip4addr",
                              "[netdev] ipaddr/mask-prefix-len", 2, 2,
                              netdev_dummy_ip4addr, NULL);
+    unixctl_command_register("netdev-dummy/ip6addr",
+                             "[netdev] ip6addr", 2, 2,
+                             netdev_dummy_ip6addr, NULL);
 
-
-    if (override) {
+    if (level == DUMMY_OVERRIDE_ALL) {
         struct sset types;
         const char *type;
 
         sset_init(&types);
         netdev_enumerate_types(&types);
         SSET_FOR_EACH (type, &types) {
-            if (!strcmp(type, "patch")) {
-                continue;
-            }
-            if (!netdev_unregister_provider(type)) {
-                struct netdev_class *class;
-                int error;
-
-                class = xmemdup(&dummy_class, sizeof dummy_class);
-                class->type = xstrdup(type);
-                error = netdev_register_provider(class);
-                if (error) {
-                    VLOG_ERR("%s: failed to register netdev provider (%s)",
-                             type, ovs_strerror(error));
-                    free(CONST_CAST(char *, class->type));
-                    free(class);
-                }
+            if (strcmp(type, "patch")) {
+                netdev_dummy_override(type);
             }
         }
         sset_destroy(&types);
+    } else if (level == DUMMY_OVERRIDE_SYSTEM) {
+        netdev_dummy_override("system");
     }
     netdev_register_provider(&dummy_class);
 

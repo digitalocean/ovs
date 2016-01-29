@@ -1267,7 +1267,7 @@ static void
 state_transition(struct rconn *rc, enum state state)
     OVS_REQUIRES(rc->mutex)
 {
-    rc->seqno += (rc->state == S_ACTIVE) != (state == S_ACTIVE);
+    rc->seqno += is_connected_state(rc->state) != is_connected_state(state);
     if (is_connected_state(state) && !is_connected_state(rc->state)) {
         rc->probably_admitted = false;
     }
@@ -1365,6 +1365,8 @@ is_admitted_msg(const struct ofpbuf *b)
     case OFPTYPE_GROUP_FEATURES_STATS_REPLY:
     case OFPTYPE_TABLE_FEATURES_STATS_REQUEST:
     case OFPTYPE_TABLE_FEATURES_STATS_REPLY:
+    case OFPTYPE_TABLE_DESC_REQUEST:
+    case OFPTYPE_TABLE_DESC_REPLY:
         return false;
 
     case OFPTYPE_PACKET_IN:
@@ -1401,6 +1403,7 @@ is_admitted_msg(const struct ofpbuf *b)
     case OFPTYPE_ROLE_REQUEST:
     case OFPTYPE_ROLE_REPLY:
     case OFPTYPE_ROLE_STATUS:
+    case OFPTYPE_REQUESTFORWARD:
     case OFPTYPE_SET_FLOW_FORMAT:
     case OFPTYPE_FLOW_MOD_TABLE_ID:
     case OFPTYPE_SET_PACKET_IN_FORMAT:
@@ -1414,6 +1417,9 @@ is_admitted_msg(const struct ofpbuf *b)
     case OFPTYPE_FLOW_MONITOR_RESUMED:
     case OFPTYPE_BUNDLE_CONTROL:
     case OFPTYPE_BUNDLE_ADD_MESSAGE:
+    case OFPTYPE_NXT_TLV_TABLE_MOD:
+    case OFPTYPE_NXT_TLV_TABLE_REQUEST:
+    case OFPTYPE_NXT_TLV_TABLE_REPLY:
     default:
         return true;
     }

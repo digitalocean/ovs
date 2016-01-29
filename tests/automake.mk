@@ -1,9 +1,12 @@
 EXTRA_DIST += \
 	$(COMMON_MACROS_AT) \
 	$(TESTSUITE_AT) \
-	$(KMOD_TESTSUITE_AT) \
+	$(SYSTEM_TESTSUITE_AT) \
+	$(SYSTEM_KMOD_TESTSUITE_AT) \
+	$(SYSTEM_USERSPACE_TESTSUITE_AT) \
 	$(TESTSUITE) \
-	$(KMOD_TESTSUITE) \
+	$(SYSTEM_KMOD_TESTSUITE) \
+	$(SYSTEM_USERSPACE_TESTSUITE) \
 	tests/atlocal.in \
 	$(srcdir)/package.m4 \
 	$(srcdir)/tests/testsuite \
@@ -47,6 +50,7 @@ TESTSUITE_AT = \
 	tests/jsonrpc-py.at \
 	tests/tunnel.at \
 	tests/tunnel-push-pop.at \
+	tests/tunnel-push-pop-ipv6.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
 	tests/ovs-vswitchd.at \
@@ -82,19 +86,33 @@ TESTSUITE_AT = \
 	tests/interface-reconfigure.at \
 	tests/vlog.at \
 	tests/vtep-ctl.at \
-	tests/auto-attach.at
+	tests/auto-attach.at \
+	tests/ovn.at \
+	tests/ovn-nbctl.at \
+	tests/ovn-sbctl.at \
+	tests/ovn-controller.at \
+	tests/ovn-controller-vtep.at
 
-KMOD_TESTSUITE_AT = \
-	tests/kmod-testsuite.at \
-	tests/kmod-macros.at \
-	tests/kmod-traffic.at
+SYSTEM_KMOD_TESTSUITE_AT = \
+	tests/system-common-macros.at \
+	tests/system-kmod-testsuite.at \
+	tests/system-kmod-macros.at
+
+SYSTEM_USERSPACE_TESTSUITE_AT = \
+	tests/system-userspace-testsuite.at \
+	tests/system-userspace-macros.at
+
+SYSTEM_TESTSUITE_AT = \
+	tests/system-common-macros.at \
+	tests/system-traffic.at
 
 TESTSUITE = $(srcdir)/tests/testsuite
 TESTSUITE_PATCH = $(srcdir)/tests/testsuite.patch
-KMOD_TESTSUITE = $(srcdir)/tests/kmod-testsuite
+SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
+SYSTEM_USERSPACE_TESTSUITE = $(srcdir)/tests/system-userspace-testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
 
-AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL)
+AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):ovn:ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
 
 check-local: tests/atconfig tests/atlocal $(TESTSUITE)
 	$(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
@@ -188,14 +206,17 @@ check-ryu: all
 EXTRA_DIST += tests/run-ryu
 
 # Run kmod tests. Assume kernel modules has been installed or linked into the kernel
-check-kernel: all tests/atconfig tests/atlocal $(KMOD_TESTSUITE)
-	$(SHELL) '$(KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
+check-kernel: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+	$(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
 
 # Testing the out of tree Kernel module
-check-kmod: all tests/atconfig tests/atlocal $(KMOD_TESTSUITE)
+check-kmod: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
 	$(MAKE) modules_install
 	modprobe -r openvswitch
 	$(MAKE) check-kernel
+
+check-system-userspace: all tests/atconfig tests/atlocal $(SYSTEM_USERSPACE_TESTSUITE)
+	$(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS)
 
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean
@@ -213,7 +234,11 @@ $(TESTSUITE): package.m4 $(TESTSUITE_AT) $(COMMON_MACROS_AT)
 	$(AM_V_at)mv $@.tmp $@
 endif
 
-$(KMOD_TESTSUITE): package.m4 $(KMOD_TESTSUITE_AT) $(COMMON_MACROS_AT)
+$(SYSTEM_KMOD_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_KMOD_TESTSUITE_AT) $(COMMON_MACROS_AT)
+	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
+	$(AM_V_at)mv $@.tmp $@
+
+$(SYSTEM_USERSPACE_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_USERSPACE_TESTSUITE_AT) $(COMMON_MACROS_AT)
 	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
 	$(AM_V_at)mv $@.tmp $@
 
@@ -229,10 +254,8 @@ $(srcdir)/package.m4: $(top_srcdir)/configure.ac
 	} >'$(srcdir)/package.m4'
 
 noinst_PROGRAMS += tests/test-ovsdb
-tests_test_ovsdb_SOURCES = \
-	tests/test-ovsdb.c \
-	tests/idltest.c \
-	tests/idltest.h
+tests_test_ovsdb_SOURCES = tests/test-ovsdb.c
+nodist_tests_test_ovsdb_SOURCES = tests/idltest.c tests/idltest.h
 EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
 tests_test_ovsdb_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
@@ -282,6 +305,7 @@ tests_ovstest_SOURCES = \
 	tests/test-netflow.c \
 	tests/test-odp.c \
 	tests/test-ofpbuf.c \
+	tests/test-ovn.c \
 	tests/test-packets.c \
 	tests/test-random.c \
 	tests/test-reconnect.c \
@@ -300,7 +324,12 @@ tests_ovstest_SOURCES += \
 	tests/test-unix-socket.c
 endif
 
-tests_ovstest_LDADD = lib/libopenvswitch.la
+if LINUX
+tests_ovstest_SOURCES += \
+	tests/test-netlink-conntrack.c
+endif
+
+tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
 dist_check_SCRIPTS = tests/flowgen.pl
 
 noinst_PROGRAMS += tests/test-strtok_r
@@ -315,6 +344,7 @@ CHECK_PYFILES = \
 	tests/test-daemon.py \
 	tests/test-json.py \
 	tests/test-jsonrpc.py \
+	tests/test-l7.py \
 	tests/test-ovsdb.py \
 	tests/test-reconnect.py \
 	tests/MockXenAPI.py \

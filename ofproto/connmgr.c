@@ -417,7 +417,7 @@ connmgr_get_memory_usage(const struct connmgr *mgr, struct simap *usage)
             struct pinsched_stats stats;
 
             pinsched_get_stats(ofconn->schedulers[i], &stats);
-            packets += stats.n_queued;;
+            packets += stats.n_queued;
         }
         packets += pktbuf_count_packets(ofconn->pktbuf);
     }
@@ -1006,6 +1006,22 @@ ofconn_set_protocol(struct ofconn *ofconn, enum ofputil_protocol protocol)
         /* OFPR_GROUP is not supported before OF1.4 */
         master[OAM_PACKET_IN] &= ~(1u << OFPR_GROUP);
         slave [OAM_PACKET_IN] &= ~(1u << OFPR_GROUP);
+
+        /* OFPR_PACKET_OUT is not supported before OF1.4 */
+        master[OAM_PACKET_IN] &= ~(1u << OFPR_PACKET_OUT);
+        slave [OAM_PACKET_IN] &= ~(1u << OFPR_PACKET_OUT);
+
+        /* OFPRR_GROUP_DELETE is not supported before OF1.4 */
+        master[OAM_FLOW_REMOVED] &= ~(1u << OFPRR_GROUP_DELETE);
+        slave [OAM_FLOW_REMOVED] &= ~(1u << OFPRR_GROUP_DELETE);
+
+        /* OFPRR_METER_DELETE is not supported before OF1.4 */
+        master[OAM_FLOW_REMOVED] &= ~(1u << OFPRR_METER_DELETE);
+        slave [OAM_FLOW_REMOVED] &= ~(1u << OFPRR_METER_DELETE);
+
+        /* OFPRR_EVICTION is not supported before OF1.4 */
+        master[OAM_FLOW_REMOVED] &= ~(1u << OFPRR_EVICTION);
+        slave [OAM_FLOW_REMOVED] &= ~(1u << OFPRR_EVICTION);
     }
 }
 
@@ -1298,20 +1314,29 @@ ofconn_flush(struct ofconn *ofconn)
         master[OAM_PACKET_IN] = ((1u << OFPR_NO_MATCH)
                                  | (1u << OFPR_ACTION)
                                  | (1u << OFPR_ACTION_SET)
-                                 | (1u << OFPR_GROUP));
+                                 | (1u << OFPR_GROUP)
+                                 | (1u << OFPR_PACKET_OUT));
         master[OAM_PORT_STATUS] = ((1u << OFPPR_ADD)
                                    | (1u << OFPPR_DELETE)
                                    | (1u << OFPPR_MODIFY));
         master[OAM_FLOW_REMOVED] = ((1u << OFPRR_IDLE_TIMEOUT)
                                     | (1u << OFPRR_HARD_TIMEOUT)
-                                    | (1u << OFPRR_DELETE));
-
+                                    | (1u << OFPRR_DELETE)
+                                    | (1u << OFPRR_GROUP_DELETE)
+                                    | (1u << OFPRR_METER_DELETE)
+                                    | (1u << OFPRR_EVICTION));
+        master[OAM_ROLE_STATUS] = 0;
+        master[OAM_TABLE_STATUS] = 0;
+        master[OAM_REQUESTFORWARD] = 0;
         /* "slave" role gets port status updates by default. */
         slave[OAM_PACKET_IN] = 0;
         slave[OAM_PORT_STATUS] = ((1u << OFPPR_ADD)
                                   | (1u << OFPPR_DELETE)
                                   | (1u << OFPPR_MODIFY));
         slave[OAM_FLOW_REMOVED] = 0;
+        slave[OAM_ROLE_STATUS] = 0;
+        slave[OAM_TABLE_STATUS] = 0;
+        slave[OAM_REQUESTFORWARD] = 0;
     } else {
         memset(ofconn->master_async_config, 0,
                sizeof ofconn->master_async_config);
@@ -1499,7 +1524,7 @@ ofconn_log_flow_mods(struct ofconn *ofconn)
  * 'ofconn'. */
 static bool
 ofconn_receives_async_msg(const struct ofconn *ofconn,
-                          enum ofconn_async_msg_type type,
+                          enum ofputil_async_msg_type type,
                           unsigned int reason)
 {
     const uint32_t *async_config;
@@ -1680,6 +1705,28 @@ connmgr_send_port_status(struct connmgr *mgr, struct ofconn *source,
 
             msg = ofputil_encode_port_status(&ps, ofconn_get_protocol(ofconn));
             ofconn_send(ofconn, msg, NULL);
+        }
+    }
+}
+
+/* Sends an OFPT_REQUESTFORWARD message with 'request' and 'reason' to
+ * appropriate controllers managed by 'mgr'.  For messages caused by a
+ * controller OFPT_GROUP_MOD and OFPT_METER_MOD, specify 'source' as the
+ * controller connection that sent the request; otherwise, specify 'source'
+ * as NULL. */
+void
+connmgr_send_requestforward(struct connmgr *mgr, const struct ofconn *source,
+                            const struct ofputil_requestforward *rf)
+{
+    struct ofconn *ofconn;
+
+    LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
+        if (ofconn_receives_async_msg(ofconn, OAM_REQUESTFORWARD, rf->reason)
+            && rconn_get_version(ofconn->rconn) >= OFP14_VERSION
+            && ofconn != source) {
+            enum ofputil_protocol protocol = ofconn_get_protocol(ofconn);
+            ofconn_send(ofconn, ofputil_encode_requestforward(rf, protocol),
+                        NULL);
         }
     }
 }

@@ -1,6 +1,6 @@
 #include <linux/version.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
+#ifndef HAVE_METADATA_DST
 
 #include <linux/module.h>
 #include <linux/errno.h>
@@ -12,6 +12,9 @@
 #include <net/udp.h>
 #include <net/udp_tunnel.h>
 #include <net/net_namespace.h>
+#include <net/ip6_checksum.h>
+#include <net/ip6_tunnel.h>
+
 
 int rpl_udp_sock_create(struct net *net, struct udp_port_cfg *cfg,
 		        struct socket **sockp)
@@ -23,11 +26,9 @@ int rpl_udp_sock_create(struct net *net, struct udp_port_cfg *cfg,
 	if (cfg->family == AF_INET6) {
 		struct sockaddr_in6 udp6_addr;
 
-		err = sock_create_kern(AF_INET6, SOCK_DGRAM, 0, &sock);
+		err = sock_create_kern(net, AF_INET6, SOCK_DGRAM, 0, &sock);
 		if (err < 0)
 			goto error;
-
-		sk_change_net(sock->sk, net);
 
 		udp6_addr.sin6_family = AF_INET6;
 		memcpy(&udp6_addr.sin6_addr, &cfg->local_ip6,
@@ -54,11 +55,9 @@ int rpl_udp_sock_create(struct net *net, struct udp_port_cfg *cfg,
 	if (cfg->family == AF_INET) {
 		struct sockaddr_in udp_addr;
 
-		err = sock_create_kern(AF_INET, SOCK_DGRAM, 0, &sock);
+		err = sock_create_kern(net, AF_INET, SOCK_DGRAM, 0, &sock);
 		if (err < 0)
 			goto error;
-
-		sk_change_net(sock->sk, net);
 
 		udp_addr.sin_family = AF_INET;
 		udp_addr.sin_addr = cfg->local_ip;
@@ -90,7 +89,7 @@ int rpl_udp_sock_create(struct net *net, struct udp_port_cfg *cfg,
 error:
 	if (sock) {
 		kernel_sock_shutdown(sock, SHUT_RDWR);
-		sk_release_kernel(sock->sk);
+		sock_release(sock);
 	}
 	*sockp = NULL;
 	return err;
@@ -137,15 +136,15 @@ void ovs_udp_csum_gso(struct sk_buff *skb)
 	/* csum segment if tunnel sets skb with csum. The cleanest way
 	 * to do this just to set it up from scratch. */
 	skb->ip_summed = CHECKSUM_NONE;
-	udp_set_csum(true, skb, iph->saddr, iph->daddr,
+	udp_set_csum(false, skb, iph->saddr, iph->daddr,
 		     skb->len - udp_offset);
 }
 EXPORT_SYMBOL_GPL(ovs_udp_csum_gso);
 
-int rpl_udp_tunnel_xmit_skb(struct rtable *rt, struct sk_buff *skb,
-			    __be32 src, __be32 dst, __u8 tos, __u8 ttl,
-			    __be16 df, __be16 src_port, __be16 dst_port,
-			    bool xnet, bool nocheck)
+int rpl_udp_tunnel_xmit_skb(struct rtable *rt, struct sock *sk,
+			    struct sk_buff *skb, __be32 src, __be32 dst,
+			    __u8 tos, __u8 ttl, __be16 df, __be16 src_port,
+			    __be16 dst_port, bool xnet, bool nocheck)
 {
 	struct udphdr *uh;
 
@@ -159,7 +158,7 @@ int rpl_udp_tunnel_xmit_skb(struct rtable *rt, struct sk_buff *skb,
 
 	udp_set_csum(nocheck, skb, src, dst, skb->len);
 
-	return iptunnel_xmit(skb->sk, rt, skb, src, dst, IPPROTO_UDP,
+	return iptunnel_xmit(sk, rt, skb, src, dst, IPPROTO_UDP,
 			     tos, ttl, df, xnet);
 }
 EXPORT_SYMBOL_GPL(rpl_udp_tunnel_xmit_skb);
@@ -168,8 +167,101 @@ void rpl_udp_tunnel_sock_release(struct socket *sock)
 {
 	rcu_assign_sk_user_data(sock->sk, NULL);
 	kernel_sock_shutdown(sock, SHUT_RDWR);
-	sk_release_kernel(sock->sk);
+	sock_release(sock);
 }
 EXPORT_SYMBOL_GPL(rpl_udp_tunnel_sock_release);
 
-#endif /* Linux version < 4.0 */
+#if IS_ENABLED(CONFIG_IPV6)
+
+#define udp_v6_check rpl_udp_v6_check
+static __sum16 udp_v6_check(int len,
+				   const struct in6_addr *saddr,
+				   const struct in6_addr *daddr,
+				   __wsum base)
+{
+	return csum_ipv6_magic(saddr, daddr, len, IPPROTO_UDP, base);
+}
+
+#define udp6_set_csum rpl_udp6_set_csum
+static void udp6_set_csum(bool nocheck, struct sk_buff *skb,
+			  const struct in6_addr *saddr,
+			  const struct in6_addr *daddr, int len)
+{
+	struct udphdr *uh = udp_hdr(skb);
+
+	if (nocheck)
+		uh->check = 0;
+	else if (skb_is_gso(skb))
+		uh->check = ~udp_v6_check(len, saddr, daddr, 0);
+	else if (skb_dst(skb) && skb_dst(skb)->dev &&
+		 (skb_dst(skb)->dev->features & NETIF_F_IPV6_CSUM)) {
+
+		BUG_ON(skb->ip_summed == CHECKSUM_PARTIAL);
+
+		skb->ip_summed = CHECKSUM_PARTIAL;
+		skb->csum_start = skb_transport_header(skb) - skb->head;
+		skb->csum_offset = offsetof(struct udphdr, check);
+		uh->check = ~udp_v6_check(len, saddr, daddr, 0);
+	} else {
+		__wsum csum;
+
+		BUG_ON(skb->ip_summed == CHECKSUM_PARTIAL);
+
+		uh->check = 0;
+		csum = skb_checksum(skb, 0, len, 0);
+		uh->check = udp_v6_check(len, saddr, daddr, csum);
+		if (uh->check == 0)
+			uh->check = CSUM_MANGLED_0;
+
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+	}
+}
+
+#define ip6_flow_hdr rpl_ip6_flow_hdr
+static inline void ip6_flow_hdr(struct ipv6hdr *hdr, unsigned int tclass,
+		__be32 flowlabel)
+{
+	*(__be32 *)hdr = htonl(0x60000000 | (tclass << 20)) | flowlabel;
+}
+
+int rpl_udp_tunnel6_xmit_skb(struct dst_entry *dst, struct sock *sk,
+			 struct sk_buff *skb,
+			 struct net_device *dev, struct in6_addr *saddr,
+			 struct in6_addr *daddr,
+			 __u8 prio, __u8 ttl, __be16 src_port,
+			 __be16 dst_port, bool nocheck)
+{
+	struct udphdr *uh;
+	struct ipv6hdr *ip6h;
+
+	__skb_push(skb, sizeof(*uh));
+	skb_reset_transport_header(skb);
+	uh = udp_hdr(skb);
+
+	uh->dest = dst_port;
+	uh->source = src_port;
+
+	uh->len = htons(skb->len);
+
+	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
+	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED
+			    | IPSKB_REROUTED);
+	skb_dst_set(skb, dst);
+
+	udp6_set_csum(nocheck, skb, saddr, daddr, skb->len);
+
+	__skb_push(skb, sizeof(*ip6h));
+	skb_reset_network_header(skb);
+	ip6h		  = ipv6_hdr(skb);
+	ip6_flow_hdr(ip6h, prio, htonl(0));
+	ip6h->payload_len = htons(skb->len);
+	ip6h->nexthdr     = IPPROTO_UDP;
+	ip6h->hop_limit   = ttl;
+	ip6h->daddr	  = *daddr;
+	ip6h->saddr	  = *saddr;
+
+	ip6tunnel_xmit(sk, skb, dev);
+	return 0;
+}
+#endif
+#endif

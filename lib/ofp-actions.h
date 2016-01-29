@@ -106,6 +106,13 @@
     OFPACT(EXIT,            ofpact_null,        ofpact, "exit")         \
     OFPACT(SAMPLE,          ofpact_sample,      ofpact, "sample")       \
     OFPACT(UNROLL_XLATE,    ofpact_unroll_xlate, ofpact, "unroll_xlate") \
+    OFPACT(CT,              ofpact_conntrack,   ofpact, "ct")           \
+                                                                        \
+    /* Debugging actions.                                               \
+     *                                                                  \
+     * These are intentionally undocumented, subject to change, and     \
+     * only accepted if ovs-vswitchd is started with --enable-dummy. */ \
+    OFPACT(DEBUG_RECIRC, ofpact_null,           ofpact, "debug_recirc") \
                                                                         \
     /* Instructions. */                                                 \
     OFPACT(METER,           ofpact_meter,       ofpact, "meter")        \
@@ -177,11 +184,14 @@ BUILD_ASSERT_DECL(sizeof(struct ofpact) == 4);
 #define OFPACT_ALIGNTO 8
 #define OFPACT_ALIGN(SIZE) ROUND_UP(SIZE, OFPACT_ALIGNTO)
 
+/* Returns the ofpact following 'ofpact'. */
 static inline struct ofpact *
 ofpact_next(const struct ofpact *ofpact)
 {
     return (void *) ((uint8_t *) ofpact + OFPACT_ALIGN(ofpact->len));
 }
+
+struct ofpact *ofpact_next_flattened(const struct ofpact *);
 
 static inline struct ofpact *
 ofpact_end(const struct ofpact *ofpacts, size_t ofpacts_len)
@@ -194,6 +204,15 @@ ofpact_end(const struct ofpact *ofpacts, size_t ofpacts_len)
 #define OFPACT_FOR_EACH(POS, OFPACTS, OFPACTS_LEN)                      \
     for ((POS) = (OFPACTS); (POS) < ofpact_end(OFPACTS, OFPACTS_LEN);  \
          (POS) = ofpact_next(POS))
+
+/* Assigns POS to each ofpact, in turn, in the OFPACTS_LEN bytes of ofpacts
+ * starting at OFPACTS.
+ *
+ * For ofpacts that contain nested ofpacts, this visits each of the inner
+ * ofpacts as well. */
+#define OFPACT_FOR_EACH_FLATTENED(POS, OFPACTS, OFPACTS_LEN)           \
+    for ((POS) = (OFPACTS); (POS) < ofpact_end(OFPACTS, OFPACTS_LEN);  \
+         (POS) = ofpact_next_flattened(POS))
 
 /* Action structure for each OFPACT_*. */
 
@@ -323,7 +342,7 @@ struct ofpact_vlan_pcp {
  * Used for OFPAT10_SET_DL_SRC, OFPAT10_SET_DL_DST. */
 struct ofpact_mac {
     struct ofpact ofpact;
-    uint8_t mac[ETH_ADDR_LEN];
+    struct eth_addr mac;
 };
 
 /* OFPACT_SET_IPV4_SRC, OFPACT_SET_IPV4_DST.
@@ -464,6 +483,58 @@ struct ofpact_nest {
 BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions) % OFPACT_ALIGNTO == 0);
 BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions)
                   == sizeof(struct ofpact_nest));
+
+/* Bits for 'flags' in struct nx_action_conntrack.
+ *
+ * If NX_CT_F_COMMIT is set, then the connection entry is moved from the
+ * unconfirmed to confirmed list in the tracker. */
+enum nx_conntrack_flags {
+    NX_CT_F_COMMIT = 1 << 0,
+};
+
+/* Magic value for struct nx_action_conntrack 'recirc_table' field, to specify
+ * that the packet should not be recirculated. */
+#define NX_CT_RECIRC_NONE OFPTT_ALL
+
+/* We want to determine the size of these elements at compile time to ensure
+ * actions alignment, but we also want to allow ofpact_conntrack to have
+ * basic _put(), _get(), etc accessors defined below which access these
+ * members directly from ofpact_conntrack. An anonymous struct will serve
+ * both of these purposes. */
+#define CT_MEMBERS                      \
+struct {                                \
+    struct ofpact ofpact;               \
+    uint16_t flags;                     \
+    uint16_t zone_imm;                  \
+    struct mf_subfield zone_src;        \
+    uint16_t alg;                       \
+    uint8_t recirc_table;               \
+}
+
+#if !defined(IPPORT_FTP)
+#define	IPPORT_FTP  21
+#endif
+
+/* OFPACT_CT.
+ *
+ * Used for NXAST_CT. */
+struct ofpact_conntrack {
+    union {
+        CT_MEMBERS;
+        uint8_t pad[OFPACT_ALIGN(sizeof(CT_MEMBERS))];
+    };
+    struct ofpact actions[0];
+};
+BUILD_ASSERT_DECL(offsetof(struct ofpact_conntrack, actions)
+                  % OFPACT_ALIGNTO == 0);
+BUILD_ASSERT_DECL(offsetof(struct ofpact_conntrack, actions)
+                  == sizeof(struct ofpact_conntrack));
+
+static inline size_t
+ofpact_ct_get_action_len(const struct ofpact_conntrack *oc)
+{
+    return oc->ofpact.len - offsetof(struct ofpact_conntrack, actions);
+}
 
 static inline size_t
 ofpact_nest_get_action_len(const struct ofpact_nest *on)
@@ -766,6 +837,7 @@ bool ofpacts_output_to_group(const struct ofpact[], size_t ofpacts_len,
                              uint32_t group_id);
 bool ofpacts_equal(const struct ofpact a[], size_t a_len,
                    const struct ofpact b[], size_t b_len);
+const struct mf_field *ofpact_get_mf_dst(const struct ofpact *ofpact);
 uint32_t ofpacts_get_meter(const struct ofpact[], size_t ofpacts_len);
 
 /* Formatting and parsing ofpacts. */

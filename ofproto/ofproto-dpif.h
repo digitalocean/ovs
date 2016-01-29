@@ -80,34 +80,28 @@ struct dpif_backer_support {
      * False if the datapath supports only 8-byte (or shorter) userdata. */
     bool variable_length_userdata;
 
-    /* Maximum number of MPLS label stack entries that the datapath supports
-     * in a match */
-    size_t max_mpls_depth;
-
     /* True if the datapath supports masked data in OVS_ACTION_ATTR_SET
      * actions. */
     bool masked_set_action;
-
-    /* True if the datapath supports recirculation. */
-    bool recirc;
 
     /* True if the datapath supports tnl_push and pop actions. */
     bool tnl_push_pop;
 
     /* True if the datapath supports OVS_FLOW_ATTR_UFID. */
     bool ufid;
+
+    /* Each member represents support for related OVS_KEY_ATTR_* fields. */
+    struct odp_support odp;
 };
 
-size_t ofproto_dpif_get_max_mpls_depth(const struct ofproto_dpif *);
-bool ofproto_dpif_get_enable_recirc(const struct ofproto_dpif *);
-bool ofproto_dpif_get_enable_ufid(struct dpif_backer *backer);
+bool ofproto_dpif_get_enable_ufid(const struct dpif_backer *backer);
+struct dpif_backer_support *ofproto_dpif_get_support(const struct ofproto_dpif *);
 
 cls_version_t ofproto_dpif_get_tables_version(struct ofproto_dpif *);
 
 struct rule_dpif *rule_dpif_lookup_from_table(struct ofproto_dpif *,
                                               cls_version_t, struct flow *,
                                               struct flow_wildcards *,
-                                              bool take_ref,
                                               const struct dpif_flow_stats *,
                                               uint8_t *table_id,
                                               ofp_port_t in_port,
@@ -136,11 +130,6 @@ ovs_be64 rule_dpif_get_flow_cookie(const struct rule_dpif *rule);
 void rule_dpif_reduce_timeouts(struct rule_dpif *rule, uint16_t idle_timeout,
                                uint16_t hard_timeout);
 
-void choose_miss_rule(enum ofputil_port_config,
-                      struct rule_dpif *miss_rule,
-                      struct rule_dpif *no_packet_in_rule,
-                      struct rule_dpif **rule, bool take_ref);
-
 void group_dpif_credit_stats(struct group_dpif *,
                              struct ofputil_bucket *,
                              const struct dpif_flow_stats *);
@@ -164,16 +153,23 @@ bool vsp_adjust_flow(const struct ofproto_dpif *, struct flow *,
 int ofproto_dpif_execute_actions(struct ofproto_dpif *, const struct flow *,
                                  struct rule_dpif *, const struct ofpact *,
                                  size_t ofpacts_len, struct dp_packet *);
+int ofproto_dpif_execute_actions__(struct ofproto_dpif *, const struct flow *,
+                                   struct rule_dpif *, const struct ofpact *,
+                                   size_t ofpacts_len, int recurse,
+                                   int resubmits, struct dp_packet *);
 void ofproto_dpif_send_packet_in(struct ofproto_dpif *,
                                  struct ofproto_packet_in *);
 bool ofproto_dpif_wants_packet_in_on_miss(struct ofproto_dpif *);
 int ofproto_dpif_send_packet(const struct ofport_dpif *, struct dp_packet *);
-void ofproto_dpif_flow_mod(struct ofproto_dpif *, struct ofputil_flow_mod *);
+void ofproto_dpif_flow_mod(struct ofproto_dpif *,
+                           const struct ofputil_flow_mod *);
 struct rule_dpif *ofproto_dpif_refresh_rule(struct rule_dpif *);
 
 struct ofport_dpif *odp_port_to_ofport(const struct dpif_backer *, odp_port_t);
 struct ofport_dpif *ofp_port_to_ofport(const struct ofproto_dpif *,
                                        ofp_port_t);
+
+bool ofproto_dpif_backer_enabled(struct dpif_backer* backer);
 
 int ofproto_dpif_add_internal_flow(struct ofproto_dpif *,
                                    const struct match *, int priority,
@@ -208,15 +204,6 @@ static inline void rule_dpif_ref(struct rule_dpif *rule)
         ofproto_rule_ref(RULE_CAST(rule));
     }
 }
-
-static inline bool rule_dpif_try_ref(struct rule_dpif *rule)
-{
-    if (rule) {
-        return ofproto_rule_try_ref(RULE_CAST(rule));
-    }
-    return false;
-}
-
 
 static inline void rule_dpif_unref(struct rule_dpif *rule)
 {

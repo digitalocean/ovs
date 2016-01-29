@@ -110,8 +110,7 @@ A: You can start by joining the mailing lists and helping to answer
 
    http://openvswitch.org/mlists/
 
-### Q: Why can I no longer connect to my OpenFlow controller or OVSDB
-manager?
+### Q: Why can I no longer connect to my OpenFlow controller or OVSDB manager?
 
 A: Starting in OVS 2.4, we switched the default ports to the
    IANA-specified port numbers for OpenFlow (6633->6653) and OVSDB
@@ -157,6 +156,7 @@ A: The following table lists the Linux kernel versions against which the
 |    2.1.x     | 2.6.32 to 3.11
 |    2.3.x     | 2.6.32 to 3.14
 |    2.4.x     | 2.6.32 to 4.0
+|    2.5.x     | 2.6.32 to 4.3
 
    Open vSwitch userspace should also work with the Linux kernel module
    built into Linux 3.3 and later.
@@ -164,6 +164,73 @@ A: The following table lists the Linux kernel versions against which the
    Open vSwitch userspace is not sensitive to the Linux kernel version.
    It should build against almost any kernel, certainly against 2.6.32
    and later.
+
+### Q: Are all features available with all datapaths?
+
+A: Open vSwitch supports different datapaths on different platforms.  Each
+   datapath has a different feature set: the following tables try to summarize
+   the status.
+
+   Supported datapaths:
+
+   * *Linux upstream*: The datapath implemented by the kernel module shipped
+                       with Linux upstream.  Since features have been gradually
+                       introduced into the kernel, the table mentions the first
+                       Linux release whose OVS module supports the feature.
+
+   * *Linux OVS tree*: The datapath implemented by the Linux kernel module
+                       distributed with the OVS source tree. Some features of
+                       this module rely on functionality not available in older
+                       kernels: in this case the minumum Linux version (against
+                       which the feature can be compiled) is listed.
+
+   * *Userspace*: Also known as DPDK, dpif-netdev or dummy datapath. It is the
+                  only datapath that works on NetBSD and FreeBSD.
+
+   * *Hyper-V*: Also known as the Windows datapath.
+
+   The following table lists the datapath supported features from
+   an Open vSwitch user's perspective.
+
+Feature               | Linux upstream | Linux OVS tree | Userspace | Hyper-V |
+----------------------|:--------------:|:--------------:|:---------:|:-------:|
+Connection tracking   |      4.3       |       3.10     |    NO     |   NO    |
+Tunnel - LISP         |      NO        |       YES      |    NO     |   NO    |
+Tunnel - STT          |      NO        |       3.5      |    NO     |   YES   |
+Tunnel - GRE          |      3.11      |       YES      |    YES    |   YES   |
+Tunnel - VXLAN        |      3.12      |       YES      |    YES    |   YES   |
+Tunnel - Geneve       |      3.18      |       YES      |    YES    |   NO    |
+QoS - Policing        |      YES       |       YES      |    NO     |   NO    |
+QoS - Shaping         |      YES       |       YES      |    NO     |   NO    |
+sFlow                 |      YES       |       YES      |    YES    |   NO    |
+Set action            |      YES       |       YES      |    YES    | PARTIAL |
+NIC Bonding           |      YES       |       YES      |    YES    |   NO    |
+Multiple VTEPs        |      YES       |       YES      |    YES    |   NO    |
+
+   **Notes:**
+   * Only a limited set of flow fields is modifiable via the set action by the
+     Hyper-V datapath.
+   * The Hyper-V datapath only supports one physical NIC per datapath. This is
+     why bonding is not supported.
+   * The Hyper-V datapath can have at most one IP address configured as a
+     tunnel endpoint.
+
+   The following table lists features that do not *directly* impact an
+   Open vSwitch user, e.g. because their absence can be hidden by the ofproto
+   layer (usually this comes with a performance penalty).
+
+Feature               | Linux upstream | Linux OVS tree | Userspace | Hyper-V |
+----------------------|:--------------:|:--------------:|:---------:|:-------:|
+SCTP flows            |      3.12      |       YES      |    YES    |   YES   |
+MPLS                  |      3.19      |       YES      |    YES    |   NO    |
+UFID                  |      4.0       |       YES      |    YES    |   NO    |
+Megaflows             |      3.12      |       YES      |    YES    |   NO    |
+Masked set action     |      4.0       |       YES      |    YES    |   NO    |
+Recirculation         |      3.19      |       YES      |    YES    |   NO    |
+TCP flags matching    |      3.13      |       YES      |    YES    |   NO    |
+Validate flow actions |      YES       |       YES      |    N/A    |   NO    |
+Multiple datapaths    |      YES       |       YES      |    YES    |   NO    |
+Tunnel TSO - STT      |      N/A       |       YES      |    NO     |   YES   |
 
 ### Q: I get an error like this when I configure Open vSwitch:
 
@@ -448,7 +515,7 @@ A: The following commands configure br0 with eth0 and tap0 as trunk
    To later disable mirroring and destroy the GRE tunnel:
 
        ovs-vsctl clear bridge br0 mirrors
-       ovs-vcstl del-port br0 gre0
+       ovs-vsctl del-port br0 gre0
 
 ### Q: Does Open vSwitch support ERSPAN?
 
@@ -563,6 +630,32 @@ A: Open vSwitch has two kinds of flows (see the previous question), so
 ### Q: How does multicast snooping works with VLANs?
 
 A: Open vSwitch maintains snooping tables for each VLAN.
+
+### Q: Can OVS populate the kernel flow table in advance instead of in reaction to packets?
+
+A: No.  There are several reasons:
+
+  - Kernel flows are not as sophisticated as OpenFlow flows, which
+    means that some OpenFlow policies could require a large number of
+    kernel flows.  The "conjunctive match" feature is an extreme
+    example: the number of kernel flows it requires is the product of
+    the number of flows in each dimension.
+
+  - With multiple OpenFlow flow tables and simple sets of actions, the
+    number of kernel flows required can be as large as the product of
+    the number of flows in each dimension.  With more sophisticated
+    actions, the number of kernel flows could be even larger.
+
+  - Open vSwitch is designed so that any version of OVS userspace
+    interoperates with any version of the OVS kernel module.  This
+    forward and backward compatibility requires that userspace observe
+    how the kernel module parses received packets.  This is only
+    possible in a straightforward way when userspace adds kernel flows
+    in reaction to received packets.
+
+  For more relevant information on the architecture of Open vSwitch,
+  please read "The Design and Implementation of Open vSwitch",
+  published in USENIX NSDI 2015.
 
 
 Performance
@@ -945,7 +1038,22 @@ A: The short answer is that this is a misuse of a "tap" device.  Use
 Quality of Service (QoS)
 ------------------------
 
-### Q: How do I configure Quality of Service (QoS)?
+### Q: Does OVS support Quality of Service (QoS)?
+
+A: Yes.  For traffic that egresses from a switch, OVS supports traffic
+   shaping; for traffic that ingresses into a switch, OVS support
+   policing.  Policing is a simple form of quality-of-service that
+   simply drops packets received in excess of the configured rate.  Due
+   to its simplicity, policing is usually less accurate and less
+   effective than egress traffic shaping, which queues packets.
+
+   Keep in mind that ingress and egress are from the perspective of the
+   switch.  That means that egress shaping limits the rate at which
+   traffic is allowed to transmit from a physical interface, but the
+   rate at which traffic will be received on a virtual machine's VIF.
+   For ingress policing, the behavior is the opposite.
+
+### Q: How do I configure egress traffic shaping?
 
 A: Suppose that you want to set up bridge br0 connected to physical
    Ethernet port eth0 (a 1 Gbps device) and virtual machine interfaces
@@ -1006,6 +1114,20 @@ A: Suppose that you want to set up bridge br0 connected to physical
    vSwitch you are using is older than version 1.8 (which added the
    --all option), then you will have to destroy QoS and Queue records
    individually.
+
+### Q: How do I configure ingress policing?
+
+A: A policing policy can be configured on an interface to drop packets
+   that arrive at a higher rate than the configured value.  For example,
+   the following commands will rate-limit traffic that vif1.0 may
+   generate to 10Mbps:
+
+       ovs-vsctl set interface vif1.0 ingress_policing_rate=10000
+       ovs-vsctl set interface vif1.0 ingress_policing_burst=1000
+
+   Traffic policing can interact poorly with some network protocols and
+   can have surprising results.  The "Ingress Policing" section of
+   ovs-vswitchd.conf.db(5) discusses the issues in greater detail.
 
 ### Q: I configured Quality of Service (QoS) in my OpenFlow network by
    adding records to the QoS and Queue table, but the results aren't
@@ -1432,8 +1554,7 @@ A: The following table lists the versions of OpenFlow supported by
    [OPENFLOW-1.1+.md] in the Open vSwitch source tree tracks support for
    OpenFlow 1.1 and later features.  When support for OpenFlow 1.4 and
    1.5 is solidly implemented, Open vSwitch will enable those version
-   by default.  Also, the OpenFlow 1.5 specification is still under
-   development and thus subject to change.
+   by default.
 
 ### Q: Does Open vSwitch support MPLS?
 
@@ -1624,6 +1745,9 @@ A: To debug network behavior problems, trace the path of a packet,
    hop-by-hop, from its origin in one host to a remote host.  If
    that's correct, then trace the path of the response packet back to
    the origin.
+
+   The open source tool called "plotnetcfg" can help to understand the
+   relationship between the networking devices on a single host.
 
    Usually a simple ICMP echo request and reply ("ping") packet is
    good enough.  Start by initiating an ongoing "ping" from the origin

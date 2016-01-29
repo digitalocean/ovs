@@ -185,6 +185,7 @@ rstp_unref(struct rstp *rstp)
 
         list_remove(&rstp->node);
         ovs_mutex_unlock(&rstp_mutex);
+        hmap_destroy(&rstp->ports);
         free(rstp->name);
         free(rstp);
     }
@@ -280,6 +281,8 @@ rstp_create(const char *name, rstp_identifier bridge_address,
     rstp->aux = aux;
     rstp->changes = false;
     rstp->begin = true;
+    rstp->old_root_aux = NULL;
+    rstp->new_root_aux = NULL;
 
     ovs_refcount_init(&rstp->ref_cnt);
 

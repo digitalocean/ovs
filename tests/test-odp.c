@@ -54,6 +54,17 @@ parse_keys(bool wc_keys)
         }
 
         if (!wc_keys) {
+            struct odp_flow_key_parms odp_parms = {
+                .flow = &flow,
+                .support = {
+                    .recirc = true,
+                    .ct_state = true,
+                    .ct_zone = true,
+                    .ct_mark = true,
+                    .ct_label = true,
+                },
+            };
+
             /* Convert odp_key to flow. */
             fitness = odp_flow_key_to_flow(odp_key.data, odp_key.size, &flow);
             switch (fitness) {
@@ -75,8 +86,8 @@ parse_keys(bool wc_keys)
             /* Convert cls_rule back to odp_key. */
             ofpbuf_uninit(&odp_key);
             ofpbuf_init(&odp_key, 0);
-            odp_flow_key_from_flow(&odp_key, &flow, NULL,
-                                   flow.in_port.odp_port, true);
+            odp_parms.odp_in_port = flow.in_port.odp_port;
+            odp_flow_key_from_flow(&odp_parms, &odp_key);
 
             if (odp_key.size > ODPUTIL_FLOW_KEY_BYTES) {
                 printf ("too long: %"PRIu32" > %d\n",
@@ -98,6 +109,7 @@ parse_keys(bool wc_keys)
 
     next:
         ofpbuf_uninit(&odp_key);
+        ofpbuf_uninit(&odp_mask);
     }
     ds_destroy(&in);
 
@@ -185,8 +197,8 @@ parse_filter(char *filter_parse)
             struct minimatch minimatch;
 
             odp_flow_key_to_flow(odp_key.data, odp_key.size, &flow);
-            odp_flow_key_to_mask(odp_mask.data, odp_mask.size, &wc.masks,
-                                 &flow);
+            odp_flow_key_to_mask(odp_mask.data, odp_mask.size, odp_key.data,
+                                 odp_key.size, &wc, &flow);
             match_init(&match, &flow, &wc);
 
             match_init(&match_filter, &flow_filter, &wc);

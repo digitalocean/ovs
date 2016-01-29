@@ -137,6 +137,8 @@ struct match;
  *
  *         MAC: A six-byte field whose value is an Ethernet address.
  *         IPv6: A 16-byte field whose value is an IPv6 address.
+ *         tunnelMD: A variable length field, up to 124 bytes, that carries
+ *                   tunnel metadata.
  *
  *   Maskable:
  *
@@ -366,19 +368,65 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_TUN_DST,
 
-    /* "tun_flags".
+    /* "tun_ipv6_src".
      *
-     * Combination of FLOW_TNL_F_* bitmapped flags that indicate properties of
-     * a tunneled packet.  Internal use only, not programmable from controller.
+     * The IPv6 source address in the outer IP header of a tunneled packet.
      *
      * For non-tunneled packets, the value is 0.
      *
-     * Type: be16.
-     * Maskable: no.
+     * Type: be128.
+     * Maskable: bitwise.
+     * Formatting: IPv6.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_TUN_IPV6_SRC(109) since v2.5.
+     * OXM: none.
+     * Prefix lookup member: tunnel.ipv6_src.
+     */
+    MFF_TUN_IPV6_SRC,
+
+    /* "tun_ipv6_dst".
+     *
+     * The IPv6 destination address in the outer IP header of a tunneled
+     * packet.
+     *
+     * For non-tunneled packets, the value is 0.
+     *
+     * Type: be128.
+     * Maskable: bitwise.
+     * Formatting: IPv6.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_TUN_IPV6_DST(110) since v2.5.
+     * OXM: none.
+     * Prefix lookup member: tunnel.ipv6_dst.
+     */
+    MFF_TUN_IPV6_DST,
+
+    /* "tun_flags".
+     *
+     * Flags representing aspects of tunnel behavior.
+     *
+     * This field currently only has a single flag defined:
+     *
+     *   - NX_TUN_FLAG_OAM: The tunnel protocol indicated that this is an
+     *                      OAM control packet.
+     *
+     * The switch may reject matches against values that it is not aware of.
+     *
+     * Note that it is possible for newer version of Open vSwitch to
+     * introduce additional flags with varying meaning. It is therefore not
+     * recommended to use an exact match on this field since the behavior of
+     * these new flags is unknown and should be ignored.
+     *
+     * For non-tunneled packets, the value is 0.
+     *
+     * Type: be16 (low 1 bits).
+     * Maskable: bitwise.
      * Formatting: tunnel flags.
      * Prerequisites: none.
-     * Access: read-only.
-     * NXM: none.
+     * Access: read/write.
+     * NXM: NXM_NX_TUN_FLAGS(104) since v2.5.
      * OXM: none.
      */
     MFF_TUN_FLAGS,
@@ -442,6 +490,154 @@ enum OVS_PACKED_ENUM mf_field_id {
      * OXM: none.
      */
     MFF_TUN_GBP_FLAGS,
+
+#if TUN_METADATA_NUM_OPTS == 64
+    /* "tun_metadata<N>".
+     *
+     * Encapsulation metadata for tunnels.
+     *
+     * Each NXM can be dynamically mapped onto a particular tunnel field using
+     * OpenFlow commands. The individual NXMs can each carry up to 124 bytes
+     * of data and a combined total of 256 across all allocated fields.
+     *
+     * Type: tunnelMD.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_TUN_METADATA0(40) since v2.5.        <0>
+     * NXM: NXM_NX_TUN_METADATA1(41) since v2.5.        <1>
+     * NXM: NXM_NX_TUN_METADATA2(42) since v2.5.        <2>
+     * NXM: NXM_NX_TUN_METADATA3(43) since v2.5.        <3>
+     * NXM: NXM_NX_TUN_METADATA4(44) since v2.5.        <4>
+     * NXM: NXM_NX_TUN_METADATA5(45) since v2.5.        <5>
+     * NXM: NXM_NX_TUN_METADATA6(46) since v2.5.        <6>
+     * NXM: NXM_NX_TUN_METADATA7(47) since v2.5.        <7>
+     * NXM: NXM_NX_TUN_METADATA8(48) since v2.5.        <8>
+     * NXM: NXM_NX_TUN_METADATA9(49) since v2.5.        <9>
+     * NXM: NXM_NX_TUN_METADATA10(50) since v2.5.       <10>
+     * NXM: NXM_NX_TUN_METADATA11(51) since v2.5.       <11>
+     * NXM: NXM_NX_TUN_METADATA12(52) since v2.5.       <12>
+     * NXM: NXM_NX_TUN_METADATA13(53) since v2.5.       <13>
+     * NXM: NXM_NX_TUN_METADATA14(54) since v2.5.       <14>
+     * NXM: NXM_NX_TUN_METADATA15(55) since v2.5.       <15>
+     * NXM: NXM_NX_TUN_METADATA16(56) since v2.5.       <16>
+     * NXM: NXM_NX_TUN_METADATA17(57) since v2.5.       <17>
+     * NXM: NXM_NX_TUN_METADATA18(58) since v2.5.       <18>
+     * NXM: NXM_NX_TUN_METADATA19(59) since v2.5.       <19>
+     * NXM: NXM_NX_TUN_METADATA20(60) since v2.5.       <20>
+     * NXM: NXM_NX_TUN_METADATA21(61) since v2.5.       <21>
+     * NXM: NXM_NX_TUN_METADATA22(62) since v2.5.       <22>
+     * NXM: NXM_NX_TUN_METADATA23(63) since v2.5.       <23>
+     * NXM: NXM_NX_TUN_METADATA24(64) since v2.5.       <24>
+     * NXM: NXM_NX_TUN_METADATA25(65) since v2.5.       <25>
+     * NXM: NXM_NX_TUN_METADATA26(66) since v2.5.       <26>
+     * NXM: NXM_NX_TUN_METADATA27(67) since v2.5.       <27>
+     * NXM: NXM_NX_TUN_METADATA28(68) since v2.5.       <28>
+     * NXM: NXM_NX_TUN_METADATA29(69) since v2.5.       <29>
+     * NXM: NXM_NX_TUN_METADATA30(70) since v2.5.       <30>
+     * NXM: NXM_NX_TUN_METADATA31(71) since v2.5.       <31>
+     * NXM: NXM_NX_TUN_METADATA32(72) since v2.5.       <32>
+     * NXM: NXM_NX_TUN_METADATA33(73) since v2.5.       <33>
+     * NXM: NXM_NX_TUN_METADATA34(74) since v2.5.       <34>
+     * NXM: NXM_NX_TUN_METADATA35(75) since v2.5.       <35>
+     * NXM: NXM_NX_TUN_METADATA36(76) since v2.5.       <36>
+     * NXM: NXM_NX_TUN_METADATA37(77) since v2.5.       <37>
+     * NXM: NXM_NX_TUN_METADATA38(78) since v2.5.       <38>
+     * NXM: NXM_NX_TUN_METADATA39(79) since v2.5.       <39>
+     * NXM: NXM_NX_TUN_METADATA40(80) since v2.5.       <40>
+     * NXM: NXM_NX_TUN_METADATA41(81) since v2.5.       <41>
+     * NXM: NXM_NX_TUN_METADATA42(82) since v2.5.       <42>
+     * NXM: NXM_NX_TUN_METADATA43(83) since v2.5.       <43>
+     * NXM: NXM_NX_TUN_METADATA44(84) since v2.5.       <44>
+     * NXM: NXM_NX_TUN_METADATA45(85) since v2.5.       <45>
+     * NXM: NXM_NX_TUN_METADATA46(86) since v2.5.       <46>
+     * NXM: NXM_NX_TUN_METADATA47(87) since v2.5.       <47>
+     * NXM: NXM_NX_TUN_METADATA48(88) since v2.5.       <48>
+     * NXM: NXM_NX_TUN_METADATA49(89) since v2.5.       <49>
+     * NXM: NXM_NX_TUN_METADATA50(90) since v2.5.       <50>
+     * NXM: NXM_NX_TUN_METADATA51(91) since v2.5.       <51>
+     * NXM: NXM_NX_TUN_METADATA52(92) since v2.5.       <52>
+     * NXM: NXM_NX_TUN_METADATA53(93) since v2.5.       <53>
+     * NXM: NXM_NX_TUN_METADATA54(94) since v2.5.       <54>
+     * NXM: NXM_NX_TUN_METADATA55(95) since v2.5.       <55>
+     * NXM: NXM_NX_TUN_METADATA56(96) since v2.5.       <56>
+     * NXM: NXM_NX_TUN_METADATA57(97) since v2.5.       <57>
+     * NXM: NXM_NX_TUN_METADATA58(98) since v2.5.       <58>
+     * NXM: NXM_NX_TUN_METADATA59(99) since v2.5.       <59>
+     * NXM: NXM_NX_TUN_METADATA60(100) since v2.5.      <60>
+     * NXM: NXM_NX_TUN_METADATA61(101) since v2.5.      <61>
+     * NXM: NXM_NX_TUN_METADATA62(102) since v2.5.      <62>
+     * NXM: NXM_NX_TUN_METADATA63(103) since v2.5.      <63>
+     * OXM: none.
+     */
+    MFF_TUN_METADATA0,
+    MFF_TUN_METADATA1,
+    MFF_TUN_METADATA2,
+    MFF_TUN_METADATA3,
+    MFF_TUN_METADATA4,
+    MFF_TUN_METADATA5,
+    MFF_TUN_METADATA6,
+    MFF_TUN_METADATA7,
+    MFF_TUN_METADATA8,
+    MFF_TUN_METADATA9,
+    MFF_TUN_METADATA10,
+    MFF_TUN_METADATA11,
+    MFF_TUN_METADATA12,
+    MFF_TUN_METADATA13,
+    MFF_TUN_METADATA14,
+    MFF_TUN_METADATA15,
+    MFF_TUN_METADATA16,
+    MFF_TUN_METADATA17,
+    MFF_TUN_METADATA18,
+    MFF_TUN_METADATA19,
+    MFF_TUN_METADATA20,
+    MFF_TUN_METADATA21,
+    MFF_TUN_METADATA22,
+    MFF_TUN_METADATA23,
+    MFF_TUN_METADATA24,
+    MFF_TUN_METADATA25,
+    MFF_TUN_METADATA26,
+    MFF_TUN_METADATA27,
+    MFF_TUN_METADATA28,
+    MFF_TUN_METADATA29,
+    MFF_TUN_METADATA30,
+    MFF_TUN_METADATA31,
+    MFF_TUN_METADATA32,
+    MFF_TUN_METADATA33,
+    MFF_TUN_METADATA34,
+    MFF_TUN_METADATA35,
+    MFF_TUN_METADATA36,
+    MFF_TUN_METADATA37,
+    MFF_TUN_METADATA38,
+    MFF_TUN_METADATA39,
+    MFF_TUN_METADATA40,
+    MFF_TUN_METADATA41,
+    MFF_TUN_METADATA42,
+    MFF_TUN_METADATA43,
+    MFF_TUN_METADATA44,
+    MFF_TUN_METADATA45,
+    MFF_TUN_METADATA46,
+    MFF_TUN_METADATA47,
+    MFF_TUN_METADATA48,
+    MFF_TUN_METADATA49,
+    MFF_TUN_METADATA50,
+    MFF_TUN_METADATA51,
+    MFF_TUN_METADATA52,
+    MFF_TUN_METADATA53,
+    MFF_TUN_METADATA54,
+    MFF_TUN_METADATA55,
+    MFF_TUN_METADATA56,
+    MFF_TUN_METADATA57,
+    MFF_TUN_METADATA58,
+    MFF_TUN_METADATA59,
+    MFF_TUN_METADATA60,
+    MFF_TUN_METADATA61,
+    MFF_TUN_METADATA62,
+    MFF_TUN_METADATA63,
+#else
+#error "Need to update MFF_TUN_METADATA* to match TUN_METADATA_NUM_OPTS"
+#endif
 
     /* "metadata".
      *
@@ -541,6 +737,109 @@ enum OVS_PACKED_ENUM mf_field_id {
      * OXM: none.
      */
     MFF_PKT_MARK,
+
+    /* "ct_state".
+     *
+     * Connection tracking state.  The field is populated by the NXAST_CT
+     * action. The following bit values describe the state of the connection:
+     *
+     *   - New (0x01): This is the beginning of a new connection.
+     *   - Established (0x02): This is part of an already existing connection.
+     *   - Related (0x04): This is a separate connection that is related to an
+     *                     existing connection.
+     *   - Reply (0x08): This flow is in the reply direction, ie it did not
+     *                   initiate the connection.
+     *   - Invalid (0x10): This flow could not be associated with a connection.
+     *                     This could be set for a variety of reasons,
+     *                     including (but not limited to):
+     *                     - L3/L4 protocol handler is not loaded/unavailable.
+     *                     - L3/L4 protocol handler determines that the packet
+     *                       is malformed or invalid for the current FSM stage.
+     *                     - Packets are unexpected length for protocol.
+     *   - Tracked (0x20): Connection tracking has occurred.
+     *
+     * The "Tracked" bit corresponds to the packet_state as described in the
+     * description of NXAST_CT action. The remaining bits correspond to
+     * connection state. The "New" bit implies that the connection state
+     * is uncommitted, while "Established" implies that it has previously been
+     * committed.
+     *
+     * There are additional constraints on the ct_state bits, listed in order
+     * of precedence below:
+     *
+     *   - If "Tracked" is unset, no other bits may be set.
+     *   - If "Tracked" is set, one or more other bits may be set.
+     *   - If "Invalid" is set, only the "Tracked" bit is also set.
+     *   - The "New" and "Established" bits are mutually exclusive.
+     *   - The "New" and "Reply" bits are mutually exclusive.
+     *   - The "Related" bit may be set in conjunction with any other bits.
+     *     Connections that are identified as "Related" are separate
+     *     connections from the originating connection, so must be committed
+     *     separately. All packets for a related connection will have the
+     *     "Related" bit set (not just the initial packet).
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: ct state.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_STATE(105) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_STATE,
+
+    /* "ct_zone".
+     *
+     * Connection tracking zone.  The field is populated by the
+     * NXAST_CT action.
+     *
+     * Type: be16.
+     * Maskable: no.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_ZONE(106) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_ZONE,
+
+    /* "ct_mark".
+     *
+     * Connection tracking mark.  The mark is carried with the
+     * connection tracking state.  On Linux this corresponds to the
+     * nf_conn's "mark" member but the exact implementation is
+     * platform-dependent.
+     *
+     * Writable only from nested actions within the NXAST_CT action.
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_CT_MARK(107) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_MARK,
+
+    /* "ct_label".
+     *
+     * Connection tracking label.  The label is carried with the
+     * connection tracking state.  On Linux this is held in the
+     * conntrack label extension but the exact implementation is
+     * platform-dependent.
+     *
+     * Writable only from nested actions within the NXAST_CT action.
+     *
+     * Type: be128.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_CT_LABEL(108) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_LABEL,
 
 #if FLOW_N_REGS == 8
     /* "reg<N>".
@@ -898,7 +1197,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      *
      * The source address in the IPv6 header.
      *
-     * Type: IPv6.
+     * Type: be128.
      * Maskable: bitwise.
      * Formatting: IPv6.
      * Prerequisites: IPv6.
@@ -913,7 +1212,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      *
      * The destination address in the IPv6 header.
      *
-     * Type: IPv6.
+     * Type: be128.
      * Maskable: bitwise.
      * Formatting: IPv6.
      * Prerequisites: IPv6.
@@ -1305,7 +1604,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Maskable: no.
      * Formatting: decimal.
      * Prerequisites: ICMPv4.
-     * Access: read-only.
+     * Access: read/write.
      * NXM: NXM_OF_ICMP_TYPE(13) since v1.1.
      * OXM: OXM_OF_ICMPV4_TYPE(19) since OF1.2 and v1.7.
      * OF1.0: exact match.
@@ -1321,7 +1620,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Maskable: no.
      * Formatting: decimal.
      * Prerequisites: ICMPv4.
-     * Access: read-only.
+     * Access: read/write.
      * NXM: NXM_OF_ICMP_CODE(14) since v1.1.
      * OXM: OXM_OF_ICMPV4_CODE(20) since OF1.2 and v1.7.
      * OF1.0: exact match.
@@ -1337,7 +1636,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Maskable: no.
      * Formatting: decimal.
      * Prerequisites: ICMPv6.
-     * Access: read-only.
+     * Access: read/write.
      * NXM: NXM_NX_ICMPV6_TYPE(21) since v1.1.
      * OXM: OXM_OF_ICMPV6_TYPE(29) since OF1.2 and v1.7.
      */
@@ -1351,7 +1650,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Maskable: no.
      * Formatting: decimal.
      * Prerequisites: ICMPv6.
-     * Access: read-only.
+     * Access: read/write.
      * NXM: NXM_NX_ICMPV6_CODE(22) since v1.1.
      * OXM: OXM_OF_ICMPV6_CODE(30) since OF1.2 and v1.7.
      */
@@ -1367,7 +1666,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      *
      * Before Open vSwitch 1.8, only CIDR masks were supported.
      *
-     * Type: IPv6.
+     * Type: be128.
      * Maskable: bitwise.
      * Formatting: IPv6.
      * Prerequisites: ND.
@@ -1433,6 +1732,42 @@ struct mf_bitmap {
 #error "Need to update CASE_MFF_XREGS to match FLOW_N_XREGS"
 #endif
 
+/* Use this macro as CASE_MFF_TUN_METADATA: in a switch statement to choose
+ * all of the MFF_TUN_METADATAn cases. */
+#define CASE_MFF_TUN_METADATA                         \
+    case MFF_TUN_METADATA0: case MFF_TUN_METADATA1:   \
+    case MFF_TUN_METADATA2: case MFF_TUN_METADATA3:   \
+    case MFF_TUN_METADATA4: case MFF_TUN_METADATA5:   \
+    case MFF_TUN_METADATA6: case MFF_TUN_METADATA7:   \
+    case MFF_TUN_METADATA8: case MFF_TUN_METADATA9:   \
+    case MFF_TUN_METADATA10: case MFF_TUN_METADATA11: \
+    case MFF_TUN_METADATA12: case MFF_TUN_METADATA13: \
+    case MFF_TUN_METADATA14: case MFF_TUN_METADATA15: \
+    case MFF_TUN_METADATA16: case MFF_TUN_METADATA17: \
+    case MFF_TUN_METADATA18: case MFF_TUN_METADATA19: \
+    case MFF_TUN_METADATA20: case MFF_TUN_METADATA21: \
+    case MFF_TUN_METADATA22: case MFF_TUN_METADATA23: \
+    case MFF_TUN_METADATA24: case MFF_TUN_METADATA25: \
+    case MFF_TUN_METADATA26: case MFF_TUN_METADATA27: \
+    case MFF_TUN_METADATA28: case MFF_TUN_METADATA29: \
+    case MFF_TUN_METADATA30: case MFF_TUN_METADATA31: \
+    case MFF_TUN_METADATA32: case MFF_TUN_METADATA33: \
+    case MFF_TUN_METADATA34: case MFF_TUN_METADATA35: \
+    case MFF_TUN_METADATA36: case MFF_TUN_METADATA37: \
+    case MFF_TUN_METADATA38: case MFF_TUN_METADATA39: \
+    case MFF_TUN_METADATA40: case MFF_TUN_METADATA41: \
+    case MFF_TUN_METADATA42: case MFF_TUN_METADATA43: \
+    case MFF_TUN_METADATA44: case MFF_TUN_METADATA45: \
+    case MFF_TUN_METADATA46: case MFF_TUN_METADATA47: \
+    case MFF_TUN_METADATA48: case MFF_TUN_METADATA49: \
+    case MFF_TUN_METADATA50: case MFF_TUN_METADATA51: \
+    case MFF_TUN_METADATA52: case MFF_TUN_METADATA53: \
+    case MFF_TUN_METADATA54: case MFF_TUN_METADATA55: \
+    case MFF_TUN_METADATA56: case MFF_TUN_METADATA57: \
+    case MFF_TUN_METADATA58: case MFF_TUN_METADATA59: \
+    case MFF_TUN_METADATA60: case MFF_TUN_METADATA61: \
+    case MFF_TUN_METADATA62: case MFF_TUN_METADATA63
+
 /* Prerequisites for matching a field.
  *
  * A field may only be matched if the correct lower-level protocols are also
@@ -1482,6 +1817,7 @@ enum OVS_PACKED_ENUM mf_string {
     MFS_HEXADECIMAL,
 
     /* Other formats. */
+    MFS_CT_STATE,               /* Connection tracking state */
     MFS_ETHERNET,
     MFS_IPV4,
     MFS_IPV6,
@@ -1512,6 +1848,7 @@ struct mf_field {
      */
     unsigned int n_bytes;       /* Width of the field in bytes. */
     unsigned int n_bits;        /* Number of significant bits in field. */
+    bool variable_len;          /* Length is variable, if so width is max. */
 
     /* Properties. */
     enum mf_maskable maskable;
@@ -1541,18 +1878,20 @@ struct mf_field {
 
 /* The representation of a field's value. */
 union mf_value {
+    uint8_t tun_metadata[128];
     struct in6_addr ipv6;
-    uint8_t mac[ETH_ADDR_LEN];
+    struct eth_addr mac;
+    ovs_be128 be128;
     ovs_be64 be64;
     ovs_be32 be32;
     ovs_be16 be16;
     uint8_t u8;
 };
-BUILD_ASSERT_DECL(sizeof(union mf_value) == 16);
+BUILD_ASSERT_DECL(sizeof(union mf_value) == 128);
+BUILD_ASSERT_DECL(sizeof(union mf_value) >= TLV_MAX_OPT_SIZE);
 
-/* An all-1-bits mf_value.  Needs to be updated if struct mf_value grows.*/
-#define MF_EXACT_MASK_INITIALIZER { IN6ADDR_EXACT_INIT }
-BUILD_ASSERT_DECL(sizeof(union mf_value) == sizeof(struct in6_addr));
+/* A const mf_value with all bits initialized to ones. */
+extern const union mf_value exact_match_mask;
 
 /* Part of a field. */
 struct mf_subfield {
@@ -1567,12 +1906,40 @@ struct mf_subfield {
  * value" contains NXM_OF_VLAN_TCI[0..11], then one could access the
  * corresponding data in value.be16[7] as the bits in the mask htons(0xfff). */
 union mf_subvalue {
-    uint8_t u8[16];
-    ovs_be16 be16[8];
-    ovs_be32 be32[4];
-    ovs_be64 be64[2];
+    /* Access to full data. */
+    uint8_t u8[128];
+    ovs_be16 be16[64];
+    ovs_be32 be32[32];
+    ovs_be64 be64[16];
+
+    /* Convenient access to just least-significant bits in various forms. */
+    struct {
+        ovs_be64 dummy_integer[15];
+        ovs_be64 integer;
+    };
+    struct {
+        uint8_t dummy_mac[122];
+        struct eth_addr mac;
+    };
+    struct {
+        ovs_be32 dummy_ipv4[31];
+        ovs_be32 ipv4;
+    };
+    struct {
+        struct in6_addr dummy_ipv6[7];
+        struct in6_addr ipv6;
+    };
 };
 BUILD_ASSERT_DECL(sizeof(union mf_value) == sizeof (union mf_subvalue));
+
+bool mf_subvalue_intersect(const union mf_subvalue *a_value,
+                           const union mf_subvalue *a_mask,
+                           const union mf_subvalue *b_value,
+                           const union mf_subvalue *b_mask,
+                           union mf_subvalue *dst_value,
+                           union mf_subvalue *dst_mask);
+int mf_subvalue_width(const union mf_subvalue *);
+void mf_subvalue_shift(union mf_subvalue *, int n);
 
 /* An array of fields with values */
 struct field_array {
@@ -1600,7 +1967,8 @@ void mf_get_mask(const struct mf_field *, const struct flow_wildcards *,
 
 /* Prerequisites. */
 bool mf_are_prereqs_ok(const struct mf_field *, const struct flow *);
-void mf_mask_field_and_prereqs(const struct mf_field *, struct flow *mask);
+void mf_mask_field_and_prereqs(const struct mf_field *,
+                               struct flow_wildcards *);
 void mf_bitmap_set_field_and_prereqs(const struct mf_field *mf, struct
                                      mf_bitmap *bm);
 
@@ -1616,32 +1984,37 @@ bool mf_is_value_valid(const struct mf_field *, const union mf_value *value);
 void mf_get_value(const struct mf_field *, const struct flow *,
                   union mf_value *value);
 void mf_set_value(const struct mf_field *, const union mf_value *value,
-                  struct match *);
+                  struct match *, char **err_str);
 void mf_set_flow_value(const struct mf_field *, const union mf_value *value,
                        struct flow *);
 void mf_set_flow_value_masked(const struct mf_field *,
                               const union mf_value *value,
                               const union mf_value *mask,
                               struct flow *);
-bool mf_is_zero(const struct mf_field *, const struct flow *);
+bool mf_is_tun_metadata(const struct mf_field *);
+bool mf_is_set(const struct mf_field *, const struct flow *);
 void mf_mask_field(const struct mf_field *, struct flow *);
+int mf_field_len(const struct mf_field *, const union mf_value *value,
+                 const union mf_value *mask, bool *is_masked);
 
 void mf_get(const struct mf_field *, const struct match *,
             union mf_value *value, union mf_value *mask);
 
 /* Returns the set of usable protocols. */
-enum ofputil_protocol mf_set(const struct mf_field *,
-                             const union mf_value *value,
-                             const union mf_value *mask,
-                             struct match *);
+uint32_t mf_set(const struct mf_field *, const union mf_value *value,
+                const union mf_value *mask, struct match *, char **err_str);
 
-void mf_set_wild(const struct mf_field *, struct match *);
+void mf_set_wild(const struct mf_field *, struct match *, char **err_str);
 
 /* Subfields. */
 void mf_write_subfield_flow(const struct mf_subfield *,
                             const union mf_subvalue *, struct flow *);
 void mf_write_subfield(const struct mf_subfield *, const union mf_subvalue *,
                        struct match *);
+void mf_mask_subfield(const struct mf_field *,
+                      const union mf_subvalue *value,
+                      const union mf_subvalue *mask,
+                      struct match *);
 
 void mf_read_subfield(const struct mf_subfield *, const struct flow *,
                       union mf_subvalue *);

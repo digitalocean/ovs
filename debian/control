@@ -9,14 +9,17 @@ Build-Depends: autoconf (>= 2.64),
                bzip2,
                debhelper (>= 9~),
                dh-autoreconf,
+               dh-python,
                dh-systemd (>= 1.5),
                graphviz,
+               libcap-ng-dev,
                libssl-dev,
                libtool,
                openssl,
                procps,
                python-all (>= 2.6.6-3~),
                python-qt4,
+               python-six,
                python-twisted-conch,
                python-zopeinterface
 Standards-Version: 3.9.6
@@ -27,10 +30,13 @@ Package: openvswitch-common
 Architecture: linux-any
 Depends: openssl,
          python,
-         python (>= 2.7) | python-argparse,
+         python (>= 2.7),
+         python-six,
          ${misc:Depends},
          ${shlibs:Depends}
 Suggests: ethtool
+Breaks: openvswitch-switch (<< 2.5.0~git20160122.66cd712-0ubuntu1~)
+Replaces: openvswitch-switch (<< 2.5.0~git20160122.66cd712-0ubuntu1~)
 Description: Open vSwitch common components
  Open vSwitch is a production quality, multilayer, software-based,
  Ethernet virtual switch. It is designed to enable massive network
@@ -65,6 +71,69 @@ Description: Open vSwitch switch implementations
  .
  openvswitch-switch provides the userspace components and utilities for
  the Open vSwitch kernel-based switch.
+
+Package: ovn-common
+Architecture: linux-any
+Depends: openvswitch-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: OVN common components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-common provides components required by other OVN packages.
+
+Package: ovn-host
+Architecture: linux-any
+Depends: openvswitch-common (= ${binary:Version}),
+         openvswitch-switch (= ${binary:Version}),
+         ovn-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: OVN host components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-host provides the userspace components and utilities for
+ OVN that can be run on every host/hypervisor.
+
+Package: ovn-central
+Architecture: linux-any
+Depends: openvswitch-common (= ${binary:Version}),
+         openvswitch-switch (= ${binary:Version}),
+         ovn-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: OVN central components
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-central provides the userspace daemons, utilities and
+ databases for OVN that is run at a central location.
+
+Package: ovn-docker
+Architecture: any
+Depends: openvswitch-common (= ${binary:Version}),
+         openvswitch-switch (= ${binary:Version}),
+         ovn-common (= ${binary:Version}),
+         python (>= 2.7),
+         python-openvswitch (= ${source:Version}),
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
+Description: OVN Docker drivers
+ OVN, the Open Virtual Network, is a system to support virtual network
+ abstraction.  OVN complements the existing capabilities of OVS to add
+ native support for virtual network abstractions, such as virtual L2 and L3
+ overlays and security groups.
+ .
+ ovn-docker provides the docker drivers for OVN.
 
 Package: openvswitch-ipsec
 Architecture: linux-any

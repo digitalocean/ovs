@@ -143,8 +143,6 @@ dnl ----------------------------------------------------------------------
 AT_BANNER([ovs-vsctl unit tests])
 
 AT_SETUP([ovs-vsctl connection retry])
-OVS_RUNDIR=$PWD; export OVS_RUNDIR
-
 dnl Without --retry, there should be no retry for active connections.
 AT_CHECK([ovs-vsctl --db=unix:foo --timeout=10 -vreconnect:emer -- init],
   [1], [], [stderr])
@@ -871,7 +869,7 @@ AT_CLEANUP
 
 AT_SETUP([database commands -- conditions])
 AT_KEYWORDS([ovs-vsctl])
-ON_EXIT([kill `cat pid`])
+on_exit 'kill `cat pid`'
 OVS_VSCTL_SETUP
 AT_CHECK(
   [RUN_OVS_VSCTL_TOGETHER(
@@ -1113,7 +1111,7 @@ AT_CHECK(
   [ovs-vsctl -vPATTERN:console:'%c|%p|%m' --no-wait -vreconnect:emer --db=unix:socket \
      -- create Bridge name=br0 | ${PERL} $srcdir/uuidfilt.pl],
   [0], [<0>
-], [vsctl|WARN|applying "create" command to table Bridge without --id option will have no effect
+], [db_ctl_base|WARN|applying "create" command to table Bridge without --id option will have no effect
 ], [OVS_VSCTL_CLEANUP])
 AT_CHECK(
   [ovs-vsctl -vPATTERN:console:'%c|%p|%m' --no-wait -vreconnect:emer --db=unix:socket \
@@ -1236,7 +1234,6 @@ m4_foreach(
 [ovs-dummy],
 [genev_sys],
 [gre_sys],
-[gre64_sys],
 [lisp_sys],
 [vxlan_sys]],
 [
@@ -1261,9 +1258,6 @@ AT_SETUP([add-port -- reserved names 2])
 # Creates all type of tunnel ports
 OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=gre \
                     options:remote_ip=1.1.1.1 ofport_request=1\
-                    -- add-port br0 p2 -- set Interface p2 type=gre64 \
-                    options:local_ip=2.2.2.2 options:remote_ip=1.1.1.1 \
-                    ofport_request=2 \
                     -- add-port br0 p3 -- set Interface p3 type=lisp \
                     options:remote_ip=2.2.2.2 ofport_request=3 \
                     -- add-port br0 p4 -- set Interface p4 type=vxlan \
@@ -1276,7 +1270,6 @@ m4_foreach(
 [reserved_name],
 [[genev_sys],
 [gre_sys],
-[gre64_sys],
 [lisp_sys],
 [vxlan_sys]],
 [
@@ -1313,4 +1306,58 @@ AT_CHECK([RUN_OVS_VSCTL([get interface 0fcd11a1-2ba8-4b38-a358-4bccf2bf3057 type
 ])
 
 OVS_VSCTL_CLEANUP
+AT_CLEANUP
+
+AT_SETUP([bootstrap ca cert])
+AT_KEYWORDS([ovs-vsctl ssl])
+AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
+PKIDIR=`pwd`
+OVS_PKI="sh $abs_top_srcdir/utilities/ovs-pki.in --dir=$PKIDIR/pki --log=$PKIDIR/ovs-pki.log"
+AT_CHECK([$OVS_PKI -B 1024 init && $OVS_PKI -B 1024 req+sign vsctl switch && $OVS_PKI -B 1024 req ovsdbserver && $OVS_PKI self-sign ovsdbserver], [0], [ignore], [ignore])
+
+dnl Create database.
+OVSDB_INIT([conf.db])
+AT_CHECK([ovsdb-server --detach --no-chdir --pidfile="`pwd`"/pid --private-key=$PKIDIR/ovsdbserver-privkey.pem --certificate=$PKIDIR/ovsdbserver-cert.pem --ca-cert=$PKIDIR/pki/switchca/cacert.pem --remote=pssl:0:127.0.0.1 --unixctl="`pwd`"/unixctl --log-file="`pwd`"/ovsdb-server.log conf.db], [0], [ignore], [ignore])
+on_exit "kill `cat pid`"
+PARSE_LISTENING_PORT([ovsdb-server.log], [SSL_PORT])
+
+# During bootstrap, the connection gets torn down. So the o/p of ovs-vsctl is error.
+AT_CHECK([ovs-vsctl -t 5 --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem show], [1], [ignore], [ignore])
+
+# If the bootstrap was successful, the following file should exist.
+OVS_WAIT_UNTIL([test -e $PKIDIR/cacert.pem])
+
+# After bootstrap, the connection should be successful.
+AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem add-br br0], [0])
+AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem list-br], [0], [br0
+])
+
+OVSDB_SERVER_SHUTDOWN
+AT_CLEANUP
+
+AT_SETUP([peer ca cert])
+AT_KEYWORDS([ovs-vsctl ssl])
+AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
+PKIDIR=`pwd`
+OVS_PKI="sh $abs_top_srcdir/utilities/ovs-pki.in --dir=$PKIDIR/pki --log=$PKIDIR/ovs-pki.log"
+AT_CHECK([$OVS_PKI -B 1024 init && $OVS_PKI -B 1024 req+sign vsctl switch && $OVS_PKI -B 1024 req+sign ovsdbserver controller], [0], [ignore], [ignore])
+
+dnl Create database.
+OVSDB_INIT([conf.db])
+AT_CHECK([ovsdb-server --detach --no-chdir --pidfile="`pwd`"/pid --private-key=$PKIDIR/ovsdbserver-privkey.pem --certificate=$PKIDIR/ovsdbserver-cert.pem --ca-cert=$PKIDIR/pki/switchca/cacert.pem --peer-ca-cert=$PKIDIR/pki/controllerca/cacert.pem --remote=pssl:0:127.0.0.1 --unixctl="`pwd`"/unixctl --log-file="`pwd`"/ovsdb-server.log conf.db], [0], [ignore], [ignore])
+on_exit "kill `cat pid`"
+PARSE_LISTENING_PORT([ovsdb-server.log], [SSL_PORT])
+
+# During bootstrap, the connection gets torn down. So the o/p of ovs-vsctl is error.
+AT_CHECK([ovs-vsctl -t 5 --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem show], [1], [ignore], [ignore])
+
+# If the bootstrap was successful, the following file should exist.
+OVS_WAIT_UNTIL([test -e $PKIDIR/cacert.pem])
+
+# After bootstrap, the connection should be successful.
+AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem add-br br0], [0])
+AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem list-br], [0], [br0
+])
+
+OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP

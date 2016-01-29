@@ -109,6 +109,8 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  *  - OVS_TUNNEL_KEY_ATTR_ID             8    --     4     12
  *  - OVS_TUNNEL_KEY_ATTR_IPV4_SRC       4    --     4      8
  *  - OVS_TUNNEL_KEY_ATTR_IPV4_DST       4    --     4      8
+ *  - OVS_TUNNEL_KEY_ATTR_IPV6_SRC       16   --     4     20
+ *  - OVS_TUNNEL_KEY_ATTR_IPV6_DST       16   --     4     20
  *  - OVS_TUNNEL_KEY_ATTR_TOS            1    3      4      8
  *  - OVS_TUNNEL_KEY_ATTR_TTL            1    3      4      8
  *  - OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT  0    --     4      4
@@ -120,6 +122,10 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  *  OVS_KEY_ATTR_SKB_MARK                4    --     4      8
  *  OVS_KEY_ATTR_DP_HASH                 4    --     4      8
  *  OVS_KEY_ATTR_RECIRC_ID               4    --     4      8
+ *  OVS_KEY_ATTR_CT_STATE                4    --     4      8
+ *  OVS_KEY_ATTR_CT_ZONE                 2     2     4      8
+ *  OVS_KEY_ATTR_CT_MARK                 4    --     4      8
+ *  OVS_KEY_ATTR_CT_LABEL               16    --     4     20
  *  OVS_KEY_ATTR_ETHERNET               12    --     4     16
  *  OVS_KEY_ATTR_ETHERTYPE               2     2     4      8  (outer VLAN ethertype)
  *  OVS_KEY_ATTR_VLAN                    2     2     4      8
@@ -129,13 +135,13 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  *  OVS_KEY_ATTR_ICMPV6                  2     2     4      8
  *  OVS_KEY_ATTR_ND                     28    --     4     32
  *  ----------------------------------------------------------
- *  total                                                 488
+ *  total                                                 572
  *
  * We include some slack space in case the calculation isn't quite right or we
  * add another field and forget to adjust this value.
  */
-#define ODPUTIL_FLOW_KEY_BYTES 512
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 31);
+#define ODPUTIL_FLOW_KEY_BYTES 640
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 35);
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -144,7 +150,7 @@ struct odputil_keybuf {
     uint32_t keybuf[DIV_ROUND_UP(ODPUTIL_FLOW_KEY_BYTES, 4)];
 };
 
-enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *,
+enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *, bool udpif,
                                            struct flow_tnl *);
 
 int odp_ufid_from_string(const char *s_, ovs_u128 *ufid);
@@ -158,12 +164,49 @@ int odp_flow_from_string(const char *s,
                          const struct simap *port_names,
                          struct ofpbuf *, struct ofpbuf *);
 
-void odp_flow_key_from_flow(struct ofpbuf *, const struct flow * flow,
-                            const struct flow *mask, odp_port_t odp_in_port,
-                            bool recirc);
-void odp_flow_key_from_mask(struct ofpbuf *, const struct flow *mask,
-                            const struct flow *flow, uint32_t odp_in_port,
-                            size_t max_mpls_depth, bool recirc);
+/* Indicates support for various fields. This defines how flows will be
+ * serialised. */
+struct odp_support {
+    /* Maximum number of MPLS label stack entries to serialise in a mask. */
+    size_t max_mpls_depth;
+
+    /* If this is true, then recirculation fields will always be serialised. */
+    bool recirc;
+
+    /* If true, serialise the corresponding OVS_KEY_ATTR_CONN_* field. */
+    bool ct_state;
+    bool ct_zone;
+    bool ct_mark;
+    bool ct_label;
+};
+
+struct odp_flow_key_parms {
+    /* The flow and mask to be serialized. In the case of masks, 'flow'
+     * is used as a template to determine how to interpret 'mask'.  For
+     * example, the 'dl_type' of 'mask' describes the mask, but it doesn't
+     * indicate whether the other fields should be interpreted as ARP, IPv4,
+     * IPv6, etc. */
+    const struct flow *flow;
+    const struct flow *mask;
+
+   /* 'flow->in_port' is ignored (since it is likely to be an OpenFlow port
+    * number rather than a datapath port number).  Instead, if 'odp_in_port'
+    * is anything other than ODPP_NONE, it is included in 'buf' as the input
+    * port. */
+    odp_port_t odp_in_port;
+
+    /* Indicates support for various fields. If the datapath supports a field,
+     * then it will always be serialised. */
+    struct odp_support support;
+
+    /* The netlink formatted version of the flow. It is used in cases where
+     * the mask cannot be constructed from the OVS internal representation
+     * and needs to see the original form. */
+    const struct ofpbuf *key_buf;
+};
+
+void odp_flow_key_from_flow(const struct odp_flow_key_parms *, struct ofpbuf *);
+void odp_flow_key_from_mask(const struct odp_flow_key_parms *, struct ofpbuf *);
 
 uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
 
@@ -188,9 +231,22 @@ enum odp_key_fitness {
 };
 enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
                                           struct flow *);
-enum odp_key_fitness odp_flow_key_to_mask(const struct nlattr *key, size_t len,
-                                          struct flow *mask,
+enum odp_key_fitness odp_flow_key_to_mask(const struct nlattr *mask_key,
+                                          size_t mask_key_len,
+                                          const struct nlattr *flow_key,
+                                          size_t flow_key_len,
+                                          struct flow_wildcards *mask,
                                           const struct flow *flow);
+
+enum odp_key_fitness odp_flow_key_to_flow_udpif(const struct nlattr *, size_t,
+                                                struct flow *);
+enum odp_key_fitness odp_flow_key_to_mask_udpif(const struct nlattr *mask_key,
+                                                size_t mask_key_len,
+                                                const struct nlattr *flow_key,
+                                                size_t flow_key_len,
+                                                struct flow_wildcards *mask,
+                                                const struct flow *flow);
+
 const char *odp_key_fitness_to_string(enum odp_key_fitness);
 
 void commit_odp_tunnel_action(const struct flow *, struct flow *base,
@@ -254,6 +310,7 @@ BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 16);
 size_t odp_put_userspace_action(uint32_t pid,
                                 const void *userdata, size_t userdata_size,
                                 odp_port_t tunnel_out_port,
+                                bool include_actions,
                                 struct ofpbuf *odp_actions);
 void odp_put_tunnel_action(const struct flow_tnl *tunnel,
                            struct ofpbuf *odp_actions);

@@ -506,25 +506,20 @@ zero_rightmost_1bit(uintmax_t x)
     return x & (x - 1);
 }
 
-/* Returns the index of the rightmost 1-bit in 'x' (e.g. 01011000 => 3), or 32
- * if 'x' is 0.
- *
- * Unlike the other functions for rightmost 1-bits, this function only works
- * with 32-bit integers. */
+/* Returns the index of the rightmost 1-bit in 'x' (e.g. 01011000 => 3), or an
+ * undefined value if 'x' is 0. */
 static inline int
-rightmost_1bit_idx(uint32_t x)
+rightmost_1bit_idx(uint64_t x)
 {
-    return ctz32(x);
+    return ctz64(x);
 }
 
-/* Returns the index of the leftmost 1-bit in 'x' (e.g. 01011000 => 6), or 32
- * if 'x' is 0.
- *
- * This function only works with 32-bit integers. */
+/* Returns the index of the leftmost 1-bit in 'x' (e.g. 01011000 => 6), or an
+ * undefined value if 'x' is 0. */
 static inline uint32_t
-leftmost_1bit_idx(uint32_t x)
+leftmost_1bit_idx(uint64_t x)
 {
-    return x ? log_2_floor(x) : 32;
+    return log_2_floor(x);
 }
 
 /* Return a ovs_be32 prefix in network byte order with 'plen' highest bits set.
@@ -548,17 +543,52 @@ bool bitwise_is_all_zeros(const void *, unsigned int len, unsigned int ofs,
                           unsigned int n_bits);
 unsigned int bitwise_scan(const void *, unsigned int len,
                           bool target, unsigned int start, unsigned int end);
+int bitwise_rscan(const void *, unsigned int len, bool target,
+                  int start, int end);
 void bitwise_put(uint64_t value,
                  void *dst, unsigned int dst_len, unsigned int dst_ofs,
                  unsigned int n_bits);
 uint64_t bitwise_get(const void *src, unsigned int src_len,
                      unsigned int src_ofs, unsigned int n_bits);
+bool bitwise_get_bit(const void *src, unsigned int len, unsigned int ofs);
+void bitwise_put0(void *dst, unsigned int len, unsigned int ofs);
+void bitwise_put1(void *dst, unsigned int len, unsigned int ofs);
+void bitwise_put_bit(void *dst, unsigned int len, unsigned int ofs, bool);
+void bitwise_toggle_bit(void *dst, unsigned int len, unsigned int ofs);
 
 /* Returns non-zero if the parameters have equal value. */
 static inline int
 ovs_u128_equals(const ovs_u128 *a, const ovs_u128 *b)
 {
     return (a->u64.hi == b->u64.hi) && (a->u64.lo == b->u64.lo);
+}
+
+/* Returns true if 'val' is 0. */
+static inline bool
+ovs_u128_is_zero(const ovs_u128 *val)
+{
+    return !(val->u64.hi || val->u64.lo);
+}
+
+/* Returns true if 'val' is all ones. */
+static inline bool
+ovs_u128_is_ones(const ovs_u128 *val)
+{
+    return ovs_u128_equals(val, &OVS_U128_MAX);
+}
+
+/* Returns non-zero if the parameters have equal value. */
+static inline int
+ovs_be128_equals(const ovs_be128 *a, const ovs_be128 *b)
+{
+    return (a->be64.hi == b->be64.hi) && (a->be64.lo == b->be64.lo);
+}
+
+/* Returns true if 'val' is 0. */
+static inline bool
+ovs_be128_is_zero(const ovs_be128 *val)
+{
+    return !(val->be64.hi || val->be64.lo);
 }
 
 void xsleep(unsigned int seconds);

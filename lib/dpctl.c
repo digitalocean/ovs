@@ -28,6 +28,7 @@
 
 #include "command-line.h"
 #include "compiler.h"
+#include "ct-dpif.h"
 #include "dirs.h"
 #include "dpctl.h"
 #include "dpif.h"
@@ -796,7 +797,8 @@ dpctl_dump_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
             struct minimatch minimatch;
 
             odp_flow_key_to_flow(f.key, f.key_len, &flow);
-            odp_flow_key_to_mask(f.mask, f.mask_len, &wc.masks, &flow);
+            odp_flow_key_to_mask(f.mask, f.mask_len, f.key, f.key_len,
+                                 &wc, &flow);
             match_init(&match, &flow, &wc);
 
             match_init(&match_filter, &flow_filter, &wc);
@@ -1240,6 +1242,84 @@ dpctl_list_commands(int argc OVS_UNUSED, const char *argv[] OVS_UNUSED,
 
     return 0;
 }
+
+static int
+dpctl_dump_conntrack(int argc, const char *argv[],
+                     struct dpctl_params *dpctl_p)
+{
+    struct ct_dpif_dump_state *dump;
+    struct ct_dpif_entry cte;
+    uint16_t zone, *pzone = NULL;
+    struct dpif *dpif;
+    char *name;
+    int error;
+
+    if (argc > 1 && ovs_scan(argv[argc - 1], "zone=%"SCNu16, &zone)) {
+        pzone = &zone;
+        argc--;
+    }
+    name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
+    if (!name) {
+        return EINVAL;
+    }
+    error = parsed_dpif_open(name, false, &dpif);
+    free(name);
+    if (error) {
+        dpctl_error(dpctl_p, error, "opening datapath");
+        return error;
+    }
+
+    error = ct_dpif_dump_start(dpif, &dump, pzone);
+    if (error) {
+        dpctl_error(dpctl_p, error, "starting conntrack dump");
+        dpif_close(dpif);
+        return error;
+    }
+
+    while (!ct_dpif_dump_next(dump, &cte)) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+
+        ct_dpif_format_entry(&cte, &s, dpctl_p->verbosity,
+                             dpctl_p->print_statistics);
+        ct_dpif_entry_uninit(&cte);
+
+        dpctl_print(dpctl_p, "%s\n", ds_cstr(&s));
+        ds_destroy(&s);
+    }
+    ct_dpif_dump_done(dump);
+    dpif_close(dpif);
+    return error;
+}
+
+static int
+dpctl_flush_conntrack(int argc, const char *argv[],
+                      struct dpctl_params *dpctl_p)
+{
+    struct dpif *dpif;
+    uint16_t zone, *pzone = NULL;
+    char *name;
+    int error;
+
+    if (argc > 1 && ovs_scan(argv[argc - 1], "zone=%"SCNu16, &zone)) {
+        pzone = &zone;
+        argc--;
+    }
+    name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
+    if (!name) {
+        return EINVAL;
+    }
+    error = parsed_dpif_open(name, false, &dpif);
+    free(name);
+    if (error) {
+        dpctl_error(dpctl_p, error, "opening datapath");
+        return error;
+    }
+
+    error = ct_dpif_flush(dpif, pzone);
+
+    dpif_close(dpif);
+    return error;
+}
 
 /* Undocumented commands for unit testing. */
 
@@ -1518,6 +1598,8 @@ static const struct dpctl_command all_commands[] = {
     { "get-flow", "get-flow [dp] ufid", 1, 2, dpctl_get_flow },
     { "del-flow", "del-flow [dp] flow", 1, 2, dpctl_del_flow },
     { "del-flows", "[dp]", 0, 1, dpctl_del_flows },
+    { "dump-conntrack", "[dp] [zone=N]", 0, 2, dpctl_dump_conntrack },
+    { "flush-conntrack", "[dp] [zone=N]", 0, 2, dpctl_flush_conntrack },
     { "help", "", 0, INT_MAX, dpctl_help },
     { "list-commands", "", 0, INT_MAX, dpctl_list_commands },
 
@@ -1582,15 +1664,13 @@ dpctl_unixctl_handler(struct unixctl_conn *conn, int argc, const char *argv[],
                       void *aux)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
-    struct dpctl_params dpctl_p;
     bool error = false;
 
-    dpctl_command_handler *handler = (dpctl_command_handler *) aux;
-
-    dpctl_p.print_statistics = false;
-    dpctl_p.zero_statistics = false;
-    dpctl_p.may_create = false;
-    dpctl_p.verbosity = 0;
+    struct dpctl_params dpctl_p = {
+        .is_appctl = true,
+        .output = dpctl_unixctl_print,
+        .aux = &ds,
+    };
 
     /* Parse options (like getopt). Unfortunately it does
      * not seem a good idea to call getopt_long() here, since it uses global
@@ -1643,10 +1723,7 @@ dpctl_unixctl_handler(struct unixctl_conn *conn, int argc, const char *argv[],
     }
 
     if (!error) {
-        dpctl_p.is_appctl = true;
-        dpctl_p.output = dpctl_unixctl_print;
-        dpctl_p.aux = &ds;
-
+        dpctl_command_handler *handler = (dpctl_command_handler *) aux;
         error = handler(argc, argv, &dpctl_p) != 0;
     }
 
@@ -1665,9 +1742,11 @@ dpctl_unixctl_register(void)
     const struct dpctl_command *p;
 
     for (p = all_commands; p->name != NULL; p++) {
-        char *cmd_name = xasprintf("dpctl/%s", p->name);
-        unixctl_command_register(cmd_name, "", p->min_args, p->max_args,
-                                 dpctl_unixctl_handler, p->handler);
-        free(cmd_name);
+        if (strcmp(p->name, "help")) {
+            char *cmd_name = xasprintf("dpctl/%s", p->name);
+            unixctl_command_register(cmd_name, "", p->min_args, p->max_args,
+                                     dpctl_unixctl_handler, p->handler);
+            free(cmd_name);
+        }
     }
 }

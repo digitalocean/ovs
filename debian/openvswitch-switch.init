@@ -1,6 +1,6 @@
 #! /bin/sh
 #
-# Copyright (C) 2011, 2012, 2014 Nicira, Inc.
+# Copyright (C) 2011, 2012 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,10 @@
 ### END INIT INFO
 
 (test -x /usr/sbin/ovs-vswitchd && test -x /usr/sbin/ovsdb-server) || exit 0
+
+_SYSTEMCTL_SKIP_REDIRECT=yes
+
+. /lib/lsb/init-functions
 
 . /usr/share/openvswitch/scripts/ovs-lib
 test -e /etc/default/openvswitch-switch && . /etc/default/openvswitch-switch
@@ -80,11 +84,15 @@ restart () {
         depmod -a
 
         if [ -e /sys/module/openvswitch ]; then
-            LOADED_SRCVERSION=`cat /sys/module/openvswitch/srcversion`
-            LOADED_VERSION=`cat /sys/module/openvswitch/version`
+            LOADED_SRCVERSION=`cat /sys/module/openvswitch/srcversion \
+                               2>/dev/null`
+            LOADED_VERSION=`cat /sys/module/openvswitch/version \
+                            2>/dev/null`
         elif [ -e /sys/module/openvswitch_mod ]; then
-            LOADED_SRCVERSION=`cat /sys/module/openvswitch_mod/srcversion`
-            LOADED_VERSION=`cat /sys/module/openvswitch_mod/version`
+            LOADED_SRCVERSION=`cat /sys/module/openvswitch_mod/srcversion \
+                               2>/dev/null`
+            LOADED_VERSION=`cat /sys/module/openvswitch_mod/version \
+                            2>/dev/null`
         fi
         SRCVERSION=`modinfo -F srcversion openvswitch 2>/dev/null`
         VERSION=`modinfo -F version openvswitch 2>/dev/null`

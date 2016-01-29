@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,13 +43,17 @@ static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
 /* Cf. IETF RFC 5101 Section 10.3.4. */
 #define IPFIX_DEFAULT_COLLECTOR_PORT 4739
 
+/* Cf. IETF RFC 5881 Setion 8. */
+#define BFD_CONTROL_DEST_PORT        3784
+#define BFD_ECHO_DEST_PORT           3785
+
 /* The standard layer2SegmentId (ID 351) element is included in vDS to send
  * the VxLAN tunnel's VNI. It is 64-bit long, the most significant byte is
  * used to indicate the type of tunnel (0x01 = VxLAN, 0x02 = GRE) and the three
  * least significant bytes hold the value of the layer 2 overlay network
  * segment identifier: a 24-bit VxLAN tunnel's VNI or a 24-bit GRE tunnel's
- * TNI. This is not compatible with GRE-64 or STT, as implemented in OVS, as
- * their tunnel IDs are 64-bit.
+ * TNI. This is not compatible with STT, as implemented in OVS, as
+ * its tunnel IDs is 64-bit.
  *
  * Two new enterprise information elements are defined which are similar to
  * laryerSegmentId but support 64-bit IDs:
@@ -230,8 +234,8 @@ OVS_PACKED(
 struct ipfix_data_record_flow_key_common {
     ovs_be32 observation_point_id;  /* OBSERVATION_POINT_ID */
     uint8_t flow_direction;  /* FLOW_DIRECTION */
-    uint8_t source_mac_address[ETH_ADDR_LEN]; /* SOURCE_MAC_ADDRESS */
-    uint8_t destination_mac_address[ETH_ADDR_LEN]; /* DESTINATION_MAC_ADDRESS */
+    struct eth_addr source_mac_address; /* SOURCE_MAC_ADDRESS */
+    struct eth_addr destination_mac_address; /* DESTINATION_MAC_ADDRESS */
     ovs_be16 ethernet_type;  /* ETHERNET_TYPE */
     uint8_t ethernet_header_length;  /* ETHERNET_HEADER_LENGTH */
 });
@@ -352,7 +356,7 @@ BUILD_ASSERT_DECL(sizeof(struct ipfix_data_record_aggregated_ip) == 32);
 /*
  * support tunnel key for:
  * VxLAN: 24-bit VIN,
- * GRE: 32- or 64-bit key,
+ * GRE: 32-bit key,
  * LISP: 24-bit instance ID
  * STT: 64-bit key
  */
@@ -588,18 +592,10 @@ dpif_ipfix_add_tunnel_port(struct dpif_ipfix *di, struct ofport *ofport,
         /* 32-bit key gre */
         dip->tunnel_type = DPIF_IPFIX_TUNNEL_GRE;
         dip->tunnel_key_length = 4;
-    } else if (strcmp(type, "gre64") == 0) {
-        /* 64-bit key gre */
-        dip->tunnel_type = DPIF_IPFIX_TUNNEL_GRE;
-        dip->tunnel_key_length = 8;
     } else if (strcmp(type, "ipsec_gre") == 0) {
         /* 32-bit key ipsec_gre */
         dip->tunnel_type = DPIF_IPFIX_TUNNEL_IPSEC_GRE;
         dip->tunnel_key_length = 4;
-    } else if (strcmp(type, "ipsec_gre64") == 0) {
-        /* 64-bit key ipsec_gre */
-        dip->tunnel_type = DPIF_IPFIX_TUNNEL_IPSEC_GRE;
-        dip->tunnel_key_length = 8;
     } else if (strcmp(type, "vxlan") == 0) {
         dip->tunnel_type = DPIF_IPFIX_TUNNEL_VXLAN;
         dip->tunnel_key_length = 3;
@@ -1446,10 +1442,8 @@ ipfix_cache_entry_init(struct ipfix_flow_cache_entry *entry,
         data_common->observation_point_id = htonl(obs_point_id);
         data_common->flow_direction =
             (output_odp_port == ODPP_NONE) ? INGRESS_FLOW : EGRESS_FLOW;
-        memcpy(data_common->source_mac_address, flow->dl_src,
-               sizeof flow->dl_src);
-        memcpy(data_common->destination_mac_address, flow->dl_dst,
-               sizeof flow->dl_dst);
+        data_common->source_mac_address = flow->dl_src;
+        data_common->destination_mac_address = flow->dl_dst;
         data_common->ethernet_type = flow->dl_type;
         data_common->ethernet_header_length = ethernet_header_length;
     }
@@ -1684,6 +1678,12 @@ dpif_ipfix_sample(struct dpif_ipfix_exporter *exporter,
     ipfix_cache_update(exporter, entry);
 }
 
+static bool
+bridge_exporter_enabled(struct dpif_ipfix *di)
+{
+    return di->bridge_exporter.probability > 0;
+}
+
 void
 dpif_ipfix_bridge_sample(struct dpif_ipfix *di, const struct dp_packet *packet,
                          const struct flow *flow,
@@ -1696,6 +1696,27 @@ dpif_ipfix_bridge_sample(struct dpif_ipfix *di, const struct dp_packet *packet,
     struct dpif_ipfix_port * tunnel_port = NULL;
 
     ovs_mutex_lock(&mutex);
+    if (!bridge_exporter_enabled(di)) {
+        ovs_mutex_unlock(&mutex);
+        return;
+    }
+
+    /* Skip BFD packets:
+     * Bidirectional Forwarding Detection(BFD) packets are for monitoring
+     * the tunnel link status and consumed by ovs itself. No need to
+     * smaple them.
+     * CF  IETF RFC 5881, BFD control packet is the UDP packet with
+     * destination port 3784, and BFD echo packet is the UDP packet with
+     * destination port 3785.
+     */
+    if (is_ip_any(flow) &&
+        flow->nw_proto == IPPROTO_UDP &&
+        (flow->tp_dst == htons(BFD_CONTROL_DEST_PORT) ||
+         flow->tp_dst == htons(BFD_ECHO_DEST_PORT))) {
+        ovs_mutex_unlock(&mutex);
+        return;
+    }
+
     /* Use the sampling probability as an approximation of the number
      * of matched packets. */
     packet_delta_count = UINT32_MAX / di->bridge_exporter.probability;
@@ -1711,6 +1732,7 @@ dpif_ipfix_bridge_sample(struct dpif_ipfix *di, const struct dp_packet *packet,
             tunnel_port = dpif_ipfix_find_port(di, output_odp_port);
         }
     }
+
     dpif_ipfix_sample(&di->bridge_exporter.exporter, packet, flow,
                       packet_delta_count,
                       di->bridge_exporter.options->obs_domain_id,
@@ -1832,7 +1854,7 @@ dpif_ipfix_run(struct dpif_ipfix *di) OVS_EXCLUDED(mutex)
 
     ovs_mutex_lock(&mutex);
     get_export_time_now(&export_time_usec, &export_time_sec);
-    if (di->bridge_exporter.probability > 0) {  /* Bridge exporter enabled. */
+    if (bridge_exporter_enabled(di)) {
       dpif_ipfix_cache_expire(
           &di->bridge_exporter.exporter, false, export_time_usec,
           export_time_sec);
@@ -1852,7 +1874,7 @@ dpif_ipfix_wait(struct dpif_ipfix *di) OVS_EXCLUDED(mutex)
     struct dpif_ipfix_flow_exporter_map_node *flow_exporter_node;
 
     ovs_mutex_lock(&mutex);
-    if (di->bridge_exporter.probability > 0) {  /* Bridge exporter enabled. */
+    if (bridge_exporter_enabled(di)) {
         if (ipfix_cache_next_timeout_msec(
                 &di->bridge_exporter.exporter, &next_timeout_msec)) {
             poll_timer_wait_until(next_timeout_msec);

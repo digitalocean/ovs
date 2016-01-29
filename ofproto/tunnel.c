@@ -33,7 +33,6 @@
 #include "seq.h"
 #include "smap.h"
 #include "socket-util.h"
-#include "tnl-arp-cache.h"
 #include "tnl-ports.h"
 #include "tunnel.h"
 #include "openvswitch/vlog.h"
@@ -47,8 +46,8 @@ VLOG_DEFINE_THIS_MODULE(tunnel);
 
 struct tnl_match {
     ovs_be64 in_key;
-    ovs_be32 ip_src;
-    ovs_be32 ip_dst;
+    struct in6_addr ipv6_src;
+    struct in6_addr ipv6_dst;
     odp_port_t odp_port;
     uint32_t pkt_mark;
     bool in_key_flow;
@@ -161,8 +160,8 @@ tnl_port_add__(const struct ofport_dpif *ofport, const struct netdev *netdev,
     tnl_port->change_seq = netdev_get_change_seq(tnl_port->netdev);
 
     tnl_port->match.in_key = cfg->in_key;
-    tnl_port->match.ip_src = cfg->ip_src;
-    tnl_port->match.ip_dst = cfg->ip_dst;
+    tnl_port->match.ipv6_src = cfg->ipv6_src;
+    tnl_port->match.ipv6_dst = cfg->ipv6_dst;
     tnl_port->match.ip_src_flow = cfg->ip_src_flow;
     tnl_port->match.ip_dst_flow = cfg->ip_dst_flow;
     tnl_port->match.pkt_mark = cfg->ipsec ? IPSEC_MARK : 0;
@@ -332,67 +331,61 @@ out:
     return ofport;
 }
 
-static bool
-tnl_ecn_ok(const struct flow *base_flow, struct flow *flow,
-           struct flow_wildcards *wc)
-{
-    if (is_ip_any(base_flow)) {
-        if ((flow->tunnel.ip_tos & IP_ECN_MASK) == IP_ECN_CE) {
-            if (wc) {
-                wc->masks.nw_tos |= IP_ECN_MASK;
-            }
-            if ((base_flow->nw_tos & IP_ECN_MASK) == IP_ECN_NOT_ECT) {
-                VLOG_WARN_RL(&rl, "dropping tunnel packet marked ECN CE"
-                             " but is not ECN capable");
-                return false;
-            } else {
-                /* Set the ECN CE value in the tunneled packet. */
-                flow->nw_tos |= IP_ECN_CE;
-            }
-        }
-    }
-
-    return true;
-}
-
 /* Should be called at the beginning of action translation to initialize
  * wildcards and perform any actions based on receiving on tunnel port.
  *
  * Returns false if the packet must be dropped. */
 bool
-tnl_xlate_init(const struct flow *base_flow, struct flow *flow,
-               struct flow_wildcards *wc)
+tnl_process_ecn(struct flow *flow)
 {
-    /* tnl_port_should_receive() examines the 'tunnel.ip_dst' field to
-     * determine the presence of the tunnel metadata.  However, since tunnels'
-     * datapath port numbers are different from the non-tunnel ports, and we
-     * always unwildcard the 'in_port', we do not need to unwildcard
-     * the 'tunnel.ip_dst' for non-tunneled packets. */
-    if (tnl_port_should_receive(flow)) {
-        if (wc) {
-            wc->masks.tunnel.tun_id = OVS_BE64_MAX;
-            wc->masks.tunnel.ip_src = OVS_BE32_MAX;
-            wc->masks.tunnel.ip_dst = OVS_BE32_MAX;
-            wc->masks.tunnel.flags = (FLOW_TNL_F_DONT_FRAGMENT |
-                                      FLOW_TNL_F_CSUM |
-                                      FLOW_TNL_F_KEY);
-            wc->masks.tunnel.ip_tos = UINT8_MAX;
-            wc->masks.tunnel.ip_ttl = UINT8_MAX;
-            /* The tp_src and tp_dst members in flow_tnl are set to be always
-             * wildcarded, not to unwildcard them here. */
-            wc->masks.tunnel.tp_src = 0;
-            wc->masks.tunnel.tp_dst = 0;
+    if (!tnl_port_should_receive(flow)) {
+        return true;
+    }
 
-            memset(&wc->masks.pkt_mark, 0xff, sizeof wc->masks.pkt_mark);
-        }
-        if (!tnl_ecn_ok(base_flow, flow, wc)) {
+    if (is_ip_any(flow) && (flow->tunnel.ip_tos & IP_ECN_MASK) == IP_ECN_CE) {
+        if ((flow->nw_tos & IP_ECN_MASK) == IP_ECN_NOT_ECT) {
+            VLOG_WARN_RL(&rl, "dropping tunnel packet marked ECN CE"
+                         " but is not ECN capable");
             return false;
         }
 
-        flow->pkt_mark &= ~IPSEC_MARK;
+        /* Set the ECN CE value in the tunneled packet. */
+        flow->nw_tos |= IP_ECN_CE;
     }
 
+    flow->pkt_mark &= ~IPSEC_MARK;
     return true;
+}
+
+void
+tnl_wc_init(struct flow *flow, struct flow_wildcards *wc)
+{
+    if (tnl_port_should_receive(flow)) {
+        wc->masks.tunnel.tun_id = OVS_BE64_MAX;
+        if (flow->tunnel.ip_dst) {
+            wc->masks.tunnel.ip_src = OVS_BE32_MAX;
+            wc->masks.tunnel.ip_dst = OVS_BE32_MAX;
+        } else {
+            wc->masks.tunnel.ipv6_src = in6addr_exact;
+            wc->masks.tunnel.ipv6_dst = in6addr_exact;
+        }
+        wc->masks.tunnel.flags = (FLOW_TNL_F_DONT_FRAGMENT |
+                                  FLOW_TNL_F_CSUM |
+                                  FLOW_TNL_F_KEY);
+        wc->masks.tunnel.ip_tos = UINT8_MAX;
+        wc->masks.tunnel.ip_ttl = UINT8_MAX;
+        /* The tp_src and tp_dst members in flow_tnl are set to be always
+         * wildcarded, not to unwildcard them here. */
+        wc->masks.tunnel.tp_src = 0;
+        wc->masks.tunnel.tp_dst = 0;
+
+        memset(&wc->masks.pkt_mark, 0xff, sizeof wc->masks.pkt_mark);
+
+        if (is_ip_any(flow)
+            && (flow->tunnel.ip_tos & IP_ECN_MASK) == IP_ECN_CE) {
+            wc->masks.nw_tos |= IP_ECN_MASK;
+        }
+    }
 }
 
 /* Given that 'flow' should be output to the ofport corresponding to
@@ -423,10 +416,16 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
     }
 
     if (!cfg->ip_src_flow) {
-        flow->tunnel.ip_src = tnl_port->match.ip_src;
+        flow->tunnel.ip_src = in6_addr_get_mapped_ipv4(&tnl_port->match.ipv6_src);
+        if (!flow->tunnel.ip_src) {
+            flow->tunnel.ipv6_src = tnl_port->match.ipv6_src;
+        }
     }
     if (!cfg->ip_dst_flow) {
-        flow->tunnel.ip_dst = tnl_port->match.ip_dst;
+        flow->tunnel.ip_dst = in6_addr_get_mapped_ipv4(&tnl_port->match.ipv6_dst);
+        if (!flow->tunnel.ip_dst) {
+            flow->tunnel.ipv6_dst = tnl_port->match.ipv6_dst;
+        }
     }
     flow->pkt_mark = tnl_port->match.pkt_mark;
 
@@ -459,7 +458,7 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
         }
     }
 
-    flow->tunnel.flags = (cfg->dont_fragment ? FLOW_TNL_F_DONT_FRAGMENT : 0)
+    flow->tunnel.flags |= (cfg->dont_fragment ? FLOW_TNL_F_DONT_FRAGMENT : 0)
         | (cfg->csum ? FLOW_TNL_F_CSUM : 0)
         | (cfg->out_key_present ? FLOW_TNL_F_KEY : 0);
 
@@ -546,10 +545,12 @@ tnl_find(const struct flow *flow) OVS_REQ_RDLOCK(rwlock)
                      * here as a description of how to treat received
                      * packets. */
                     match.in_key = in_key_flow ? 0 : flow->tunnel.tun_id;
-                    match.ip_src = (ip_src == IP_SRC_CFG
-                                    ? flow->tunnel.ip_dst
-                                    : 0);
-                    match.ip_dst = ip_dst_flow ? 0 : flow->tunnel.ip_src;
+                    if (ip_src == IP_SRC_CFG) {
+                        match.ipv6_src = flow_tnl_dst(&flow->tunnel);
+                    }
+                    if (!ip_dst_flow) {
+                        match.ipv6_dst = flow_tnl_src(&flow->tunnel);
+                    }
                     match.odp_port = flow->in_port.odp_port;
                     match.pkt_mark = flow->pkt_mark;
                     match.in_key_flow = in_key_flow;
@@ -578,7 +579,7 @@ tnl_match_map(const struct tnl_match *m)
     enum ip_src_type ip_src;
 
     ip_src = (m->ip_src_flow ? IP_SRC_FLOW
-              : m->ip_src ? IP_SRC_CFG
+              : ipv6_addr_is_set(&m->ipv6_src) ? IP_SRC_CFG
               : IP_SRC_ANY);
 
     return &tnl_match_maps[6 * m->in_key_flow + 3 * m->ip_dst_flow + ip_src];
@@ -589,10 +590,12 @@ tnl_match_fmt(const struct tnl_match *match, struct ds *ds)
     OVS_REQ_RDLOCK(rwlock)
 {
     if (!match->ip_dst_flow) {
-        ds_put_format(ds, IP_FMT"->"IP_FMT, IP_ARGS(match->ip_src),
-                      IP_ARGS(match->ip_dst));
+        ipv6_format_mapped(&match->ipv6_src, ds);
+        ds_put_cstr(ds, "->");
+        ipv6_format_mapped(&match->ipv6_dst, ds);
     } else if (!match->ip_src_flow) {
-        ds_put_format(ds, IP_FMT"->flow", IP_ARGS(match->ip_src));
+        ipv6_format_mapped(&match->ipv6_src, ds);
+        ds_put_cstr(ds, "->flow");
     } else {
         ds_put_cstr(ds, "flow->flow");
     }
@@ -680,42 +683,64 @@ tnl_port_get_name(const struct tnl_port *tnl_port) OVS_REQ_RDLOCK(rwlock)
 int
 tnl_port_build_header(const struct ofport_dpif *ofport,
                       const struct flow *tnl_flow,
-                      uint8_t dmac[ETH_ADDR_LEN],
-                      uint8_t smac[ETH_ADDR_LEN],
-                      ovs_be32 ip_src, struct ovs_action_push_tnl *data)
+                      const struct eth_addr dmac,
+                      const struct eth_addr smac,
+                      const struct in6_addr * ipv6_src,
+                      struct ovs_action_push_tnl *data)
 {
     struct tnl_port *tnl_port;
     struct eth_header *eth;
     struct ip_header *ip;
+    struct ovs_16aligned_ip6_hdr *ip6;
     void *l3;
     int res;
+    ovs_be32 ip_src;
 
     fat_rwlock_rdlock(&rwlock);
     tnl_port = tnl_find_ofport(ofport);
     ovs_assert(tnl_port);
 
+    ip_src = in6_addr_get_mapped_ipv4(ipv6_src);
+
     /* Build Ethernet and IP headers. */
     memset(data->header, 0, sizeof data->header);
 
     eth = (struct eth_header *)data->header;
-    memcpy(eth->eth_dst, dmac, ETH_ADDR_LEN);
-    memcpy(eth->eth_src, smac, ETH_ADDR_LEN);
-    eth->eth_type = htons(ETH_TYPE_IP);
+    eth->eth_dst = dmac;
+    eth->eth_src = smac;
+    eth->eth_type = ip_src ? htons(ETH_TYPE_IP) : htons(ETH_TYPE_IPV6);
 
     l3 = (eth + 1);
-    ip = (struct ip_header *) l3;
 
-    ip->ip_ihl_ver = IP_IHL_VER(5, 4);
-    ip->ip_tos = tnl_flow->tunnel.ip_tos;
-    ip->ip_ttl = tnl_flow->tunnel.ip_ttl;
-    ip->ip_frag_off = (tnl_flow->tunnel.flags & FLOW_TNL_F_DONT_FRAGMENT) ?
-                      htons(IP_DF) : 0;
+    if (ip_src) {
+        ip = (struct ip_header *) l3;
 
-    put_16aligned_be32(&ip->ip_src, ip_src);
-    put_16aligned_be32(&ip->ip_dst, tnl_flow->tunnel.ip_dst);
+        ip->ip_ihl_ver = IP_IHL_VER(5, 4);
+        ip->ip_tos = tnl_flow->tunnel.ip_tos;
+        ip->ip_ttl = tnl_flow->tunnel.ip_ttl;
+        ip->ip_frag_off = (tnl_flow->tunnel.flags & FLOW_TNL_F_DONT_FRAGMENT) ?
+                          htons(IP_DF) : 0;
+
+        put_16aligned_be32(&ip->ip_src, ip_src);
+        put_16aligned_be32(&ip->ip_dst, tnl_flow->tunnel.ip_dst);
+    } else {
+        ip6 = (struct ovs_16aligned_ip6_hdr *) l3;
+
+        ip6->ip6_vfc = 0x60;
+        ip6->ip6_hlim = tnl_flow->tunnel.ip_ttl;
+
+        /* next header, plen - at netdev_build_header? */
+
+        memcpy(&ip6->ip6_src, ipv6_src, sizeof(ovs_be32[4]));
+        memcpy(&ip6->ip6_dst, &tnl_flow->tunnel.ipv6_dst, sizeof(ovs_be32[4]));
+    }
 
     res = netdev_build_header(tnl_port->netdev, data, tnl_flow);
-    ip->ip_csum = csum(ip, sizeof *ip);
+
+    if (ip_src) {
+        ip->ip_csum = csum(ip, sizeof *ip);
+    }
+
     fat_rwlock_unlock(&rwlock);
 
     return res;

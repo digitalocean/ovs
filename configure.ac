@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.4.0, bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.5.0, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -85,15 +85,16 @@ AC_SEARCH_LIBS([pthread_create], [pthread])
 AC_FUNC_STRERROR_R
 
 OVS_CHECK_ESX
+OVS_CHECK_WIN64
 OVS_CHECK_WIN32
 OVS_CHECK_VISUAL_STUDIO_DDK
 OVS_CHECK_COVERAGE
 OVS_CHECK_NDEBUG
 OVS_CHECK_NETLINK
 OVS_CHECK_OPENSSL
+OVS_CHECK_LIBCAPNG
 OVS_CHECK_LOGDIR
 OVS_CHECK_PYTHON
-OVS_CHECK_PYTHON_COMPAT
 OVS_CHECK_DOT
 OVS_CHECK_IF_PACKET
 OVS_CHECK_IF_DL
@@ -137,6 +138,7 @@ AC_CONFIG_FILES([
     ofproto/libofproto.sym
     lib/libsflow.sym
     lib/libopenvswitch.sym
+    ovn/lib/libovn.sym
     vtep/libvtep.sym])
 
 OVS_ENABLE_OPTION([-Wall])
@@ -184,6 +186,8 @@ dnl This makes sure that include/openflow gets created in the build directory.
 AC_CONFIG_COMMANDS([include/openflow/openflow.h.stamp])
 
 AC_CONFIG_COMMANDS([utilities/bugtool/dummy], [:])
+AC_CONFIG_COMMANDS([ovn/dummy], [:])
+AC_CONFIG_COMMANDS([ovn/utilities/dummy], [:])
 
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES])
 

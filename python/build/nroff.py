@@ -16,7 +16,7 @@ import re
 
 from ovs.db import error
 
-def textToNroff(s, font=r'\fR'):
+def text_to_nroff(s, font=r'\fR'):
     def escape(match):
         c = match.group(0)
 
@@ -47,7 +47,7 @@ def textToNroff(s, font=r'\fR'):
         elif c == ".":
             # groff(7) says that . can be escaped by \. but in practice groff
             # still gives an error with \. at the beginning of a line.
-            return font + "."
+            return r'\[char46]'
         else:
             raise error.Error("bad escape")
 
@@ -55,20 +55,21 @@ def textToNroff(s, font=r'\fR'):
     s = re.sub('(-[0-9]|--|[-"\'\\\\.])', escape, s)
     return s
 
-def escapeNroffLiteral(s, font=r'\fB'):
-    return font + r'%s\fR' % textToNroff(s, font)
+def escape_nroff_literal(s, font=r'\fB'):
+    return font + r'%s\fR' % text_to_nroff(s, font)
 
-def inlineXmlToNroff(node, font, to_upper=False):
+def inline_xml_to_nroff(node, font, to_upper=False, newline='\n'):
     if node.nodeType == node.TEXT_NODE:
         if to_upper:
-            return textToNroff(node.data.upper(), font)
+            s = text_to_nroff(node.data.upper(), font)
         else:
-            return textToNroff(node.data, font)
+            s = text_to_nroff(node.data, font)
+        return s.replace('\n', newline)
     elif node.nodeType == node.ELEMENT_NODE:
-        if node.tagName in ['code', 'em', 'option']:
+        if node.tagName in ['code', 'em', 'option', 'env', 'b']:
             s = r'\fB'
             for child in node.childNodes:
-                s += inlineXmlToNroff(child, r'\fB')
+                s += inline_xml_to_nroff(child, r'\fB', to_upper, newline)
             return s + font
         elif node.tagName == 'ref':
             s = r'\fB'
@@ -85,31 +86,128 @@ def inlineXmlToNroff(node, font, to_upper=False):
             else:
                 raise error.Error("'ref' lacks required attributes: %s" % node.attributes.keys())
             return s + font
-        elif node.tagName == 'var' or node.tagName == 'dfn':
+        elif node.tagName in ['var', 'dfn', 'i']:
             s = r'\fI'
             for child in node.childNodes:
-                s += inlineXmlToNroff(child, r'\fI')
+                s += inline_xml_to_nroff(child, r'\fI', to_upper, newline)
             return s + font
         else:
             raise error.Error("element <%s> unknown or invalid here" % node.tagName)
+    elif node.nodeType == node.COMMENT_NODE:
+        return ''
     else:
         raise error.Error("unknown node %s in inline xml" % node)
 
 def pre_to_nroff(nodes, para, font):
-    s = para + '\n.nf\n'
+    # This puts 'font' at the beginning of each line so that leading and
+    # trailing whitespace stripping later doesn't removed leading spaces
+    # from preformatted text.
+    s = para + '\n.nf\n' + font
     for node in nodes:
-        if node.nodeType != node.TEXT_NODE:
-            fatal("<pre> element may only have text children")
-        for line in node.data.split('\n'):
-            s += escapeNroffLiteral(line, font) + '\n.br\n'
-    s += '.fi\n'
+        s += inline_xml_to_nroff(node, font, False, '\n.br\n' + font)
+    s += '\n.fi\n'
     return s
 
-def blockXmlToNroff(nodes, para='.PP'):
+def diagram_header_to_nroff(header_node):
+    header_fields = []
+    i = 0
+    for node in header_node.childNodes:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == 'bits':
+            name = node.attributes['name'].nodeValue
+            width = node.attributes['width'].nodeValue
+            above = node.getAttribute('above')
+            below = node.getAttribute('below')
+            fill = node.getAttribute('fill')
+            header_fields += [{"name": name,
+                              "tag": "B%d" % i,
+                              "width": width,
+                              "above": above,
+                              "below": below,
+                              "fill": fill}]
+            i += 1
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
+        elif node.nodeType == node.TEXT_NODE and node.data.isspace():
+            pass
+        else:
+            fatal("unknown node %s in diagram <header> element" % node)
+
+    pic_s = ""
+    for f in header_fields:
+        pic_s += "  %s: box \"%s\" width %s" % (f['tag'], f['name'], f['width'])
+        if f['fill'] == 'yes':
+            pic_s += " fill"
+        pic_s += '\n'
+    for f in header_fields:
+        pic_s += "  \"%s\" at %s.n above\n" % (f['above'], f['tag'])
+        pic_s += "  \"%s\" at %s.s below\n" % (f['below'], f['tag'])
+    name = header_node.getAttribute('name')
+    if name == "":
+        visible = " invis"
+    else:
+        visible = ""
+    pic_s += "line <->%s \"%s\" above " % (visible, name)
+    pic_s += "from %s.nw + (0,textht) " % header_fields[0]['tag']
+    pic_s += "to %s.ne + (0,textht)\n" % header_fields[-1]['tag']
+
+    text_s = ""
+    for f in header_fields:
+        text_s += """.IP \\(bu
+%s bits""" % (f['above'])
+        if f['name']:
+            text_s += ": %s" % f['name']
+        if f['below']:
+            text_s += " (%s)" % f['below']
+        text_s += "\n"
+    return pic_s, text_s
+
+def diagram_to_nroff(nodes, para):
+    pic_s = ''
+    text_s = ''
+    move = False
+    for node in nodes:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == 'header':
+            if move:
+                pic_s += "move .1\n"
+                text_s += ".sp\n"
+            pic_header, text_header = diagram_header_to_nroff(node)
+            pic_s += "[\n" + pic_header + "]\n"
+            text_s += text_header
+            move = True
+        elif node.nodeType == node.ELEMENT_NODE and node.tagName == 'nospace':
+            move = False
+        elif node.nodeType == node.ELEMENT_NODE and node.tagName == 'dots':
+            pic_s += "move .1\n"
+            pic_s += '". . ." ljust\n'
+            text_s += ".sp\n"
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
+        elif node.nodeType == node.TEXT_NODE and node.data.isspace():
+            pass
+        else:
+            fatal("unknown node %s in diagram <header> element" % node)
+    return para + """
+.\\" check if in troff mode (TTY)
+.if t \{
+.PS
+boxht = .2
+textht = 1/6
+fillval = .2
+""" + pic_s + """\
+.PE
+\\}
+.\\" check if in nroff mode:
+.if n \{
+.RS
+""" + text_s + """\
+.RE
+\\}"""
+
+def block_xml_to_nroff(nodes, para='.PP'):
     s = ''
     for node in nodes:
         if node.nodeType == node.TEXT_NODE:
-            s += textToNroff(node.data)
+            s += text_to_nroff(node.data)
             s = s.lstrip()
         elif node.nodeType == node.ELEMENT_NODE:
             if node.tagName in ['ul', 'ol']:
@@ -117,17 +215,19 @@ def blockXmlToNroff(nodes, para='.PP'):
                     s += "\n"
                 s += ".RS\n"
                 i = 0
-                for liNode in node.childNodes:
-                    if (liNode.nodeType == node.ELEMENT_NODE
-                        and liNode.tagName == 'li'):
+                for li_node in node.childNodes:
+                    if (li_node.nodeType == node.ELEMENT_NODE
+                        and li_node.tagName == 'li'):
                         i += 1
                         if node.tagName == 'ul':
                             s += ".IP \\(bu\n"
                         else:
                             s += ".IP %d. .25in\n" % i
-                        s += blockXmlToNroff(liNode.childNodes, ".IP")
-                    elif (liNode.nodeType != node.TEXT_NODE
-                          or not liNode.data.isspace()):
+                        s += block_xml_to_nroff(li_node.childNodes, ".IP")
+                    elif li_node.nodeType == node.COMMENT_NODE:
+                        pass
+                    elif (li_node.nodeType != node.TEXT_NODE
+                          or not li_node.data.isspace()):
                         raise error.Error("<%s> element may only have <li> children" % node.tagName)
                 s += ".RE\n"
             elif node.tagName == 'dl':
@@ -135,30 +235,32 @@ def blockXmlToNroff(nodes, para='.PP'):
                     s += "\n"
                 s += ".RS\n"
                 prev = "dd"
-                for liNode in node.childNodes:
-                    if (liNode.nodeType == node.ELEMENT_NODE
-                        and liNode.tagName == 'dt'):
+                for li_node in node.childNodes:
+                    if (li_node.nodeType == node.ELEMENT_NODE
+                        and li_node.tagName == 'dt'):
                         if prev == 'dd':
                             s += '.TP\n'
                         else:
                             s += '.TQ .5in\n'
                         prev = 'dt'
-                    elif (liNode.nodeType == node.ELEMENT_NODE
-                          and liNode.tagName == 'dd'):
+                    elif (li_node.nodeType == node.ELEMENT_NODE
+                          and li_node.tagName == 'dd'):
                         if prev == 'dd':
                             s += '.IP\n'
                         prev = 'dd'
-                    elif (liNode.nodeType != node.TEXT_NODE
-                          or not liNode.data.isspace()):
+                    elif li_node.nodeType == node.COMMENT_NODE:
+                        continue
+                    elif (li_node.nodeType != node.TEXT_NODE
+                          or not li_node.data.isspace()):
                         raise error.Error("<dl> element may only have <dt> and <dd> children")
-                    s += blockXmlToNroff(liNode.childNodes, ".IP")
+                    s += block_xml_to_nroff(li_node.childNodes, ".IP")
                 s += ".RE\n"
             elif node.tagName == 'p':
                 if s != "":
                     if not s.endswith("\n"):
                         s += "\n"
                     s += para + "\n"
-                s += blockXmlToNroff(node.childNodes, para)
+                s += block_xml_to_nroff(node.childNodes, para)
             elif node.tagName in ('h1', 'h2', 'h3'):
                 if s != "":
                     if not s.endswith("\n"):
@@ -166,7 +268,7 @@ def blockXmlToNroff(nodes, para='.PP'):
                 nroffTag = {'h1': 'SH', 'h2': 'SS', 'h3': 'ST'}[node.tagName]
                 s += '.%s "' % nroffTag
                 for child_node in node.childNodes:
-                    s += inlineXmlToNroff(child_node, r'\fR',
+                    s += inline_xml_to_nroff(child_node, r'\fR',
                                           to_upper=(nroffTag == 'SH'))
                 s += '"\n'
             elif node.tagName == 'pre':
@@ -176,8 +278,12 @@ def blockXmlToNroff(nodes, para='.PP'):
                 else:
                     font = r'\fB'
                 s += pre_to_nroff(node.childNodes, para, font)
+            elif node.tagName == 'diagram':
+                s += diagram_to_nroff(node.childNodes, para)
             else:
-                s += inlineXmlToNroff(node, r'\fR')
+                s += inline_xml_to_nroff(node, r'\fR')
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
         else:
             raise error.Error("unknown node %s in block xml" % node)
     if s != "" and not s.endswith('\n'):

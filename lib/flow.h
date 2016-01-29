@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include "bitmap.h"
 #include "byte-order.h"
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
@@ -39,7 +40,7 @@ struct match;
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 31
+#define FLOW_WC_SEQ 35
 
 /* Number of Open vSwitch extension 32-bit registers. */
 #define FLOW_N_REGS 8
@@ -64,12 +65,7 @@ BUILD_ASSERT_DECL(FLOW_N_REGS % 2 == 0); /* Even. */
 BUILD_ASSERT_DECL(FLOW_NW_FRAG_ANY == NX_IP_FRAG_ANY);
 BUILD_ASSERT_DECL(FLOW_NW_FRAG_LATER == NX_IP_FRAG_LATER);
 
-#define FLOW_TNL_F_DONT_FRAGMENT (1 << 0)
-#define FLOW_TNL_F_CSUM (1 << 1)
-#define FLOW_TNL_F_KEY (1 << 2)
-#define FLOW_TNL_F_OAM (1 << 3)
-
-#define FLOW_TNL_F_MASK ((1 << 4) - 1)
+BUILD_ASSERT_DECL(FLOW_TNL_F_OAM == NX_TUN_FLAG_OAM);
 
 const char *flow_tun_flag_to_string(uint32_t flags);
 
@@ -106,13 +102,18 @@ struct flow {
                                  * computation is opaque to the user space. */
     union flow_in_port in_port; /* Input port.*/
     uint32_t recirc_id;         /* Must be exact match. */
+    uint16_t ct_state;          /* Connection tracking state. */
+    uint16_t ct_zone;           /* Connection tracking zone. */
+    uint32_t ct_mark;           /* Connection mark.*/
+    uint8_t pad1[4];            /* Pad to 64 bits. */
+    ovs_u128 ct_label;          /* Connection label. */
     uint32_t conj_id;           /* Conjunction ID. */
     ofp_port_t actset_output;   /* Output port in action set. */
-    uint8_t pad1[6];            /* Pad to 64 bits. */
+    uint8_t pad2[2];            /* Pad to 64 bits. */
 
     /* L2, Order the same as in the Ethernet header! (64-bit aligned) */
-    uint8_t dl_dst[ETH_ADDR_LEN]; /* Ethernet destination address. */
-    uint8_t dl_src[ETH_ADDR_LEN]; /* Ethernet source address. */
+    struct eth_addr dl_dst;     /* Ethernet destination address. */
+    struct eth_addr dl_src;     /* Ethernet source address. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
     ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
     ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
@@ -128,18 +129,19 @@ struct flow {
     uint8_t nw_ttl;             /* IP TTL/Hop Limit. */
     uint8_t nw_proto;           /* IP protocol or low 8 bits of ARP opcode. */
     struct in6_addr nd_target;  /* IPv6 neighbor discovery (ND) target. */
-    uint8_t arp_sha[ETH_ADDR_LEN]; /* ARP/ND source hardware address. */
-    uint8_t arp_tha[ETH_ADDR_LEN]; /* ARP/ND target hardware address. */
+    struct eth_addr arp_sha;    /* ARP/ND source hardware address. */
+    struct eth_addr arp_tha;    /* ARP/ND target hardware address. */
     ovs_be16 tcp_flags;         /* TCP flags. With L3 to avoid matching L4. */
-    ovs_be16 pad2;              /* Pad to 64 bits. */
+    ovs_be16 pad3;              /* Pad to 64 bits. */
 
     /* L4 (64-bit aligned) */
-    ovs_be16 tp_src;            /* TCP/UDP/SCTP source port. */
-    ovs_be16 tp_dst;            /* TCP/UDP/SCTP destination port. */
+    ovs_be16 tp_src;            /* TCP/UDP/SCTP source port/ICMP type. */
+    ovs_be16 tp_dst;            /* TCP/UDP/SCTP destination port/ICMP code. */
     ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address.
                                  * Keep last for BUILD_ASSERT_DECL below. */
 };
 BUILD_ASSERT_DECL(sizeof(struct flow) % sizeof(uint64_t) == 0);
+BUILD_ASSERT_DECL(sizeof(struct flow_tnl) % sizeof(uint64_t) == 0);
 
 #define FLOW_U64S (sizeof(struct flow) / sizeof(uint64_t))
 
@@ -156,8 +158,8 @@ BUILD_ASSERT_DECL(sizeof(struct flow) % sizeof(uint64_t) == 0);
 
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
-                  == sizeof(struct flow_tnl) + 192
-                  && FLOW_WC_SEQ == 31);
+                  == sizeof(struct flow_tnl) + 216
+                  && FLOW_WC_SEQ == 35);
 
 /* Incremental points at which flow classification may be performed in
  * segments.
@@ -180,18 +182,32 @@ BUILD_ASSERT_DECL(FLOW_SEGMENT_3_ENDS_AT < sizeof(struct flow));
 
 extern const uint8_t flow_segment_u64s[];
 
+#define FLOW_U64_OFFSET(FIELD)                          \
+    (offsetof(struct flow, FIELD) / sizeof(uint64_t))
+#define FLOW_U64_OFFREM(FIELD)                          \
+    (offsetof(struct flow, FIELD) % sizeof(uint64_t))
+
+/* Number of 64-bit units spanned by a 'FIELD'. */
+#define FLOW_U64_SIZE(FIELD)                                            \
+    DIV_ROUND_UP(FLOW_U64_OFFREM(FIELD) + MEMBER_SIZEOF(struct flow, FIELD), \
+                 sizeof(uint64_t))
+
 void flow_extract(struct dp_packet *, struct flow *);
 
 void flow_zero_wildcards(struct flow *, const struct flow_wildcards *);
 void flow_unwildcard_tp_ports(const struct flow *, struct flow_wildcards *);
 void flow_get_metadata(const struct flow *, struct match *flow_metadata);
 
+const char *ct_state_to_string(uint32_t state);
 char *flow_to_string(const struct flow *);
 void format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
                   uint32_t flags, char del);
 void format_flags_masked(struct ds *ds, const char *name,
                          const char *(*bit_to_string)(uint32_t),
-                         uint32_t flags, uint32_t mask);
+                         uint32_t flags, uint32_t mask, uint32_t max_mask);
+int parse_flags(const char *s, const char *(*bit_to_string)(uint32_t),
+                char end, const char *field_name, char **res_string,
+                uint32_t *res_flags, uint32_t allowed, uint32_t *res_mask);
 
 void flow_format(struct ds *, const struct flow *);
 void flow_print(FILE *, const struct flow *);
@@ -310,6 +326,8 @@ struct flow_wildcards {
 
 #define WC_MASK_FIELD(WC, FIELD) \
     memset(&(WC)->masks.FIELD, 0xff, sizeof (WC)->masks.FIELD)
+#define WC_MASK_FIELD_MASK(WC, FIELD, MASK)     \
+    ((WC)->masks.FIELD |= (MASK))
 #define WC_UNMASK_FIELD(WC, FIELD) \
     memset(&(WC)->masks.FIELD, 0, sizeof (WC)->masks.FIELD)
 
@@ -317,7 +335,6 @@ void flow_wildcards_init_catchall(struct flow_wildcards *);
 
 void flow_wildcards_init_for_packet(struct flow_wildcards *,
                                     const struct flow *);
-uint64_t flow_wc_map(const struct flow *);
 
 void flow_wildcards_clear_non_packet_fields(struct flow_wildcards *);
 
@@ -341,6 +358,8 @@ bool flow_wildcards_equal(const struct flow_wildcards *,
                           const struct flow_wildcards *);
 uint32_t flow_hash_5tuple(const struct flow *flow, uint32_t basis);
 uint32_t flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis);
+uint32_t flow_hash_symmetric_l3l4(const struct flow *flow, uint32_t basis,
+                         bool inc_udp_ports );
 
 /* Initialize a flow with random fields that matter for nx_hash_fields. */
 void flow_random_hash_fields(struct flow *);
@@ -358,215 +377,438 @@ uint32_t flow_hash_in_wildcards(const struct flow *,
 bool flow_equal_except(const struct flow *a, const struct flow *b,
                        const struct flow_wildcards *);
 
+/* Bitmap for flow values.  For each 1-bit the corresponding flow value is
+ * explicitly specified, other values are zeroes.
+ *
+ * map_t must be wide enough to hold any member of struct flow. */
+typedef unsigned long long map_t;
+#define MAP_T_BITS (sizeof(map_t) * CHAR_BIT)
+#define MAP_1 (map_t)1
+#define MAP_MAX TYPE_MAXIMUM(map_t)
+
+#define MAP_IS_SET(MAP, IDX) ((MAP) & (MAP_1 << (IDX)))
+
+/* Iterate through the indices of all 1-bits in 'MAP'. */
+#define MAP_FOR_EACH_INDEX(IDX, MAP)            \
+    ULLONG_FOR_EACH_1(IDX, MAP)
+
+#define FLOWMAP_UNITS DIV_ROUND_UP(FLOW_U64S, MAP_T_BITS)
+
+struct flowmap {
+    map_t bits[FLOWMAP_UNITS];
+};
+
+#define FLOWMAP_EMPTY_INITIALIZER { { 0 } }
+
+static inline void flowmap_init(struct flowmap *);
+static inline bool flowmap_equal(struct flowmap, struct flowmap);
+static inline bool flowmap_is_set(const struct flowmap *, size_t idx);
+static inline bool flowmap_are_set(const struct flowmap *, size_t idx,
+                                   unsigned int n_bits);
+static inline void flowmap_set(struct flowmap *, size_t idx,
+                               unsigned int n_bits);
+static inline void flowmap_clear(struct flowmap *, size_t idx,
+                                 unsigned int n_bits);
+static inline struct flowmap flowmap_or(struct flowmap, struct flowmap);
+static inline struct flowmap flowmap_and(struct flowmap, struct flowmap);
+static inline bool flowmap_is_empty(struct flowmap);
+static inline unsigned int flowmap_n_1bits(struct flowmap);
+
+#define FLOWMAP_HAS_FIELD(FM, FIELD)                                    \
+    flowmap_are_set(FM, FLOW_U64_OFFSET(FIELD), FLOW_U64_SIZE(FIELD))
+
+#define FLOWMAP_SET(FM, FIELD)                                      \
+    flowmap_set(FM, FLOW_U64_OFFSET(FIELD), FLOW_U64_SIZE(FIELD))
+
+#define FLOWMAP_SET__(FM, FIELD, SIZE)                  \
+    flowmap_set(FM, FLOW_U64_OFFSET(FIELD),             \
+                DIV_ROUND_UP(SIZE, sizeof(uint64_t)))
+
+/* XXX: Only works for full 64-bit units. */
+#define FLOWMAP_CLEAR(FM, FIELD)                                        \
+    BUILD_ASSERT_DECL(FLOW_U64_OFFREM(FIELD) == 0);                     \
+    BUILD_ASSERT_DECL(sizeof(((struct flow *)0)->FIELD) % sizeof(uint64_t) == 0); \
+    flowmap_clear(FM, FLOW_U64_OFFSET(FIELD), FLOW_U64_SIZE(FIELD))
+
+/* Iterate through all units in 'FMAP'. */
+#define FLOWMAP_FOR_EACH_UNIT(UNIT)                     \
+    for ((UNIT) = 0; (UNIT) < FLOWMAP_UNITS; (UNIT)++)
+
+/* Iterate through all map units in 'FMAP'. */
+#define FLOWMAP_FOR_EACH_MAP(MAP, FLOWMAP)                              \
+    for (size_t unit__ = 0;                                       \
+         unit__ < FLOWMAP_UNITS && ((MAP) = (FLOWMAP).bits[unit__], true); \
+         unit__++)
+
+struct flowmap_aux;
+static inline bool flowmap_next_index(struct flowmap_aux *, size_t *idx);
+
+#define FLOWMAP_AUX_INITIALIZER(FLOWMAP) { .unit = 0, .map = (FLOWMAP) }
+
+/* Iterate through all struct flow u64 indices specified by 'MAP'.  This is a
+ * slower but easier version of the FLOWMAP_FOR_EACH_MAP() &
+ * MAP_FOR_EACH_INDEX() combination. */
+#define FLOWMAP_FOR_EACH_INDEX(IDX, MAP)                            \
+    for (struct flowmap_aux aux__ = FLOWMAP_AUX_INITIALIZER(MAP);   \
+         flowmap_next_index(&aux__, &(IDX));)
+
+/* Flowmap inline implementations. */
+static inline void
+flowmap_init(struct flowmap *fm)
+{
+    memset(fm, 0, sizeof *fm);
+}
+
+static inline bool
+flowmap_equal(struct flowmap a, struct flowmap b)
+{
+    return !memcmp(&a, &b, sizeof a);
+}
+
+static inline bool
+flowmap_is_set(const struct flowmap *fm, size_t idx)
+{
+    return (fm->bits[idx / MAP_T_BITS] & (MAP_1 << (idx % MAP_T_BITS))) != 0;
+}
+
+/* Returns 'true' if any of the 'n_bits' bits starting at 'idx' are set in
+ * 'fm'.  'n_bits' can be at most MAP_T_BITS. */
+static inline bool
+flowmap_are_set(const struct flowmap *fm, size_t idx, unsigned int n_bits)
+{
+    map_t n_bits_mask = (MAP_1 << n_bits) - 1;
+    size_t unit = idx / MAP_T_BITS;
+
+    idx %= MAP_T_BITS;
+
+    if (fm->bits[unit] & (n_bits_mask << idx)) {
+        return true;
+    }
+    /* The seemingly unnecessary bounds check on 'unit' is a workaround for a
+     * false-positive array out of bounds error by GCC 4.9. */
+    if (unit + 1 < FLOWMAP_UNITS && idx + n_bits > MAP_T_BITS) {
+        /* Check the remaining bits from the next unit. */
+        return fm->bits[unit + 1] & (n_bits_mask >> (MAP_T_BITS - idx));
+    }
+    return false;
+}
+
+/* Set the 'n_bits' consecutive bits in 'fm', starting at bit 'idx'.
+ * 'n_bits' can be at most MAP_T_BITS. */
+static inline void
+flowmap_set(struct flowmap *fm, size_t idx, unsigned int n_bits)
+{
+    map_t n_bits_mask = (MAP_1 << n_bits) - 1;
+    size_t unit = idx / MAP_T_BITS;
+
+    idx %= MAP_T_BITS;
+
+    fm->bits[unit] |= n_bits_mask << idx;
+    /* The seemingly unnecessary bounds check on 'unit' is a workaround for a
+     * false-positive array out of bounds error by GCC 4.9. */
+    if (unit + 1 < FLOWMAP_UNITS && idx + n_bits > MAP_T_BITS) {
+        /* 'MAP_T_BITS - idx' bits were set on 'unit', set the remaining
+         * bits from the next unit. */
+        fm->bits[unit + 1] |= n_bits_mask >> (MAP_T_BITS - idx);
+    }
+}
+
+/* Clears the 'n_bits' consecutive bits in 'fm', starting at bit 'idx'.
+ * 'n_bits' can be at most MAP_T_BITS. */
+static inline void
+flowmap_clear(struct flowmap *fm, size_t idx, unsigned int n_bits)
+{
+    map_t n_bits_mask = (MAP_1 << n_bits) - 1;
+    size_t unit = idx / MAP_T_BITS;
+
+    idx %= MAP_T_BITS;
+
+    fm->bits[unit] &= ~(n_bits_mask << idx);
+    /* The seemingly unnecessary bounds check on 'unit' is a workaround for a
+     * false-positive array out of bounds error by GCC 4.9. */
+    if (unit + 1 < FLOWMAP_UNITS && idx + n_bits > MAP_T_BITS) {
+        /* 'MAP_T_BITS - idx' bits were cleared on 'unit', clear the
+         * remaining bits from the next unit. */
+        fm->bits[unit + 1] &= ~(n_bits_mask >> (MAP_T_BITS - idx));
+    }
+}
+
+/* OR the bits in the flowmaps. */
+static inline struct flowmap
+flowmap_or(struct flowmap a, struct flowmap b)
+{
+    struct flowmap map;
+    size_t unit;
+
+    FLOWMAP_FOR_EACH_UNIT (unit) {
+        map.bits[unit] = a.bits[unit] | b.bits[unit];
+    }
+    return map;
+}
+
+/* AND the bits in the flowmaps. */
+static inline struct flowmap
+flowmap_and(struct flowmap a, struct flowmap b)
+{
+    struct flowmap map;
+    size_t unit;
+
+    FLOWMAP_FOR_EACH_UNIT (unit) {
+        map.bits[unit] = a.bits[unit] & b.bits[unit];
+    }
+    return map;
+}
+
+static inline bool
+flowmap_is_empty(struct flowmap fm)
+{
+    map_t map;
+
+    FLOWMAP_FOR_EACH_MAP (map, fm) {
+        if (map) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline unsigned int
+flowmap_n_1bits(struct flowmap fm)
+{
+    unsigned int n_1bits = 0;
+    size_t unit;
+
+    FLOWMAP_FOR_EACH_UNIT (unit) {
+        n_1bits += count_1bits(fm.bits[unit]);
+    }
+    return n_1bits;
+}
+
+struct flowmap_aux {
+    size_t unit;
+    struct flowmap map;
+};
+
+static inline bool
+flowmap_next_index(struct flowmap_aux *aux, size_t *idx)
+{
+    for (;;) {
+        map_t *map = &aux->map.bits[aux->unit];
+        if (*map) {
+            *idx = aux->unit * MAP_T_BITS + raw_ctz(*map);
+            *map = zero_rightmost_1bit(*map);
+            return true;
+        }
+        if (++aux->unit >= FLOWMAP_UNITS) {
+            return false;
+        }
+    }
+}
+
+
 /* Compressed flow. */
-
-/* Number of 64-bit words present in struct miniflow. */
-#define MINI_N_INLINE 4
-
-/* Maximum number of 64-bit words supported. */
-BUILD_ASSERT_DECL(FLOW_U64S <= 63);
 
 /* A sparse representation of a "struct flow".
  *
  * A "struct flow" is fairly large and tends to be mostly zeros.  Sparse
- * representation has two advantages.  First, it saves memory.  Second, it
- * saves time when the goal is to iterate over only the nonzero parts of the
- * struct.
+ * representation has two advantages.  First, it saves memory and, more
+ * importantly, minimizes the number of accessed cache lines.  Second, it saves
+ * time when the goal is to iterate over only the nonzero parts of the struct.
  *
- * The 'map' member holds one bit for each uint64_t in a "struct flow".  Each
+ * The map member hold one bit for each uint64_t in a "struct flow".  Each
  * 0-bit indicates that the corresponding uint64_t is zero, each 1-bit that it
  * *may* be nonzero (see below how this applies to minimasks).
  *
- * The 'values_inline' boolean member indicates that the values are at
- * 'inline_values'.  If 'values_inline' is zero, then the values are
- * offline at 'offline_values'.  In either case, values is an array that has
- * one element for each 1-bit in 'map'.  The least-numbered 1-bit is in
- * the first element of the values array, the next 1-bit is in the next array
- * element, and so on.
- *
- * MINI_N_INLINE is the default number of inline words.  When a miniflow is
- * dynamically allocated the actual amount of inline storage may be different.
- * In that case 'inline_values' contains storage at least for the number
- * of words indicated by 'map' (one uint64_t for each 1-bit in the map).
+ * The values indicated by 'map' always follow the miniflow in memory.  The
+ * user of the miniflow is responsible for always having enough storage after
+ * the struct miniflow corresponding to the number of 1-bits in maps.
  *
  * Elements in values array are allowed to be zero.  This is useful for "struct
  * minimatch", for which ensuring that the miniflow and minimask members have
- * same 'map' allows optimization.  This allowance applies only to a miniflow
- * that is not a mask.  That is, a minimask may NOT have zero elements in
- * its 'values'.
- */
+ * same maps allows optimization.  This allowance applies only to a miniflow
+ * that is not a mask.  That is, a minimask may NOT have zero elements in its
+ * values.
+ *
+ * A miniflow is always dynamically allocated so that the maps are followed by
+ * at least as many elements as there are 1-bits in maps. */
 struct miniflow {
-    uint64_t map:63;
-    uint64_t values_inline:1;
-    union {
-        uint64_t *offline_values;
-        uint64_t inline_values[MINI_N_INLINE]; /* Minimum inline size. */
-    };
+    struct flowmap map;
+    /* Followed by:
+     *     uint64_t values[n];
+     * where 'n' is miniflow_n_values(miniflow). */
 };
-BUILD_ASSERT_DECL(sizeof(struct miniflow)
-                  == sizeof(uint64_t) + MINI_N_INLINE * sizeof(uint64_t));
+BUILD_ASSERT_DECL(sizeof(struct miniflow) % sizeof(uint64_t) == 0);
 
 #define MINIFLOW_VALUES_SIZE(COUNT) ((COUNT) * sizeof(uint64_t))
 
 static inline uint64_t *miniflow_values(struct miniflow *mf)
 {
-    return OVS_LIKELY(mf->values_inline)
-        ? mf->inline_values : mf->offline_values;
+    return (uint64_t *)(mf + 1);
 }
 
 static inline const uint64_t *miniflow_get_values(const struct miniflow *mf)
 {
-    return OVS_LIKELY(mf->values_inline)
-        ? mf->inline_values : mf->offline_values;
-}
-
-/* This is useful for initializing a miniflow for a miniflow_extract() call. */
-static inline void miniflow_initialize(struct miniflow *mf,
-                                       uint64_t buf[FLOW_U64S])
-{
-    mf->map = 0;
-    mf->values_inline = (buf == (uint64_t *)(mf + 1));
-    if (!mf->values_inline) {
-        mf->offline_values = buf;
-    }
+    return (const uint64_t *)(mf + 1);
 }
 
 struct pkt_metadata;
 
-/* The 'dst->values' must be initialized with a buffer with space for
- * FLOW_U64S.  'dst->map' is ignored on input and set on output to
- * indicate which fields were extracted. */
+/* The 'dst' must follow with buffer space for FLOW_U64S 64-bit units.
+ * 'dst->map' is ignored on input and set on output to indicate which fields
+ * were extracted. */
 void miniflow_extract(struct dp_packet *packet, struct miniflow *dst);
+void miniflow_map_init(struct miniflow *, const struct flow *);
+void flow_wc_map(const struct flow *, struct flowmap *);
+size_t miniflow_alloc(struct miniflow *dsts[], size_t n,
+                      const struct miniflow *src);
 void miniflow_init(struct miniflow *, const struct flow *);
-void miniflow_init_with_minimask(struct miniflow *, const struct flow *,
-                                 const struct minimask *);
-void miniflow_clone(struct miniflow *, const struct miniflow *);
-void miniflow_clone_inline(struct miniflow *, const struct miniflow *,
-                           size_t n_values);
-void miniflow_move(struct miniflow *dst, struct miniflow *);
-void miniflow_destroy(struct miniflow *);
+void miniflow_clone(struct miniflow *, const struct miniflow *,
+                    size_t n_values);
+struct miniflow * miniflow_create(const struct flow *);
 
 void miniflow_expand(const struct miniflow *, struct flow *);
 
 static inline uint64_t flow_u64_value(const struct flow *flow, size_t index)
 {
-    return ((uint64_t *)(flow))[index];
+    return ((uint64_t *)flow)[index];
 }
 
 static inline uint64_t *flow_u64_lvalue(struct flow *flow, size_t index)
 {
-    return &((uint64_t *)(flow))[index];
+    return &((uint64_t *)flow)[index];
 }
 
-static inline bool
-flow_get_next_in_map(const struct flow *flow, uint64_t map, uint64_t *value)
+static inline size_t
+miniflow_n_values(const struct miniflow *flow)
 {
-    if (map) {
-        *value = flow_u64_value(flow, raw_ctz(map));
+    return flowmap_n_1bits(flow->map);
+}
+
+struct flow_for_each_in_maps_aux {
+    const struct flow *flow;
+    struct flowmap_aux map_aux;
+};
+
+static inline bool
+flow_values_get_next_in_maps(struct flow_for_each_in_maps_aux *aux,
+                             uint64_t *value)
+{
+    size_t idx;
+
+    if (flowmap_next_index(&aux->map_aux, &idx)) {
+        *value = flow_u64_value(aux->flow, idx);
         return true;
     }
     return false;
 }
 
-/* Iterate through all flow u64 values specified by 'MAP'. */
-#define FLOW_FOR_EACH_IN_MAP(VALUE, FLOW, MAP)         \
-    for (uint64_t map__ = (MAP);                       \
-         flow_get_next_in_map(FLOW, map__, &(VALUE));  \
-         map__ = zero_rightmost_1bit(map__))
-
-/* Iterate through all struct flow u64 indices specified by 'MAP'. */
-#define MAP_FOR_EACH_INDEX(U64IDX, MAP)                 \
-    for (uint64_t map__ = (MAP);                        \
-         map__ && ((U64IDX) = raw_ctz(map__), true);    \
-         map__ = zero_rightmost_1bit(map__))
-
-#define FLOW_U64_SIZE(FIELD)                                            \
-    DIV_ROUND_UP(sizeof(((struct flow *)0)->FIELD), sizeof(uint64_t))
-
-#define MINIFLOW_MAP(FIELD)                       \
-    (((UINT64_C(1) << FLOW_U64_SIZE(FIELD)) - 1)  \
-     << (offsetof(struct flow, FIELD) / sizeof(uint64_t)))
+/* Iterate through all flow u64 values specified by 'MAPS'. */
+#define FLOW_FOR_EACH_IN_MAPS(VALUE, FLOW, MAPS)            \
+    for (struct flow_for_each_in_maps_aux aux__             \
+             = { (FLOW), FLOWMAP_AUX_INITIALIZER(MAPS) };   \
+         flow_values_get_next_in_maps(&aux__, &(VALUE));)
 
 struct mf_for_each_in_map_aux {
+    size_t unit;
+    struct flowmap fmap;
+    struct flowmap map;
     const uint64_t *values;
-    uint64_t fmap;
-    uint64_t map;
 };
 
 static inline bool
-mf_get_next_in_map(struct mf_for_each_in_map_aux *aux, uint64_t *value)
+mf_get_next_in_map(struct mf_for_each_in_map_aux *aux,
+                   uint64_t *value)
 {
-    if (aux->map) {
-        uint64_t rm1bit = rightmost_1bit(aux->map);
-        aux->map -= rm1bit;
+    map_t *map, *fmap;
+    map_t rm1bit;
 
-        if (aux->fmap & rm1bit) {
-            /* Advance 'aux->values' to point to the value for 'rm1bit'. */
-            uint64_t trash = aux->fmap & (rm1bit - 1);
-            if (trash) {
-                aux->fmap -= trash;
-                aux->values += count_1bits(trash);
-            }
-
-            /* Retrieve the value for 'rm1bit' then advance past it. */
-            aux->fmap -= rm1bit;
-            *value = *aux->values++;
-        } else {
-            *value = 0;
+    while (OVS_UNLIKELY(!*(map = &aux->map.bits[aux->unit]))) {
+        /* Skip remaining data in the previous unit. */
+        aux->values += count_1bits(aux->fmap.bits[aux->unit]);
+        if (++aux->unit == FLOWMAP_UNITS) {
+            return false;
         }
-        return true;
-    } else {
-        return false;
     }
+
+    rm1bit = rightmost_1bit(*map);
+    *map -= rm1bit;
+    fmap = &aux->fmap.bits[aux->unit];
+
+    if (OVS_LIKELY(*fmap & rm1bit)) {
+        map_t trash = *fmap & (rm1bit - 1);
+
+        *fmap -= trash;
+        /* count_1bits() is fast for systems where speed matters (e.g.,
+         * DPDK), so we don't try avoid using it.
+         * Advance 'aux->values' to point to the value for 'rm1bit'. */
+        aux->values += count_1bits(trash);
+
+        *value = *aux->values;
+    } else {
+        *value = 0;
+    }
+    return true;
 }
 
-/* Iterate through all miniflow u64 values specified by 'MAP'. */
-#define MINIFLOW_FOR_EACH_IN_MAP(VALUE, FLOW, MAP)                      \
-    for (struct mf_for_each_in_map_aux aux__                            \
-             = { miniflow_get_values(FLOW), (FLOW)->map, MAP };         \
-         mf_get_next_in_map(&aux__, &(VALUE));                          \
-        )
+/* Iterate through miniflow u64 values specified by 'FLOWMAP'. */
+#define MINIFLOW_FOR_EACH_IN_FLOWMAP(VALUE, FLOW, FLOWMAP)          \
+    for (struct mf_for_each_in_map_aux aux__ =                      \
+        { 0, (FLOW)->map, (FLOWMAP), miniflow_get_values(FLOW) };   \
+         mf_get_next_in_map(&aux__, &(VALUE));)
 
-/* This can be used when it is known that 'u64_idx' is set in 'map'. */
-static inline uint64_t
-miniflow_values_get__(const uint64_t *values, uint64_t map, int u64_idx)
+/* This can be used when it is known that 'idx' is set in 'map'. */
+static inline const uint64_t *
+miniflow_values_get__(const uint64_t *values, map_t map, size_t idx)
 {
-    return values[count_1bits(map & ((UINT64_C(1) << u64_idx) - 1))];
+    return values + count_1bits(map & ((MAP_1 << idx) - 1));
 }
 
 /* This can be used when it is known that 'u64_idx' is set in
  * the map of 'mf'. */
-static inline uint64_t
-miniflow_get__(const struct miniflow *mf, int u64_idx)
+static inline const uint64_t *
+miniflow_get__(const struct miniflow *mf, size_t idx)
 {
-    return miniflow_values_get__(miniflow_get_values(mf), mf->map, u64_idx);
+    const uint64_t *values = miniflow_get_values(mf);
+    const map_t *map = mf->map.bits;
+
+    while (idx >= MAP_T_BITS) {
+        idx -= MAP_T_BITS;
+        values += count_1bits(*map++);
+    }
+    return miniflow_values_get__(values, *map, idx);
 }
 
-/* Get the value of 'FIELD' of an up to 8 byte wide integer type 'TYPE' of
- * a miniflow. */
-#define MINIFLOW_GET_TYPE(MF, TYPE, OFS)                                \
-    (((MF)->map & (UINT64_C(1) << (OFS) / sizeof(uint64_t)))            \
-     ? ((OVS_FORCE const TYPE *)                                        \
-        (miniflow_get_values(MF)                                        \
-         + count_1bits((MF)->map &                                      \
-                       ((UINT64_C(1) << (OFS) / sizeof(uint64_t)) - 1)))) \
-     [(OFS) % sizeof(uint64_t) / sizeof(TYPE)]                          \
-     : 0)                                                               \
+#define MINIFLOW_IN_MAP(MF, IDX) flowmap_is_set(&(MF)->map, IDX)
 
-#define MINIFLOW_GET_U8(FLOW, FIELD)                                \
-    MINIFLOW_GET_TYPE(FLOW, uint8_t, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_U16(FLOW, FIELD)                               \
-    MINIFLOW_GET_TYPE(FLOW, uint16_t, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_BE16(FLOW, FIELD)                              \
-    MINIFLOW_GET_TYPE(FLOW, ovs_be16, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_U32(FLOW, FIELD)                               \
-    MINIFLOW_GET_TYPE(FLOW, uint32_t, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_BE32(FLOW, FIELD)                              \
-    MINIFLOW_GET_TYPE(FLOW, ovs_be32, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_U64(FLOW, FIELD)                               \
-    MINIFLOW_GET_TYPE(FLOW, uint64_t, offsetof(struct flow, FIELD))
-#define MINIFLOW_GET_BE64(FLOW, FIELD)                              \
-    MINIFLOW_GET_TYPE(FLOW, ovs_be64, offsetof(struct flow, FIELD))
+/* Get the value of the struct flow 'FIELD' as up to 8 byte wide integer type
+ * 'TYPE' from miniflow 'MF'. */
+#define MINIFLOW_GET_TYPE(MF, TYPE, FIELD)                              \
+    (MINIFLOW_IN_MAP(MF, FLOW_U64_OFFSET(FIELD))                        \
+     ? ((OVS_FORCE const TYPE *)miniflow_get__(MF, FLOW_U64_OFFSET(FIELD))) \
+     [FLOW_U64_OFFREM(FIELD) / sizeof(TYPE)]                            \
+     : 0)
+
+#define MINIFLOW_GET_U128(FLOW, FIELD)                                  \
+    (ovs_u128) { .u64 = {                                               \
+            (MINIFLOW_IN_MAP(FLOW, FLOW_U64_OFFSET(FIELD)) ?            \
+             *miniflow_get__(FLOW, FLOW_U64_OFFSET(FIELD)) : 0),        \
+            (MINIFLOW_IN_MAP(FLOW, FLOW_U64_OFFSET(FIELD) + 1) ?        \
+             *miniflow_get__(FLOW, FLOW_U64_OFFSET(FIELD) + 1) : 0) } }
+
+#define MINIFLOW_GET_U8(FLOW, FIELD)            \
+    MINIFLOW_GET_TYPE(FLOW, uint8_t, FIELD)
+#define MINIFLOW_GET_U16(FLOW, FIELD)           \
+    MINIFLOW_GET_TYPE(FLOW, uint16_t, FIELD)
+#define MINIFLOW_GET_BE16(FLOW, FIELD)          \
+    MINIFLOW_GET_TYPE(FLOW, ovs_be16, FIELD)
+#define MINIFLOW_GET_U32(FLOW, FIELD)           \
+    MINIFLOW_GET_TYPE(FLOW, uint32_t, FIELD)
+#define MINIFLOW_GET_BE32(FLOW, FIELD)          \
+    MINIFLOW_GET_TYPE(FLOW, ovs_be32, FIELD)
+#define MINIFLOW_GET_U64(FLOW, FIELD)           \
+    MINIFLOW_GET_TYPE(FLOW, uint64_t, FIELD)
+#define MINIFLOW_GET_BE64(FLOW, FIELD)          \
+    MINIFLOW_GET_TYPE(FLOW, ovs_be64, FIELD)
 
 static inline uint64_t miniflow_get(const struct miniflow *,
                                     unsigned int u64_ofs);
@@ -601,12 +843,10 @@ struct minimask {
 };
 
 void minimask_init(struct minimask *, const struct flow_wildcards *);
-void minimask_clone(struct minimask *, const struct minimask *);
-void minimask_move(struct minimask *dst, struct minimask *src);
+struct minimask * minimask_create(const struct flow_wildcards *);
 void minimask_combine(struct minimask *dst,
                       const struct minimask *a, const struct minimask *b,
                       uint64_t storage[FLOW_U64S]);
-void minimask_destroy(struct minimask *);
 
 void minimask_expand(const struct minimask *, struct flow_wildcards *);
 
@@ -629,7 +869,7 @@ minimask_is_catchall(const struct minimask *mask)
     /* For every 1-bit in mask's map, the corresponding value is non-zero,
      * so the only way the mask can not fix any bits or fields is for the
      * map the be zero. */
-    return mask->masks.map == 0;
+    return flowmap_is_empty(mask->masks.map);
 }
 
 /* Returns the uint64_t that would be at byte offset '8 * u64_ofs' if 'flow'
@@ -637,8 +877,7 @@ minimask_is_catchall(const struct minimask *mask)
 static inline uint64_t miniflow_get(const struct miniflow *flow,
                                     unsigned int u64_ofs)
 {
-    return flow->map & (UINT64_C(1) << u64_ofs)
-        ? miniflow_get__(flow, u64_ofs) : 0;
+    return MINIFLOW_IN_MAP(flow, u64_ofs) ? *miniflow_get__(flow, u64_ofs) : 0;
 }
 
 static inline uint32_t miniflow_get_u32(const struct miniflow *flow,
@@ -716,18 +955,33 @@ minimask_get_metadata_mask(const struct minimask *mask)
     return MINIFLOW_GET_BE64(&mask->masks, metadata);
 }
 
+/* Perform a bitwise OR of miniflow 'src' flow data specified in 'subset' with
+ * the equivalent fields in 'dst', storing the result in 'dst'.  'subset' must
+ * be a subset of 'src's map. */
+static inline void
+flow_union_with_miniflow_subset(struct flow *dst, const struct miniflow *src,
+                                struct flowmap subset)
+{
+    uint64_t *dst_u64 = (uint64_t *) dst;
+    const uint64_t *p = miniflow_get_values(src);
+    map_t map;
+
+    FLOWMAP_FOR_EACH_MAP (map, subset) {
+        size_t idx;
+
+        MAP_FOR_EACH_INDEX(idx, map) {
+            dst_u64[idx] |= *p++;
+        }
+        dst_u64 += MAP_T_BITS;
+    }
+}
+
 /* Perform a bitwise OR of miniflow 'src' flow data with the equivalent
  * fields in 'dst', storing the result in 'dst'. */
 static inline void
 flow_union_with_miniflow(struct flow *dst, const struct miniflow *src)
 {
-    uint64_t *dst_u64 = (uint64_t *) dst;
-    const uint64_t *p = miniflow_get_values(src);
-    int idx;
-
-    MAP_FOR_EACH_INDEX(idx, src->map) {
-        dst_u64[idx] |= *p++;
-    }
+    flow_union_with_miniflow_subset(dst, src, src->map);
 }
 
 static inline void
@@ -735,10 +989,14 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
 {
     md->recirc_id = flow->recirc_id;
     md->dp_hash = flow->dp_hash;
-    md->tunnel = flow->tunnel;
+    flow_tnl_copy__(&md->tunnel, &flow->tunnel);
     md->skb_priority = flow->skb_priority;
     md->pkt_mark = flow->pkt_mark;
     md->in_port = flow->in_port;
+    md->ct_state = flow->ct_state;
+    md->ct_zone = flow->ct_zone;
+    md->ct_mark = flow->ct_mark;
+    md->ct_label = flow->ct_label;
 }
 
 static inline bool is_ip_any(const struct flow *flow)
@@ -756,6 +1014,31 @@ static inline bool is_icmpv6(const struct flow *flow)
 {
     return (flow->dl_type == htons(ETH_TYPE_IPV6)
             && flow->nw_proto == IPPROTO_ICMPV6);
+}
+
+static inline bool is_igmp(const struct flow *flow)
+{
+    return (flow->dl_type == htons(ETH_TYPE_IP)
+            && flow->nw_proto == IPPROTO_IGMP);
+}
+
+static inline bool is_mld(const struct flow *flow)
+{
+    return is_icmpv6(flow)
+           && (flow->tp_src == htons(MLD_QUERY)
+               || flow->tp_src == htons(MLD_REPORT)
+               || flow->tp_src == htons(MLD_DONE)
+               || flow->tp_src == htons(MLD2_REPORT));
+}
+
+static inline bool is_mld_query(const struct flow *flow)
+{
+    return is_icmpv6(flow) && flow->tp_src == htons(MLD_QUERY);
+}
+
+static inline bool is_mld_report(const struct flow *flow)
+{
+    return is_mld(flow) && !is_mld_query(flow);
 }
 
 static inline bool is_stp(const struct flow *flow)

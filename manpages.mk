@@ -1,5 +1,17 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 
+ovn/utilities/ovn-sbctl.8: \
+	ovn/utilities/ovn-sbctl.8.in \
+	lib/db-ctl-base.man \
+	lib/table.man \
+	ovsdb/remote-active.man \
+	ovsdb/remote-passive.man
+ovn/utilities/ovn-sbctl.8.in:
+lib/db-ctl-base.man:
+lib/table.man:
+ovsdb/remote-active.man:
+ovsdb/remote-passive.man:
+
 ovsdb/ovsdb-client.1: \
 	ovsdb/ovsdb-client.1.in \
 	lib/common-syn.man \
@@ -42,6 +54,8 @@ ovsdb/ovsdb-server.1: \
 	lib/service.man \
 	lib/ssl-bootstrap-syn.man \
 	lib/ssl-bootstrap.man \
+	lib/ssl-peer-ca-cert-syn.man \
+	lib/ssl-peer-ca-cert.man \
 	lib/ssl-syn.man \
 	lib/ssl.man \
 	lib/unixctl-syn.man \
@@ -62,6 +76,8 @@ lib/service-syn.man:
 lib/service.man:
 lib/ssl-bootstrap-syn.man:
 lib/ssl-bootstrap.man:
+lib/ssl-peer-ca-cert-syn.man:
+lib/ssl-peer-ca-cert.man:
 lib/ssl-syn.man:
 lib/ssl.man:
 lib/unixctl-syn.man:
@@ -213,6 +229,7 @@ utilities/ovs-vlan-bugs.man:
 utilities/ovs-vsctl.8: \
 	utilities/ovs-vsctl.8.in \
 	lib/common.man \
+	lib/db-ctl-base.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl-peer-ca-cert.man \
 	lib/ssl.man \
@@ -226,6 +243,7 @@ utilities/ovs-vsctl.8: \
 	ovsdb/remote-passive.man
 utilities/ovs-vsctl.8.in:
 lib/common.man:
+lib/db-ctl-base.man:
 lib/ssl-bootstrap.man:
 lib/ssl-peer-ca-cert.man:
 lib/ssl.man:
@@ -277,6 +295,7 @@ ovsdb/remote-passive.man:
 vtep/vtep-ctl.8: \
 	vtep/vtep-ctl.8.in \
 	lib/common.man \
+	lib/db-ctl-base.man \
 	lib/ssl-bootstrap.man \
 	lib/ssl-peer-ca-cert.man \
 	lib/ssl.man \
@@ -288,6 +307,7 @@ vtep/vtep-ctl.8: \
 	ovsdb/remote-passive.man
 vtep/vtep-ctl.8.in:
 lib/common.man:
+lib/db-ctl-base.man:
 lib/ssl-bootstrap.man:
 lib/ssl-peer-ca-cert.man:
 lib/ssl.man:

@@ -43,7 +43,12 @@ you will need the following software:
     libssl is installed, then Open vSwitch will automatically build
     with support for it.
 
-  - Python 2.x, for x >= 4.
+  - libcap-ng, written by Steve Grubb, is optional but recommended.  It
+    is required to run OVS daemons as a non-root user with dropped root
+    privileges.  If libcap-ng is installed, then Open vSwitch will
+    automatically build with support for it.
+
+  - Python 2.7.
 
 On Linux, you may choose to compile the kernel module that comes with
 the Open vSwitch distribution or to use the kernel module built into
@@ -113,8 +118,6 @@ formats other than plain text, only if you have the following:
 
   - Perl.  Version 5.10.1 is known to work.  Earlier versions should
     also work.
-
-  - Python 2.x, for x >= 4.
 
 If you are going to extensively modify Open vSwitch, please consider
 installing the following to obtain better warnings:
@@ -632,6 +635,13 @@ To recompile and reinstall OVS using RPM:
 
 	./boot.sh
 	vagrant provision --provision-with configure_ovs,install_rpm
+
+Two provisioners are included to run system tests with the OVS kernel
+module or with a userspace datapath.  This tests are different from
+the self-tests mentioned above.  To run them:
+
+	./boot.sh
+	vagrant provision --provision-with configure_ovs,test_ovs_kmod,test_ovs_system_userspace
 
 Continuous Integration with Travis-CI
 -------------------------------------

@@ -623,6 +623,19 @@ enum ofperr {
     /* ONF1.3(4448), OF1.4+(14,8).  Permissions error. */
     OFPERR_OFPBPC_EPERM,
 
+/* ## -------------------------- ## */
+/* ## OFPET_ASYNC_CONFIG_FAILED  ## */
+/* ## -------------------------- ## */
+
+    /* OF1.4+(15,0).  One mask is invalid. */
+    OFPERR_OFPACFC_INVALID,
+
+    /* OF1.4+(15,1).  Requested configuration not supported. */
+    OFPERR_OFPACFC_UNSUPPORTED,
+
+    /* OF1.4+(15,2).  Permissions error. */
+    OFPERR_OFPACFC_EPERM,
+
 /* ## -------------------- ## */
 /* ## OFPET_BUNDLE_FAILED  ## */
 /* ## -------------------- ## */
@@ -710,6 +723,34 @@ enum ofperr {
 
     /* OF1.4+(16,7).  Error in output port/group. */
     OFPERR_OFPMOFC_BAD_OUT,
+
+/* ## ----------------------------- ## */
+/* ## OFPET_TLV_TABLE_MOD_FAILED ## */
+/* ## ----------------------------- ## */
+
+    /* NX1.0-1.1(1,527), NX1.2+(16).  The TLV table mod command is not
+     * recognized as a valid operation. */
+    OFPERR_NXTTMFC_BAD_COMMAND,
+
+    /* NX1.0-1.1(1,528), NX1.2+(17).  The option length is not a valid
+     * option size for TLVs. */
+    OFPERR_NXTTMFC_BAD_OPT_LEN,
+
+    /* NX1.0-1.1(1,529), NX1.2+(18).  The field index is out of range for
+     * the supported NX_TUN_METADATA<n> match. */
+    OFPERR_NXTTMFC_BAD_FIELD_IDX,
+
+    /* NX1.0-1.1(1,530), NX1.2+(19).  The total set of configured options
+     * exceeds the maximum supported by the switch. */
+    OFPERR_NXTTMFC_TABLE_FULL,
+
+    /* NX1.0-1.1(1,531), NX1.2+(20).  The controller issued an NXTTMC_ADD
+     * command for a field index that is already mapped. */
+    OFPERR_NXTTMFC_ALREADY_MAPPED,
+
+    /* NX1.0-1.1(1,532), NX1.2+(21).  The option TLV that is attempting
+     * to be mapped is the same as one assigned to a different field. */
+    OFPERR_NXTTMFC_DUP_ENTRY,
 
 /* ## ------------------ ## */
 /* ## OFPET_EXPERIMENTER ## */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "coverage.h"
 #include "dpctl.h"
 #include "dp-packet.h"
+#include "dpif-netdev.h"
 #include "dynamic-string.h"
 #include "flow.h"
 #include "netdev.h"
@@ -43,7 +44,7 @@
 #include "shash.h"
 #include "sset.h"
 #include "timeval.h"
-#include "tnl-arp-cache.h"
+#include "tnl-neigh-cache.h"
 #include "tnl-ports.h"
 #include "util.h"
 #include "uuid.h"
@@ -121,7 +122,7 @@ dp_initialize(void)
         tnl_conf_seq = seq_create();
         dpctl_unixctl_register();
         tnl_port_map_init();
-        tnl_arp_cache_init();
+        tnl_neigh_cache_init();
         route_table_init();
 
         for (i = 0; i < ARRAY_SIZE(base_dpif_classes); i++) {
@@ -1096,6 +1097,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
     ovs_assert(cnt == 1);
 
     switch ((enum ovs_action_attr)type) {
+    case OVS_ACTION_ATTR_CT:
     case OVS_ACTION_ATTR_OUTPUT:
     case OVS_ACTION_ATTR_TUNNEL_PUSH:
     case OVS_ACTION_ATTR_TUNNEL_POP:
@@ -1105,8 +1107,10 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
         struct ofpbuf execute_actions;
         uint64_t stub[256 / 8];
         struct pkt_metadata *md = &packet->md;
+        bool dst_set;
 
-        if (md->tunnel.ip_dst) {
+        dst_set = flow_tnl_dst_is_set(&md->tunnel);
+        if (dst_set) {
             /* The Linux kernel datapath throws away the tunnel information
              * that we supply as metadata.  We have to use a "set" action to
              * supply it. */
@@ -1124,10 +1128,11 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
         execute.packet = packet;
         execute.needs_help = false;
         execute.probe = false;
+        execute.mtu = 0;
         aux->error = dpif_execute(aux->dpif, &execute);
         log_execute_message(aux->dpif, &execute, true, aux->error);
 
-        if (md->tunnel.ip_dst) {
+        if (dst_set) {
             ofpbuf_uninit(&execute_actions);
         }
         break;
@@ -1342,6 +1347,14 @@ dpif_handlers_set(struct dpif *dpif, uint32_t n_handlers)
         log_operation(dpif, "handlers_set", error);
     }
     return error;
+}
+
+void
+dpif_register_dp_purge_cb(struct dpif *dpif, dp_purge_callback *cb, void *aux)
+{
+    if (dpif->dpif_class->register_dp_purge_cb) {
+        dpif->dpif_class->register_dp_purge_cb(dpif, cb, aux);
+    }
 }
 
 void
@@ -1683,6 +1696,7 @@ log_execute_message(struct dpif *dpif, const struct dpif_execute *execute,
             ds_put_format(&ds, " failed (%s)", ovs_strerror(error));
         }
         ds_put_format(&ds, " on packet %s", packet);
+        ds_put_format(&ds, " mtu %d", execute->mtu);
         vlog(THIS_MODULE, error ? VLL_WARN : VLL_DBG, "%s", ds_cstr(&ds));
         ds_destroy(&ds);
         free(packet);
@@ -1705,6 +1719,5 @@ log_flow_get_message(const struct dpif *dpif, const struct dpif_flow_get *get,
 bool
 dpif_supports_tnl_push_pop(const struct dpif *dpif)
 {
-   return !strcmp(dpif->dpif_class->type, "netdev") ||
-          !strcmp(dpif->dpif_class->type, "dummy");
+    return dpif_is_netdev(dpif);
 }

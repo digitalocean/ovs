@@ -221,6 +221,7 @@ main(int argc, char *argv[])
     process_init();
 
     parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
+    daemon_become_new_user(false);
 
     /* Create and initialize 'config_tmpfile' as a temporary file to hold
      * ovsdb-server's most basic configuration, and then save our initial
@@ -248,7 +249,7 @@ main(int argc, char *argv[])
 
     save_config__(config_tmpfile, &remotes, &db_filenames);
 
-    daemonize_start();
+    daemonize_start(false);
 
     /* Load the saved config. */
     load_config(config_tmpfile, &remotes, &db_filenames);
@@ -257,6 +258,9 @@ main(int argc, char *argv[])
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
     server_config.jsonrpc = jsonrpc;
+
+    perf_counters_init();
+
     SSET_FOR_EACH (db_filename, &db_filenames) {
         error = open_db(&server_config, db_filename);
         if (error) {
@@ -294,8 +298,6 @@ main(int argc, char *argv[])
     }
 
     daemonize_complete();
-
-    perf_counters_init();
 
     if (!run_command) {
         /* ovsdb-server is usually a long-running process, in which case it
@@ -336,6 +338,7 @@ main(int argc, char *argv[])
         close_db(db);
         shash_delete(&all_dbs, node);
     }
+    shash_destroy(&all_dbs);
     sset_destroy(&remotes);
     sset_destroy(&db_filenames);
     unixctl_server_destroy(unixctl);
@@ -1252,6 +1255,7 @@ parse_options(int *argcp, char **argvp[],
         OPT_UNIXCTL,
         OPT_RUN,
         OPT_BOOTSTRAP_CA_CERT,
+        OPT_PEER_CA_CERT,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS
     };
@@ -1266,6 +1270,7 @@ parse_options(int *argcp, char **argvp[],
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
+        {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
         {"private-key", required_argument, NULL, 'p'},
         {"certificate", required_argument, NULL, 'c'},
         {"ca-cert",     required_argument, NULL, 'C'},
@@ -1323,6 +1328,10 @@ parse_options(int *argcp, char **argvp[],
         case OPT_BOOTSTRAP_CA_CERT:
             ca_cert_file = optarg;
             bootstrap_ca_cert = true;
+            break;
+
+        case OPT_PEER_CA_CERT:
+            stream_ssl_set_peer_ca_cert_file(optarg);
             break;
 
         case '?':

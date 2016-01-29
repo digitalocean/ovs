@@ -40,6 +40,7 @@
 #include "netdev.h"
 #include "netdev-linux.h"
 #include "netdev-vport.h"
+#include "netlink-conntrack.h"
 #include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "netlink.h"
@@ -759,9 +760,6 @@ get_vport_type(const struct dpif_netlink_vport *vport)
     case OVS_VPORT_TYPE_GRE:
         return "gre";
 
-    case OVS_VPORT_TYPE_GRE64:
-        return "gre64";
-
     case OVS_VPORT_TYPE_VXLAN:
         return "vxlan";
 
@@ -794,8 +792,6 @@ netdev_to_ovs_vport_type(const struct netdev *netdev)
         return OVS_VPORT_TYPE_STT;
     } else if (!strcmp(type, "geneve")) {
         return OVS_VPORT_TYPE_GENEVE;
-    } else if (strstr(type, "gre64")) {
-        return OVS_VPORT_TYPE_GRE64;
     } else if (strstr(type, "gre")) {
         return OVS_VPORT_TYPE_GRE;
     } else if (!strcmp(type, "vxlan")) {
@@ -1552,6 +1548,9 @@ dpif_netlink_encode_execute(int dp_ifindex, const struct dpif_execute *d_exec,
     if (d_exec->probe) {
         nl_msg_put_flag(buf, OVS_PACKET_ATTR_PROBE);
     }
+    if (d_exec->mtu) {
+        nl_msg_put_u16(buf, OVS_PACKET_ATTR_MRU, d_exec->mtu);
+    }
 }
 
 /* Executes, against 'dpif', up to the first 'n_ops' operations in 'ops'.
@@ -1595,20 +1594,6 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
         switch (op->type) {
         case DPIF_OP_FLOW_PUT:
             put = &op->u.flow_put;
-#ifdef _WIN32
-            /* Windows datapath doesn't support DPIF_FP_PROBE yet. */
-            if (put->flags & DPIF_FP_PROBE) {
-                /* Report an error immediately if this is the first operation.
-                 * Otherwise the easiest thing to do is to postpone to the next
-                 * call (when this will be the first operation). */
-                if (i == 0) {
-                    op->error = EINVAL;
-                    return 1;
-                }
-                n_ops = i;
-                break;
-            }
-#endif
             dpif_netlink_init_flow_put(dpif, put, &flow);
             if (put->stats) {
                 flow.nlmsg_flags |= NLM_F_ECHO;
@@ -1983,6 +1968,8 @@ parse_odp_packet(const struct dpif_netlink *dpif, struct ofpbuf *buf,
         /* OVS_PACKET_CMD_ACTION only. */
         [OVS_PACKET_ATTR_USERDATA] = { .type = NL_A_UNSPEC, .optional = true },
         [OVS_PACKET_ATTR_EGRESS_TUN_KEY] = { .type = NL_A_NESTED, .optional = true },
+        [OVS_PACKET_ATTR_ACTIONS] = { .type = NL_A_NESTED, .optional = true },
+        [OVS_PACKET_ATTR_MRU] = { .type = NL_A_U16, .optional = true }
     };
 
     struct ovs_header *ovs_header;
@@ -2019,6 +2006,8 @@ parse_odp_packet(const struct dpif_netlink *dpif, struct ofpbuf *buf,
     dpif_flow_hash(&dpif->dpif, upcall->key, upcall->key_len, &upcall->ufid);
     upcall->userdata = a[OVS_PACKET_ATTR_USERDATA];
     upcall->out_tun_key = a[OVS_PACKET_ATTR_EGRESS_TUN_KEY];
+    upcall->actions = a[OVS_PACKET_ATTR_ACTIONS];
+    upcall->mru = a[OVS_PACKET_ATTR_MRU];
 
     /* Allow overwriting the netlink attribute header without reallocating. */
     dp_packet_use_stub(&upcall->packet,
@@ -2291,6 +2280,69 @@ dpif_netlink_get_datapath_version(void)
     return version_str;
 }
 
+#ifdef __linux__
+struct dpif_netlink_ct_dump_state {
+    struct ct_dpif_dump_state up;
+    struct nl_ct_dump_state *nl_ct_dump;
+};
+
+static int
+dpif_netlink_ct_dump_start(struct dpif *dpif OVS_UNUSED,
+                           struct ct_dpif_dump_state **dump_,
+                           const uint16_t *zone)
+{
+    struct dpif_netlink_ct_dump_state *dump;
+    int err;
+
+    dump = xzalloc(sizeof *dump);
+    err = nl_ct_dump_start(&dump->nl_ct_dump, zone);
+    if (err) {
+        free(dump);
+        return err;
+    }
+
+    *dump_ = &dump->up;
+
+    return 0;
+}
+
+static int
+dpif_netlink_ct_dump_next(struct dpif *dpif OVS_UNUSED,
+                          struct ct_dpif_dump_state *dump_,
+                          struct ct_dpif_entry *entry)
+{
+    struct dpif_netlink_ct_dump_state *dump;
+
+    INIT_CONTAINER(dump, dump_, up);
+
+    return nl_ct_dump_next(dump->nl_ct_dump, entry);
+}
+
+static int
+dpif_netlink_ct_dump_done(struct dpif *dpif OVS_UNUSED,
+                          struct ct_dpif_dump_state *dump_)
+{
+    struct dpif_netlink_ct_dump_state *dump;
+    int err;
+
+    INIT_CONTAINER(dump, dump_, up);
+
+    err = nl_ct_dump_done(dump->nl_ct_dump);
+    free(dump);
+    return err;
+}
+
+static int
+dpif_netlink_ct_flush(struct dpif *dpif OVS_UNUSED, const uint16_t *zone)
+{
+    if (zone) {
+        return nl_ct_flush_zone(*zone);
+    } else {
+        return nl_ct_flush();
+    }
+}
+#endif
+
 const struct dpif_class dpif_netlink_class = {
     "system",
     NULL,                       /* init */
@@ -2326,10 +2378,22 @@ const struct dpif_class dpif_netlink_class = {
     dpif_netlink_recv,
     dpif_netlink_recv_wait,
     dpif_netlink_recv_purge,
+    NULL,                       /* register_dp_purge_cb */
     NULL,                       /* register_upcall_cb */
     NULL,                       /* enable_upcall */
     NULL,                       /* disable_upcall */
     dpif_netlink_get_datapath_version, /* get_datapath_version */
+#ifdef __linux__
+    dpif_netlink_ct_dump_start,
+    dpif_netlink_ct_dump_next,
+    dpif_netlink_ct_dump_done,
+    dpif_netlink_ct_flush,
+#else
+    NULL,                       /* ct_dump_start */
+    NULL,                       /* ct_dump_next */
+    NULL,                       /* ct_dump_done */
+    NULL,                       /* ct_flush */
+#endif
 };
 
 static int

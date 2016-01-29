@@ -59,7 +59,7 @@ override_dh_strip:
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track
-BRANCH=branch-2.4
+BRANCH=branch-2.5
 
 get-orig-snapshot:
 	rm -Rf openvswitch-upstream
