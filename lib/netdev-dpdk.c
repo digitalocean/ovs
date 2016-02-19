@@ -33,6 +33,7 @@
 #include "dirs.h"
 #include "dp-packet.h"
 #include "dpif-netdev.h"
+#include "fatal-signal.h"
 #include "list.h"
 #include "netdev-dpdk.h"
 #include "netdev-provider.h"
@@ -687,9 +688,13 @@ netdev_dpdk_vhost_user_construct(struct netdev *netdev_)
     if (err) {
         VLOG_ERR("vhost-user socket device setup failure for socket %s\n",
                  netdev->vhost_id);
+    } else {
+        fatal_signal_add_file_to_unlink(netdev->vhost_id);
+        VLOG_INFO("Socket %s created for vhost-user port %s\n",
+                  netdev->vhost_id, netdev_->name);
+        err = vhost_construct_helper(netdev_);
     }
-    VLOG_INFO("Socket %s created for vhost-user port %s\n", netdev->vhost_id, netdev_->name);
-    err = vhost_construct_helper(netdev_);
+
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
 }
@@ -745,6 +750,8 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev_)
 
     if (rte_vhost_driver_unregister(dev->vhost_id)) {
         VLOG_ERR("Unable to remove vhost-user socket %s", dev->vhost_id);
+    } else {
+        fatal_signal_remove_file_to_unlink(dev->vhost_id);
     }
 
     ovs_mutex_lock(&dpdk_mutex);
@@ -1881,6 +1888,7 @@ static void
 destroy_device(volatile struct virtio_net *dev)
 {
     struct netdev_dpdk *vhost_dev;
+    bool exists = false;
 
     ovs_mutex_lock(&dpdk_mutex);
     LIST_FOR_EACH (vhost_dev, list_node, &dpdk_list) {
@@ -1889,24 +1897,32 @@ destroy_device(volatile struct virtio_net *dev)
             ovs_mutex_lock(&vhost_dev->mutex);
             dev->flags &= ~VIRTIO_DEV_RUNNING;
             ovsrcu_set(&vhost_dev->virtio_dev, NULL);
+            exists = true;
             ovs_mutex_unlock(&vhost_dev->mutex);
-
-            /*
-             * Wait for other threads to quiesce before
-             * setting the virtio_dev to NULL.
-             */
-            ovsrcu_synchronize();
-            /*
-             * As call to ovsrcu_synchronize() will end the quiescent state,
-             * put thread back into quiescent state before returning.
-             */
-            ovsrcu_quiesce_start();
+            break;
         }
     }
+
     ovs_mutex_unlock(&dpdk_mutex);
 
-    VLOG_INFO("vHost Device '%s' %"PRIu64" has been removed", dev->ifname,
-              dev->device_fh);
+    if (exists == true) {
+        /*
+         * Wait for other threads to quiesce after setting the 'virtio_dev'
+         * to NULL, before returning.
+         */
+        ovsrcu_synchronize();
+        /*
+         * As call to ovsrcu_synchronize() will end the quiescent state,
+         * put thread back into quiescent state before returning.
+         */
+        ovsrcu_quiesce_start();
+        VLOG_INFO("vHost Device '%s' %"PRIu64" has been removed", dev->ifname,
+                  dev->device_fh);
+    } else {
+        VLOG_INFO("vHost Device '%s' %"PRIu64" not found", dev->ifname,
+                  dev->device_fh);
+    }
+
 }
 
 struct virtio_net *

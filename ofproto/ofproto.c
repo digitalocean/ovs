@@ -217,9 +217,9 @@ static void learned_cookies_flush(struct ofproto *, struct ovs_list *dead_cookie
 
 /* ofport. */
 static void ofport_destroy__(struct ofport *) OVS_EXCLUDED(ofproto_mutex);
-static void ofport_destroy(struct ofport *);
+static void ofport_destroy(struct ofport *, bool del);
 
-static void update_port(struct ofproto *, const char *devname);
+static int update_port(struct ofproto *, const char *devname);
 static int init_ports(struct ofproto *);
 static void reinit_ports(struct ofproto *);
 
@@ -1580,7 +1580,7 @@ ofproto_destroy_defer__(struct ofproto *ofproto)
 }
 
 void
-ofproto_destroy(struct ofproto *p)
+ofproto_destroy(struct ofproto *p, bool del)
     OVS_EXCLUDED(ofproto_mutex)
 {
     struct ofport *ofport, *next_ofport;
@@ -1599,7 +1599,7 @@ ofproto_destroy(struct ofproto *p)
 
     ofproto_flush__(p);
     HMAP_FOR_EACH_SAFE (ofport, next_ofport, hmap_node, &p->ports) {
-        ofport_destroy(ofport);
+        ofport_destroy(ofport, del);
     }
 
     HMAP_FOR_EACH_SAFE (usage, next_usage, hmap_node, &p->ofport_usage) {
@@ -1962,7 +1962,7 @@ ofproto_port_add(struct ofproto *ofproto, struct netdev *netdev,
 
         simap_put(&ofproto->ofp_requests, netdev_name,
                   ofp_to_u16(ofp_port));
-        update_port(ofproto, netdev_name);
+        error = update_port(ofproto, netdev_name);
     }
     if (ofp_portp) {
         *ofp_portp = OFPP_NONE;
@@ -2352,7 +2352,7 @@ ofport_equal(const struct ofputil_phy_port *a,
 /* Adds an ofport to 'p' initialized based on the given 'netdev' and 'opp'.
  * The caller must ensure that 'p' does not have a conflicting ofport (that is,
  * one with the same name or port number). */
-static void
+static int
 ofport_install(struct ofproto *p,
                struct netdev *netdev, const struct ofputil_phy_port *pp)
 {
@@ -2386,7 +2386,7 @@ ofport_install(struct ofproto *p,
         goto error;
     }
     connmgr_send_port_status(p->connmgr, NULL, pp, OFPPR_ADD);
-    return;
+    return 0;
 
 error:
     VLOG_WARN_RL(&rl, "%s: could not add port %s (%s)",
@@ -2396,6 +2396,7 @@ error:
     } else {
         netdev_close(netdev);
     }
+    return error;
 }
 
 /* Removes 'ofport' from 'p' and destroys it. */
@@ -2404,7 +2405,7 @@ ofport_remove(struct ofport *ofport)
 {
     connmgr_send_port_status(ofport->ofproto->connmgr, NULL, &ofport->pp,
                              OFPPR_DELETE);
-    ofport_destroy(ofport);
+    ofport_destroy(ofport, true);
 }
 
 /* If 'ofproto' contains an ofport named 'name', removes it from 'ofproto' and
@@ -2490,11 +2491,11 @@ ofport_destroy__(struct ofport *port)
 }
 
 static void
-ofport_destroy(struct ofport *port)
+ofport_destroy(struct ofport *port, bool del)
 {
     if (port) {
         dealloc_ofp_port(port->ofproto, port->ofp_port);
-        port->ofproto->ofproto_class->port_destruct(port);
+        port->ofproto->ofproto_class->port_destruct(port, del);
         ofport_destroy__(port);
      }
 }
@@ -2577,13 +2578,14 @@ ofproto_port_get_stats(const struct ofport *port, struct netdev_stats *stats)
     return error;
 }
 
-static void
+static int
 update_port(struct ofproto *ofproto, const char *name)
 {
     struct ofproto_port ofproto_port;
     struct ofputil_phy_port pp;
     struct netdev *netdev;
     struct ofport *port;
+    int error = 0;
 
     COVERAGE_INC(ofproto_update_port);
 
@@ -2623,13 +2625,15 @@ update_port(struct ofproto *ofproto, const char *name)
                 ofport_remove(port);
             }
             ofport_remove_with_name(ofproto, name);
-            ofport_install(ofproto, netdev, &pp);
+            error = ofport_install(ofproto, netdev, &pp);
         }
     } else {
         /* Any port named 'name' is gone now. */
         ofport_remove_with_name(ofproto, name);
     }
     ofproto_port_destroy(&ofproto_port);
+
+    return error;
 }
 
 static int

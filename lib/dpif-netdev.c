@@ -478,7 +478,9 @@ static void dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                                       const struct nlattr *actions,
                                       size_t actions_len);
 static void dp_netdev_input(struct dp_netdev_pmd_thread *,
-                            struct dp_packet **, int cnt);
+                            struct dp_packet **, int cnt, odp_port_t port_no);
+static void dp_netdev_recirculate(struct dp_netdev_pmd_thread *,
+                                  struct dp_packet **, int cnt);
 
 static void dp_netdev_disable_upcall(struct dp_netdev *);
 static void dp_netdev_pmd_reload_done(struct dp_netdev_pmd_thread *pmd);
@@ -927,15 +929,16 @@ dp_netdev_free(struct dp_netdev *dp)
     shash_find_and_delete(&dp_netdevs, dp->name);
 
     dp_netdev_destroy_all_pmds(dp);
-    cmap_destroy(&dp->poll_threads);
     ovs_mutex_destroy(&dp->non_pmd_mutex);
     ovsthread_key_delete(dp->per_pmd_key);
 
     ovs_mutex_lock(&dp->port_mutex);
     CMAP_FOR_EACH (port, node, &dp->ports) {
+        /* PMD threads are destroyed here. do_del_port() cannot quiesce */
         do_del_port(dp, port);
     }
     ovs_mutex_unlock(&dp->port_mutex);
+    cmap_destroy(&dp->poll_threads);
 
     seq_destroy(dp->port_seq);
     cmap_destroy(&dp->ports);
@@ -2555,16 +2558,10 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
     error = netdev_rxq_recv(rxq, packets, &cnt);
     cycles_count_end(pmd, PMD_CYCLES_POLLING);
     if (!error) {
-        int i;
-
         *recirc_depth_get() = 0;
 
-        /* XXX: initialize md in netdev implementation. */
-        for (i = 0; i < cnt; i++) {
-            pkt_metadata_init(&packets[i]->md, port->port_no);
-        }
         cycles_count_start(pmd);
-        dp_netdev_input(pmd, packets, cnt);
+        dp_netdev_input(pmd, packets, cnt, port->port_no);
         cycles_count_end(pmd, PMD_CYCLES_PROCESSING);
     } else if (error != EAGAIN && error != EOPNOTSUPP) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
@@ -2914,10 +2911,24 @@ static void
 dp_netdev_destroy_all_pmds(struct dp_netdev *dp)
 {
     struct dp_netdev_pmd_thread *pmd;
+    struct dp_netdev_pmd_thread **pmd_list;
+    size_t k = 0, n_pmds;
+
+    n_pmds = cmap_count(&dp->poll_threads);
+    pmd_list = xcalloc(n_pmds, sizeof *pmd_list);
 
     CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
-        dp_netdev_del_pmd(dp, pmd);
+        /* We cannot call dp_netdev_del_pmd(), since it alters
+         * 'dp->poll_threads' (while we're iterating it) and it
+         * might quiesce. */
+        ovs_assert(k < n_pmds);
+        pmd_list[k++] = pmd;
     }
+
+    for (size_t i = 0; i < k; i++) {
+        dp_netdev_del_pmd(dp, pmd_list[i]);
+    }
+    free(pmd_list);
 }
 
 /* Deletes all pmd threads on numa node 'numa_id' and
@@ -2928,16 +2939,26 @@ dp_netdev_del_pmds_on_numa(struct dp_netdev *dp, int numa_id)
     struct dp_netdev_pmd_thread *pmd;
     int n_pmds_on_numa, n_pmds;
     int *free_idx, k = 0;
+    struct dp_netdev_pmd_thread **pmd_list;
 
     n_pmds_on_numa = get_n_pmd_threads_on_numa(dp, numa_id);
-    free_idx = xmalloc(n_pmds_on_numa * sizeof *free_idx);
+    free_idx = xcalloc(n_pmds_on_numa, sizeof *free_idx);
+    pmd_list = xcalloc(n_pmds_on_numa, sizeof *pmd_list);
 
     CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
+        /* We cannot call dp_netdev_del_pmd(), since it alters
+         * 'dp->poll_threads' (while we're iterating it) and it
+         * might quiesce. */
         if (pmd->numa_id == numa_id) {
             atomic_read_relaxed(&pmd->tx_qid, &free_idx[k]);
+            pmd_list[k] = pmd;
+            ovs_assert(k < n_pmds_on_numa);
             k++;
-            dp_netdev_del_pmd(dp, pmd);
         }
+    }
+
+    for (int i = 0; i < k; i++) {
+        dp_netdev_del_pmd(dp, pmd_list[i]);
     }
 
     n_pmds = get_n_pmd_threads(dp);
@@ -2953,6 +2974,7 @@ dp_netdev_del_pmds_on_numa(struct dp_netdev *dp, int numa_id)
         }
     }
 
+    free(pmd_list);
     free(free_idx);
 }
 
@@ -3294,17 +3316,21 @@ dp_packet_swap(struct dp_packet **a, struct dp_packet **b)
 }
 
 /* Try to process all ('cnt') the 'packets' using only the exact match cache
- * 'flow_cache'. If a flow is not found for a packet 'packets[i]', the
+ * 'pmd->flow_cache'. If a flow is not found for a packet 'packets[i]', the
  * miniflow is copied into 'keys' and the packet pointer is moved at the
  * beginning of the 'packets' array.
  *
  * The function returns the number of packets that needs to be processed in the
  * 'packets' array (they have been moved to the beginning of the vector).
+ *
+ * If 'md_is_valid' is false, the metadata in 'packets' is not valid and must be
+ * initialized by this function using 'port_no'.
  */
 static inline size_t
 emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
                size_t cnt, struct netdev_flow_key *keys,
-               struct packet_batch batches[], size_t *n_batches)
+               struct packet_batch batches[], size_t *n_batches,
+               bool md_is_valid, odp_port_t port_no)
 {
     struct emc_cache *flow_cache = &pmd->flow_cache;
     struct netdev_flow_key key;
@@ -3319,10 +3345,14 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
         }
 
         if (i != cnt - 1) {
-            /* Prefetch next packet data */
+            /* Prefetch next packet data and metadata. */
             OVS_PREFETCH(dp_packet_data(packets[i+1]));
+            pkt_metadata_prefetch_init(&packets[i+1]->md);
         }
 
+        if (!md_is_valid) {
+            pkt_metadata_init(&packets[i]->md, port_no);
+        }
         miniflow_extract(packets[i], &key.mf);
         key.len = 0; /* Not computed yet. */
         key.hash = dpif_netdev_packet_get_rss_hash(packets[i], &key.mf);
@@ -3484,9 +3514,16 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
     dp_netdev_count_packet(pmd, DP_STAT_LOST, lost_cnt);
 }
 
+/* Packets enter the datapath from a port (or from recirculation) here.
+ *
+ * For performance reasons a caller may choose not to initialize the metadata
+ * in 'packets': in this case 'mdinit' is false and this function needs to
+ * initialize it using 'port_no'.  If the metadata in 'packets' is already
+ * valid, 'md_is_valid' must be true and 'port_no' will be ignored. */
 static void
-dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
-                struct dp_packet **packets, int cnt)
+dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
+                  struct dp_packet **packets, int cnt,
+                  bool md_is_valid, odp_port_t port_no)
 {
 #if !defined(__CHECKER__) && !defined(_WIN32)
     const size_t PKT_ARRAY_SIZE = cnt;
@@ -3500,7 +3537,8 @@ dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
     size_t newcnt, n_batches, i;
 
     n_batches = 0;
-    newcnt = emc_processing(pmd, packets, cnt, keys, batches, &n_batches);
+    newcnt = emc_processing(pmd, packets, cnt, keys, batches, &n_batches,
+                            md_is_valid, port_no);
     if (OVS_UNLIKELY(newcnt)) {
         fast_path_processing(pmd, packets, newcnt, keys, batches, &n_batches);
     }
@@ -3512,6 +3550,21 @@ dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
     for (i = 0; i < n_batches; i++) {
         packet_batch_execute(&batches[i], pmd, now);
     }
+}
+
+static void
+dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
+                struct dp_packet **packets, int cnt,
+                odp_port_t port_no)
+{
+     dp_netdev_input__(pmd, packets, cnt, false, port_no);
+}
+
+static void
+dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
+                      struct dp_packet **packets, int cnt)
+{
+     dp_netdev_input__(pmd, packets, cnt, true, 0);
 }
 
 struct dp_netdev_execute_aux {
@@ -3617,7 +3670,7 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             err = push_tnl_action(dp, a, packets, cnt);
             if (!err) {
                 (*depth)++;
-                dp_netdev_input(pmd, packets, cnt);
+                dp_netdev_recirculate(pmd, packets, cnt);
                 (*depth)--;
             } else {
                 dp_netdev_drop_packets(tnl_pkt, cnt, !may_steal);
@@ -3648,7 +3701,7 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
                     }
 
                     (*depth)++;
-                    dp_netdev_input(pmd, packets, cnt);
+                    dp_netdev_recirculate(pmd, packets, cnt);
                     (*depth)--;
                 } else {
                     dp_netdev_drop_packets(tnl_pkt, cnt, !may_steal);
@@ -3706,7 +3759,7 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             }
 
             (*depth)++;
-            dp_netdev_input(pmd, packets, cnt);
+            dp_netdev_recirculate(pmd, packets, cnt);
             (*depth)--;
 
             return;

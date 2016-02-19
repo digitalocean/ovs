@@ -1,3 +1,9 @@
+openvswitch (2.5.0~git20160219.522aca6-0ubuntu1) xenial; urgency=medium
+
+  * [7c4c30b] Imported upstream snapshot 2.5.0~git20160219.522aca6.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 19 Feb 2016 13:51:49 +0000
+
 openvswitch (2.5.0~git20160129.46a88d9-0ubuntu1) xenial; urgency=medium
 
   * [099b995] d/rules: Switch to 2.5 branch for snapshots.
