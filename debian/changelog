@@ -1,3 +1,18 @@
+openvswitch (2.5.0~git20160219.522aca6-0ubuntu2) xenial; urgency=medium
+
+  * [9c970b06] d/rules,*.manpages,*.install: Prepare for dual build.
+  * [f7dff3e7] DPDK enablement (LP: #1492186):
+    - d/p/system-dpdk.patch: Pick patch from openvswitch-dpdk to
+      support use with libdpdk-dev.
+    - d/control: Add DPDK dependencies for supported archs.
+    - d/rules: Build DPDK enabled binaries for supported archs.
+    - d/openvswitch-switch.p*: Install ovs-vswitch-dpdk binary as an
+      alternative.
+    - d/openvswitch-switch.README.Debian: Let users know how to use
+      the DPDK binary.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 24 Feb 2016 21:44:41 +0000
+
 openvswitch (2.5.0~git20160219.522aca6-0ubuntu1) xenial; urgency=medium
 
   * [7c4c30b] Imported upstream snapshot 2.5.0~git20160219.522aca6.

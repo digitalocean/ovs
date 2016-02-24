@@ -8,7 +8,6 @@ EXTRA_DIST += \
 	debian/openvswitch-common.dirs \
 	debian/openvswitch-common.docs \
 	debian/openvswitch-common.install \
-	debian/openvswitch-common.manpages \
 	debian/openvswitch-ipsec.dirs \
 	debian/openvswitch-ipsec.init \
 	debian/openvswitch-ipsec.install \
@@ -20,37 +19,30 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.init \
 	debian/openvswitch-switch.install \
 	debian/openvswitch-switch.logrotate \
-	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
 	debian/openvswitch-switch.default \
 	debian/openvswitch-switch.links \
 	debian/openvswitch-test.install \
-	debian/openvswitch-test.manpages \
 	debian/openvswitch-testcontroller.README.Debian \
 	debian/openvswitch-testcontroller.default \
 	debian/openvswitch-testcontroller.dirs \
 	debian/openvswitch-testcontroller.init \
 	debian/openvswitch-testcontroller.install \
-	debian/openvswitch-testcontroller.manpages \
 	debian/openvswitch-testcontroller.postinst \
 	debian/openvswitch-testcontroller.postrm \
 	debian/openvswitch-vtep.default \
 	debian/openvswitch-vtep.dirs \
 	debian/openvswitch-vtep.init \
 	debian/openvswitch-vtep.install \
-	debian/openvswitch-vtep.manpages \
 	debian/ovn-central.init \
 	debian/ovn-central.install \
-	debian/ovn-central.manpages \
 	debian/ovn-central.postrm \
 	debian/ovn-central.default \
 	debian/ovn-common.install \
-	debian/ovn-common.manpages \
     debian/ovn-docker.install \
 	debian/ovn-host.init \
 	debian/ovn-host.install \
-	debian/ovn-host.manpages \
 	debian/ovn-host.postrm \
 	debian/ovn-host.default \
 	debian/ovs-monitor-ipsec \

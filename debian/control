@@ -13,8 +13,11 @@ Build-Depends: autoconf (>= 2.64),
                dh-systemd (>= 1.5),
                graphviz,
                libcap-ng-dev,
+               libdpdk-dev [amd64 i386],
+               libpcap-dev [amd64 i386],
                libssl-dev,
                libtool,
+               libxen-dev [amd64 i386],
                openssl,
                procps,
                python-all (>= 2.6.6-3~),
@@ -51,7 +54,8 @@ Description: Open vSwitch common components
 
 Package: openvswitch-switch
 Architecture: linux-any
-Depends: kmod | module-init-tools,
+Depends: dpdk [amd64 i386],
+         kmod | module-init-tools,
          netbase,
          openvswitch-common (= ${binary:Version}),
          procps,

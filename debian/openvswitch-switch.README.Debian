@@ -203,3 +203,46 @@ in the 'auto' section, openvswitch-switch will forcefully be started when
 ifupdown kicks in. In a case like this, the admin needs to make sure that /usr
 has already been mounted and that a remote $syslog (if used) is ready to
 receive openvswitch logs.
+
+DPDK support
+------------
+
+This package provides a DPDK enabled version of the OpenvSwitch vswitchd
+binary; by default, the standard ovs-vswitchd binary will be used:
+
+  $ update-alternatives --query ovs-vswitchd
+  Name: ovs-vswitchd
+  Link: /usr/sbin/ovs-vswitchd
+  Status: auto
+  Best: /usr/lib/openvswitch-switch/ovs-vswitchd
+  Value: /usr/lib/openvswitch-switch/ovs-vswitchd
+
+  Alternative: /usr/lib/openvswitch-switch/ovs-vswitchd-dpdk
+  Priority: 50
+
+  Alternative: /usr/lib/openvswitch-switch/ovs-vswitchd
+  Priority: 100
+
+DPDK provides fast packet processing in userspace, and has some specific
+requirements in terms of system configuration - see the upstream
+documentation for more details:
+
+  /usr/share/doc/openvswitch-common/INSTALL.DPDK.md.gz
+
+DPDK has a minimum CPU feature set of SSE3 and requires use of hugepage
+memory, so is not appropriate for all amd64 CPU types hence is not
+enabled by default.
+
+To switch to the DPDK version:
+
+   sudo update-alternatives --set ovs-vswitchd \
+        /usr/lib/openvswitch-switch/ovs-vswitchd-dpdk
+   sudo service openvswitch-switch restart
+
+and to switch back:
+
+   sudo update-alternatives --set ovs-vswitchd \
+        /usr/lib/openvswitch-switch/ovs-vswitchd
+   sudo service openvswitch-switch restart
+
+ -- James Page <james.page@ubuntu.com>  Wed, 24 Feb 2016 15:59:24 +0000

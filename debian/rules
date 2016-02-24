@@ -17,7 +17,19 @@ PARALLEL =
 endif
 
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-ssl $(DATAPATH_CONFIGURE_OPTS)
+	test -d _debian || mkdir _debian
+	cd _debian && ( \
+		test -e Makefile || \
+		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
+				     --sysconfdir=/etc $(DATAPATH_CONFIGURE_OPTS))
+ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+	test -d _dpdk || mkdir _dpdk
+	cd _dpdk && ( \
+		test -e Makefile || \
+        ../configure --prefix=/usr --localstatedir=/var --enable-ssl \
+                     --with-dpdk=/usr --sysconfdir=/etc \
+					 $(DATAPATH_CONFIGURE_OPTS))
+endif
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on powerpc/s390x until
@@ -25,21 +37,36 @@ override_dh_auto_test:
 # is resolved
 ifeq (,$(filter powerpc s390x,$(DEB_HOST_ARCH)))
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL)' || \
-                $(MAKE) check TESTSUITEFLAGS='--recheck'; then :; \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL)' || \
+                $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
-		cat tests/testsuite.log; \
+		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
-endif
+ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL)' || \
+				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
+	else \
+		cat _dpdk/tests/testsuite.log; \
+		exit 1; \
+	fi
+endif # i386/amd64
+endif # nocheck
 endif # powerpc/s390x
 
 override_dh_auto_build:
-	dh_auto_build -- distdir=openvswitch
+	$(MAKE) -C _debian dist distdir=openvswitch
+ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+	$(MAKE) -C _dpdk dist distdir=openvswitch
+endif
 
 override_dh_auto_clean:
 	rm -f python/ovs/*.pyc python/ovs/db/*.pyc
 	dh_auto_clean
+	rm -rf _debian _dpdk
+
+override_dh_auto_install:
+	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/tmp install
 
 override_dh_install:
 	dh_install --list-missing
@@ -47,6 +74,10 @@ override_dh_install:
 	mkdir -p $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch
 	mv $(CURDIR)/debian/openvswitch-switch/usr/sbin/ovs-vswitchd \
 		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
+ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+	install -D _dpdk/vswitchd/ovs-vswitchd \
+        $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd-dpdk
+endif
 
 override_dh_installinit:
 	dh_installinit -R
