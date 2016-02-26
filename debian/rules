@@ -76,7 +76,7 @@ override_dh_install:
 		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
 ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
 	install -D _dpdk/vswitchd/ovs-vswitchd \
-        $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd-dpdk
+        $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
 endif
 
 override_dh_installinit:

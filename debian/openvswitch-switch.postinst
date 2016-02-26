@@ -22,10 +22,6 @@ case "$1" in
     configure)
         update-alternatives --install /usr/sbin/ovs-vswitchd ovs-vswitchd \
             /usr/lib/openvswitch-switch/ovs-vswitchd 100
-        if [ -x /usr/lib/openvswitch-switch/ovs-vswitchd-dpdk ]; then
-            update-alternatives --install /usr/sbin/ovs-vswitchd ovs-vswitchd \
-                /usr/lib/openvswitch-switch/ovs-vswitchd-dpdk 50
-        fi
         mkdir -p /var/lib/openvswitch
 	DEFAULT=/etc/default/openvswitch-switch
 	TEMPLATE=/usr/share/openvswitch/switch/default.template

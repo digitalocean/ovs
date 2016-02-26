@@ -1,3 +1,15 @@
+openvswitch (2.5.0~git20160219.522aca6-0ubuntu3) xenial; urgency=medium
+
+  * d/rules,control,openvswitch-switch-dpdk.*: Install DPDK enabled binaries
+    into a new package (replacing the one from src:openvswitch-dpdk) rather
+    than shipping alongside the vanilla binaries (LP: #1550254).
+  * d/openvswitch-switch.*: Tidy up alternatives related to ovs-vswitchd-dpdk
+    in 2.5.0~git20160219.522aca6-0ubuntu2.
+  * d/tests/*: Refactor, exercise vanilla and dpdk enabled binaries where
+    possible.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 26 Feb 2016 12:39:27 +0000
+
 openvswitch (2.5.0~git20160219.522aca6-0ubuntu2) xenial; urgency=medium
 
   * [9c970b06] d/rules,*.manpages,*.install: Prepare for dual build.
