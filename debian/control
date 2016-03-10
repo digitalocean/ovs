@@ -99,7 +99,6 @@ Description: DPDK enabled Open vSwitch switch implementation
  .
  DPDK is a set of libraries for fast packet processing. Applications run
  in user-space and communicate directly with dedicated network interfaces.
- This package contains the runtime environment to run DPDK applications.
  .
  This package provides a DPDK enabled implementation of the ovs-vswitchd
  binary.

@@ -616,32 +616,32 @@ ovsdb_monitor_compose_update(struct ovsdb_monitor *dbmon,
  * going to be used as part of an "update" notification. */
 struct json *
 ovsdb_monitor_get_update(struct ovsdb_monitor *dbmon,
-                         bool initial, uint64_t *unflushed)
+                         bool initial, uint64_t *unflushed_)
 {
     struct ovsdb_monitor_json_cache_node *cache_node;
     struct shash_node *node;
     struct json *json;
-    uint64_t prev_txn = *unflushed;
-    uint64_t next_txn = dbmon->n_transactions + 1;
+    const uint64_t unflushed = *unflushed_;
+    const uint64_t next_unflushed = dbmon->n_transactions + 1;
 
     /* Return a clone of cached json if one exists. Otherwise,
      * generate a new one and add it to the cache.  */
-    cache_node = ovsdb_monitor_json_cache_search(dbmon, prev_txn);
+    cache_node = ovsdb_monitor_json_cache_search(dbmon, unflushed);
     if (cache_node) {
         json = cache_node->json ? json_clone(cache_node->json) : NULL;
     } else {
-        json = ovsdb_monitor_compose_update(dbmon, initial, prev_txn);
-        ovsdb_monitor_json_cache_insert(dbmon, prev_txn, json);
+        json = ovsdb_monitor_compose_update(dbmon, initial, unflushed);
+        ovsdb_monitor_json_cache_insert(dbmon, unflushed, json);
     }
 
     /* Maintain transaction id of 'changes'. */
     SHASH_FOR_EACH (node, &dbmon->tables) {
         struct ovsdb_monitor_table *mt = node->data;
 
-        ovsdb_monitor_table_untrack_changes(mt, prev_txn);
-        ovsdb_monitor_table_track_changes(mt, next_txn);
+        ovsdb_monitor_table_untrack_changes(mt, unflushed);
+        ovsdb_monitor_table_track_changes(mt, next_unflushed);
     }
-    *unflushed = next_txn;
+    *unflushed_ = next_unflushed;
 
     return json;
 }
@@ -1005,11 +1005,24 @@ ovsdb_monitor_commit(struct ovsdb_replica *replica,
     struct ovsdb_monitor_aux aux;
 
     ovsdb_monitor_init_aux(&aux, m);
+    /* Update ovsdb_monitor's transaction number for
+     * each transaction, before calling ovsdb_monitor_change_cb().  */
+    m->n_transactions++;
     ovsdb_txn_for_each_change(txn, ovsdb_monitor_change_cb, &aux);
 
-    if (aux.efficacy == OVSDB_CHANGES_REQUIRE_EXTERNAL_UPDATE) {
+    switch(aux.efficacy) {
+    case OVSDB_CHANGES_NO_EFFECT:
+        /* The transaction is ignored by the monitor.
+         * Roll back the 'n_transactions' as if the transaction
+         * has never happened. */
+        m->n_transactions--;
+        break;
+    case OVSDB_CHANGES_REQUIRE_INTERNAL_UPDATE:
+        /* Nothing.  */
+        break;
+    case  OVSDB_CHANGES_REQUIRE_EXTERNAL_UPDATE:
         ovsdb_monitor_json_cache_flush(m);
-        m->n_transactions++;
+        break;
     }
 
     return NULL;

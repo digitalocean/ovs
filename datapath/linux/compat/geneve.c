@@ -742,6 +742,34 @@ static netdev_tx_t geneve_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
+static int __geneve_change_mtu(struct net_device *dev, int new_mtu, bool strict)
+{
+	/* The max_mtu calculation does not take account of GENEVE
+	 * options, to avoid excluding potentially valid
+	 * configurations.
+	 */
+	int max_mtu = IP_MAX_MTU - GENEVE_BASE_HLEN - sizeof(struct iphdr)
+		      - dev->hard_header_len;
+
+	if (new_mtu < 68)
+		return -EINVAL;
+
+	if (new_mtu > max_mtu) {
+		if (strict)
+			return -EINVAL;
+
+		new_mtu = max_mtu;
+	}
+
+	dev->mtu = new_mtu;
+	return 0;
+}
+
+static int geneve_change_mtu(struct net_device *dev, int new_mtu)
+{
+	return __geneve_change_mtu(dev, new_mtu, true);
+}
+
 static const struct net_device_ops geneve_netdev_ops = {
 #ifdef HAVE_DEV_TSTATS
 	.ndo_init		= geneve_init,
@@ -751,7 +779,7 @@ static const struct net_device_ops geneve_netdev_ops = {
 	.ndo_open		= geneve_open,
 	.ndo_stop		= geneve_stop,
 	.ndo_start_xmit		= geneve_dev_xmit,
-	.ndo_change_mtu		= eth_change_mtu,
+	.ndo_change_mtu		= geneve_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
 };
@@ -1028,11 +1056,21 @@ struct net_device *rpl_geneve_dev_create_fb(struct net *net, const char *name,
 		return dev;
 
 	err = geneve_configure(net, dev, 0, 0, 0, 0, htons(dst_port), true);
-	if (err) {
-		free_netdev(dev);
-		return ERR_PTR(err);
-	}
+	if (err)
+		goto err;
+
+	/* openvswitch users expect packet sizes to be unrestricted,
+	 * so set the largest MTU we can.
+	 */
+	err = __geneve_change_mtu(dev, IP_MAX_MTU, false);
+	if (err)
+		goto err;
+
 	return dev;
+
+err:
+	free_netdev(dev);
+	return ERR_PTR(err);
 }
 EXPORT_SYMBOL_GPL(rpl_geneve_dev_create_fb);
 
