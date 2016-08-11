@@ -25,7 +25,7 @@ override_dh_auto_configure:
 		test -e Makefile || \
 		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
 				     --sysconfdir=/etc $(DATAPATH_CONFIGURE_OPTS))
-ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 arm64, $(DEB_HOST_ARCH)))
 	test -d _dpdk || mkdir _dpdk
 	cd _dpdk && ( \
 		test -e Makefile || \
@@ -37,10 +37,7 @@ endif
 
 # Skip some known failing tests - review for each snapshot or release
 # https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1609846
-SKIP_TEST := 1-14 16-
-ifeq (i386, $(DEB_HOST_ARCH))
 SKIP_TEST := 1-14 16-1148 1150-2215 2217-
-endif
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on powerpc/s390x until
@@ -54,20 +51,20 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
-ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 arm64, $(DEB_HOST_ARCH)))
 	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
 				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat _dpdk/tests/testsuite.log; \
 		exit 1; \
 	fi
-endif # i386/amd64
+endif # i386/amd64/arm64
 endif # nocheck
 endif # powerpc/s390x
 
 override_dh_auto_build:
 	$(MAKE) -C _debian dist distdir=openvswitch
-ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 arm64, $(DEB_HOST_ARCH)))
 	$(MAKE) -C _dpdk dist distdir=openvswitch
 endif
 
@@ -93,7 +90,7 @@ override_dh_install:
         cd python && python$$pyvers setup.py install --install-layout=deb \
             --root $(CURDIR)/debian/python3-openvswitch; \
     done
-ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 arm64, $(DEB_HOST_ARCH)))
 	install -D _dpdk/vswitchd/ovs-vswitchd \
         $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
 endif

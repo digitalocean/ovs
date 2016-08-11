@@ -1,3 +1,10 @@
+openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu2) yakkety; urgency=medium
+
+  * Enable dpdk builds for arm64.
+  * Generalize blacklist of racey/failing unit tests.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 11 Aug 2016 21:59:17 +0100
+
 openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu1) yakkety; urgency=medium
 
   * New upstream snapshot for 2.6.0 release goal.
