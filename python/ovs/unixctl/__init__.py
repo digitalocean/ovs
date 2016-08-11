@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import types
+import six
+import sys
 
 import ovs.util
 
 commands = {}
-strtypes = types.StringTypes
+strtypes = six.string_types
 
 
 class _UnixctlCommand(object):
@@ -61,16 +62,18 @@ def command_register(name, usage, min_args, max_args, callback, aux):
     assert isinstance(usage, strtypes)
     assert isinstance(min_args, int)
     assert isinstance(max_args, int)
-    assert isinstance(callback, types.FunctionType)
+    assert callable(callback)
 
     if name not in commands:
         commands[name] = _UnixctlCommand(usage, min_args, max_args, callback,
                                          aux)
 
+
 def socket_name_from_target(target):
     assert isinstance(target, strtypes)
 
-    if target.startswith("/"):
+    """ On Windows an absolute path contains ':' ( i.e: C:\ ) """
+    if target.startswith('/') or target.find(':') > -1:
         return 0, target
 
     pidfile_name = "%s/%s.pid" % (ovs.dirs.RUNDIR, target)
@@ -78,6 +81,9 @@ def socket_name_from_target(target):
     if pid < 0:
         return -pid, "cannot read pidfile \"%s\"" % pidfile_name
 
-    return 0, "%s/%s.%d.ctl" % (ovs.dirs.RUNDIR, target, pid)
+    if sys.platform == "win32":
+        return 0, "%s/%s.ctl" % (ovs.dirs.RUNDIR, target)
+    else:
+        return 0, "%s/%s.%d.ctl" % (ovs.dirs.RUNDIR, target, pid)
 
 command_register("help", "", 0, 0, _unixctl_help, None)

@@ -17,6 +17,7 @@ import ovs.timeval
 import ovs.vlog
 import select
 import socket
+import os
 
 try:
     import eventlet.patcher
@@ -34,6 +35,7 @@ POLLOUT = 0x004
 POLLERR = 0x008
 POLLHUP = 0x010
 POLLNVAL = 0x020
+
 
 # eventlet/gevent doesn't support select.poll. If select.poll is used,
 # python interpreter is blocked as a whole instead of switching from the
@@ -84,7 +86,7 @@ class _SelectSelect(object):
             events_dict[fd] = events_dict.get(fd, 0) | (POLLERR |
                                                         POLLHUP |
                                                         POLLNVAL)
-        return events_dict.items()
+        return list(events_dict.items())
 
 
 SelectPoll = _SelectSelect
@@ -167,7 +169,12 @@ class Poller(object):
             try:
                 events = self.poll.poll(self.timeout)
                 self.__log_wakeup(events)
-            except select.error, e:
+            except OSError as e:
+                """ On Windows, the select function from poll raises OSError
+                exception if the polled array is empty."""
+                if e.errno != errno.EINTR:
+                    vlog.err("poll: %s" % os.strerror(e.errno))
+            except select.error as e:
                 # XXX rate-limit
                 error, msg = e
                 if error != errno.EINTR:

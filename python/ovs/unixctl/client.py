@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
-import errno
 import os
-import types
+
+import six
 
 import ovs.jsonrpc
 import ovs.stream
@@ -23,7 +22,7 @@ import ovs.util
 
 
 vlog = ovs.vlog.Vlog("unixctl_client")
-strtypes = types.StringTypes
+strtypes = six.string_types
 
 
 class UnixctlClient(object):

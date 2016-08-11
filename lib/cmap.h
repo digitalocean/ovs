@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Nicira, Inc.
+ * Copyright (c) 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,6 +78,12 @@ cmap_node_next_protected(const struct cmap_node *node)
 struct cmap {
     OVSRCU_TYPE(struct cmap_impl *) impl;
 };
+
+/* Initializer for an empty cmap. */
+#define CMAP_INITIALIZER {                                              \
+        .impl = OVSRCU_INITIALIZER((struct cmap_impl *) &empty_cmap)    \
+    }
+extern OVS_ALIGNED_VAR(CACHE_LINE_SIZE) const struct cmap_impl empty_cmap;
 
 /* Initialization. */
 void cmap_init(struct cmap *);
@@ -168,6 +174,11 @@ unsigned long cmap_find_batch(const struct cmap *cmap, unsigned long map,
  *     - Concurrent calls to cmap_remove() don't have the same problem.  (A
  *       node being deleted may be visited once or not at all.  Other nodes
  *       will be visited once.)
+ *
+ *     - If the cmap is changing, it is not safe to quiesce while iterating.
+ *       Even if the changes are done by the same thread that's performing the
+ *       iteration (Corollary: it is not safe to call cmap_remove() and quiesce
+ *       in the loop body).
  *
  *
  * Example

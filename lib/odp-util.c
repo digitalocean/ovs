@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,10 +29,10 @@
 #include "byte-order.h"
 #include "coverage.h"
 #include "dpif.h"
-#include "dynamic-string.h"
+#include "openvswitch/dynamic-string.h"
 #include "flow.h"
 #include "netlink.h"
-#include "ofpbuf.h"
+#include "openvswitch/ofpbuf.h"
 #include "packets.h"
 #include "simap.h"
 #include "timeval.h"
@@ -107,6 +107,7 @@ odp_action_len(uint16_t type)
 
     switch ((enum ovs_action_attr) type) {
     case OVS_ACTION_ATTR_OUTPUT: return sizeof(uint32_t);
+    case OVS_ACTION_ATTR_TRUNC: return sizeof(struct ovs_action_trunc);
     case OVS_ACTION_ATTR_TUNNEL_PUSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_TUNNEL_POP: return sizeof(uint32_t);
     case OVS_ACTION_ATTR_USERSPACE: return ATTR_LEN_VARIABLE;
@@ -311,11 +312,13 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
                 ds_put_format(ds, ",flow_sample(probability=%"PRIu16
                               ",collector_set_id=%"PRIu32
                               ",obs_domain_id=%"PRIu32
-                              ",obs_point_id=%"PRIu32")",
+                              ",obs_point_id=%"PRIu32
+                              ",output_port=%"PRIu32")",
                               cookie.flow_sample.probability,
                               cookie.flow_sample.collector_set_id,
                               cookie.flow_sample.obs_domain_id,
-                              cookie.flow_sample.obs_point_id);
+                              cookie.flow_sample.obs_point_id,
+                              cookie.flow_sample.output_odp_port);
             } else if (userdata_len >= sizeof cookie.ipfix
                        && cookie.type == USER_ACTION_COOKIE_IPFIX) {
                 ds_put_format(ds, ",ipfix(output_port=%"PRIu32")",
@@ -386,13 +389,13 @@ static void
 format_mpls(struct ds *ds, const struct ovs_key_mpls *mpls_key,
             const struct ovs_key_mpls *mpls_mask, int n)
 {
-    if (n == 1) {
-        ovs_be32 key = mpls_key->mpls_lse;
+    for (int i = 0; i < n; i++) {
+        ovs_be32 key = mpls_key[i].mpls_lse;
 
         if (mpls_mask == NULL) {
             format_mpls_lse(ds, key);
         } else {
-            ovs_be32 mask = mpls_mask->mpls_lse;
+            ovs_be32 mask = mpls_mask[i].mpls_lse;
 
             ds_put_format(ds, "label=%"PRIu32"/0x%x,tc=%d/%x,ttl=%d/0x%x,bos=%d/%x",
                           mpls_lse_to_label(key), mpls_lse_to_label(mask),
@@ -400,19 +403,9 @@ format_mpls(struct ds *ds, const struct ovs_key_mpls *mpls_key,
                           mpls_lse_to_ttl(key), mpls_lse_to_ttl(mask),
                           mpls_lse_to_bos(key), mpls_lse_to_bos(mask));
         }
-    } else {
-        int i;
-
-        for (i = 0; i < n; i++) {
-            ds_put_format(ds, "lse%d=%#"PRIx32,
-                          i, ntohl(mpls_key[i].mpls_lse));
-            if (mpls_mask) {
-                ds_put_format(ds, "/%#"PRIx32, ntohl(mpls_mask[i].mpls_lse));
-            }
-            ds_put_char(ds, ',');
-        }
-        ds_chomp(ds, ',');
+        ds_put_char(ds, ',');
     }
+    ds_chomp(ds, ',');
 }
 
 static void
@@ -557,6 +550,150 @@ format_odp_tnl_push_action(struct ds *ds, const struct nlattr *attr)
     ds_put_format(ds, ",out_port(%"PRIu32"))", data->out_port);
 }
 
+static const struct nl_policy ovs_nat_policy[] = {
+    [OVS_NAT_ATTR_SRC] = { .type = NL_A_FLAG, .optional = true, },
+    [OVS_NAT_ATTR_DST] = { .type = NL_A_FLAG, .optional = true, },
+    [OVS_NAT_ATTR_IP_MIN] = { .type = NL_A_UNSPEC, .optional = true,
+                              .min_len = sizeof(struct in_addr),
+                              .max_len = sizeof(struct in6_addr)},
+    [OVS_NAT_ATTR_IP_MAX] = { .type = NL_A_UNSPEC, .optional = true,
+                              .min_len = sizeof(struct in_addr),
+                              .max_len = sizeof(struct in6_addr)},
+    [OVS_NAT_ATTR_PROTO_MIN] = { .type = NL_A_U16, .optional = true, },
+    [OVS_NAT_ATTR_PROTO_MAX] = { .type = NL_A_U16, .optional = true, },
+    [OVS_NAT_ATTR_PERSISTENT] = { .type = NL_A_FLAG, .optional = true, },
+    [OVS_NAT_ATTR_PROTO_HASH] = { .type = NL_A_FLAG, .optional = true, },
+    [OVS_NAT_ATTR_PROTO_RANDOM] = { .type = NL_A_FLAG, .optional = true, },
+};
+
+static void
+format_odp_ct_nat(struct ds *ds, const struct nlattr *attr)
+{
+    struct nlattr *a[ARRAY_SIZE(ovs_nat_policy)];
+    size_t addr_len;
+    ovs_be32 ip_min, ip_max;
+    struct in6_addr ip6_min, ip6_max;
+    uint16_t proto_min, proto_max;
+
+    if (!nl_parse_nested(attr, ovs_nat_policy, a, ARRAY_SIZE(a))) {
+        ds_put_cstr(ds, "nat(error: nl_parse_nested() failed.)");
+        return;
+    }
+    /* If no type, then nothing else either. */
+    if (!(a[OVS_NAT_ATTR_SRC] || a[OVS_NAT_ATTR_DST])
+        && (a[OVS_NAT_ATTR_IP_MIN] || a[OVS_NAT_ATTR_IP_MAX]
+            || a[OVS_NAT_ATTR_PROTO_MIN] || a[OVS_NAT_ATTR_PROTO_MAX]
+            || a[OVS_NAT_ATTR_PERSISTENT] || a[OVS_NAT_ATTR_PROTO_HASH]
+            || a[OVS_NAT_ATTR_PROTO_RANDOM])) {
+        ds_put_cstr(ds, "nat(error: options allowed only with \"src\" or \"dst\")");
+        return;
+    }
+    /* Both SNAT & DNAT may not be specified. */
+    if (a[OVS_NAT_ATTR_SRC] && a[OVS_NAT_ATTR_DST]) {
+        ds_put_cstr(ds, "nat(error: Only one of \"src\" or \"dst\" may be present.)");
+        return;
+    }
+    /* proto may not appear without ip. */
+    if (!a[OVS_NAT_ATTR_IP_MIN] && a[OVS_NAT_ATTR_PROTO_MIN]) {
+        ds_put_cstr(ds, "nat(error: proto but no IP.)");
+        return;
+    }
+    /* MAX may not appear without MIN. */
+    if ((!a[OVS_NAT_ATTR_IP_MIN] && a[OVS_NAT_ATTR_IP_MAX])
+        || (!a[OVS_NAT_ATTR_PROTO_MIN] && a[OVS_NAT_ATTR_PROTO_MAX])) {
+        ds_put_cstr(ds, "nat(error: range max without min.)");
+        return;
+    }
+    /* Address sizes must match. */
+    if ((a[OVS_NAT_ATTR_IP_MIN]
+         && (nl_attr_get_size(a[OVS_NAT_ATTR_IP_MIN]) != sizeof(ovs_be32) &&
+             nl_attr_get_size(a[OVS_NAT_ATTR_IP_MIN]) != sizeof(struct in6_addr)))
+        || (a[OVS_NAT_ATTR_IP_MIN] && a[OVS_NAT_ATTR_IP_MAX]
+            && (nl_attr_get_size(a[OVS_NAT_ATTR_IP_MIN])
+                != nl_attr_get_size(a[OVS_NAT_ATTR_IP_MAX])))) {
+        ds_put_cstr(ds, "nat(error: IP address sizes do not match)");
+        return;
+    }
+
+    addr_len = a[OVS_NAT_ATTR_IP_MIN]
+        ? nl_attr_get_size(a[OVS_NAT_ATTR_IP_MIN]) : 0;
+    ip_min = addr_len == sizeof(ovs_be32) && a[OVS_NAT_ATTR_IP_MIN]
+        ? nl_attr_get_be32(a[OVS_NAT_ATTR_IP_MIN]) : 0;
+    ip_max = addr_len == sizeof(ovs_be32) && a[OVS_NAT_ATTR_IP_MAX]
+        ? nl_attr_get_be32(a[OVS_NAT_ATTR_IP_MAX]) : 0;
+    if (addr_len == sizeof ip6_min) {
+        ip6_min = a[OVS_NAT_ATTR_IP_MIN]
+            ? *(struct in6_addr *)nl_attr_get(a[OVS_NAT_ATTR_IP_MIN])
+            : in6addr_any;
+        ip6_max = a[OVS_NAT_ATTR_IP_MAX]
+            ? *(struct in6_addr *)nl_attr_get(a[OVS_NAT_ATTR_IP_MAX])
+            : in6addr_any;
+    }
+    proto_min = a[OVS_NAT_ATTR_PROTO_MIN]
+        ? nl_attr_get_u16(a[OVS_NAT_ATTR_PROTO_MIN]) : 0;
+    proto_max = a[OVS_NAT_ATTR_PROTO_MAX]
+        ? nl_attr_get_u16(a[OVS_NAT_ATTR_PROTO_MAX]) : 0;
+
+    if ((addr_len == sizeof(ovs_be32)
+         && ip_max && ntohl(ip_min) > ntohl(ip_max))
+        || (addr_len == sizeof(struct in6_addr)
+            && !ipv6_mask_is_any(&ip6_max)
+            && memcmp(&ip6_min, &ip6_max, sizeof ip6_min) > 0)
+        || (proto_max && proto_min > proto_max)) {
+        ds_put_cstr(ds, "nat(range error)");
+        return;
+    }
+
+    ds_put_cstr(ds, "nat");
+    if (a[OVS_NAT_ATTR_SRC] || a[OVS_NAT_ATTR_DST]) {
+        ds_put_char(ds, '(');
+        if (a[OVS_NAT_ATTR_SRC]) {
+            ds_put_cstr(ds, "src");
+        } else if (a[OVS_NAT_ATTR_DST]) {
+            ds_put_cstr(ds, "dst");
+        }
+
+        if (addr_len > 0) {
+            ds_put_cstr(ds, "=");
+
+            if (addr_len == sizeof ip_min) {
+                ds_put_format(ds, IP_FMT, IP_ARGS(ip_min));
+
+                if (ip_max && ip_max != ip_min) {
+                    ds_put_format(ds, "-"IP_FMT, IP_ARGS(ip_max));
+                }
+            } else if (addr_len == sizeof ip6_min) {
+                ipv6_format_addr_bracket(&ip6_min, ds, proto_min);
+
+                if (!ipv6_mask_is_any(&ip6_max) &&
+                    memcmp(&ip6_max, &ip6_min, sizeof ip6_max) != 0) {
+                    ds_put_char(ds, '-');
+                    ipv6_format_addr_bracket(&ip6_max, ds, proto_min);
+                }
+            }
+            if (proto_min) {
+                ds_put_format(ds, ":%"PRIu16, proto_min);
+
+                if (proto_max && proto_max != proto_min) {
+                    ds_put_format(ds, "-%"PRIu16, proto_max);
+                }
+            }
+        }
+        ds_put_char(ds, ',');
+        if (a[OVS_NAT_ATTR_PERSISTENT]) {
+            ds_put_cstr(ds, "persistent,");
+        }
+        if (a[OVS_NAT_ATTR_PROTO_HASH]) {
+            ds_put_cstr(ds, "hash,");
+        }
+        if (a[OVS_NAT_ATTR_PROTO_RANDOM]) {
+            ds_put_cstr(ds, "random,");
+        }
+        ds_chomp(ds, ',');
+        ds_put_char(ds, ')');
+    }
+}
+
 static const struct nl_policy ovs_conntrack_policy[] = {
     [OVS_CT_ATTR_COMMIT] = { .type = NL_A_FLAG, .optional = true, },
     [OVS_CT_ATTR_ZONE] = { .type = NL_A_U16, .optional = true, },
@@ -566,6 +703,7 @@ static const struct nl_policy ovs_conntrack_policy[] = {
                              .min_len = sizeof(struct ovs_key_ct_labels) * 2 },
     [OVS_CT_ATTR_HELPER] = { .type = NL_A_STRING, .optional = true,
                              .min_len = 1, .max_len = 16 },
+    [OVS_CT_ATTR_NAT] = { .type = NL_A_UNSPEC, .optional = true },
 };
 
 static void
@@ -577,6 +715,7 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     const char *helper;
     uint16_t zone;
     bool commit;
+    const struct nlattr *nat;
 
     if (!nl_parse_nested(attr, ovs_conntrack_policy, a, ARRAY_SIZE(a))) {
         ds_put_cstr(ds, "ct(error)");
@@ -588,9 +727,10 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     mark = a[OVS_CT_ATTR_MARK] ? nl_attr_get(a[OVS_CT_ATTR_MARK]) : NULL;
     label = a[OVS_CT_ATTR_LABELS] ? nl_attr_get(a[OVS_CT_ATTR_LABELS]): NULL;
     helper = a[OVS_CT_ATTR_HELPER] ? nl_attr_get(a[OVS_CT_ATTR_HELPER]) : NULL;
+    nat = a[OVS_CT_ATTR_NAT];
 
     ds_put_format(ds, "ct");
-    if (commit || zone || mark || label || helper) {
+    if (commit || zone || mark || label || helper || nat) {
         ds_put_cstr(ds, "(");
         if (commit) {
             ds_put_format(ds, "commit,");
@@ -609,6 +749,9 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
         }
         if (helper) {
             ds_put_format(ds, "helper=%s,", helper);
+        }
+        if (nat) {
+            format_odp_ct_nat(ds, nat);
         }
         ds_chomp(ds, ',');
         ds_put_cstr(ds, ")");
@@ -635,6 +778,14 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
     case OVS_ACTION_ATTR_OUTPUT:
         ds_put_format(ds, "%"PRIu32, nl_attr_get_u32(a));
         break;
+    case OVS_ACTION_ATTR_TRUNC: {
+        const struct ovs_action_trunc *trunc =
+                       nl_attr_get_unspec(a, sizeof *trunc);
+
+        ds_put_format(ds, "trunc(%"PRIu32")", trunc->max_len);
+        break;
+    }
+    break;
     case OVS_ACTION_ATTR_TUNNEL_POP:
         ds_put_format(ds, "tnl_pop(%"PRIu32")", nl_attr_get_u32(a));
         break;
@@ -811,9 +962,11 @@ parse_odp_userspace_action(const char *s, struct ofpbuf *actions)
         } else if (ovs_scan(&s[n], ",flow_sample(probability=%"SCNi32","
                             "collector_set_id=%"SCNi32","
                             "obs_domain_id=%"SCNi32","
-                            "obs_point_id=%"SCNi32")%n",
+                            "obs_point_id=%"SCNi32","
+                            "output_port=%"SCNi32")%n",
                             &probability, &collector_set_id,
-                            &obs_domain_id, &obs_point_id, &n1)) {
+                            &obs_domain_id, &obs_point_id,
+                            &output, &n1)) {
             n += n1;
 
             cookie.type = USER_ACTION_COOKIE_FLOW_SAMPLE;
@@ -821,6 +974,7 @@ parse_odp_userspace_action(const char *s, struct ofpbuf *actions)
             cookie.flow_sample.collector_set_id = collector_set_id;
             cookie.flow_sample.obs_domain_id = obs_domain_id;
             cookie.flow_sample.obs_point_id = obs_point_id;
+            cookie.flow_sample.output_odp_port = u32_to_odp(output);
             user_data = &cookie;
             user_data_size = sizeof cookie.flow_sample;
         } else if (ovs_scan(&s[n], ",ipfix(output_port=%"SCNi32")%n",
@@ -896,15 +1050,15 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     ip = (struct ip_header *) l3;
     ip6 = (struct ovs_16aligned_ip6_hdr *) l3;
     if (!ovs_scan_len(s, &n, "header(size=%"SCNi32",type=%"SCNi32","
-                         "eth(dst="ETH_ADDR_SCAN_FMT",",
-                         &data->header_len,
-                         &data->tnl_type,
-                         ETH_ADDR_SCAN_ARGS(eth->eth_dst))) {
+                      "eth(dst="ETH_ADDR_SCAN_FMT",",
+                      &data->header_len,
+                      &data->tnl_type,
+                      ETH_ADDR_SCAN_ARGS(eth->eth_dst))) {
         return -EINVAL;
     }
 
     if (!ovs_scan_len(s, &n, "src="ETH_ADDR_SCAN_FMT",",
-                  ETH_ADDR_SCAN_ARGS(eth->eth_src))) {
+                      ETH_ADDR_SCAN_ARGS(eth->eth_src))) {
         return -EINVAL;
     }
     if (!ovs_scan_len(s, &n, "dl_type=0x%"SCNx16"),", &dl_type)) {
@@ -955,7 +1109,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     udp = (struct udp_header *) l4;
     greh = (struct gre_base_hdr *) l4;
     if (ovs_scan_len(s, &n, "udp(src=%"SCNi16",dst=%"SCNi16",csum=0x%"SCNx16"),",
-                         &udp_src, &udp_dst, &csum)) {
+                     &udp_src, &udp_dst, &csum)) {
         uint32_t vx_flags, vni;
 
         udp->udp_src = htons(udp_src);
@@ -964,7 +1118,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
         udp->udp_csum = htons(csum);
 
         if (ovs_scan_len(s, &n, "vxlan(flags=0x%"SCNx32",vni=0x%"SCNx32"))",
-                            &vx_flags, &vni)) {
+                         &vx_flags, &vni)) {
             struct vxlanhdr *vxh = (struct vxlanhdr *) (udp + 1);
 
             put_16aligned_be32(&vxh->vx_flags, htonl(vx_flags));
@@ -1015,7 +1169,7 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
             return -EINVAL;
         }
     } else if (ovs_scan_len(s, &n, "gre((flags=0x%"SCNx16",proto=0x%"SCNx16")",
-                         &gre_flags, &gre_proto)){
+                            &gre_flags, &gre_proto)){
 
         tnl_type = OVS_VPORT_TYPE_GRE;
         greh->flags = htons(gre_flags);
@@ -1077,6 +1231,176 @@ ovs_parse_tnl_push(const char *s, struct ovs_action_push_tnl *data)
     return n;
 }
 
+struct ct_nat_params {
+    bool snat;
+    bool dnat;
+    size_t addr_len;
+    union {
+        ovs_be32 ip;
+        struct in6_addr ip6;
+    } addr_min;
+    union {
+        ovs_be32 ip;
+        struct in6_addr ip6;
+    } addr_max;
+    uint16_t proto_min;
+    uint16_t proto_max;
+    bool persistent;
+    bool proto_hash;
+    bool proto_random;
+};
+
+static int
+scan_ct_nat_range(const char *s, int *n, struct ct_nat_params *p)
+{
+    if (ovs_scan_len(s, n, "=")) {
+        char ipv6_s[IPV6_SCAN_LEN + 1];
+        struct in6_addr ipv6;
+
+        if (ovs_scan_len(s, n, IP_SCAN_FMT, IP_SCAN_ARGS(&p->addr_min.ip))) {
+            p->addr_len = sizeof p->addr_min.ip;
+            if (ovs_scan_len(s, n, "-")) {
+                if (!ovs_scan_len(s, n, IP_SCAN_FMT,
+                                  IP_SCAN_ARGS(&p->addr_max.ip))) {
+                    return -EINVAL;
+                }
+            }
+        } else if ((ovs_scan_len(s, n, IPV6_SCAN_FMT, ipv6_s)
+                    || ovs_scan_len(s, n, "["IPV6_SCAN_FMT"]", ipv6_s))
+                   && inet_pton(AF_INET6, ipv6_s, &ipv6) == 1) {
+            p->addr_len = sizeof p->addr_min.ip6;
+            p->addr_min.ip6 = ipv6;
+            if (ovs_scan_len(s, n, "-")) {
+                if ((ovs_scan_len(s, n, IPV6_SCAN_FMT, ipv6_s)
+                     || ovs_scan_len(s, n, "["IPV6_SCAN_FMT"]", ipv6_s))
+                    && inet_pton(AF_INET6, ipv6_s, &ipv6) == 1) {
+                    p->addr_max.ip6 = ipv6;
+                } else {
+                    return -EINVAL;
+                }
+            }
+        } else {
+            return -EINVAL;
+        }
+        if (ovs_scan_len(s, n, ":%"SCNu16, &p->proto_min)) {
+            if (ovs_scan_len(s, n, "-")) {
+                if (!ovs_scan_len(s, n, "%"SCNu16, &p->proto_max)) {
+                    return -EINVAL;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int
+scan_ct_nat(const char *s, struct ct_nat_params *p)
+{
+    int n = 0;
+
+    if (ovs_scan_len(s, &n, "nat")) {
+        memset(p, 0, sizeof *p);
+
+        if (ovs_scan_len(s, &n, "(")) {
+            char *end;
+            int end_n;
+
+            end = strchr(s + n, ')');
+            if (!end) {
+                return -EINVAL;
+            }
+            end_n = end - s;
+
+            while (n < end_n) {
+                n += strspn(s + n, delimiters);
+                if (ovs_scan_len(s, &n, "src")) {
+                    int err = scan_ct_nat_range(s, &n, p);
+                    if (err) {
+                        return err;
+                    }
+                    p->snat = true;
+                    continue;
+                }
+                if (ovs_scan_len(s, &n, "dst")) {
+                    int err = scan_ct_nat_range(s, &n, p);
+                    if (err) {
+                        return err;
+                    }
+                    p->dnat = true;
+                    continue;
+                }
+                if (ovs_scan_len(s, &n, "persistent")) {
+                    p->persistent = true;
+                    continue;
+                }
+                if (ovs_scan_len(s, &n, "hash")) {
+                    p->proto_hash = true;
+                    continue;
+                }
+                if (ovs_scan_len(s, &n, "random")) {
+                    p->proto_random = true;
+                    continue;
+                }
+                return -EINVAL;
+            }
+
+            if (p->snat && p->dnat) {
+                return -EINVAL;
+            }
+            if ((p->addr_len != 0 &&
+                 memcmp(&p->addr_max, &in6addr_any, p->addr_len) &&
+                 memcmp(&p->addr_max, &p->addr_min, p->addr_len) < 0) ||
+                (p->proto_max && p->proto_max < p->proto_min)) {
+                return -EINVAL;
+            }
+            if (p->proto_hash && p->proto_random) {
+                return -EINVAL;
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+static void
+nl_msg_put_ct_nat(struct ct_nat_params *p, struct ofpbuf *actions)
+{
+    size_t start = nl_msg_start_nested(actions, OVS_CT_ATTR_NAT);
+
+    if (p->snat) {
+        nl_msg_put_flag(actions, OVS_NAT_ATTR_SRC);
+    } else if (p->dnat) {
+        nl_msg_put_flag(actions, OVS_NAT_ATTR_DST);
+    } else {
+        goto out;
+    }
+    if (p->addr_len != 0) {
+        nl_msg_put_unspec(actions, OVS_NAT_ATTR_IP_MIN, &p->addr_min,
+                          p->addr_len);
+        if (memcmp(&p->addr_max, &p->addr_min, p->addr_len) > 0) {
+            nl_msg_put_unspec(actions, OVS_NAT_ATTR_IP_MAX, &p->addr_max,
+                              p->addr_len);
+        }
+        if (p->proto_min) {
+            nl_msg_put_u16(actions, OVS_NAT_ATTR_PROTO_MIN, p->proto_min);
+            if (p->proto_max && p->proto_max > p->proto_min) {
+                nl_msg_put_u16(actions, OVS_NAT_ATTR_PROTO_MAX, p->proto_max);
+            }
+        }
+        if (p->persistent) {
+            nl_msg_put_flag(actions, OVS_NAT_ATTR_PERSISTENT);
+        }
+        if (p->proto_hash) {
+            nl_msg_put_flag(actions, OVS_NAT_ATTR_PROTO_HASH);
+        }
+        if (p->proto_random) {
+            nl_msg_put_flag(actions, OVS_NAT_ATTR_PROTO_RANDOM);
+        }
+    }
+out:
+    nl_msg_end_nested(actions, start);
+}
+
 static int
 parse_conntrack_action(const char *s_, struct ofpbuf *actions)
 {
@@ -1095,6 +1419,8 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
             ovs_u128 value;
             ovs_u128 mask;
         } ct_label;
+        struct ct_nat_params nat_params;
+        bool have_nat = false;
         size_t start;
         char *end;
 
@@ -1103,13 +1429,14 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
         s += 2;
         if (ovs_scan(s, "(")) {
             s++;
+find_end:
             end = strchr(s, ')');
             if (!end) {
                 return -EINVAL;
             }
 
             while (s != end) {
-                int n = -1;
+                int n;
 
                 s += strspn(s, delimiters);
                 if (ovs_scan(s, "commit%n", &n)) {
@@ -1153,6 +1480,16 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
                     continue;
                 }
 
+                n = scan_ct_nat(s, &nat_params);
+                if (n > 0) {
+                    s += n;
+                    have_nat = true;
+
+                    /* end points to the end of the nested, nat action.
+                     * find the real end. */
+                    goto find_end;
+                }
+                /* Nothing matched. */
                 return -EINVAL;
             }
             s++;
@@ -1169,13 +1506,16 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
             nl_msg_put_unspec(actions, OVS_CT_ATTR_MARK, &ct_mark,
                               sizeof(ct_mark));
         }
-        if (!ovs_u128_is_zero(&ct_label.mask)) {
+        if (!ovs_u128_is_zero(ct_label.mask)) {
             nl_msg_put_unspec(actions, OVS_CT_ATTR_LABELS, &ct_label,
                               sizeof ct_label);
         }
         if (helper) {
             nl_msg_put_string__(actions, OVS_CT_ATTR_HELPER, helper,
                                 helper_len);
+        }
+        if (have_nat) {
+            nl_msg_put_ct_nat(&nat_params, actions);
         }
         nl_msg_end_nested(actions, start);
     }
@@ -1193,6 +1533,20 @@ parse_odp_action(const char *s, const struct simap *port_names,
 
         if (ovs_scan(s, "%"SCNi32"%n", &port, &n)) {
             nl_msg_put_u32(actions, OVS_ACTION_ATTR_OUTPUT, port);
+            return n;
+        }
+    }
+
+    {
+        uint32_t max_len;
+        int n;
+
+        if (ovs_scan(s, "trunc(%"SCNi32")%n", &max_len, &n)) {
+            struct ovs_action_trunc *trunc;
+
+            trunc = nl_msg_put_unspec_uninit(actions,
+                     OVS_ACTION_ATTR_TRUNC, sizeof *trunc);
+            trunc->max_len = max_len;
             return n;
         }
     }
@@ -1755,10 +2109,9 @@ odp_portno_names_get(const struct hmap *portno_names, odp_port_t port_no)
 void
 odp_portno_names_destroy(struct hmap *portno_names)
 {
-    struct odp_portno_names *odp_portno_names, *odp_portno_names_next;
-    HMAP_FOR_EACH_SAFE (odp_portno_names, odp_portno_names_next,
-                        hmap_node, portno_names) {
-        hmap_remove(portno_names, &odp_portno_names->hmap_node);
+    struct odp_portno_names *odp_portno_names;
+
+    HMAP_FOR_EACH_POP (odp_portno_names, hmap_node, portno_names) {
         free(odp_portno_names->name);
         free(odp_portno_names);
     }
@@ -2040,7 +2393,7 @@ format_odp_tun_vxlan_opt(const struct nlattr *attr,
         case OVS_VXLAN_EXT_GBP: {
             uint32_t key = nl_attr_get_u32(a);
             ovs_be16 id, id_mask;
-            uint8_t flags, flags_mask;
+            uint8_t flags, flags_mask = 0;
 
             id = htons(key & 0xFFFF);
             flags = (key >> 16) & 0xFF;
@@ -2240,6 +2593,8 @@ format_odp_tun_attr(const struct nlattr *attr, const struct nlattr *mask_attr,
             format_odp_tun_geneve(a, ma, ds, verbose);
             ds_put_cstr(ds, "),");
             break;
+        case OVS_TUNNEL_KEY_ATTR_PAD:
+            break;
         case __OVS_TUNNEL_KEY_ATTR_MAX:
         default:
             format_unknown_key(ds, a, ma);
@@ -2287,6 +2642,10 @@ odp_ct_state_to_string(uint32_t flag)
         return "rel";
     case OVS_CS_F_INVALID:
         return "inv";
+    case OVS_CS_F_SRC_NAT:
+        return "snat";
+    case OVS_CS_F_DST_NAT:
+        return "dnat";
     default:
         return NULL;
     }
@@ -2621,12 +2980,12 @@ static void
 format_u128(struct ds *ds, const ovs_u128 *key, const ovs_u128 *mask,
             bool verbose)
 {
-    if (verbose || (mask && !ovs_u128_is_zero(mask))) {
+    if (verbose || (mask && !ovs_u128_is_zero(*mask))) {
         ovs_be128 value;
 
         value = hton128(*key);
         ds_put_hex(ds, &value, sizeof value);
-        if (mask && !(ovs_u128_is_ones(mask))) {
+        if (mask && !(ovs_u128_is_ones(*mask))) {
             value = hton128(*mask);
             ds_put_char(ds, '/');
             ds_put_hex(ds, &value, sizeof value);
@@ -2634,6 +2993,12 @@ format_u128(struct ds *ds, const ovs_u128 *key, const ovs_u128 *mask,
     }
 }
 
+/* Read the string from 's_' as a 128-bit value.  If the string contains
+ * a "/", the rest of the string will be treated as a 128-bit mask.
+ *
+ * If either the value or mask is larger than 64 bits, the string must
+ * be in hexadecimal.
+ */
 static int
 scan_u128(const char *s_, ovs_u128 *value, ovs_u128 *mask)
 {
@@ -3057,6 +3422,12 @@ ovs_to_odp_ct_state(uint8_t state)
     if (state & CS_TRACKED) {
         odp |= OVS_CS_F_TRACKED;
     }
+    if (state & CS_SRC_NAT) {
+        odp |= OVS_CS_F_SRC_NAT;
+    }
+    if (state & CS_DST_NAT) {
+        odp |= OVS_CS_F_DST_NAT;
+    }
 
     return odp;
 }
@@ -3083,6 +3454,12 @@ odp_to_ovs_ct_state(uint32_t flags)
     }
     if (flags & OVS_CS_F_TRACKED) {
         state |= CS_TRACKED;
+    }
+    if (flags & OVS_CS_F_SRC_NAT) {
+        state |= CS_SRC_NAT;
+    }
+    if (flags & OVS_CS_F_DST_NAT) {
+        state |= CS_DST_NAT;
     }
 
     return state;
@@ -3573,17 +3950,59 @@ geneve_to_attr(struct ofpbuf *a, const void *data_)
         SCAN_FIELD_NESTED__(NAME, TYPE, SCAN_AS, 0, FUNC)
 
 #define SCAN_PUT(ATTR, FUNC)                            \
-        if (!mask || !is_all_zeros(&smask, sizeof smask)) { \
-            SCAN_PUT_ATTR(key, ATTR, skey, FUNC);       \
-            if (mask) {                                 \
-                SCAN_PUT_ATTR(mask, ATTR, smask, FUNC); \
-            }                                           \
-        }
+        SCAN_PUT_ATTR(key, ATTR, skey, FUNC);           \
+        if (mask)                                       \
+            SCAN_PUT_ATTR(mask, ATTR, smask, FUNC);     \
 
 #define SCAN_END(ATTR)                                  \
         SCAN_FINISH();                                  \
         SCAN_PUT(ATTR, NULL);                           \
         return s - start;                               \
+    }
+
+#define SCAN_BEGIN_ARRAY(NAME, TYPE, CNT)       \
+    SCAN_IF(NAME);                              \
+        TYPE skey[CNT], smask[CNT];             \
+        memset(&skey, 0, sizeof skey);          \
+        memset(&smask, 0, sizeof smask);        \
+        int idx = 0, cnt = CNT;                 \
+        uint64_t fields = 0;                    \
+        do {                                    \
+            int field = 0;                      \
+            len = 0;
+
+/* Scan named ('NAME') entry 'FIELD' as 'TYPE'. */
+#define SCAN_FIELD_ARRAY(NAME, TYPE, FIELD)                             \
+    if (strncmp(s, NAME, strlen(NAME)) == 0) {                          \
+        if (fields & (1UL << field)) {                                  \
+            fields = 0;                                                 \
+            if (++idx == cnt) {                                         \
+                break;                                                  \
+            }                                                           \
+        }                                                               \
+        s += strlen(NAME);                                              \
+        SCAN_TYPE(TYPE, &skey[idx].FIELD, mask ? &smask[idx].FIELD : NULL); \
+        fields |= 1UL << field;                                         \
+        continue;                                                       \
+    }                                                                   \
+    field++;
+
+#define SCAN_PUT_ATTR_ARRAY(BUF, ATTR, DATA, CNT)                    \
+    nl_msg_put_unspec(BUF, ATTR, &(DATA), sizeof (DATA)[0] * (CNT)); \
+
+#define SCAN_PUT_ARRAY(ATTR, CNT)                        \
+    SCAN_PUT_ATTR_ARRAY(key, ATTR, skey, CNT);       \
+    if (mask) {                                      \
+        SCAN_PUT_ATTR_ARRAY(mask, ATTR, smask, CNT); \
+    }
+
+#define SCAN_END_ARRAY(ATTR)             \
+        SCAN_FINISH();                   \
+        if (idx == cnt) {                \
+            return -EINVAL;              \
+        }                                \
+        SCAN_PUT_ARRAY(ATTR, idx + 1);   \
+        return s - start;                \
     }
 
 #define SCAN_END_SINGLE(ATTR)                           \
@@ -3668,12 +4087,12 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
 
     SCAN_SINGLE("eth_type(", ovs_be16, be16, OVS_KEY_ATTR_ETHERTYPE);
 
-    SCAN_BEGIN("mpls(", struct ovs_key_mpls) {
-        SCAN_FIELD("label=", mpls_label, mpls_lse);
-        SCAN_FIELD("tc=", mpls_tc, mpls_lse);
-        SCAN_FIELD("ttl=", mpls_ttl, mpls_lse);
-        SCAN_FIELD("bos=", mpls_bos, mpls_lse);
-    } SCAN_END(OVS_KEY_ATTR_MPLS);
+    SCAN_BEGIN_ARRAY("mpls(", struct ovs_key_mpls, FLOW_MAX_MPLS_LABELS) {
+        SCAN_FIELD_ARRAY("label=", mpls_label, mpls_lse);
+        SCAN_FIELD_ARRAY("tc=", mpls_tc, mpls_lse);
+        SCAN_FIELD_ARRAY("ttl=", mpls_ttl, mpls_lse);
+        SCAN_FIELD_ARRAY("bos=", mpls_bos, mpls_lse);
+    } SCAN_END_ARRAY(OVS_KEY_ATTR_MPLS);
 
     SCAN_BEGIN("ipv4(", struct ovs_key_ipv4) {
         SCAN_FIELD("src=", ipv4, ipv4_src);
@@ -3891,10 +4310,10 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
         nl_msg_put_u32(buf, OVS_KEY_ATTR_DP_HASH, data->dp_hash);
     }
 
-    /* Add an ingress port attribute if this is a mask or 'odp_in_port'
+    /* Add an ingress port attribute if this is a mask or 'in_port.odp_port'
      * is not the magical value "ODPP_NONE". */
-    if (export_mask || parms->odp_in_port != ODPP_NONE) {
-        nl_msg_put_odp_port(buf, OVS_KEY_ATTR_IN_PORT, parms->odp_in_port);
+    if (export_mask || flow->in_port.odp_port != ODPP_NONE) {
+        nl_msg_put_odp_port(buf, OVS_KEY_ATTR_IN_PORT, data->in_port.odp_port);
     }
 
     eth_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ETHERNET,
@@ -4009,9 +4428,7 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
             icmpv6_key->icmpv6_type = ntohs(data->tp_src);
             icmpv6_key->icmpv6_code = ntohs(data->tp_dst);
 
-            if (flow->tp_dst == htons(0)
-                && (flow->tp_src == htons(ND_NEIGHBOR_SOLICIT)
-                    || flow->tp_src == htons(ND_NEIGHBOR_ADVERT))
+            if (is_nd(flow, NULL)
                 /* Even though 'tp_src' and 'tp_dst' are 16 bits wide, ICMP
                  * type and code are 8 bits wide.  Therefore, an exact match
                  * looks like htons(0xff), not htons(0xffff).  See
@@ -4081,7 +4498,7 @@ odp_key_from_pkt_metadata(struct ofpbuf *buf, const struct pkt_metadata *md)
         if (md->ct_mark) {
             nl_msg_put_u32(buf, OVS_KEY_ATTR_CT_MARK, md->ct_mark);
         }
-        if (!ovs_u128_is_zero(&md->ct_label)) {
+        if (!ovs_u128_is_zero(md->ct_label)) {
             nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_LABELS, &md->ct_label,
                               sizeof(md->ct_label));
         }
@@ -4182,8 +4599,7 @@ uint32_t
 odp_flow_key_hash(const struct nlattr *key, size_t key_len)
 {
     BUILD_ASSERT_DECL(!(NLA_ALIGNTO % sizeof(uint32_t)));
-    return hash_words(ALIGNED_CAST(const uint32_t *, key),
-                      key_len / sizeof(uint32_t), 0);
+    return hash_bytes32(ALIGNED_CAST(const uint32_t *, key), key_len, 0);
 }
 
 static void
@@ -4547,9 +4963,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             flow->tp_src = htons(icmpv6_key->icmpv6_type);
             flow->tp_dst = htons(icmpv6_key->icmpv6_code);
             expected_bit = OVS_KEY_ATTR_ICMPV6;
-            if (src_flow->tp_dst == htons(0) &&
-                (src_flow->tp_src == htons(ND_NEIGHBOR_SOLICIT) ||
-                 src_flow->tp_src == htons(ND_NEIGHBOR_ADVERT))) {
+            if (is_nd(src_flow, NULL)) {
                 if (!is_mask) {
                     expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ND;
                 }
@@ -5337,9 +5751,9 @@ commit_set_icmp_action(const struct flow *flow, struct flow *base_flow,
     struct ovs_key_icmp key, mask, base;
     enum ovs_key_attr attr;
 
-    if (is_icmpv4(flow)) {
+    if (is_icmpv4(flow, NULL)) {
         attr = OVS_KEY_ATTR_ICMP;
-    } else if (is_icmpv6(flow)) {
+    } else if (is_icmpv6(flow, NULL)) {
         attr = OVS_KEY_ATTR_ICMPV6;
     } else {
         return 0;

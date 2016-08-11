@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import uuid
+
+import six
 
 import ovs.jsonrpc
 import ovs.db.parser
@@ -29,6 +32,9 @@ __pychecker__ = 'no-classattr no-objattrs'
 ROW_CREATE = "create"
 ROW_UPDATE = "update"
 ROW_DELETE = "delete"
+
+OVSDB_UPDATE = 0
+OVSDB_UPDATE2 = 1
 
 
 class Idl(object):
@@ -83,6 +89,10 @@ class Idl(object):
       currently being constructed, if there is one, or None otherwise.
 """
 
+    IDL_S_INITIAL = 0
+    IDL_S_MONITOR_REQUESTED = 1
+    IDL_S_MONITOR_COND_REQUESTED = 2
+
     def __init__(self, remote, schema):
         """Creates and returns a connection to the database named 'db_name' on
         'remote', which should be in a form acceptable to
@@ -113,6 +123,8 @@ class Idl(object):
         self._monitor_request_id = None
         self._last_seqno = None
         self.change_seqno = 0
+        self.uuid = uuid.uuid1()
+        self.state = self.IDL_S_INITIAL
 
         # Database locking.
         self.lock_name = None          # Name of lock we need, None if none.
@@ -124,13 +136,15 @@ class Idl(object):
         self.txn = None
         self._outstanding_txns = {}
 
-        for table in schema.tables.itervalues():
-            for column in table.columns.itervalues():
+        for table in six.itervalues(schema.tables):
+            for column in six.itervalues(table.columns):
                 if not hasattr(column, 'alert'):
                     column.alert = True
             table.need_table = False
             table.rows = {}
             table.idl = self
+            table.condition = []
+            table.cond_changed = False
 
     def close(self):
         """Closes the connection to the database.  The IDL will no longer
@@ -157,6 +171,8 @@ class Idl(object):
         for changes in self.change_seqno."""
         assert not self.txn
         initial_change_seqno = self.change_seqno
+
+        self.send_cond_change()
         self._session.run()
         i = 0
         while i < 50:
@@ -177,11 +193,15 @@ class Idl(object):
             if msg is None:
                 break
             if (msg.type == ovs.jsonrpc.Message.T_NOTIFY
-                and msg.method == "update"
-                and len(msg.params) == 2
-                and msg.params[0] == None):
+                    and msg.method == "update2"
+                    and len(msg.params) == 2):
                 # Database contents changed.
-                self.__parse_update(msg.params[1])
+                self.__parse_update(msg.params[1], OVSDB_UPDATE2)
+            elif (msg.type == ovs.jsonrpc.Message.T_NOTIFY
+                    and msg.method == "update"
+                    and len(msg.params) == 2):
+                # Database contents changed.
+                self.__parse_update(msg.params[1], OVSDB_UPDATE)
             elif (msg.type == ovs.jsonrpc.Message.T_REPLY
                   and self._monitor_request_id is not None
                   and self._monitor_request_id == msg.id):
@@ -190,10 +210,15 @@ class Idl(object):
                     self.change_seqno += 1
                     self._monitor_request_id = None
                     self.__clear()
-                    self.__parse_update(msg.result)
-                except error.Error, e:
+                    if self.state == self.IDL_S_MONITOR_COND_REQUESTED:
+                        self.__parse_update(msg.result, OVSDB_UPDATE2)
+                    else:
+                        assert self.state == self.IDL_S_MONITOR_REQUESTED
+                        self.__parse_update(msg.result, OVSDB_UPDATE)
+
+                except error.Error as e:
                     vlog.err("%s: parse error in received schema: %s"
-                              % (self._session.get_name(), e))
+                             % (self._session.get_name(), e))
                     self.__error()
             elif (msg.type == ovs.jsonrpc.Message.T_REPLY
                   and self._lock_request_id is not None
@@ -211,6 +236,11 @@ class Idl(object):
             elif msg.type == ovs.jsonrpc.Message.T_NOTIFY and msg.id == "echo":
                 # Reply to our echo request.  Ignore it.
                 pass
+            elif (msg.type == ovs.jsonrpc.Message.T_ERROR and
+                  self.state == self.IDL_S_MONITOR_COND_REQUESTED and
+                  self._monitor_request_id == msg.id):
+                if msg.error == "unknown method":
+                    self.__send_monitor_request()
             elif (msg.type in (ovs.jsonrpc.Message.T_ERROR,
                                ovs.jsonrpc.Message.T_REPLY)
                   and self.__txn_process_reply(msg)):
@@ -224,6 +254,33 @@ class Idl(object):
                              ovs.jsonrpc.Message.type_to_string(msg.type)))
 
         return initial_change_seqno != self.change_seqno
+
+    def send_cond_change(self):
+        if not self._session.is_connected():
+            return
+
+        for table in six.itervalues(self.tables):
+            if table.cond_changed:
+                self.__send_cond_change(table, table.condition)
+                table.cond_changed = False
+
+    def cond_change(self, table_name, add_cmd, cond):
+        """Change conditions for this IDL session. If session is not already
+        connected, add condtion to table and submit it on send_monitor_request.
+        Otherwise  send monitor_cond_change method with the requested
+        changes."""
+
+        table = self.tables.get(table_name)
+        if not table:
+            raise error.Error('Unknown table "%s"' % table_name)
+
+        if add_cmd:
+            table.condition += cond
+        else:
+            for c in cond:
+                table.condition.remove(c)
+
+        table.cond_changed = True
 
     def wait(self, poller):
         """Arranges for poller.block() to wake up when self.run() has something
@@ -276,14 +333,23 @@ class Idl(object):
         :type event:    ROW_CREATE, ROW_UPDATE, or ROW_DELETE
         :param row:     The row as it is after the operation has occured
         :type row:      Row
-        :param updates: For updates, a Row object with just the changed columns
+        :param updates: For updates, row with only old values of the changed
+                        columns
         :type updates:  Row
         """
+
+    def __send_cond_change(self, table, cond):
+        monitor_cond_change = {table.name: [{"where": cond}]}
+        old_uuid = str(self.uuid)
+        self.uuid = uuid.uuid1()
+        params = [old_uuid, str(self.uuid), monitor_cond_change]
+        msg = ovs.jsonrpc.Message.create_request("monitor_cond_change", params)
+        self._session.send(msg)
 
     def __clear(self):
         changed = False
 
-        for table in self.tables.itervalues():
+        for table in six.itervalues(self.tables):
             if table.rows:
                 changed = True
                 table.rows = {}
@@ -322,14 +388,14 @@ class Idl(object):
 
     def __parse_lock_reply(self, result):
         self._lock_request_id = None
-        got_lock = type(result) == dict and result.get("locked") is True
+        got_lock = isinstance(result, dict) and result.get("locked") is True
         self.__update_has_lock(got_lock)
         if not got_lock:
             self.is_lock_contended = True
 
     def __parse_lock_notify(self, params, new_has_lock):
         if (self.lock_name is not None
-            and type(params) in (list, tuple)
+            and isinstance(params, (list, tuple))
             and params
             and params[0] == self.lock_name):
             self.__update_has_lock(new_has_lock)
@@ -337,43 +403,55 @@ class Idl(object):
                 self.is_lock_contended = True
 
     def __send_monitor_request(self):
+        if self.state == self.IDL_S_INITIAL:
+            self.state = self.IDL_S_MONITOR_COND_REQUESTED
+            method = "monitor_cond"
+        else:
+            self.state = self.IDL_S_MONITOR_REQUESTED
+            method = "monitor"
+
         monitor_requests = {}
-        for table in self.tables.itervalues():
+        for table in six.itervalues(self.tables):
             columns = []
-            for column in table.columns.keys():
+            for column in six.iterkeys(table.columns):
                 if ((table.name not in self.readonly) or
-                    (table.name in self.readonly) and
-                    (column not in self.readonly[table.name])):
+                        (table.name in self.readonly) and
+                        (column not in self.readonly[table.name])):
                     columns.append(column)
             monitor_requests[table.name] = {"columns": columns}
+            if method == "monitor_cond" and table.cond_changed and \
+                   table.condition:
+                monitor_requests[table.name]["where"] = table.condition
+                table.cond_change = False
+
         msg = ovs.jsonrpc.Message.create_request(
-            "monitor", [self._db.name, None, monitor_requests])
+            method, [self._db.name, str(self.uuid), monitor_requests])
         self._monitor_request_id = msg.id
         self._session.send(msg)
 
-    def __parse_update(self, update):
+    def __parse_update(self, update, version):
         try:
-            self.__do_parse_update(update)
-        except error.Error, e:
+            self.__do_parse_update(update, version)
+        except error.Error as e:
             vlog.err("%s: error parsing update: %s"
                      % (self._session.get_name(), e))
 
-    def __do_parse_update(self, table_updates):
-        if type(table_updates) != dict:
+    def __do_parse_update(self, table_updates, version):
+        if not isinstance(table_updates, dict):
             raise error.Error("<table-updates> is not an object",
                               table_updates)
 
-        for table_name, table_update in table_updates.iteritems():
+        for table_name, table_update in six.iteritems(table_updates):
             table = self.tables.get(table_name)
             if not table:
                 raise error.Error('<table-updates> includes unknown '
                                   'table "%s"' % table_name)
 
-            if type(table_update) != dict:
+            if not isinstance(table_update, dict):
                 raise error.Error('<table-update> for table "%s" is not '
                                   'an object' % table_name, table_update)
 
-            for uuid_string, row_update in table_update.iteritems():
+            for uuid_string, row_update in six.iteritems(table_update):
                 if not ovs.ovsuuid.is_valid_string(uuid_string):
                     raise error.Error('<table-update> for table "%s" '
                                       'contains bad UUID "%s" as member '
@@ -381,11 +459,16 @@ class Idl(object):
                                       table_update)
                 uuid = ovs.ovsuuid.from_string(uuid_string)
 
-                if type(row_update) != dict:
+                if not isinstance(row_update, dict):
                     raise error.Error('<table-update> for table "%s" '
                                       'contains <row-update> for %s that '
                                       'is not an object'
                                       % (table_name, uuid_string))
+
+                if version == OVSDB_UPDATE2:
+                    if self.__process_update2(table, uuid, row_update):
+                        self.change_seqno += 1
+                    continue
 
                 parser = ovs.db.parser.Parser(row_update, "row-update")
                 old = parser.get_optional("old", [dict])
@@ -398,6 +481,46 @@ class Idl(object):
 
                 if self.__process_update(table, uuid, old, new):
                     self.change_seqno += 1
+
+    def __process_update2(self, table, uuid, row_update):
+        row = table.rows.get(uuid)
+        changed = False
+        if "delete" in row_update:
+            if row:
+                del table.rows[uuid]
+                self.notify(ROW_DELETE, row)
+                changed = True
+            else:
+                # XXX rate-limit
+                vlog.warn("cannot delete missing row %s from table"
+                          "%s" % (uuid, table.name))
+        elif "insert" in row_update or "initial" in row_update:
+            if row:
+                vlog.warn("cannot add existing row %s from table"
+                          " %s" % (uuid, table.name))
+                del table.rows[uuid]
+            row = self.__create_row(table, uuid)
+            if "insert" in row_update:
+                row_update = row_update['insert']
+            else:
+                row_update = row_update['initial']
+            self.__add_default(table, row_update)
+            if self.__row_update(table, row, row_update):
+                changed = True
+                self.notify(ROW_CREATE, row)
+        elif "modify" in row_update:
+            if not row:
+                raise error.Error('Modify non-existing row')
+
+            old_row_diff_json = self.__apply_diff(table, row,
+                                                  row_update['modify'])
+            self.notify(ROW_UPDATE, row,
+                        Row.from_json(self, table, uuid, old_row_diff_json))
+            changed = True
+        else:
+            raise error.Error('<row-update> unknown operation',
+                              row_update)
+        return changed
 
     def __process_update(self, table, uuid, old, new):
         """Returns True if a column changed, False otherwise."""
@@ -439,9 +562,50 @@ class Idl(object):
                 self.notify(op, row, Row.from_json(self, table, uuid, old))
         return changed
 
+    def __column_name(self, column):
+        if column.type.key.type == ovs.db.types.UuidType:
+            return ovs.ovsuuid.to_json(column.type.key.type.default)
+        else:
+            return column.type.key.type.default
+
+    def __add_default(self, table, row_update):
+        for column in six.itervalues(table.columns):
+            if column.name not in row_update:
+                if ((table.name not in self.readonly) or
+                        (table.name in self.readonly) and
+                        (column.name not in self.readonly[table.name])):
+                    if column.type.n_min != 0 and not column.type.is_map():
+                        row_update[column.name] = self.__column_name(column)
+
+    def __apply_diff(self, table, row, row_diff):
+        old_row_diff_json = {}
+        for column_name, datum_diff_json in six.iteritems(row_diff):
+            column = table.columns.get(column_name)
+            if not column:
+                # XXX rate-limit
+                vlog.warn("unknown column %s updating table %s"
+                          % (column_name, table.name))
+                continue
+
+            try:
+                datum_diff = ovs.db.data.Datum.from_json(column.type,
+                                                         datum_diff_json)
+            except error.Error as e:
+                # XXX rate-limit
+                vlog.warn("error parsing column %s in table %s: %s"
+                          % (column_name, table.name, e))
+                continue
+
+            old_row_diff_json[column_name] = row._data[column_name].to_json()
+            datum = row._data[column_name].diff(datum_diff)
+            if datum != row._data[column_name]:
+                row._data[column_name] = datum
+
+        return old_row_diff_json
+
     def __row_update(self, table, row, row_json):
         changed = False
-        for column_name, datum_json in row_json.iteritems():
+        for column_name, datum_json in six.iteritems(row_json):
             column = table.columns.get(column_name)
             if not column:
                 # XXX rate-limit
@@ -451,7 +615,7 @@ class Idl(object):
 
             try:
                 datum = ovs.db.data.Datum.from_json(column.type, datum_json)
-            except error.Error, e:
+            except error.Error as e:
                 # XXX rate-limit
                 vlog.warn("error parsing column %s in table %s: %s"
                           % (column_name, table.name, e))
@@ -469,7 +633,7 @@ class Idl(object):
 
     def __create_row(self, table, uuid):
         data = {}
-        for column in table.columns.itervalues():
+        for column in six.itervalues(table.columns):
             data[column.name] = ovs.db.data.Datum.default(column.type)
         row = table.rows[uuid] = Row(self, table, uuid, data)
         return row
@@ -496,12 +660,13 @@ def _uuid_to_row(atom, base):
 
 
 def _row_to_uuid(value):
-    if type(value) == Row:
+    if isinstance(value, Row):
         return value.uuid
     else:
         return value
 
 
+@functools.total_ordering
 class Row(object):
     """A row within an IDL.
 
@@ -570,6 +735,19 @@ class Row(object):
         # in the dictionary are all None.
         self.__dict__["_prereqs"] = {}
 
+    def __lt__(self, other):
+        if not isinstance(other, Row):
+            return NotImplemented
+        return bool(self.__dict__['uuid'] < other.__dict__['uuid'])
+
+    def __eq__(self, other):
+        if not isinstance(other, Row):
+            return NotImplemented
+        return bool(self.__dict__['uuid'] == other.__dict__['uuid'])
+
+    def __hash__(self):
+        return int(self.__dict__['uuid'])
+
     def __getattr__(self, column_name):
         assert self._changes is not None
 
@@ -591,15 +769,16 @@ class Row(object):
         assert self._idl.txn
 
         if ((self._table.name in self._idl.readonly) and
-            (column_name in self._idl.readonly[self._table.name])):
-            vlog.warn("attempting to write to readonly column %s" % column_name)
+                (column_name in self._idl.readonly[self._table.name])):
+            vlog.warn("attempting to write to readonly column %s"
+                      % column_name)
             return
 
         column = self._table.columns[column_name]
         try:
             datum = ovs.db.data.Datum.from_python(column.type, value,
                                                   _row_to_uuid)
-        except error.Error, e:
+        except error.Error as e:
             # XXX rate-limit
             vlog.err("attempting to write bad value to column %s (%s)"
                      % (column_name, e))
@@ -609,7 +788,7 @@ class Row(object):
     @classmethod
     def from_json(cls, idl, table, uuid, row_json):
         data = {}
-        for column_name, datum_json in row_json.iteritems():
+        for column_name, datum_json in six.iteritems(row_json):
             column = table.columns.get(column_name)
             if not column:
                 # XXX rate-limit
@@ -618,7 +797,7 @@ class Row(object):
                 continue
             try:
                 datum = ovs.db.data.Datum.from_json(column.type, datum_json)
-            except error.Error, e:
+            except error.Error as e:
                 # XXX rate-limit
                 vlog.warn("error parsing column %s in table %s: %s"
                           % (column_name, table.name, e))
@@ -749,17 +928,26 @@ class Transaction(object):
        of Idl.change_seqno.  (Transaction.commit_block() calls Idl.run().)"""
 
     # Status values that Transaction.commit() can return.
-    UNCOMMITTED = "uncommitted"  # Not yet committed or aborted.
-    UNCHANGED = "unchanged"      # Transaction didn't include any changes.
-    INCOMPLETE = "incomplete"    # Commit in progress, please wait.
-    ABORTED = "aborted"          # ovsdb_idl_txn_abort() called.
-    SUCCESS = "success"          # Commit successful.
-    TRY_AGAIN = "try again"      # Commit failed because a "verify" operation
-                                 # reported an inconsistency, due to a network
-                                 # problem, or other transient failure.  Wait
-                                 # for a change, then try again.
-    NOT_LOCKED = "not locked"    # Server hasn't given us the lock yet.
-    ERROR = "error"              # Commit failed due to a hard error.
+
+    # Not yet committed or aborted.
+    UNCOMMITTED = "uncommitted"
+    # Transaction didn't include any changes.
+    UNCHANGED = "unchanged"
+    # Commit in progress, please wait.
+    INCOMPLETE = "incomplete"
+    # ovsdb_idl_txn_abort() called.
+    ABORTED = "aborted"
+    # Commit successful.
+    SUCCESS = "success"
+    # Commit failed because a "verify" operation
+    # reported an inconsistency, due to a network
+    # problem, or other transient failure.  Wait
+    # for a change, then try again.
+    TRY_AGAIN = "try again"
+    # Server hasn't given us the lock yet.
+    NOT_LOCKED = "not locked"
+    # Commit failed due to a hard error.
+    ERROR = "error"
 
     @staticmethod
     def status_to_string(status):
@@ -815,10 +1003,10 @@ class Transaction(object):
             poller.immediate_wake()
 
     def _substitute_uuids(self, json):
-        if type(json) in (list, tuple):
+        if isinstance(json, (list, tuple)):
             if (len(json) == 2
-                and json[0] == 'uuid'
-                and ovs.ovsuuid.is_valid_string(json[1])):
+                    and json[0] == 'uuid'
+                    and ovs.ovsuuid.is_valid_string(json[1])):
                 uuid = ovs.ovsuuid.from_string(json[1])
                 row = self._txn_rows.get(uuid, None)
                 if row and row._data is None:
@@ -830,7 +1018,7 @@ class Transaction(object):
     def __disassemble(self):
         self.idl.txn = None
 
-        for row in self._txn_rows.itervalues():
+        for row in six.itervalues(self._txn_rows):
             if row._changes is None:
                 row._table.rows[row.uuid] = row
             elif row._data is None:
@@ -909,7 +1097,7 @@ class Transaction(object):
                                "lock": self.idl.lock_name})
 
         # Add prerequisites and declarations of new rows.
-        for row in self._txn_rows.itervalues():
+        for row in six.itervalues(self._txn_rows):
             if row._prereqs:
                 rows = {}
                 columns = []
@@ -926,7 +1114,7 @@ class Transaction(object):
 
         # Add updates.
         any_updates = False
-        for row in self._txn_rows.itervalues():
+        for row in six.itervalues(self._txn_rows):
             if row._changes is None:
                 if row._table.is_root:
                     operations.append({"op": "delete",
@@ -952,17 +1140,17 @@ class Transaction(object):
                 row_json = {}
                 op["row"] = row_json
 
-                for column_name, datum in row._changes.iteritems():
+                for column_name, datum in six.iteritems(row._changes):
                     if row._data is not None or not datum.is_default():
                         row_json[column_name] = (
-                                self._substitute_uuids(datum.to_json()))
+                            self._substitute_uuids(datum.to_json()))
 
                         # If anything really changed, consider it an update.
                         # We can't suppress not-really-changed values earlier
                         # or transactions would become nonatomic (see the big
                         # comment inside Transaction._write()).
                         if (not any_updates and row._data is not None and
-                            row._data[column_name] != datum):
+                                row._data[column_name] != datum):
                             any_updates = True
 
                 if row._data is None or row_json:
@@ -1089,7 +1277,7 @@ class Transaction(object):
         self._inc_column = column
 
     def _fetch(self, row, column_name):
-        self._fetch_requests.append({"row":row, "column_name":column_name})
+        self._fetch_requests.append({"row": row, "column_name": column_name})
 
     def _write(self, row, column, datum):
         assert row._changes is not None
@@ -1108,7 +1296,8 @@ class Transaction(object):
         # transaction only does writes of existing values, without making any
         # real changes, we will drop the whole transaction later in
         # ovsdb_idl_txn_commit().)
-        if not column.alert and row._data and row._data.get(column.name) == datum:
+        if (not column.alert and row._data and
+                row._data.get(column.name) == datum):
             new_value = row._changes.get(column.name)
             if new_value is None or new_value == datum:
                 return
@@ -1137,7 +1326,7 @@ class Transaction(object):
     def _process_reply(self, msg):
         if msg.type == ovs.jsonrpc.Message.T_ERROR:
             self._status = Transaction.ERROR
-        elif type(msg.result) not in (list, tuple):
+        elif not isinstance(msg.result, (list, tuple)):
             # XXX rate-limit
             vlog.warn('reply to "transact" is not JSON array')
         else:
@@ -1152,7 +1341,7 @@ class Transaction(object):
                     # prior operation failed, so make sure that we know about
                     # it.
                     soft_errors = True
-                elif type(op) == dict:
+                elif isinstance(op, dict):
                     error = op.get("error")
                     if error is not None:
                         if error == "timed out":
@@ -1179,7 +1368,7 @@ class Transaction(object):
                     else:
                         hard_errors = True
 
-                for insert in self._inserted_rows.itervalues():
+                for insert in six.itervalues(self._inserted_rows):
                     if not self.__process_insert_reply(insert, ops):
                         hard_errors = True
 
@@ -1198,7 +1387,7 @@ class Transaction(object):
             # XXX rate-limit
             vlog.warn("%s is missing" % name)
             return False
-        elif type(json) not in types:
+        elif not isinstance(json, tuple(types)):
             # XXX rate-limit
             vlog.warn("%s has unexpected type %s" % (name, type(json)))
             return False
@@ -1221,7 +1410,7 @@ class Transaction(object):
             if len(fetched_rows) != 1:
                 # XXX rate-limit
                 vlog.warn('"select" reply "rows" has %d elements '
-                          'instead of 1' % len(rows))
+                          'instead of 1' % len(fetched_rows))
                 continue
             fetched_row = fetched_rows[0]
             if not Transaction.__check_json_type(fetched_row, (dict,),
@@ -1248,7 +1437,7 @@ class Transaction(object):
         # __process_reply() already checked.
         mutate = ops[self._inc_index]
         count = mutate.get("count")
-        if not Transaction.__check_json_type(count, (int, long),
+        if not Transaction.__check_json_type(count, six.integer_types,
                                              '"mutate" reply "count"'):
             return False
         if count != 1:
@@ -1271,7 +1460,7 @@ class Transaction(object):
                                              '"select" reply row'):
             return False
         column = row.get(self._inc_column)
-        if not Transaction.__check_json_type(column, (int, long),
+        if not Transaction.__check_json_type(column, six.integer_types,
                                              '"select" reply inc column'):
             return False
         self._inc_new_value = column
@@ -1349,8 +1538,8 @@ class SchemaHelper(object):
         'readonly' must be a list of strings.
         """
 
-        assert type(table) is str
-        assert type(columns) is list
+        assert isinstance(table, six.string_types)
+        assert isinstance(columns, list)
 
         columns = set(columns) | self._tables.get(table, set())
         self._tables[table] = columns
@@ -1362,7 +1551,7 @@ class SchemaHelper(object):
 
         'table' must be a string
         """
-        assert type(table) is str
+        assert isinstance(table, six.string_types)
         self._tables[table] = set()  # empty set means all columns in the table
 
     def register_all(self):
@@ -1379,7 +1568,7 @@ class SchemaHelper(object):
 
         if not self._all:
             schema_tables = {}
-            for table, columns in self._tables.iteritems():
+            for table, columns in six.iteritems(self._tables):
                 schema_tables[table] = (
                     self._keep_table_columns(schema, table, columns))
 
@@ -1397,7 +1586,7 @@ class SchemaHelper(object):
 
         new_columns = {}
         for column_name in columns:
-            assert type(column_name) is str
+            assert isinstance(column_name, six.string_types)
             assert column_name in table.columns
 
             new_columns[column_name] = table.columns[column_name]

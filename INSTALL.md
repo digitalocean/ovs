@@ -48,7 +48,7 @@ you will need the following software:
     privileges.  If libcap-ng is installed, then Open vSwitch will
     automatically build with support for it.
 
-  - Python 2.7.
+  - Python 2.7. You must also have the Python six library.
 
 On Linux, you may choose to compile the kernel module that comes with
 the Open vSwitch distribution or to use the kernel module built into
@@ -63,23 +63,13 @@ install the following:
   - A supported Linux kernel version.  Please refer to [README.md] for a
     list of supported versions.
 
-    The Open vSwitch datapath requires bridging support
-    (CONFIG_BRIDGE) to be built as a kernel module.  (This is common
-    in kernels provided by Linux distributions.)  The bridge module
-    must not be loaded or in use.  If the bridge module is running
-    (check with "lsmod | grep bridge"), you must remove it ("rmmod
-    bridge") before starting the datapath.
-
     For optional support of ingress policing, you must enable kernel
     configuration options NET_CLS_BASIC, NET_SCH_INGRESS, and
     NET_ACT_POLICE, either built-in or as modules.  (NET_CLS_POLICE is
     obsolete and not needed.)
 
-    To use GRE tunneling on Linux 2.6.37 or newer, kernel support
-    for GRE demultiplexing (CONFIG_NET_IPGRE_DEMUX) must be compiled
-    in or available as a module.  Also, on kernels before 3.11, the
-    ip_gre module, for GRE tunnels over IP (NET_IPGRE), must not be
-    loaded or compiled in.
+    On kernels before 3.11, the ip_gre module, for GRE tunnels over IP
+    (NET_IPGRE), must not be loaded or compiled in.
 
     To configure HTB or HFSC quality of service with Open vSwitch,
     you must enable the respective configuration options.
@@ -111,6 +101,14 @@ To run the unit tests, you also need:
   - Perl.  Version 5.10.1 is known to work.  Earlier versions should
     also work.
 
+The datapath tests for userspace and Linux datapaths also rely upon:
+
+  - pyftpdlib. Version 1.2.0 is known to work. Earlier versions should
+    also work.
+
+  - GNU wget. Version 1.16 is known to work. Earlier versions should
+    also work.
+
 The ovs-vswitchd.conf.db(5) manpage will include an E-R diagram, in
 formats other than plain text, only if you have the following:
 
@@ -128,6 +126,14 @@ installing the following to obtain better warnings:
   - GNU make.
 
   - clang, version 3.4 or later
+
+  - “flake8”, version 2.X, along with the “hacking” flake8 plugin (for Python
+    code).  The automatic flake8 check that runs against Python code has some
+    warnings enabled that come from the "hacking" flake8 plugin.  If it's not
+    installed, the warnings just won't occur until it's run on a system with
+    "hacking" installed.  Note that there are problems with flake8 3.0 and the
+    “hacking” plugin.  To ensure you get flake8 2.X, you can use
+    “pip install ‘flake8<3.0’”.
 
 Also, you may find the ovs-dev script found in utilities/ovs-dev.py useful.
 
@@ -147,6 +153,8 @@ following software:
   - For optional support of ingress policing on Linux, the "tc" program
     from iproute2 (part of all major distributions and available at
     http://www.linux-foundation.org/en/Net:Iproute2).
+
+  - Python 2.7. You must also have the Python six library.
 
 On Linux you should ensure that /dev/urandom exists.  To support TAP
 devices, you must also ensure that /dev/net/tun exists.
@@ -177,16 +185,22 @@ usually invoke configure without any arguments.  For example:
 
       `% ./configure`
 
-By default all files are installed under /usr/local.  If you want
-to install into, e.g., /usr and /var instead of /usr/local and
-/usr/local/var, add options as shown here:
+By default all files are installed under /usr/local.  Open vSwitch also
+expects to find its database in /usr/local/etc/openvswitch by default.
+If you want to install all files into, e.g., /usr and /var instead of
+/usr/local and /usr/local/var and expect to use /etc/openvswitch as the default
+database directory, add options as shown here:
 
-      `% ./configure --prefix=/usr --localstatedir=/var`
+      `% ./configure --prefix=/usr --localstatedir=/var --sysconfdir=/etc`
+
+Note that the Open vSwitch installed with packages like .rpm (e.g. via 'yum
+install' or 'rpm -ivh') and .deb (e.g. via 'apt-get install' or 'dpkg -i') use
+the above configure options.
 
 By default, static libraries are built and linked against. If you
 want to use shared libraries instead:
 
-      % ./configure --enable-shared
+      `% ./configure --enable-shared`
 
 To use a specific C compiler for compiling Open vSwitch user
 programs, also specify it on the configure command line, like so:
@@ -205,11 +219,26 @@ default CFLAGS plus "-mssse3", you might run configure as follows:
 
       `% ./configure CFLAGS="-g -O2 -mssse3"`
 
+For efficient hash computation special flags can be passed to leverage
+built-in intrinsics.  For example on X86_64 with SSE4.2 instruction set
+support, CRC32 intrinsics can be used by passing '-msse4.2'.
+
+      `% ./configure CFLAGS="-g -O2 -msse4.2"`
+
+If you are on a different processor and don't know what flags to choose, it
+is recommended to use '-march=native' settings.
+
+      `% ./configure CFLAGS="-g -O2 -march=native"`
+
+With this, GCC will detect the processor and automatically set appropriate
+flags for it.  This should not be used if you are compiling OVS outside the
+target machine.
+
 Note that these CFLAGS are not applied when building the Linux
 kernel module.  Custom CFLAGS for the kernel module are supplied
 using the EXTRA_CFLAGS variable when running make.  So, for example:
 
-      `% make EXTRA_CFLAGS="-Wno-error=date-time"
+      `% make EXTRA_CFLAGS="-Wno-error=date-time"`
 
 To build the Linux kernel module, so that you can run the
 kernel-based switch, pass the location of the kernel build
@@ -250,9 +279,16 @@ from a single source directory, e.g. to try out both GCC and Clang
 builds, or to build kernel modules for more than one Linux version.
 Here is an example:
 
-      `% mkdir _gcc && (cd _gcc && ../configure CC=gcc)`  
+      `% mkdir _gcc && (cd _gcc && ../configure CC=gcc)`
       `% mkdir _clang && (cd _clang && ../configure CC=clang)`
 
+Under certains loads the ovsdb-server and other components perform
+better when using the jemalloc memory allocator, instead of the glibc
+memory allocator.
+
+If you wish to link with jemalloc add it to LIBS:
+
+      `% ./configure LIBS=-ljemalloc`
 
 Building the Sources
 --------------------
@@ -268,7 +304,7 @@ Building the Sources
    If you used a separate build directory, run make or gmake from that
    directory, e.g.:
 
-      `% make -C _gcc`  
+      `% make -C _gcc`
       `% make -C _clang`
 
    For improved warnings if you installed "sparse" (see "Prerequisites"),
@@ -288,7 +324,7 @@ Building the Sources
 
 5. If you built kernel modules, you may install and load them, e.g.:
 
-      `% make modules_install`  
+      `% make modules_install`
       `% /sbin/modprobe openvswitch`
 
    To verify that the modules have been loaded, run "/sbin/lsmod" and
@@ -296,23 +332,6 @@ Building the Sources
 
    If the `modprobe` operation fails, look at the last few kernel log
    messages (e.g. with `dmesg | tail`):
-
-      - The message "openvswitch: exports duplicate symbol
-        br_should_route_hook (owned by bridge)" means that the bridge
-        module is loaded.  Run `/sbin/rmmod bridge` to remove it.
-
-        If `/sbin/rmmod bridge` fails with "ERROR: Module bridge does
-        not exist in /proc/modules", then the bridge is compiled into
-        the kernel, rather than as a module.  Open vSwitch does not
-        support this configuration (see "Build Requirements", above).
-
-      - The message "openvswitch: exports duplicate symbol
-        dp_ioctl_hook (owned by ofdatapath)" means that the ofdatapath
-        module from the OpenFlow reference implementation is loaded.
-        Run `/sbin/rmmod ofdatapath` to remove it.  (You might have to
-        delete any existing datapaths beforehand, using the "dpctl"
-        program included with the OpenFlow reference implementation.
-        "ovs-dpctl" will not work.)
 
       - Otherwise, the most likely problem is that Open vSwitch was
         built for a kernel different from the one into which you are
@@ -331,21 +350,9 @@ Building the Sources
         module loading, please include the output from the `dmesg` and
         `modinfo` commands mentioned above.
 
-There is an optional module parameter to openvswitch.ko called
-vlan_tso that enables TCP segmentation offload over VLANs on NICs
-that support it. Many drivers do not expose support for TSO on VLANs
-in a way that Open vSwitch can use but there is no way to detect
-whether this is the case. If you know that your particular driver can
-handle it (for example by testing sending large TCP packets over VLANs)
-then passing in a value of 1 may improve performance. Modules built for
-Linux kernels 2.6.37 and later, as well as specially patched versions
-of earlier kernels, do not need this and do not have this parameter. If
-you do not understand what this means or do not know if your driver
-will work, do not set this.
-
 6. Initialize the configuration database using ovsdb-tool, e.g.:
 
-      `% mkdir -p /usr/local/etc/openvswitch`  
+      `% mkdir -p /usr/local/etc/openvswitch`
       `% ovsdb-tool create /usr/local/etc/openvswitch/conf.db vswitchd/vswitch.ovsschema`
 
 Startup
@@ -359,12 +366,14 @@ explained above), to listen on a Unix domain socket, to connect to any
 managers specified in the database itself, and to use the SSL
 configuration in the database:
 
+      ```
       % ovsdb-server --remote=punix:/usr/local/var/run/openvswitch/db.sock \
                      --remote=db:Open_vSwitch,Open_vSwitch,manager_options \
                      --private-key=db:Open_vSwitch,SSL,private_key \
                      --certificate=db:Open_vSwitch,SSL,certificate \
                      --bootstrap-ca-cert=db:Open_vSwitch,SSL,ca_cert \
                      --pidfile --detach
+      ```
 
 (If you built Open vSwitch without SSL support, then omit
 --private-key, --certificate, and --bootstrap-ca-cert.)
@@ -373,20 +382,20 @@ Then initialize the database using ovs-vsctl.  This is only
 necessary the first time after you create the database with
 ovsdb-tool (but running it at any time is harmless):
 
-      % ovs-vsctl --no-wait init
+      `% ovs-vsctl --no-wait init`
 
 Then start the main Open vSwitch daemon, telling it to connect to the
 same Unix domain socket:
 
-      % ovs-vswitchd --pidfile --detach
+      `% ovs-vswitchd --pidfile --detach`
 
 Now you may use ovs-vsctl to set up bridges and other Open vSwitch
 features.  For example, to create a bridge named br0 and add ports
 eth0 and vif1.0 to it:
 
-      % ovs-vsctl add-br br0
-      % ovs-vsctl add-port br0 eth0
-      % ovs-vsctl add-port br0 vif1.0
+      `% ovs-vsctl add-br br0`
+      `% ovs-vsctl add-port br0 eth0`
+      `% ovs-vsctl add-port br0 vif1.0`
 
 Please refer to ovs-vsctl(8) for more details.
 
@@ -402,7 +411,10 @@ also upgrade the database schema:
       % kill `cd /usr/local/var/run/openvswitch && cat ovsdb-server.pid ovs-vswitchd.pid`
       ```
 
-2. Install the new Open vSwitch release.
+2. Install the new Open vSwitch release by using the same configure options as
+was used for installing the previous version. If you do not use the same
+configure options, you can end up with two different versions of Open vSwitch
+executables installed in different locations.
 
 3. Upgrade the database, in one of the following two ways:
 
@@ -508,6 +520,12 @@ The results of a testing run are reported in tests/testsuite.log.
 Please report test failures as bugs and include the testsuite.log in
 your report.
 
+If the build was configured with "--enable-coverage" and the "lcov"
+utility is installed, you can run the testsuite and generate a code
+coverage report by using "make check-lcov". All of the options for
+TESTSUITEFLAGS are available, so you can e.g.:
+      `make check-lcov TESTSUITEFLAGS=-j8 -k ovn`
+
 If you have "valgrind" installed, then you can also run the testsuite
 under valgrind by using "make check-valgrind" in place of "make
 check".  All the same options are available via TESTSUITEFLAGS.  When
@@ -519,7 +537,10 @@ valgrind results are easier to interpret if you put "-q" in
 Sometimes a few tests may fail on some runs but not others.  This is
 usually a bug in the testsuite, not a bug in Open vSwitch itself.  If
 you find that a test fails intermittently, please report it, since the
-developers may not have noticed.
+developers may not have noticed.  You can make the testsuite
+automatically rerun tests that fail, by adding RECHECK=yes to the
+"make" command line, e.g.:
+      `make check TESTSUITEFLAGS=-j8 RECHECK=yes`
 
 OFTest
 ------
@@ -601,24 +622,41 @@ test failures that you believe to represent bugs in Open vSwitch.
 Include the precise versions of Open vSwitch and Ryu in your bug
 report, plus any other information needed to reproduce the problem.
 
-Vagrant
--------
+Datapath testing
+----------------
 
-Requires: Vagrant (version 1.7.0 or later) and a compatible hypervisor
+Open vSwitch also includes a suite of tests specifically for datapath
+functionality, which can be run against the userspace or kernel datapaths.
+If you are developing datapath features, it is recommended that you use
+these tests and build upon them to verify your implementation.
+
+The datapath tests make some assumptions about the environment. They
+must be run under root privileges on a Linux system with support for
+network namespaces. For ease of use, the OVS source tree includes a
+vagrant box to invoke these tests. Running the tests inside Vagrant
+provides kernel isolation, protecting your development host from kernel
+panics or configuration conflicts in the testsuite. If you wish to run
+the tests without using the vagrant box, there are further instructions
+below.
+
+### Vagrant
+
+*Requires Vagrant (version 1.7.0 or later) and a compatible hypervisor*
 
 You must bootstrap and configure the sources (steps are in "Building
 and Installing Open vSwitch for Linux, FreeBSD or NetBSD" above) before
 you run the steps described here.
 
 A Vagrantfile is provided allowing to compile and provision the source
-tree as found locally in a virtual machine using the following commands:
+tree as found locally in a virtual machine using the following command:
 
 	vagrant up
-	vagrant ssh
 
-This will bring up w Fedora 20 VM by default, alternatively the
-`Vagrantfile` can be modified to use a different distribution box as
-base. Also, the VM can be reprovisioned at any time:
+This will bring up a Fedora 23 VM by default. If you wish to use a
+different box or a vagrant backend not supported by the default box,
+the `Vagrantfile` can be modified to use a different box as base.
+
+The VM can be reprovisioned at any time:
 
 	vagrant provision
 
@@ -627,11 +665,10 @@ OVS out-of-tree compilation environment can be set up with:
 	./boot.sh
 	vagrant provision --provision-with configure_ovs,build_ovs
 
-This will set up an out-of-tree build environment in /home/vagrant/build.
-The source code can be found in /vagrant.  Out-of-tree build is preferred
-to work around limitations of the sync file systems.
+This will set up an out-of-tree build environment inside the VM in
+/root/build. The source code can be found in /vagrant.
 
-To recompile and reinstall OVS using RPM:
+To recompile and reinstall OVS in the VM using RPM:
 
 	./boot.sh
 	vagrant provision --provision-with configure_ovs,install_rpm
@@ -642,6 +679,46 @@ the self-tests mentioned above.  To run them:
 
 	./boot.sh
 	vagrant provision --provision-with configure_ovs,test_ovs_kmod,test_ovs_system_userspace
+
+The results of the testsuite reside in the VM root user's home directory:
+
+        vagrant ssh
+        sudo -s
+        cd /root/build
+        ls tests/system*
+
+### Native
+
+The datapath testsuite as invoked by Vagrant above may also be run
+manually on a Linux system with root privileges. These tests may take
+several minutes to complete, and cannot be run in parallel.
+
+#### Userspace datapath
+
+To invoke the datapath testsuite with the userspace datapath:
+
+        make check-system-userspace
+
+The results of the testsuite are in tests/system-userspace-traffic.dir/.
+
+#### Kernel datapath
+
+Make targets are also provided for testing the Linux kernel module.
+Note that these tests operate by inserting modules into the running
+Linux kernel, so if the tests are able to trigger a bug in the OVS
+kernel module or in the upstream kernel then the kernel may panic.
+
+To run the testsuite against the kernel module which is currently
+installed on your system:
+
+        make check-kernel
+
+To install the kernel module from the current build directory and
+run the testsuite against that kernel module:
+
+        make check-kmod
+
+The results of the testsuite are in tests/system-kmod-traffic.dir/.
 
 Continuous Integration with Travis-CI
 -------------------------------------
@@ -686,6 +763,28 @@ Instructions to setup travis-ci for your GitHub repository:
 4. Pushing a commit to the repository which breaks the build or the
    testsuite will now trigger a email sent to mylist@mydomain.org
 
+Static Code Analysis
+--------------------
+
+Static Analysis is a method of debugging Software by examining code rather
+than actually executing it. This can be done through 'scan-build' commandline
+utility which internally uses clang (or) gcc to compile the code and also
+invokes a static analyzer to do the code analysis. At the end of the build, the
+reports are aggregated in to a common folder and can later be analyzed using
+'scan-view'.
+
+Open vSwitch includes a Makefile target to trigger static code Analysis and
+the instructions are below.
+
+1. ./boot.sh
+2. ./configure CC=clang (when using clang compiler)
+   ./configure CC=gcc CFLAGS="-std=gnu99" (when using GCC)
+3. make clang-analyze
+
+You should invoke scan-view to view analysis results. The last line of output
+from 'make clang-analyze' shall list the command (containing results directory)
+that you should invoke to view the results on a browser.
+
 Bug Reporting
 =============
 
@@ -697,6 +796,7 @@ Please report problems to bugs@openvswitch.org.
 [INSTALL.RHEL.md]:INSTALL.RHEL.md
 [INSTALL.XenServer.md]:INSTALL.XenServer.md
 [INSTALL.NetBSD.md]:INSTALL.NetBSD.md
+[INSTALL.Windows.md]:INSTALL.Windows.md
 [INSTALL.DPDK.md]:INSTALL.DPDK.md
 [INSTALL.userspace.md]:INSTALL.userspace.md
 [FAQ.md]:FAQ.md

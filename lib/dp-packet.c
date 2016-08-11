@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #include <config.h>
 #include <stdlib.h>
 #include <string.h>
-#include "dynamic-string.h"
+#include "openvswitch/dynamic-string.h"
 #include "netdev-dpdk.h"
 #include "dp-packet.h"
 #include "util.h"
@@ -29,6 +29,8 @@ dp_packet_init__(struct dp_packet *b, size_t allocated, enum dp_packet_source so
     b->source = source;
     dp_packet_reset_offsets(b);
     pkt_metadata_init(&b->md, 0);
+    dp_packet_rss_invalidate(b);
+    dp_packet_reset_cutlen(b);
 }
 
 static void
@@ -167,6 +169,20 @@ dp_packet_clone_with_headroom(const struct dp_packet *buffer, size_t headroom)
     new_buffer->l3_ofs = buffer->l3_ofs;
     new_buffer->l4_ofs = buffer->l4_ofs;
     new_buffer->md = buffer->md;
+    new_buffer->cutlen = buffer->cutlen;
+#ifdef DPDK_NETDEV
+    new_buffer->mbuf.ol_flags = buffer->mbuf.ol_flags;
+#else
+    new_buffer->rss_hash_valid = buffer->rss_hash_valid;
+#endif
+
+    if (dp_packet_rss_valid(new_buffer)) {
+#ifdef DPDK_NETDEV
+        new_buffer->mbuf.hash.rss = buffer->mbuf.hash.rss;
+#else
+        new_buffer->rss_hash = buffer->rss_hash;
+#endif
+    }
 
     return new_buffer;
 }
@@ -429,21 +445,6 @@ dp_packet_steal_data(struct dp_packet *b)
     dp_packet_set_base(b, NULL);
     dp_packet_set_data(b, NULL);
     return p;
-}
-
-/* Returns a string that describes some of 'b''s metadata plus a hex dump of up
- * to 'maxbytes' from the start of the buffer. */
-char *
-dp_packet_to_string(const struct dp_packet *b, size_t maxbytes)
-{
-    struct ds s;
-
-    ds_init(&s);
-    ds_put_format(&s, "size=%"PRIu32", allocated=%"PRIu32", head=%"PRIuSIZE", tail=%"PRIuSIZE"\n",
-                  dp_packet_size(b), dp_packet_get_allocated(b),
-                  dp_packet_headroom(b), dp_packet_tailroom(b));
-    ds_put_hex_dump(&s, dp_packet_data(b), MIN(dp_packet_size(b), maxbytes), 0, false);
-    return ds_cstr(&s);
 }
 
 static inline void

@@ -21,7 +21,7 @@ The primary approach to compatibility is to abstract most of the
 details of the differences from the core code, by adding a protocol
 layer that translates between OF1.x and a slightly higher-level
 abstract representation.  The core of this approach is the many struct
-ofputil_* structures in lib/ofp-util.h.
+ofputil_* structures in include/openvswitch/ofp-util.h.
 
 As a consequence of this approach, OVS cannot use OpenFlow protocol
 definitions that closely resemble those in the OpenFlow specification,
@@ -192,10 +192,7 @@ OpenFlow 1.4 features are listed in the previous section.
 
   * More extensible wire protocol
     Many on-wire structures got TLVs.
-    Already implemented: port desc properties, port mod properties,
-                         port stats properties, table mod properties,
-                         queue stats, unified property errors.
-    Remaining required: set-async, queue desc
+    All required features are now supported.
     Remaining optional: table desc, table-status
     [EXT-262]
     [required for OF1.4+]

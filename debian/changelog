@@ -1,3 +1,19 @@
+openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu1) yakkety; urgency=medium
+
+  * New upstream snapshot for 2.6.0 release goal.
+  * d/control: Bumped Standards-Version to 3.9.8, no changes.
+  * d/openvswitch-common.install: Drop ovs-benchmark tool, removed upstream
+    due to lack of use and maintenance.
+  * d/control,ovn-controller-vtep.*: Add ovn-controller-vtep package.
+  * d/openvswitch-switch.install: Add ovs-tcpdump binary and manpage.
+  * Add support for Python 3:
+    - d/control: Drop surplus Python 2 BD's, add BD's for Python 3.
+    - d/control: Add missing dependency on python-six.
+    - d/rules,control: Add python3-openvswitch package.
+  * d/rules: Skip racey/failing tests until resolved upstream.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 11 Aug 2016 17:53:28 +0100
+
 openvswitch (2.5.0-0ubuntu1) xenial; urgency=medium
 
   * New upstream release.

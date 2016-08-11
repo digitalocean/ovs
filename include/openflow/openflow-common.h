@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2011, 2012, 2013, 2014 The Board of Trustees of The Leland Stanford
+/* Copyright (c) 2008, 2011, 2012, 2013, 2014, 2016 The Board of Trustees of The Leland Stanford
  * Junior University
  *
  * We are making the OpenFlow specification and associated documentation
@@ -32,7 +32,7 @@
  */
 
 /*
- * Copyright (c) 2008-2014 Nicira, Inc.
+ * Copyright (c) 2008-2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,7 +77,8 @@ enum ofp_version {
     OFP12_VERSION = 0x03,
     OFP13_VERSION = 0x04,
     OFP14_VERSION = 0x05,
-    OFP15_VERSION = 0x06
+    OFP15_VERSION = 0x06,
+    OFP16_VERSION = 0x07
 };
 
 /* Vendor (aka experimenter) IDs.
@@ -107,6 +108,7 @@ enum ofp_version {
 #define NTR_COMPAT_VENDOR_ID   0x00001540 /* Incorrect value used in v2.4. */
 #define NX_VENDOR_ID    0x00002320 /* Nicira. */
 #define ONF_VENDOR_ID   0x4f4e4600 /* Open Networking Foundation. */
+#define INTEL_VENDOR_ID 0x0000AA01 /* Intel */
 
 #define OFP_MAX_TABLE_NAME_LEN 32
 #define OFP_MAX_PORT_NAME_LEN  16
@@ -209,28 +211,39 @@ enum ofp_port_features {
     OFPPF_10GB_FD    = 1 << 6,  /* 10 Gb full-duplex rate support. */
 };
 
-enum ofp_queue_properties {
-    OFPQT_MIN_RATE = 1,          /* Minimum datarate guaranteed. */
-    OFPQT_MAX_RATE = 2,          /* Maximum guaranteed rate. */
-    OFPQT_EXPERIMENTER = 0xffff, /* Experimenter defined property. */
+/* Generic OpenFlow property header, as used by various messages in OF1.3+, and
+ * especially in OF1.4.
+ *
+ * The OpenFlow specs prefer to define a new structure with a specialized name
+ * each time this property structure comes up: struct
+ * ofp_port_desc_prop_header, struct ofp_controller_status_prop_header, struct
+ * ofp_table_mod_prop_header, and more.  They're all the same, so it's easier
+ * to unify them.
+ */
+struct ofp_prop_header {
+    ovs_be16 type;
+    ovs_be16 len;
+    /* Followed by:
+     *     - 'len - 4' bytes of payload.
+     *     - PAD_SIZE(len, 8) bytes of zeros. */
 };
+OFP_ASSERT(sizeof(struct ofp_prop_header) == 4);
 
-/* Common description for a queue. */
-struct ofp_queue_prop_header {
-    ovs_be16 property; /* One of OFPQT_. */
-    ovs_be16 len;      /* Length of property, including this header. */
-    uint8_t pad[4];    /* 64-bit alignemnt. */
+/* Generic OpenFlow experimenter property header.
+ *
+ * Again the OpenFlow specs define this over and over again and it's easier to
+ * unify them. */
+struct ofp_prop_experimenter {
+    ovs_be16 type;          /* Generally 0xffff (in one case 0xfffe). */
+    ovs_be16 len;           /* Length in bytes of this property. */
+    ovs_be32 experimenter;  /* Experimenter ID which takes the same form as
+                             * in struct ofp_experimenter_header. */
+    ovs_be32 exp_type;      /* Experimenter defined. */
+    /* Followed by:
+     *     - 'len - 12' bytes of payload.
+     *     - PAD_SIZE(len, 8) bytes of zeros. */
 };
-OFP_ASSERT(sizeof(struct ofp_queue_prop_header) == 8);
-
-/* Min-Rate and Max-Rate queue property description (OFPQT_MIN and
- * OFPQT_MAX). */
-struct ofp_queue_prop_rate {
-    struct ofp_queue_prop_header prop_header;
-    ovs_be16 rate;        /* In 1/10 of a percent; >1000 -> disabled. */
-    uint8_t pad[6];       /* 64-bit alignment */
-};
-OFP_ASSERT(sizeof(struct ofp_queue_prop_rate) == 16);
+OFP_ASSERT(sizeof(struct ofp_prop_experimenter) == 12);
 
 /* Switch features. */
 struct ofp_switch_features {
@@ -269,12 +282,24 @@ enum ofp_capabilities {
 
 /* Why is this packet being sent to the controller? */
 enum ofp_packet_in_reason {
+    /* Standard reasons. */
     OFPR_NO_MATCH,          /* No matching flow. */
     OFPR_ACTION,            /* Action explicitly output to controller. */
     OFPR_INVALID_TTL,       /* Packet has invalid TTL. */
     OFPR_ACTION_SET,        /* Output to controller in action set */
     OFPR_GROUP,             /* Output to controller in group bucket */
     OFPR_PACKET_OUT,        /* Output to controller in packet-out */
+
+#define OFPR10_BITS                                                     \
+    ((1u << OFPR_NO_MATCH) | (1u << OFPR_ACTION) | (1u << OFPR_INVALID_TTL))
+#define OFPR14_BITS                                                     \
+    (OFPR10_BITS |                                                      \
+     (1u << OFPR_ACTION_SET) | (1u << OFPR_GROUP) | (1u << OFPR_PACKET_OUT))
+
+    /* Nonstandard reason--not exposed via OpenFlow. */
+    OFPR_EXPLICIT_MISS,
+    OFPR_IMPLICIT_MISS,
+
     OFPR_N_REASONS
 };
 
@@ -301,6 +326,16 @@ enum ofp_flow_removed_reason {
     OFPRR_METER_DELETE,         /* Meter was removed. */
     OFPRR_EVICTION,             /* Switch eviction to free resources. */
 
+#define OFPRR10_BITS                            \
+    ((1u << OFPRR_IDLE_TIMEOUT) |               \
+     (1u << OFPRR_HARD_TIMEOUT) |               \
+     (1u << OFPRR_DELETE))
+#define OFPRR14_BITS                            \
+    (OFPRR10_BITS |                             \
+     (1u << OFPRR_GROUP_DELETE) |               \
+     (1u << OFPRR_METER_DELETE) |               \
+     (1u << OFPRR_EVICTION))
+
     OVS_OFPRR_NONE              /* OVS internal_use only, keep last!. */
 };
 
@@ -309,6 +344,11 @@ enum ofp_port_reason {
     OFPPR_ADD,              /* The port was added. */
     OFPPR_DELETE,           /* The port was removed. */
     OFPPR_MODIFY,           /* Some attribute of the port has changed. */
+
+#define OFPPR_BITS ((1u << OFPPR_ADD) |         \
+                    (1u << OFPPR_DELETE) |      \
+                    (1u << OFPPR_MODIFY))
+
     OFPPR_N_REASONS         /* Denotes number of reasons. */
 };
 
@@ -389,17 +429,6 @@ struct ofp_hello_elem_header {
     ovs_be16    length;      /* Length in bytes of this element. */
 };
 OFP_ASSERT(sizeof(struct ofp_hello_elem_header) == 4);
-
-/* Vendor extension. */
-struct ofp_vendor_header {
-    struct ofp_header header;   /* Type OFPT_VENDOR or OFPT_EXPERIMENTER. */
-    ovs_be32 vendor;            /* Vendor ID:
-                                 * - MSB 0: low-order bytes are IEEE OUI.
-                                 * - MSB != 0: defined by OpenFlow
-                                 *   consortium. */
-    /* Vendor-defined arbitrary additional data. */
-};
-OFP_ASSERT(sizeof(struct ofp_vendor_header) == 12);
 
 /* Table numbering. Tables can use any number up to OFPT_MAX. */
 enum ofp_table {

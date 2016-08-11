@@ -59,6 +59,7 @@ enum ofp15_group_mod_command {
     /* OFPGCXX_YYY = 4, */    /* Reserved for future use. */
     OFPGC15_REMOVE_BUCKET = 5,/* Remove all action buckets or any specific
                                  action bucket from matching group */
+    OFPGC15_ADD_OR_MOD = 0x8000, /* Create new or modify existing group. */
 };
 
 /* Group bucket property types.  */
@@ -68,24 +69,6 @@ enum ofp15_group_bucket_prop_type {
     OFPGBPT15_WATCH_GROUP            = 2,  /* Fast failover groups only. */
     OFPGBPT15_EXPERIMENTER      = 0xFFFF,  /* Experimenter defined. */
 };
-
-/* Group bucket weight property, for select groups only. */
-struct ofp15_group_bucket_prop_weight {
-    ovs_be16         type;    /* OFPGBPT15_WEIGHT. */
-    ovs_be16         length;  /* 8. */
-    ovs_be16         weight;  /* Relative weight of bucket. */
-    uint8_t          pad[2];  /* Pad to 64 bits. */
-};
-OFP_ASSERT(sizeof(struct ofp15_group_bucket_prop_weight) == 8);
-
-/* Group bucket watch port or watch group property, for fast failover groups
- * only. */
-struct ofp15_group_bucket_prop_watch {
-    ovs_be16         type;    /* OFPGBPT15_WATCH_PORT or OFPGBPT15_WATCH_GROUP. */
-    ovs_be16         length;  /* 8. */
-    ovs_be32         watch;   /* The port or the group.  */
-};
-OFP_ASSERT(sizeof(struct ofp15_group_bucket_prop_watch) == 8);
 
 /* Bucket for use in groups. */
 struct ofp15_bucket {

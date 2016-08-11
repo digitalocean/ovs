@@ -30,12 +30,11 @@ import time
 import XenAPI
 
 import ovs.dirs
-from ovs.db import error
-from ovs.db import types
 import ovs.daemon
 import ovs.db.idl
 import ovs.unixctl
 import ovs.unixctl.server
+import six
 
 vlog = ovs.vlog.Vlog("ovs-xapi-sync")
 session = None
@@ -69,7 +68,7 @@ def init_session():
     try:
         session = XenAPI.xapi_local()
         session.xenapi.login_with_password("", "")
-    except XenAPI.Failure, e:
+    except XenAPI.Failure as e:
         session = None
         vlog.warn("Couldn't login to XAPI (%s)" % e)
         return False
@@ -83,11 +82,13 @@ def get_network_by_bridge(br_name):
                 " XAPI session could not be initialized" % br_name)
         return None
 
-    recs = session.xenapi.network.get_all_records_where('field "bridge"="%s"' % br_name)
+    recs = session.xenapi.network.get_all_records_where(
+            'field "bridge"="%s"' % br_name)
     if len(recs) > 0:
-        return recs.values()[0]
+        return next(six.itervalues(recs))
 
     return None
+
 
 # There are possibilities when multiple xs-network-uuids are set for a bridge.
 # In cases like that, we should choose the bridge-id associated with the bridge
@@ -102,6 +103,7 @@ def get_single_bridge_id(bridge_ids, br_name, default=None):
     vlog.warn("Failed to get a single bridge id from Xapi.")
     xapi_down = True
     return default
+
 
 # By default, the "bridge-id" external id in the Bridge table is the
 # same as "xs-network-uuids".  This may be overridden by defining a
@@ -267,7 +269,7 @@ def main():
     while True:
         unixctl_server.run()
         if exiting:
-            break;
+            break
 
         idl.run()
         if not xapi_down and not flush_cache and seqno == idl.change_seqno:
@@ -293,7 +295,7 @@ def main():
         txn = ovs.db.idl.Transaction(idl)
 
         new_bridges = {}
-        for row in idl.tables["Bridge"].rows.itervalues():
+        for row in six.itervalues(idl.tables["Bridge"].rows):
             bridge_id = bridges.get(row.name)
             if bridge_id is None:
                 # Configure the new bridge.
@@ -318,12 +320,12 @@ def main():
         bridges = new_bridges
 
         iface_by_name = {}
-        for row in idl.tables["Interface"].rows.itervalues():
+        for row in six.itervalues(idl.tables["Interface"].rows):
             iface_by_name[row.name] = row
 
         new_iface_ids = {}
         new_vm_ids = {}
-        for row in idl.tables["Interface"].rows.itervalues():
+        for row in six.itervalues(idl.tables["Interface"].rows):
             # Match up paired vif and tap devices.
             if row.name.startswith("vif"):
                 vif = row

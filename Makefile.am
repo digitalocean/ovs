@@ -73,6 +73,7 @@ docs = \
 	INSTALL.md \
 	INSTALL.Debian.md \
 	INSTALL.Docker.md \
+	INSTALL.DPDK-ADVANCED.md \
 	INSTALL.DPDK.md \
 	INSTALL.Fedora.md \
 	INSTALL.KVM.md \
@@ -85,6 +86,7 @@ docs = \
 	INSTALL.userspace.md \
 	INSTALL.Windows.md \
 	IntegrationGuide.md \
+	MAINTAINERS.md \
 	OPENFLOW-1.1+.md \
 	PORTING.md \
 	README.md \
@@ -92,25 +94,28 @@ docs = \
 	README-native-tunneling.md \
 	REPORTING-BUGS.md \
 	SECURITY.md \
-	TODO.md \
 	WHY-OVS.md
 EXTRA_DIST = \
 	$(docs) \
 	NOTICE \
 	.travis.yml \
-	.travis/build.sh \
-	.travis/prepare.sh \
+	.travis/linux-build.sh \
+	.travis/linux-prepare.sh \
+	.travis/osx-build.sh \
+	.travis/osx-prepare.sh \
 	appveyor.yml \
 	boot.sh \
 	build-aux/cccl \
 	build-aux/cksum-schema-check \
+	build-aux/calculate-schema-cksum \
 	build-aux/dist-docs \
 	build-aux/sodepends.pl \
 	build-aux/soexpand.pl \
 	build-aux/xml2nroff \
 	$(MAN_FRAGMENTS) \
 	$(MAN_ROOTS) \
-	Vagrantfile
+	Vagrantfile \
+	Vagrantfile-FreeBSD
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
@@ -142,6 +147,7 @@ SUFFIXES =
 check_DATA =
 check_SCRIPTS =
 pkgconfig_DATA =
+FLAKE8_PYFILES =
 
 scriptsdir = $(pkgdatadir)/scripts
 completiondir = $(sysconfdir)/bash_completion.d
@@ -183,6 +189,7 @@ SUFFIXES += .in
 SUFFIXES += .xml
 %: %.xml
 	$(AM_V_GEN)$(run_python) $(srcdir)/build-aux/xml2nroff $< > $@.tmp \
+		-I $(srcdir) \
 		--version=$(VERSION) \
 		PKIDIR='$(PKIDIR)' \
 		LOGDIR='$(LOGDIR)' \
@@ -245,7 +252,7 @@ config-h-check:
 	@cd $(srcdir); \
 	if test -e .git && (git --version) >/dev/null 2>&1 && \
 	   git --no-pager grep -L '#include <config\.h>' `git ls-files | grep '\.c$$' | \
-               grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows'`; \
+               grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows|^python'`; \
 	then \
 	    echo "See above for list of violations of the rule that"; \
 	    echo "every C source file must #include <config.h>."; \
@@ -340,6 +347,36 @@ manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
 CLEANFILES += manpage-check
 endif
 
+if HAVE_FLAKE8
+ALL_LOCAL += flake8-check
+# http://flake8.readthedocs.org/en/latest/warnings.html
+# All warnings explicitly selected or ignored should be listed below.
+#
+# E***, W*** -- warnings from pep8
+#   E121 continuation line under-indented for hanging indent (only from flake8 v2.0)
+#   E123 closing bracket does not match indentation of opening bracket's line
+#   E125 continuation line with same indent as next logical line (only from flake8 v2.0)
+#   E126 continuation line over-indented for hanging indent
+#   E127 continuation line over-indented for visual indent
+#   E128 continuation line under-indented for visual indent
+#   E129 visually indented line with same indent as next logical line
+#   E131 continuation line unaligned for hanging indent
+#   W503 line break before binary operator
+# F*** -- warnings native to flake8
+#   F811 redefinition of unused <name> from line <N> (only from flake8 v2.0)
+# D*** -- warnings from flake8-docstrings plugin
+# H*** -- warnings from flake8 hacking plugin (custom style checks beyond PEP8)
+#   H231 Python 3.x incompatible 'except x,y:' construct
+#   H232 Python 3.x incompatible octal 077 should be written as 0o77
+#   H233 Python 3.x incompatible use of print operator
+#   H238 old style class declaration, use new style (inherit from `object`)
+flake8-check: $(FLAKE8_PYFILES)
+	$(AM_V_GEN) if flake8 $^ --select=H231,H232,H233,H238 ${FLAKE8_FLAGS} && \
+		flake8 $^ --ignore=E121,E123,E125,E126,E127,E128,E129,E131,W503,F811,D,H ${FLAKE8_FLAGS}; then \
+		touch $@; else exit 1; fi
+endif
+CLEANFILES += flake8-check
+
 include $(srcdir)/manpages.mk
 $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.pl
 	@$(PERL) $(srcdir)/build-aux/sodepends.pl -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
@@ -352,17 +389,24 @@ $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.pl
 CLEANFILES += manpage-dep-check
 
 if VSTUDIO_DDK
-ALL_LOCAL += ovsext_make
-ovsext_make: datapath-windows/ovsext.sln
-	MSBuild.exe datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)"
-	MSBuild.exe datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
+ALL_LOCAL += ovsext
+ovsext: datapath-windows/ovsext.sln $(srcdir)/datapath-windows/include/OvsDpInterface.h
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
 
 CLEAN_LOCAL += ovsext_clean
 ovsext_clean: datapath-windows/ovsext.sln
-	MSBuild.exe datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)"
-	MSBuild.exe datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
 endif
-.PHONY: ovsext_make
+.PHONY: ovsext
+
+clang-analyze: clean
+	@which clang scan-build >/dev/null 2>&1 || \
+		(echo "Unable to find clang/scan-build, Install clang,clang-analyzer packages"; exit 1)
+	@$(MKDIR_P) "$(srcdir)/tests/clang-analyzer-results"
+	@scan-build -o $(srcdir)/tests/clang-analyzer-results --use-cc=$(CC) $(MAKE)
+.PHONY: clang-analyze
 
 dist-hook: $(DIST_HOOKS)
 all-local: $(ALL_LOCAL)
@@ -377,7 +421,7 @@ if LINUX_ENABLED
 endif
 
 dist-docs:
-	VERSION=$(VERSION) $(srcdir)/build-aux/dist-docs $(srcdir) $(docs)
+	VERSION=$(VERSION) MAKE='$(MAKE)' $(srcdir)/build-aux/dist-docs $(srcdir) $(docs)
 .PHONY: dist-docs
 
 include Documentation/automake.mk

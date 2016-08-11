@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 VMware, Inc.
+ * Copyright (c) 2014, 2016 VMware, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,31 @@
 
 #include "precomp.h"
 
-#include "Checksum.h"
+#include "Actions.h"
+#include "Conntrack.h"
+#include "Debug.h"
 #include "Event.h"
 #include "Flow.h"
 #include "Gre.h"
+#include "Jhash.h"
+#include "Mpls.h"
 #include "NetProto.h"
+#include "Offload.h"
 #include "PacketIO.h"
+#include "Recirc.h"
 #include "Stt.h"
 #include "Switch.h"
 #include "User.h"
 #include "Vport.h"
 #include "Vxlan.h"
+#include "Geneve.h"
 
 #ifdef OVS_DBG_MOD
 #undef OVS_DBG_MOD
 #endif
 #define OVS_DBG_MOD OVS_DBG_ACTION
-#include "Debug.h"
+
+#define OVS_DEST_PORTS_ARRAY_MIN_SIZE 2
 
 typedef struct _OVS_ACTION_STATS {
     UINT64 rxGre;
@@ -41,6 +49,8 @@ typedef struct _OVS_ACTION_STATS {
     UINT64 txVxlan;
     UINT64 rxStt;
     UINT64 txStt;
+    UINT64 rxGeneve;
+    UINT64 txGeneve;
     UINT64 flowMiss;
     UINT64 flowUserspace;
     UINT64 txTcp;
@@ -54,6 +64,8 @@ typedef struct _OVS_ACTION_STATS {
     UINT32 cannotGrowDest;
     UINT32 zeroActionLen;
     UINT32 failedChecksum;
+    UINT32 deferredActionsQueueFull;
+    UINT32 deferredActionsExecLimit;
 } OVS_ACTION_STATS, *POVS_ACTION_STATS;
 
 OVS_ACTION_STATS ovsActionStats;
@@ -65,7 +77,6 @@ OVS_ACTION_STATS ovsActionStats;
  * exercised while adding new members to the structure - only add ones that get
  * used across multiple stages in the pipeline/get used in multiple functions.
  */
-#define OVS_DEST_PORTS_ARRAY_MIN_SIZE 2
 typedef struct OvsForwardingContext {
     POVS_SWITCH_CONTEXT switchContext;
     /* The NBL currently used in the pipeline. */
@@ -98,7 +109,7 @@ typedef struct OvsForwardingContext {
      */
     OvsIPv4TunnelKey tunKey;
 
-     /*
+    /*
      * Tunneling - Tx:
      * To store the output port, when it is a tunneled port. We don't foresee
      * multiple tunneled ports as outport for any given NBL.
@@ -115,7 +126,6 @@ typedef struct OvsForwardingContext {
     /* header information */
     OVS_PACKET_HDR_INFO layers;
 } OvsForwardingContext;
-
 
 /*
  * --------------------------------------------------------------------------
@@ -208,32 +218,35 @@ OvsDetectTunnelRxPkt(OvsForwardingContext *ovsFwdCtx,
     /* XXX: we should also check for the length of the UDP payload to pick
      * packets only if they are at least VXLAN header size.
      */
+
+    /*
+     * For some of the tunnel types such as GRE, the dstPort is not applicable
+     * since GRE does not have a L4 port. We use '0' for convenience.
+     */
     if (!flowKey->ipKey.nwFrag) {
         UINT16 dstPort = htons(flowKey->ipKey.l4.tpDst);
-        switch (flowKey->ipKey.nwProto) {
-        case IPPROTO_GRE:
-            tunnelVport = OvsFindTunnelVportByPortType(ovsFwdCtx->switchContext,
-                                                       OVS_VPORT_TYPE_GRE);
-            if (tunnelVport) {
-                ovsActionStats.rxGre++;
-            }
-            break;
-        case IPPROTO_TCP:
-            tunnelVport = OvsFindTunnelVportByDstPort(ovsFwdCtx->switchContext,
-                                                      dstPort,
-                                                      OVS_VPORT_TYPE_STT);
-            if (tunnelVport) {
+
+        ASSERT(flowKey->ipKey.nwProto != IPPROTO_GRE || dstPort == 0);
+
+        tunnelVport =
+            OvsFindTunnelVportByDstPortAndNWProto(ovsFwdCtx->switchContext,
+                                                  dstPort,
+                                                  flowKey->ipKey.nwProto);
+        if (tunnelVport) {
+            switch(tunnelVport->ovsType) {
+            case OVS_VPORT_TYPE_STT:
                 ovsActionStats.rxStt++;
-            }
-            break;
-        case IPPROTO_UDP:
-            tunnelVport = OvsFindTunnelVportByDstPort(ovsFwdCtx->switchContext,
-                                                      dstPort,
-                                                      OVS_VPORT_TYPE_VXLAN);
-            if (tunnelVport) {
+                break;
+            case OVS_VPORT_TYPE_VXLAN:
                 ovsActionStats.rxVxlan++;
+                break;
+            case OVS_VPORT_TYPE_GENEVE:
+                ovsActionStats.rxGeneve++;
+                break;
+            case OVS_VPORT_TYPE_GRE:
+                ovsActionStats.rxGre++;
+                break;
             }
-            break;
         }
     }
 
@@ -326,6 +339,9 @@ OvsDetectTunnelPkt(OvsForwardingContext *ovsFwdCtx,
             case OVS_VPORT_TYPE_STT:
                 ovsActionStats.txStt++;
                 break;
+            case OVS_VPORT_TYPE_GENEVE:
+               ovsActionStats.txGeneve++;
+               break;
             }
             ovsFwdCtx->tunnelTxNic = dstVport;
         }
@@ -563,10 +579,10 @@ OvsCompleteNBLForwardingCtx(OvsForwardingContext *ovsFwdCtx,
 static __inline NDIS_STATUS
 OvsDoFlowLookupOutput(OvsForwardingContext *ovsFwdCtx)
 {
-    OvsFlowKey key;
-    OvsFlow *flow;
-    UINT64 hash;
-    NDIS_STATUS status;
+    OvsFlowKey key = { 0 };
+    OvsFlow *flow = NULL;
+    UINT64 hash = 0;
+    NDIS_STATUS status = NDIS_STATUS_SUCCESS;
     POVS_VPORT_ENTRY vport =
         OvsFindVportByPortNo(ovsFwdCtx->switchContext, ovsFwdCtx->srcVportNo);
     if (vport == NULL || vport->ovsState != OVS_STATE_CONNECTED) {
@@ -594,11 +610,13 @@ OvsDoFlowLookupOutput(OvsForwardingContext *ovsFwdCtx)
     if (flow) {
         OvsFlowUsed(flow, ovsFwdCtx->curNbl, &ovsFwdCtx->layers);
         ovsFwdCtx->switchContext->datapath.hits++;
-        status = OvsActionsExecute(ovsFwdCtx->switchContext,
-                                   ovsFwdCtx->completionList, ovsFwdCtx->curNbl,
-                                   ovsFwdCtx->srcVportNo, ovsFwdCtx->sendFlags,
-                                   &key, &hash, &ovsFwdCtx->layers,
-                                   flow->actions, flow->actionsLen);
+        status = OvsDoExecuteActions(ovsFwdCtx->switchContext,
+                                     ovsFwdCtx->completionList,
+                                     ovsFwdCtx->curNbl,
+                                     ovsFwdCtx->srcVportNo,
+                                     ovsFwdCtx->sendFlags,
+                                     &key, &hash, &ovsFwdCtx->layers,
+                                     flow->actions, flow->actionsLen);
         ovsFwdCtx->curNbl = NULL;
     } else {
         LIST_ENTRY missedPackets;
@@ -680,6 +698,11 @@ OvsTunnelPortTx(OvsForwardingContext *ovsFwdCtx)
                              &ovsFwdCtx->tunKey, ovsFwdCtx->switchContext,
                              &ovsFwdCtx->layers, &newNbl);
         break;
+    case OVS_VPORT_TYPE_GENEVE:
+        status = OvsEncapGeneve(ovsFwdCtx->tunnelTxNic, ovsFwdCtx->curNbl,
+                                &ovsFwdCtx->tunKey, ovsFwdCtx->switchContext,
+                                &ovsFwdCtx->layers, &newNbl);
+        break;
     default:
         ASSERT(! "Tx: Unhandled tunnel type");
     }
@@ -757,6 +780,10 @@ OvsTunnelPortRx(OvsForwardingContext *ovsFwdCtx)
             /* This was an STT-LSO Fragment */
             dropReason = L"OVS-STT segment is cached";
         }
+        break;
+    case OVS_VPORT_TYPE_GENEVE:
+        status = OvsDecapGeneve(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
+                                &ovsFwdCtx->tunKey, &newNbl);
         break;
     default:
         OVS_LOG_ERROR("Rx: Unhandled tunnel type: %d\n",
@@ -974,7 +1001,7 @@ static __inline NDIS_STATUS
 OvsOutputBeforeSetAction(OvsForwardingContext *ovsFwdCtx)
 {
     PNET_BUFFER_LIST newNbl;
-    NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+    NDIS_STATUS status;
 
     /*
      * Create a copy and work on the copy after this point. The original NBL is
@@ -1031,28 +1058,29 @@ OvsOutputBeforeSetAction(OvsForwardingContext *ovsFwdCtx)
 
 /*
  * --------------------------------------------------------------------------
- * OvsPopVlanInPktBuf --
- *     Function to pop a VLAN tag when the tag is in the packet buffer.
+ * OvsPopFieldInPacketBuf --
+ *     Function to pop a specified field of length 'shiftLength' located at
+ *     'shiftOffset' from the ethernet header. The data on the left of the
+ *     'shiftOffset' is right shifted.
+ *
+ *     Returns a pointer to the new start in 'bufferData'.
  * --------------------------------------------------------------------------
  */
 static __inline NDIS_STATUS
-OvsPopVlanInPktBuf(OvsForwardingContext *ovsFwdCtx)
+OvsPopFieldInPacketBuf(OvsForwardingContext *ovsFwdCtx,
+                       UINT32 shiftOffset,
+                       UINT32 shiftLength,
+                       PUINT8 *bufferData)
 {
     PNET_BUFFER curNb;
     PMDL curMdl;
     PUINT8 bufferStart;
-    ULONG dataLength = sizeof (DL_EUI48) + sizeof (DL_EUI48);
     UINT32 packetLen, mdlLen;
     PNET_BUFFER_LIST newNbl;
     NDIS_STATUS status;
+    PUINT8 tempBuffer[ETH_HEADER_LENGTH];
 
-    /*
-     * Declare a dummy vlanTag structure since we need to compute the size
-     * of shiftLength. The NDIS one is a unionized structure.
-     */
-    NDIS_PACKET_8021Q_INFO vlanTag = {0};
-    ULONG shiftLength = sizeof (vlanTag.TagHeader);
-    PUINT8 tempBuffer[sizeof (DL_EUI48) + sizeof (DL_EUI48)];
+    ASSERT(shiftOffset > ETH_ADDR_LENGTH);
 
     newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
                                0, 0, TRUE /* copy NBL info */);
@@ -1064,8 +1092,8 @@ OvsPopVlanInPktBuf(OvsForwardingContext *ovsFwdCtx)
     /* Complete the original NBL and create a copy to modify. */
     OvsCompleteNBLForwardingCtx(ovsFwdCtx, L"OVS-Dropped due to copy");
 
-    status = OvsInitForwardingCtx(ovsFwdCtx, ovsFwdCtx->switchContext,
-                                  newNbl, ovsFwdCtx->srcVportNo, 0,
+    status = OvsInitForwardingCtx(ovsFwdCtx, ovsFwdCtx->switchContext, newNbl,
+                                  ovsFwdCtx->srcVportNo, 0,
                                   NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(newNbl),
                                   NULL, &ovsFwdCtx->layers, FALSE);
     if (status != NDIS_STATUS_SUCCESS) {
@@ -1083,68 +1111,143 @@ OvsPopVlanInPktBuf(OvsForwardingContext *ovsFwdCtx)
         return NDIS_STATUS_RESOURCES;
     }
     mdlLen -= NET_BUFFER_CURRENT_MDL_OFFSET(curNb);
-    /* Bail out if L2 + VLAN header is not contiguous in the first buffer. */
-    if (MIN(packetLen, mdlLen) < sizeof (EthHdr) + shiftLength) {
+    /* Bail out if L2 + shiftLength is not contiguous in the first buffer. */
+    if (MIN(packetLen, mdlLen) < sizeof(EthHdr) + shiftLength) {
         ASSERT(FALSE);
         return NDIS_STATUS_FAILURE;
     }
     bufferStart += NET_BUFFER_CURRENT_MDL_OFFSET(curNb);
-    RtlCopyMemory(tempBuffer, bufferStart, dataLength);
-    RtlCopyMemory(bufferStart + shiftLength, tempBuffer, dataLength);
+    RtlCopyMemory(tempBuffer, bufferStart, shiftOffset);
+    RtlCopyMemory(bufferStart + shiftLength, tempBuffer, shiftOffset);
     NdisAdvanceNetBufferDataStart(curNb, shiftLength, FALSE, NULL);
+
+    if (bufferData) {
+        *bufferData = bufferStart + shiftLength;
+    }
 
     return NDIS_STATUS_SUCCESS;
 }
 
+
 /*
  * --------------------------------------------------------------------------
- * OvsTunnelAttrToIPv4TunnelKey --
- *      Convert tunnel attribute to OvsIPv4TunnelKey.
+ * OvsPopVlanInPktBuf --
+ *     Function to pop a VLAN tag when the tag is in the packet buffer.
  * --------------------------------------------------------------------------
  */
 static __inline NDIS_STATUS
-OvsTunnelAttrToIPv4TunnelKey(PNL_ATTR attr,
-                             OvsIPv4TunnelKey *tunKey)
+OvsPopVlanInPktBuf(OvsForwardingContext *ovsFwdCtx)
 {
-   PNL_ATTR a;
-   INT rem;
+    /*
+     * Declare a dummy vlanTag structure since we need to compute the size
+     * of shiftLength. The NDIS one is a unionized structure.
+     */
+    NDIS_PACKET_8021Q_INFO vlanTag = {0};
+    UINT32 shiftLength = sizeof(vlanTag.TagHeader);
+    UINT32 shiftOffset = sizeof(DL_EUI48) + sizeof(DL_EUI48);
 
-   tunKey->attr[0] = 0;
-   tunKey->attr[1] = 0;
-   tunKey->attr[2] = 0;
-   ASSERT(NlAttrType(attr) == OVS_KEY_ATTR_TUNNEL);
+    return OvsPopFieldInPacketBuf(ovsFwdCtx, shiftOffset, shiftLength, NULL);
+}
 
-   NL_ATTR_FOR_EACH_UNSAFE (a, rem, NlAttrData(attr),
-                            NlAttrGetSize(attr)) {
-      switch (NlAttrType(a)) {
-      case OVS_TUNNEL_KEY_ATTR_ID:
-         tunKey->tunnelId = NlAttrGetBe64(a);
-         tunKey->flags |= OVS_TNL_F_KEY;
-         break;
-      case OVS_TUNNEL_KEY_ATTR_IPV4_SRC:
-         tunKey->src = NlAttrGetBe32(a);
-         break;
-      case OVS_TUNNEL_KEY_ATTR_IPV4_DST:
-         tunKey->dst = NlAttrGetBe32(a);
-         break;
-      case OVS_TUNNEL_KEY_ATTR_TOS:
-         tunKey->tos = NlAttrGetU8(a);
-         break;
-      case OVS_TUNNEL_KEY_ATTR_TTL:
-         tunKey->ttl = NlAttrGetU8(a);
-         break;
-      case OVS_TUNNEL_KEY_ATTR_DONT_FRAGMENT:
-         tunKey->flags |= OVS_TNL_F_DONT_FRAGMENT;
-         break;
-      case OVS_TUNNEL_KEY_ATTR_CSUM:
-         tunKey->flags |= OVS_TNL_F_CSUM;
-         break;
-      default:
-         ASSERT(0);
-      }
-   }
 
-   return NDIS_STATUS_SUCCESS;
+/*
+ * --------------------------------------------------------------------------
+ * OvsActionMplsPop --
+ *     Function to pop the first MPLS label from the current packet.
+ * --------------------------------------------------------------------------
+ */
+static __inline NDIS_STATUS
+OvsActionMplsPop(OvsForwardingContext *ovsFwdCtx,
+                 ovs_be16 ethertype)
+{
+    NDIS_STATUS status;
+    OVS_PACKET_HDR_INFO *layers = &ovsFwdCtx->layers;
+    EthHdr *ethHdr = NULL;
+
+    status = OvsPopFieldInPacketBuf(ovsFwdCtx, sizeof(*ethHdr),
+                                    MPLS_HLEN, (PUINT8*)&ethHdr);
+    if (status == NDIS_STATUS_SUCCESS) {
+        if (ethHdr && OvsEthertypeIsMpls(ethHdr->Type)) {
+            ethHdr->Type = ethertype;
+        }
+
+        layers->l3Offset -= MPLS_HLEN;
+        layers->l4Offset -= MPLS_HLEN;
+    }
+
+    return status;
+}
+
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsActionMplsPush --
+ *     Function to push the MPLS label into the current packet.
+ * --------------------------------------------------------------------------
+ */
+static __inline NDIS_STATUS
+OvsActionMplsPush(OvsForwardingContext *ovsFwdCtx,
+                  const struct ovs_action_push_mpls *mpls)
+{
+    NDIS_STATUS status;
+    PNET_BUFFER curNb = NULL;
+    PMDL curMdl = NULL;
+    PUINT8 bufferStart = NULL;
+    OVS_PACKET_HDR_INFO *layers = &ovsFwdCtx->layers;
+    EthHdr *ethHdr = NULL;
+    MPLSHdr *mplsHdr = NULL;
+    UINT32 mdlLen = 0, curMdlOffset = 0;
+    PNET_BUFFER_LIST newNbl;
+
+    newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
+                               layers->l3Offset, MPLS_HLEN, TRUE);
+    if (!newNbl) {
+        ovsActionStats.noCopiedNbl++;
+        return NDIS_STATUS_RESOURCES;
+    }
+    OvsCompleteNBLForwardingCtx(ovsFwdCtx,
+                                L"Complete after partial copy.");
+
+    status = OvsInitForwardingCtx(ovsFwdCtx, ovsFwdCtx->switchContext,
+                                  newNbl, ovsFwdCtx->srcVportNo, 0,
+                                  NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(newNbl),
+                                  NULL, &ovsFwdCtx->layers, FALSE);
+    if (status != NDIS_STATUS_SUCCESS) {
+        OvsCompleteNBLForwardingCtx(ovsFwdCtx,
+                                    L"OVS-Dropped due to resources");
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    curNb = NET_BUFFER_LIST_FIRST_NB(ovsFwdCtx->curNbl);
+    ASSERT(curNb->Next == NULL);
+
+    status = NdisRetreatNetBufferDataStart(curNb, MPLS_HLEN, 0, NULL);
+    if (status != NDIS_STATUS_SUCCESS) {
+        return status;
+    }
+
+    curMdl = NET_BUFFER_CURRENT_MDL(curNb);
+    NdisQueryMdl(curMdl, &bufferStart, &mdlLen, LowPagePriority);
+    if (!curMdl) {
+        ovsActionStats.noResource++;
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    curMdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(curNb);
+    mdlLen -= curMdlOffset;
+    ASSERT(mdlLen >= MPLS_HLEN);
+
+    ethHdr = (EthHdr *)(bufferStart + curMdlOffset);
+    RtlMoveMemory(ethHdr, (UINT8*)ethHdr + MPLS_HLEN, sizeof(*ethHdr));
+    ethHdr->Type = mpls->mpls_ethertype;
+
+    mplsHdr = (MPLSHdr *)(ethHdr + 1);
+    mplsHdr->lse = mpls->mpls_lse;
+
+    layers->l3Offset += MPLS_HLEN;
+    layers->l4Offset += MPLS_HLEN;
+
+    return NDIS_STATUS_SUCCESS;
 }
 
 /*
@@ -1375,37 +1478,223 @@ OvsExecuteSetAction(OvsForwardingContext *ovsFwdCtx,
     case OVS_KEY_ATTR_TUNNEL:
     {
         OvsIPv4TunnelKey tunKey;
-        status = OvsTunnelAttrToIPv4TunnelKey((PNL_ATTR)a, &tunKey);
+        NTSTATUS convertStatus = OvsTunnelAttrToIPv4TunnelKey((PNL_ATTR)a, &tunKey);
+        status = SUCCEEDED(convertStatus) ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
         ASSERT(status == NDIS_STATUS_SUCCESS);
         tunKey.flow_hash = (uint16)(hash ? *hash : OvsHashFlow(key));
         tunKey.dst_port = key->ipKey.l4.tpDst;
         RtlCopyMemory(&ovsFwdCtx->tunKey, &tunKey, sizeof ovsFwdCtx->tunKey);
         break;
     }
-    case OVS_KEY_ATTR_SKB_MARK:
-    /* XXX: Not relevant to Hyper-V. Return OK */
-    break;
-    case OVS_KEY_ATTR_UNSPEC:
-    case OVS_KEY_ATTR_ENCAP:
-    case OVS_KEY_ATTR_ETHERTYPE:
-    case OVS_KEY_ATTR_IN_PORT:
-    case OVS_KEY_ATTR_VLAN:
-    case OVS_KEY_ATTR_ICMP:
-    case OVS_KEY_ATTR_ICMPV6:
-    case OVS_KEY_ATTR_ARP:
-    case OVS_KEY_ATTR_ND:
-    case __OVS_KEY_ATTR_MAX:
+
     default:
-    OVS_LOG_INFO("Unhandled attribute %#x", type);
-    ASSERT(FALSE);
+        OVS_LOG_INFO("Unhandled attribute %#x", type);
+        break;
     }
     return status;
 }
 
 /*
  * --------------------------------------------------------------------------
- * OvsActionsExecute --
- *     Interpret and execute the specified 'actions' on the specifed packet
+ * OvsExecuteRecirc --
+ *     The function adds a deferred action to allow the current packet, nbl,
+ *     to re-enter datapath packet processing.
+ * --------------------------------------------------------------------------
+ */
+NDIS_STATUS
+OvsExecuteRecirc(OvsForwardingContext *ovsFwdCtx,
+                 OvsFlowKey *key,
+                 const PNL_ATTR actions,
+                 int rem)
+{
+    POVS_DEFERRED_ACTION deferredAction = NULL;
+    PNET_BUFFER_LIST newNbl = NULL;
+
+    if (!NlAttrIsLast(actions, rem)) {
+        /*
+         * Recirc action is the not the last action of the action list, so we
+         * need to clone the packet.
+         */
+        newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
+                                   0, 0, TRUE /*copy NBL info*/);
+        /*
+         * Skip the recirc action when out of memory, but continue on with the
+         * rest of the action list.
+         */
+        if (newNbl == NULL) {
+            ovsActionStats.noCopiedNbl++;
+            return NDIS_STATUS_SUCCESS;
+        }
+    }
+
+    if (newNbl) {
+        deferredAction = OvsAddDeferredActions(newNbl, key, NULL);
+    } else {
+        deferredAction = OvsAddDeferredActions(ovsFwdCtx->curNbl, key, NULL);
+    }
+
+    if (deferredAction) {
+        deferredAction->key.recircId = NlAttrGetU32(actions);
+    } else {
+        if (newNbl) {
+            ovsActionStats.deferredActionsQueueFull++;
+            OvsCompleteNBL(ovsFwdCtx->switchContext, newNbl, TRUE);
+        }
+    }
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsExecuteHash --
+ *     The function updates datapath hash read from userspace.
+ * --------------------------------------------------------------------------
+ */
+VOID
+OvsExecuteHash(OvsFlowKey *key,
+               const PNL_ATTR attr)
+{
+    struct ovs_action_hash *hash_act = NlAttrData(attr);
+    UINT32 hash = 0;
+
+    hash = (UINT32)OvsHashFlow(key);
+    hash = OvsJhashWords(&hash, 1, hash_act->hash_basis);
+    if (!hash)
+        hash = 1;
+
+    key->dpHash = hash;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsOutputUserspaceAction --
+ *      This function sends the packet to userspace according to nested
+ *      %OVS_USERSPACE_ATTR_* attributes.
+ * --------------------------------------------------------------------------
+ */
+static __inline NDIS_STATUS
+OvsOutputUserspaceAction(OvsForwardingContext *ovsFwdCtx,
+                         OvsFlowKey *key,
+                         const PNL_ATTR attr)
+{
+    NTSTATUS status = NDIS_STATUS_SUCCESS;
+    PNL_ATTR userdataAttr;
+    PNL_ATTR queueAttr;
+    POVS_PACKET_QUEUE_ELEM elem;
+    POVS_PACKET_HDR_INFO layers = &ovsFwdCtx->layers;
+    BOOLEAN isRecv = FALSE;
+
+    POVS_VPORT_ENTRY vport = OvsFindVportByPortNo(ovsFwdCtx->switchContext,
+                                                  ovsFwdCtx->srcVportNo);
+
+    if (vport) {
+        if (vport->isExternal ||
+            OvsIsTunnelVportType(vport->ovsType)) {
+            isRecv = TRUE;
+        }
+    }
+
+    queueAttr = NlAttrFindNested(attr, OVS_USERSPACE_ATTR_PID);
+    userdataAttr = NlAttrFindNested(attr, OVS_USERSPACE_ATTR_USERDATA);
+
+    elem = OvsCreateQueueNlPacket(NlAttrData(userdataAttr),
+                                  NlAttrGetSize(userdataAttr),
+                                  OVS_PACKET_CMD_ACTION,
+                                  vport, key, ovsFwdCtx->curNbl,
+                                  NET_BUFFER_LIST_FIRST_NB(ovsFwdCtx->curNbl),
+                                  isRecv,
+                                  layers);
+    if (elem) {
+        LIST_ENTRY missedPackets;
+        InitializeListHead(&missedPackets);
+        InsertTailList(&missedPackets, &elem->link);
+        OvsQueuePackets(&missedPackets, 1);
+    } else {
+        status = NDIS_STATUS_FAILURE;
+    }
+
+    return status;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsExecuteSampleAction --
+ *      Executes actions based on probability, as specified in the nested
+ *      %OVS_SAMPLE_ATTR_* attributes.
+ * --------------------------------------------------------------------------
+ */
+static __inline NDIS_STATUS
+OvsExecuteSampleAction(OvsForwardingContext *ovsFwdCtx,
+                       OvsFlowKey *key,
+                       const PNL_ATTR attr)
+{
+    PNET_BUFFER_LIST newNbl = NULL;
+    PNL_ATTR actionsList = NULL;
+    PNL_ATTR a = NULL;
+    INT rem = 0;
+
+    SRand();
+    NL_ATTR_FOR_EACH_UNSAFE(a, rem, NlAttrData(attr), NlAttrGetSize(attr)) {
+        switch (NlAttrType(a)) {
+        case OVS_SAMPLE_ATTR_PROBABILITY:
+        {
+            UINT32 probability = NlAttrGetU32(a);
+
+            if (!probability || Rand() > probability) {
+                return 0;
+            }
+            break;
+        }
+        case OVS_SAMPLE_ATTR_ACTIONS:
+            actionsList = a;
+            break;
+        }
+    }
+
+    if (actionsList) {
+        rem = NlAttrGetSize(actionsList);
+        a = (PNL_ATTR)NlAttrData(actionsList);
+    }
+
+    if (!rem) {
+        /* Actions list is empty, do nothing */
+        return STATUS_SUCCESS;
+    }
+
+    /*
+     * The only known usage of sample action is having a single user-space
+     * action. Treat this usage as a special case.
+     */
+    if (NlAttrType(a) == OVS_ACTION_ATTR_USERSPACE &&
+        NlAttrIsLast(a, rem)) {
+        return OvsOutputUserspaceAction(ovsFwdCtx, key, a);
+    }
+
+    newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
+                               0, 0, TRUE /*copy NBL info*/);
+    if (newNbl == NULL) {
+        /*
+         * Skip the sample action when out of memory, but continue on with the
+         * rest of the action list.
+         */
+        ovsActionStats.noCopiedNbl++;
+        return STATUS_SUCCESS;
+    }
+
+    if (!OvsAddDeferredActions(newNbl, key, a)) {
+        OVS_LOG_INFO(
+            "Deferred actions limit reached, dropping sample action.");
+        OvsCompleteNBL(ovsFwdCtx->switchContext, newNbl, TRUE);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsDoExecuteActions --
+ *     Interpret and execute the specified 'actions' on the specified packet
  *     'curNbl'. The expectation is that if the packet needs to be dropped
  *     (completed) for some reason, it is added to 'completionList' so that the
  *     caller can complete the packet. If 'completionList' is NULL, the NBL is
@@ -1421,16 +1710,16 @@ OvsExecuteSetAction(OvsForwardingContext *ovsFwdCtx,
  * --------------------------------------------------------------------------
  */
 NDIS_STATUS
-OvsActionsExecute(POVS_SWITCH_CONTEXT switchContext,
-                  OvsCompletionList *completionList,
-                  PNET_BUFFER_LIST curNbl,
-                  UINT32 portNo,
-                  ULONG sendFlags,
-                  OvsFlowKey *key,
-                  UINT64 *hash,
-                  OVS_PACKET_HDR_INFO *layers,
-                  const PNL_ATTR actions,
-                  INT actionsLen)
+OvsDoExecuteActions(POVS_SWITCH_CONTEXT switchContext,
+                    OvsCompletionList *completionList,
+                    PNET_BUFFER_LIST curNbl,
+                    UINT32 portNo,
+                    ULONG sendFlags,
+                    OvsFlowKey *key,
+                    UINT64 *hash,
+                    OVS_PACKET_HDR_INFO *layers,
+                    const PNL_ATTR actions,
+                    INT actionsLen)
 {
     PNL_ATTR a;
     INT rem;
@@ -1535,45 +1824,122 @@ OvsActionsExecute(POVS_SWITCH_CONTEXT switchContext,
             break;
         }
 
-        case OVS_ACTION_ATTR_USERSPACE:
+        case OVS_ACTION_ATTR_PUSH_MPLS:
         {
-            PNL_ATTR userdataAttr;
-            PNL_ATTR queueAttr;
-            POVS_PACKET_QUEUE_ELEM elem;
-            BOOLEAN isRecv = FALSE;
-
-            POVS_VPORT_ENTRY vport = OvsFindVportByPortNo(switchContext,
-                portNo);
-
-            if (vport) {
-                if (vport->isExternal ||
-                    OvsIsTunnelVportType(vport->ovsType)) {
-                    isRecv = TRUE;
+            if (ovsFwdCtx.destPortsSizeOut > 0 || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
                 }
             }
 
-            queueAttr = NlAttrFindNested(a, OVS_USERSPACE_ATTR_PID);
-            userdataAttr = NlAttrFindNested(a, OVS_USERSPACE_ATTR_USERDATA);
+            status = OvsActionMplsPush(&ovsFwdCtx,
+                                       (struct ovs_action_push_mpls *)NlAttrGet
+                                       ((const PNL_ATTR)a));
+            if (status != NDIS_STATUS_SUCCESS) {
+                dropReason = L"OVS-push MPLS action failed";
+                goto dropit;
+            }
+            layers->l3Offset += MPLS_HLEN;
+            layers->l4Offset += MPLS_HLEN;
+            break;
+        }
 
-            elem = OvsCreateQueueNlPacket((PVOID)userdataAttr,
-                                    userdataAttr->nlaLen,
-                                    OVS_PACKET_CMD_ACTION,
-                                    vport, key, ovsFwdCtx.curNbl,
-                                    NET_BUFFER_LIST_FIRST_NB(ovsFwdCtx.curNbl),
-                                    isRecv,
-                                    layers);
-            if (elem) {
-                LIST_ENTRY missedPackets;
-                InitializeListHead(&missedPackets);
-                InsertTailList(&missedPackets, &elem->link);
-                OvsQueuePackets(&missedPackets, 1);
-                dropReason = L"OVS-Completed since packet was copied to "
-                             L"userspace";
-            } else {
+        case OVS_ACTION_ATTR_POP_MPLS:
+        {
+            if (ovsFwdCtx.destPortsSizeOut > 0 || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
+                }
+            }
+
+            status = OvsActionMplsPop(&ovsFwdCtx, NlAttrGetBe16(a));
+            if (status != NDIS_STATUS_SUCCESS) {
+                dropReason = L"OVS-pop MPLS action failed";
+                goto dropit;
+            }
+            layers->l3Offset -= MPLS_HLEN;
+            layers->l4Offset -= MPLS_HLEN;
+            break;
+        }
+
+        case OVS_ACTION_ATTR_HASH:
+        {
+            if (ovsFwdCtx.destPortsSizeOut > 0 || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
+                }
+            }
+
+            OvsExecuteHash(key, (const PNL_ATTR)a);
+
+            break;
+        }
+
+        case OVS_ACTION_ATTR_CT:
+        {
+            if (ovsFwdCtx.destPortsSizeOut > 0
+                || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
+                }
+            }
+
+            status = OvsExecuteConntrackAction(ovsFwdCtx.curNbl, layers,
+                                               key, (const PNL_ATTR)a);
+            if (status != NDIS_STATUS_SUCCESS) {
+                OVS_LOG_ERROR("CT Action failed");
+                dropReason = L"OVS-conntrack action failed";
+                goto dropit;
+            }
+            break;
+        }
+
+        case OVS_ACTION_ATTR_RECIRC:
+        {
+            if (ovsFwdCtx.destPortsSizeOut > 0 || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
+                }
+            }
+
+            status = OvsExecuteRecirc(&ovsFwdCtx, key, (const PNL_ATTR)a, rem);
+            if (status != NDIS_STATUS_SUCCESS) {
+                dropReason = L"OVS-recirculation action failed";
+                goto dropit;
+            }
+
+            if (NlAttrIsLast(a, rem)) {
+                goto exit;
+            }
+            break;
+        }
+
+        case OVS_ACTION_ATTR_USERSPACE:
+        {
+            status = OvsOutputUserspaceAction(&ovsFwdCtx, key,
+                                              (const PNL_ATTR)a);
+            if (status != NDIS_STATUS_SUCCESS) {
                 dropReason = L"OVS-Dropped due to failure to queue to "
                              L"userspace";
                 goto dropit;
             }
+            dropReason = L"OVS-Completed since packet was copied to "
+                         L"userspace";
             break;
         }
         case OVS_ACTION_ATTR_SET:
@@ -1597,6 +1963,24 @@ OvsActionsExecute(POVS_SWITCH_CONTEXT switchContext,
             break;
         }
         case OVS_ACTION_ATTR_SAMPLE:
+        {
+            if (ovsFwdCtx.destPortsSizeOut > 0 || ovsFwdCtx.tunnelTxNic != NULL
+                || ovsFwdCtx.tunnelRxNic != NULL) {
+                status = OvsOutputBeforeSetAction(&ovsFwdCtx);
+                if (status != NDIS_STATUS_SUCCESS) {
+                    dropReason = L"OVS-adding destination failed";
+                    goto dropit;
+                }
+            }
+
+            status = OvsExecuteSampleAction(&ovsFwdCtx, key,
+                                            (const PNL_ATTR)a);
+            if (status != NDIS_STATUS_SUCCESS) {
+                dropReason = L"OVS-sample action failed";
+                goto dropit;
+            }
+            break;
+        }
         default:
             status = NDIS_STATUS_NOT_SUPPORTED;
             break;
@@ -1619,6 +2003,138 @@ dropit:
      */
     if (ovsFwdCtx.curNbl) {
         OvsCompleteNBLForwardingCtx(&ovsFwdCtx, dropReason);
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsActionsExecute --
+ *     The function interprets and executes the specified 'actions' on the
+ *     specified packet 'curNbl'. See 'OvsDoExecuteActions' description for
+ *     more details.
+ *
+ *     Also executes deferred actions added by recirculation or sample
+ *     actions.
+ * --------------------------------------------------------------------------
+ */
+NDIS_STATUS
+OvsActionsExecute(POVS_SWITCH_CONTEXT switchContext,
+                  OvsCompletionList *completionList,
+                  PNET_BUFFER_LIST curNbl,
+                  UINT32 portNo,
+                  ULONG sendFlags,
+                  OvsFlowKey *key,
+                  UINT64 *hash,
+                  OVS_PACKET_HDR_INFO *layers,
+                  const PNL_ATTR actions,
+                  INT actionsLen)
+{
+    NDIS_STATUS status;
+
+    status = OvsDoExecuteActions(switchContext, completionList, curNbl,
+                                 portNo, sendFlags, key, hash, layers,
+                                 actions, actionsLen);
+
+    if (status == STATUS_SUCCESS) {
+        status = OvsProcessDeferredActions(switchContext, completionList,
+                                           portNo, sendFlags, layers);
+    }
+
+    return status;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsDoRecirc --
+ *     The function processes the packet 'curNbl' that re-entered datapath
+ *     packet processing after a recirculation action.
+ * --------------------------------------------------------------------------
+ */
+NDIS_STATUS
+OvsDoRecirc(POVS_SWITCH_CONTEXT switchContext,
+            OvsCompletionList *completionList,
+            PNET_BUFFER_LIST curNbl,
+            OvsFlowKey *key,
+            UINT32 srcPortNo,
+            OVS_PACKET_HDR_INFO *layers)
+{
+    NDIS_STATUS status;
+    OvsFlow *flow;
+    OvsForwardingContext ovsFwdCtx = { 0 };
+    UINT64 hash = 0;
+    ASSERT(layers);
+
+    OvsInitForwardingCtx(&ovsFwdCtx, switchContext, curNbl,
+                         srcPortNo, 0,
+                         NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(curNbl),
+                         completionList, layers, TRUE);
+
+    flow = OvsLookupFlow(&ovsFwdCtx.switchContext->datapath, key, &hash, FALSE);
+    if (flow) {
+        UINT32 level = OvsDeferredActionsLevelGet();
+
+        if (level > DEFERRED_ACTION_EXEC_LEVEL) {
+            OvsCompleteNBLForwardingCtx(&ovsFwdCtx,
+                L"OVS-Dropped due to deferred actions execution level limit \
+                  reached");
+            ovsActionStats.deferredActionsExecLimit++;
+            ovsFwdCtx.curNbl = NULL;
+            return NDIS_STATUS_FAILURE;
+        }
+
+        OvsFlowUsed(flow, ovsFwdCtx.curNbl, &ovsFwdCtx.layers);
+        ovsFwdCtx.switchContext->datapath.hits++;
+
+        OvsDeferredActionsLevelInc();
+
+        status = OvsDoExecuteActions(ovsFwdCtx.switchContext,
+                                     ovsFwdCtx.completionList,
+                                     ovsFwdCtx.curNbl,
+                                     ovsFwdCtx.srcVportNo,
+                                     ovsFwdCtx.sendFlags,
+                                     key, &hash, &ovsFwdCtx.layers,
+                                     flow->actions, flow->actionsLen);
+        ovsFwdCtx.curNbl = NULL;
+
+        OvsDeferredActionsLevelDec();
+    } else {
+        POVS_VPORT_ENTRY vport = NULL;
+        LIST_ENTRY missedPackets;
+        UINT32 num = 0;
+
+        ovsFwdCtx.switchContext->datapath.misses++;
+        InitializeListHead(&missedPackets);
+        vport = OvsFindVportByPortNo(switchContext, srcPortNo);
+        if (vport == NULL || vport->ovsState != OVS_STATE_CONNECTED) {
+            OvsCompleteNBLForwardingCtx(&ovsFwdCtx,
+                L"OVS-Dropped due to port removal");
+            ovsActionStats.noVport++;
+            return NDIS_STATUS_SUCCESS;
+        }
+        status = OvsCreateAndAddPackets(NULL, 0, OVS_PACKET_CMD_MISS,
+                                        vport, key, ovsFwdCtx.curNbl,
+                                        vport->portId ==
+                                        switchContext->virtualExternalPortId,
+                                        &ovsFwdCtx.layers,
+                                        ovsFwdCtx.switchContext,
+                                        &missedPackets, &num);
+        if (num) {
+            OvsQueuePackets(&missedPackets, num);
+        }
+        if (status == NDIS_STATUS_SUCCESS) {
+            /* Complete the packet since it was copied to user buffer. */
+            OvsCompleteNBLForwardingCtx(&ovsFwdCtx,
+                L"OVS-Dropped since packet was copied to userspace");
+            ovsActionStats.flowMiss++;
+        } else {
+            OvsCompleteNBLForwardingCtx(&ovsFwdCtx,
+                L"OVS-Dropped due to failure to queue to userspace");
+            ovsActionStats.failedFlowMiss++;
+            status = NDIS_STATUS_FAILURE;
+        }
     }
 
     return status;

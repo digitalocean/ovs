@@ -11,6 +11,7 @@ ovstest_pyfiles = \
 ovs_pyfiles = \
 	python/ovs/__init__.py \
 	python/ovs/daemon.py \
+	python/ovs/fcntl_win.py \
 	python/ovs/db/__init__.py \
 	python/ovs/db/data.py \
 	python/ovs/db/error.py \
@@ -46,9 +47,19 @@ EXTRA_DIST += \
 	python/README.rst \
 	python/setup.py
 
+# C extension support.
+EXTRA_DIST += python/ovs/_json.c
+
 PYFILES = $(ovs_pyfiles) python/ovs/dirs.py $(ovstest_pyfiles)
 EXTRA_DIST += $(PYFILES)
 PYCOV_CLEAN_FILES += $(PYFILES:.py=.py,cover)
+
+FLAKE8_PYFILES += \
+	$(filter-out python/ovs/dirs.py,$(PYFILES)) \
+	python/setup.py \
+	python/build/__init__.py \
+	python/build/nroff.py \
+	python/ovs/dirs.py.template
 
 if HAVE_PYTHON
 nobase_pkgdata_DATA = $(ovs_pyfiles) $(ovstest_pyfiles)

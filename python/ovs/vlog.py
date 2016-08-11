@@ -1,5 +1,5 @@
 
-# Copyright (c) 2011, 2012, 2013 Nicira, Inc.
+# Copyright (c) 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,9 @@ import re
 import socket
 import sys
 import threading
+
+import six
+from six.moves import range
 
 import ovs.dirs
 import ovs.unixctl
@@ -51,7 +54,7 @@ def get_level(level_str):
     return LEVELS.get(level_str.lower())
 
 
-class Vlog:
+class Vlog(object):
     __inited = False
     __msg_num = 0
     __start_time = 0
@@ -78,7 +81,7 @@ class Vlog:
         msg_num = Vlog.__msg_num
         Vlog.__msg_num += 1
 
-        for f, f_level in Vlog.__mfl[self.name].iteritems():
+        for f, f_level in six.iteritems(Vlog.__mfl[self.name]):
             f_level = LEVELS.get(f_level, logging.CRITICAL)
             if level_num >= f_level:
                 msg = self._build_message(message, f, level, msg_num)
@@ -130,7 +133,7 @@ class Vlog:
         matches = formatting.match(match)
         # Do we need to apply padding?
         if not matches.group(1) and replace != "":
-            replace = replace.center(len(replace)+2)
+            replace = replace.center(len(replace) + 2)
         # Does the field have a minimum width
         if matches.group(2):
             min_width = int(matches.group(2))
@@ -182,7 +185,7 @@ class Vlog:
 
     def __is_enabled(self, level):
         level = LEVELS.get(level.lower(), logging.DEBUG)
-        for f, f_level in Vlog.__mfl[self.name].iteritems():
+        for f, f_level in six.iteritems(Vlog.__mfl[self.name]):
             f_level = LEVELS.get(f_level, logging.CRITICAL)
             if level >= f_level:
                 return True
@@ -238,7 +241,9 @@ class Vlog:
 
         ovs.unixctl.command_register("vlog/reopen", "", 0, 0,
                                      Vlog._unixctl_vlog_reopen, None)
-        ovs.unixctl.command_register("vlog/set", "spec", 1, sys.maxint,
+        ovs.unixctl.command_register("vlog/close", "", 0, 0,
+                                     Vlog._unixctl_vlog_close, None)
+        ovs.unixctl.command_register("vlog/set", "spec", 1, sys.maxsize,
                                      Vlog._unixctl_vlog_set, None)
         ovs.unixctl.command_register("vlog/list", "", 0, 0,
                                      Vlog._unixctl_vlog_list, None)
@@ -264,12 +269,12 @@ class Vlog:
             return
 
         if module == "any":
-            modules = Vlog.__mfl.keys()
+            modules = list(Vlog.__mfl.keys())
         else:
             modules = [module]
 
         if destination == "any":
-            destinations = DESTINATIONS.keys()
+            destinations = list(DESTINATIONS.keys())
         else:
             destinations = [destination]
 
@@ -293,10 +298,10 @@ class Vlog:
             return
 
         logger = logging.getLogger('syslog')
-        # If there is no infrastructure to support python syslog, increase
-        # the logging severity level to avoid repeated errors.
+        # If there is no infrastructure to support python syslog, disable
+        # the logger to avoid repeated errors.
         if not os.path.exists("/dev/log"):
-            logger.setLevel(logging.CRITICAL)
+            logger.disabled = True
             return
 
         if syslog_handler:
@@ -385,6 +390,13 @@ class Vlog:
             conn.reply(None)
         else:
             conn.reply("Logging to file not configured")
+
+    @staticmethod
+    def _unixctl_vlog_close(conn, unused_argv, unused_aux):
+        if Vlog.__log_file:
+            logger = logging.getLogger("file")
+            logger.removeHandler(Vlog.__file_handler)
+        conn.reply(None)
 
     @staticmethod
     def _unixctl_vlog_set(conn, argv, unused_aux):

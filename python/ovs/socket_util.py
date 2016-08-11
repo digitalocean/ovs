@@ -16,9 +16,10 @@ import errno
 import os
 import os.path
 import random
-import select
 import socket
-import sys
+
+import six
+from six.moves import range
 
 import ovs.fatal_signal
 import ovs.poller
@@ -33,14 +34,14 @@ def make_short_name(long_name):
     long_name = os.path.abspath(long_name)
     long_dirname = os.path.dirname(long_name)
     tmpdir = os.getenv('TMPDIR', '/tmp')
-    for x in xrange(0, 1000):
+    for x in range(0, 1000):
         link_name = \
             '%s/ovs-un-py-%d-%d' % (tmpdir, random.randint(0, 10000), x)
         try:
             os.symlink(long_dirname, link_name)
             ovs.fatal_signal.add_file_to_unlink(link_name)
             return os.path.join(link_name, os.path.basename(long_name))
-        except OSError, e:
+        except OSError as e:
             if e.errno != errno.EEXIST:
                 break
     raise Exception("Failed to create temporary symlink")
@@ -65,7 +66,7 @@ def make_unix_socket(style, nonblock, bind_path, connect_path, short=False):
 
     try:
         sock = socket.socket(socket.AF_UNIX, style)
-    except socket.error, e:
+    except socket.error as e:
         return get_exception_errno(e), None
 
     try:
@@ -75,7 +76,7 @@ def make_unix_socket(style, nonblock, bind_path, connect_path, short=False):
             # Delete bind_path but ignore ENOENT.
             try:
                 os.unlink(bind_path)
-            except OSError, e:
+            except OSError as e:
                 if e.errno != errno.ENOENT:
                     return e.errno, None
 
@@ -83,20 +84,17 @@ def make_unix_socket(style, nonblock, bind_path, connect_path, short=False):
             sock.bind(bind_path)
 
             try:
-                if sys.hexversion >= 0x02060000:
-                    os.fchmod(sock.fileno(), 0700)
-                else:
-                    os.chmod("/dev/fd/%d" % sock.fileno(), 0700)
-            except OSError, e:
+                os.fchmod(sock.fileno(), 0o700)
+            except OSError as e:
                 pass
         if connect_path is not None:
             try:
                 sock.connect(connect_path)
-            except socket.error, e:
+            except socket.error as e:
                 if get_exception_errno(e) != errno.EINPROGRESS:
                     raise
         return 0, sock
-    except socket.error, e:
+    except socket.error as e:
         sock.close()
         if (bind_path is not None and
             os.path.exists(bind_path)):
@@ -113,22 +111,26 @@ def make_unix_socket(style, nonblock, bind_path, connect_path, short=False):
                 dirname = os.path.dirname(connect_path)
                 basename = os.path.basename(connect_path)
                 try:
-                    connect_dirfd = os.open(dirname, os.O_DIRECTORY | os.O_RDONLY)
-                except OSError, err:
+                    connect_dirfd = os.open(dirname,
+                                            os.O_DIRECTORY | os.O_RDONLY)
+                except OSError as err:
                     return get_exception_errno(err), None
-                short_connect_path = "/proc/self/fd/%d/%s" % (connect_dirfd, basename)
+                short_connect_path = "/proc/self/fd/%d/%s" % (connect_dirfd,
+                                                              basename)
 
             if bind_path is not None:
                 dirname = os.path.dirname(bind_path)
                 basename = os.path.basename(bind_path)
                 try:
                     bind_dirfd = os.open(dirname, os.O_DIRECTORY | os.O_RDONLY)
-                except OSError, err:
+                except OSError as err:
                     return get_exception_errno(err), None
-                short_bind_path = "/proc/self/fd/%d/%s" % (bind_dirfd, basename)
+                short_bind_path = "/proc/self/fd/%d/%s" % (bind_dirfd,
+                                                           basename)
 
             try:
-                return make_unix_socket(style, nonblock, short_bind_path, short_connect_path)
+                return make_unix_socket(style, nonblock, short_bind_path,
+                                        short_connect_path)
             finally:
                 if connect_dirfd is not None:
                     os.close(connect_dirfd)
@@ -169,7 +171,7 @@ def check_connection_completion(sock):
                 # XXX rate-limit
                 vlog.err("poll return POLLERR but send succeeded")
                 return errno.EPROTO
-            except socket.error, e:
+            except socket.error as e:
                 return get_exception_errno(e)
         else:
             return 0
@@ -217,7 +219,7 @@ def inet_open_active(style, target, default_port, dscp):
         else:
             sock = socket.socket(socket.AF_INET6, style, 0)
             family = socket.AF_INET6
-    except socket.error, e:
+    except socket.error as e:
         return get_exception_errno(e), None
 
     try:
@@ -225,11 +227,11 @@ def inet_open_active(style, target, default_port, dscp):
         set_dscp(sock, family, dscp)
         try:
             sock.connect(address)
-        except socket.error, e:
+        except socket.error as e:
             if get_exception_errno(e) != errno.EINPROGRESS:
                 raise
         return 0, sock
-    except socket.error, e:
+    except socket.error as e:
         sock.close()
         return get_exception_errno(e), None
 
@@ -239,7 +241,7 @@ def get_exception_errno(e):
     exception is documented as having two completely different forms of
     arguments: either a string or a (errno, string) tuple.  We only want the
     errno."""
-    if type(e.args) == tuple:
+    if isinstance(e.args, tuple):
         return e.args[0]
     else:
         return errno.EPROTO
@@ -256,7 +258,7 @@ def get_null_fd():
     if null_fd < 0:
         try:
             null_fd = os.open("/dev/null", os.O_RDWR)
-        except OSError, e:
+        except OSError as e:
             vlog.err("could not open /dev/null: %s" % os.strerror(e.errno))
             return -e.errno
     return null_fd
@@ -270,6 +272,8 @@ def write_fully(fd, buf):
     bytes_written = 0
     if len(buf) == 0:
         return 0, 0
+    if six.PY3 and not isinstance(buf, six.binary_type):
+        buf = six.binary_type(buf, 'utf-8')
     while True:
         try:
             retval = os.write(fd, buf)
@@ -282,14 +286,14 @@ def write_fully(fd, buf):
             else:
                 bytes_written += retval
                 buf = buf[:retval]
-        except OSError, e:
+        except OSError as e:
             return e.errno, bytes_written
 
 
 def set_nonblocking(sock):
     try:
         sock.setblocking(0)
-    except socket.error, e:
+    except socket.error as e:
         vlog.err("could not set nonblocking mode on socket: %s"
                  % os.strerror(get_exception_errno(e)))
 
@@ -300,14 +304,8 @@ def set_dscp(sock, family, dscp):
 
     val = dscp << 2
     if family == socket.AF_INET:
-        try:
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, val)
-        except socket.error, e:
-            raise
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, val)
     elif family == socket.AF_INET6:
-        try:
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_TCLASS, val)
-        except socket.error, e:
-            raise
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_TCLASS, val)
     else:
-        raise
+        raise ValueError('Invalid family %d' % family)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,13 +39,12 @@ static const struct ovs_cmdl_command *get_all_commands(void);
 static void
 test_reconnect_main(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
-    extern struct vlog_module VLM_reconnect;
     struct reconnect_stats prev;
     unsigned int old_max_tries;
     int old_time;
     char line[128];
 
-    vlog_set_levels(&VLM_reconnect, VLF_ANY_DESTINATION, VLL_OFF);
+    vlog_set_levels_from_string_assert("reconnect:off");
 
     now = 1000;
     reconnect = reconnect_create(now);

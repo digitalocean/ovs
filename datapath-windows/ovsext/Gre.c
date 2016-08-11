@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Cloudbase Solutions Srl
+ * Copyright (c) 2015, 2016 Cloudbase Solutions Srl
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,12 @@
 #include "precomp.h"
 
 #include "Atomic.h"
-#include "Checksum.h"
+#include "Debug.h"
 #include "Flow.h"
 #include "Gre.h"
 #include "IpHelper.h"
 #include "NetProto.h"
+#include "Offload.h"
 #include "PacketIO.h"
 #include "PacketParser.h"
 #include "Switch.h"
@@ -33,7 +34,6 @@
 #undef OVS_DBG_MOD
 #endif
 #define OVS_DBG_MOD OVS_DBG_GRE
-#include "Debug.h"
 
 static NDIS_STATUS
 OvsDoEncapGre(POVS_VPORT_ENTRY vport, PNET_BUFFER_LIST curNbl,
@@ -135,7 +135,8 @@ OvsDoEncapGre(POVS_VPORT_ENTRY vport,
     IPHdr *ipHdr;
     PGREHdr greHdr;
     POVS_GRE_VPORT vportGre;
-    UINT32 headRoom = GreTunHdrSize(tunKey->flags);
+    PCHAR pChk = NULL;
+    UINT32 headRoom = GreTunHdrSize(OvsTunnelFlagsToGreFlags(tunKey->flags));
 #if DBG
     UINT32 counterHeadRoom;
 #endif
@@ -147,21 +148,8 @@ OvsDoEncapGre(POVS_VPORT_ENTRY vport,
     packetLength = NET_BUFFER_DATA_LENGTH(curNb);
 
     if (layers->isTcp) {
-        NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO tsoInfo;
+        mss = OVSGetTcpMSS(curNbl);
 
-        tsoInfo.Value = NET_BUFFER_LIST_INFO(curNbl,
-                                             TcpLargeSendNetBufferListInfo);
-        switch (tsoInfo.Transmit.Type) {
-            case NDIS_TCP_LARGE_SEND_OFFLOAD_V1_TYPE:
-                mss = tsoInfo.LsoV1Transmit.MSS;
-                break;
-            case NDIS_TCP_LARGE_SEND_OFFLOAD_V2_TYPE:
-                mss = tsoInfo.LsoV2Transmit.MSS;
-                break;
-            default:
-                OVS_LOG_ERROR("Unknown LSO transmit type:%d",
-                              tsoInfo.Transmit.Type);
-        }
         OVS_LOG_TRACE("MSS %u packet len %u", mss,
                       packetLength);
         if (mss) {
@@ -188,71 +176,15 @@ OvsDoEncapGre(POVS_VPORT_ENTRY vport,
             OVS_LOG_ERROR("Unable to copy NBL");
             return NDIS_STATUS_FAILURE;
         }
-        /*
-         * To this point we do not have GRE hardware offloading.
-         * Apply defined checksums
-         */
-        curNb = NET_BUFFER_LIST_FIRST_NB(*newNbl);
-        curMdl = NET_BUFFER_CURRENT_MDL(curNb);
-        bufferStart = (PUINT8)MmGetSystemAddressForMdlSafe(curMdl,
-                                                           LowPagePriority);
-        if (!bufferStart) {
-            status = NDIS_STATUS_RESOURCES;
-            goto ret_error;
-        }
 
         NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO csumInfo;
         csumInfo.Value = NET_BUFFER_LIST_INFO(curNbl,
                                               TcpIpChecksumNetBufferListInfo);
 
-        bufferStart += NET_BUFFER_CURRENT_MDL_OFFSET(curNb);
-
-        if (layers->isIPv4) {
-            IPHdr *ip = (IPHdr *)(bufferStart + layers->l3Offset);
-
-            if (csumInfo.Transmit.IpHeaderChecksum) {
-                ip->check = 0;
-                ip->check = IPChecksum((UINT8 *)ip, 4 * ip->ihl, 0);
-            }
-
-            if (layers->isTcp && csumInfo.Transmit.TcpChecksum) {
-                UINT16 csumLength = (UINT16)(packetLength - layers->l4Offset);
-                TCPHdr *tcp = (TCPHdr *)(bufferStart + layers->l4Offset);
-                tcp->check = IPPseudoChecksum(&ip->saddr, &ip->daddr,
-                                              IPPROTO_TCP, csumLength);
-                tcp->check = CalculateChecksumNB(curNb, csumLength,
-                                                 (UINT32)(layers->l4Offset));
-            } else if (layers->isUdp && csumInfo.Transmit.UdpChecksum) {
-                UINT16 csumLength = (UINT16)(packetLength - layers->l4Offset);
-                UDPHdr *udp = (UDPHdr *)((PCHAR)ip + sizeof *ip);
-                udp->check = IPPseudoChecksum(&ip->saddr, &ip->daddr,
-                                              IPPROTO_UDP, csumLength);
-                udp->check = CalculateChecksumNB(curNb, csumLength,
-                                                 (UINT32)(layers->l4Offset));
-            }
-        } else if (layers->isIPv6) {
-            IPv6Hdr *ip = (IPv6Hdr *)(bufferStart + layers->l3Offset);
-
-            if (layers->isTcp && csumInfo.Transmit.TcpChecksum) {
-                UINT16 csumLength = (UINT16)(packetLength - layers->l4Offset);
-                TCPHdr *tcp = (TCPHdr *)(bufferStart + layers->l4Offset);
-                tcp->check = IPv6PseudoChecksum((UINT32 *) &ip->saddr,
-                                                (UINT32 *) &ip->daddr,
-                                                IPPROTO_TCP, csumLength);
-                tcp->check = CalculateChecksumNB(curNb, csumLength,
-                                                 (UINT32)(layers->l4Offset));
-            } else if (layers->isUdp && csumInfo.Transmit.UdpChecksum) {
-                UINT16 csumLength = (UINT16)(packetLength - layers->l4Offset);
-                UDPHdr *udp = (UDPHdr *)((PCHAR)ip + sizeof *ip);
-                udp->check = IPv6PseudoChecksum((UINT32 *) &ip->saddr,
-                                                (UINT32 *) &ip->daddr,
-                                                IPPROTO_UDP, csumLength);
-                udp->check = CalculateChecksumNB(curNb, csumLength,
-                                                 (UINT32)(layers->l4Offset));
-            }
+        status = OvsApplySWChecksumOnNB(layers, *newNbl, &csumInfo);
+        if (status != NDIS_STATUS_SUCCESS) {
+            goto ret_error;
         }
-        /* Clear out TcpIpChecksumNetBufferListInfo flag */
-        NET_BUFFER_LIST_INFO(*newNbl, TcpIpChecksumNetBufferListInfo) = 0;
     }
 
     curNbl = *newNbl;
@@ -328,6 +260,7 @@ OvsDoEncapGre(POVS_VPORT_ENTRY vport,
 
         if (tunKey->flags & OVS_TNL_F_CSUM) {
             RtlZeroMemory(currentOffset, 4);
+            pChk = currentOffset;
             currentOffset += 4;
 #if DBG
             counterHeadRoom -= 4;
@@ -342,6 +275,17 @@ OvsDoEncapGre(POVS_VPORT_ENTRY vport,
 #if DBG
             counterHeadRoom -= 4;
 #endif
+        }
+
+        /* Checksum needs to be done after the GRE header has been set */
+        if (tunKey->flags & OVS_TNL_F_CSUM) {
+            ASSERT(pChk);
+            UINT16 chksum =
+                CalculateChecksumNB(curNb,
+                                    (UINT16)(NET_BUFFER_DATA_LENGTH(curNb) -
+                                             sizeof *ipHdr - sizeof *ethHdr),
+                                    sizeof *ipHdr + sizeof *ethHdr);
+            RtlCopyMemory(pChk, &chksum, 2);
         }
 
 #if DBG
@@ -368,37 +312,42 @@ OvsDecapGre(POVS_SWITCH_CONTEXT switchContext,
     EthHdr *ethHdr;
     IPHdr *ipHdr;
     GREHdr *greHdr;
-    UINT32 tunnelSize = 0, packetLength = 0;
+    UINT32 tunnelSize, packetLength;
     UINT32 headRoom = 0;
     PUINT8 bufferStart;
-    NDIS_STATUS status;
+    NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+    PCHAR tempBuf = NULL;
+
+    ASSERT(*newNbl == NULL);
+
+    *newNbl = NULL;
 
     curNb = NET_BUFFER_LIST_FIRST_NB(curNbl);
     packetLength = NET_BUFFER_DATA_LENGTH(curNb);
-    tunnelSize = GreTunHdrSize(tunKey->flags);
+    curMdl = NET_BUFFER_CURRENT_MDL(curNb);
+    tunnelSize = GreTunHdrSize(0);
     if (packetLength <= tunnelSize) {
         return NDIS_STATUS_INVALID_LENGTH;
     }
 
-    /*
-     * Create a copy of the NBL so that we have all the headers in one MDL.
-     */
-    *newNbl = OvsPartialCopyNBL(switchContext, curNbl,
-                                tunnelSize + OVS_DEFAULT_COPY_SIZE, 0,
-                                TRUE /*copy NBL info */);
-
-    if (*newNbl == NULL) {
-        return NDIS_STATUS_RESOURCES;
-    }
-
-    curNbl = *newNbl;
-    curNb = NET_BUFFER_LIST_FIRST_NB(curNbl);
-    curMdl = NET_BUFFER_CURRENT_MDL(curNb);
-    bufferStart = (PUINT8)MmGetSystemAddressForMdlSafe(curMdl, LowPagePriority) +
-                  NET_BUFFER_CURRENT_MDL_OFFSET(curNb);
+    /* Get a contiguous buffer for the maximum length of a GRE header */
+    bufferStart = NdisGetDataBuffer(curNb, OVS_MAX_GRE_LGTH, NULL, 1, 0);
     if (!bufferStart) {
-        status = NDIS_STATUS_RESOURCES;
-        goto dropNbl;
+        /* Documentation is unclear on where the packet can be fragmented.
+         * For the moment allocate the buffer needed to get the maximum length
+         * of a GRE header contiguous */
+        tempBuf = OvsAllocateMemoryWithTag(OVS_MAX_GRE_LGTH, OVS_GRE_POOL_TAG);
+        if (!tempBuf) {
+            status = NDIS_STATUS_RESOURCES;
+            goto end;
+        }
+        RtlZeroMemory(tempBuf, OVS_MAX_GRE_LGTH);
+        bufferStart = NdisGetDataBuffer(curNb, OVS_MAX_GRE_LGTH, tempBuf,
+                                        1, 0);
+        if (!bufferStart) {
+            status = NDIS_STATUS_RESOURCES;
+            goto end;
+        }
     }
 
     ethHdr = (EthHdr *)bufferStart;
@@ -415,16 +364,36 @@ OvsDecapGre(POVS_SWITCH_CONTEXT switchContext,
     greHdr = (GREHdr *)((PCHAR)ipHdr + sizeof *ipHdr);
     headRoom += sizeof *greHdr;
 
+    tunnelSize = GreTunHdrSize(greHdr->flags);
+
+    /* Verify the packet length after looking at the GRE flags*/
+    if (packetLength <= tunnelSize) {
+        status = NDIS_STATUS_INVALID_LENGTH;
+        goto end;
+    }
+
     /* Validate if GRE header protocol type. */
     if (greHdr->protocolType != GRE_NET_TEB) {
         status = STATUS_NDIS_INVALID_PACKET;
-        goto dropNbl;
+        goto end;
     }
 
     PCHAR currentOffset = (PCHAR)greHdr + sizeof *greHdr;
 
     if (greHdr->flags & GRE_CSUM) {
         tunKey->flags |= OVS_TNL_F_CSUM;
+        UINT16 prevChksum = *((UINT16 *)currentOffset);
+        RtlZeroMemory(currentOffset, 2);
+        UINT16 chksum =
+            CalculateChecksumNB(curNb,
+                                (UINT16)(NET_BUFFER_DATA_LENGTH(curNb) -
+                                (ipHdr->ihl * 4 + sizeof *ethHdr)),
+                                ipHdr->ihl * 4 + sizeof *ethHdr);
+        if (prevChksum != chksum) {
+            status = STATUS_NDIS_INVALID_PACKET;
+            goto end;
+        }
+        RtlCopyMemory(currentOffset, &prevChksum, 2);
         currentOffset += 4;
         headRoom += 4;
     }
@@ -438,15 +407,31 @@ OvsDecapGre(POVS_SWITCH_CONTEXT switchContext,
         headRoom += 4;
     }
 
+    /*
+     * Create a copy of the NBL so that we have all the headers in one MDL.
+     */
+    *newNbl = OvsPartialCopyNBL(switchContext, curNbl,
+                                tunnelSize, 0,
+                                TRUE /*copy NBL info */);
+
+    if (*newNbl == NULL) {
+        status = NDIS_STATUS_RESOURCES;
+        goto end;
+    }
+
+    curNbl = *newNbl;
+    curNb = NET_BUFFER_LIST_FIRST_NB(curNbl);
+
     /* Clear out the receive flag for the inner packet. */
     NET_BUFFER_LIST_INFO(curNbl, TcpIpChecksumNetBufferListInfo) = 0;
-    NdisAdvanceNetBufferDataStart(curNb, GreTunHdrSize(tunKey->flags), FALSE,
+    NdisAdvanceNetBufferDataStart(curNb, GreTunHdrSize(greHdr->flags), FALSE,
                                   NULL);
-    ASSERT(headRoom == GreTunHdrSize(tunKey->flags));
-    return NDIS_STATUS_SUCCESS;
+    ASSERT(headRoom == GreTunHdrSize(greHdr->flags));
 
-dropNbl:
-    OvsCompleteNBL(switchContext, *newNbl, TRUE);
-    *newNbl = NULL;
+end:
+    if (tempBuf) {
+        OvsFreeMemoryWithTag(tempBuf, OVS_GRE_POOL_TAG);
+        tempBuf = NULL;
+    }
     return status;
 }

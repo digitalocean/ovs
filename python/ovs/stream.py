@@ -16,6 +16,8 @@ import errno
 import os
 import socket
 
+import six
+
 import ovs.poller
 import ovs.socket_util
 import ovs.vlog
@@ -58,7 +60,7 @@ class Stream(object):
 
     @staticmethod
     def _find_method(name):
-        for method, cls in Stream._SOCKET_METHODS.items():
+        for method, cls in six.iteritems(Stream._SOCKET_METHODS):
             if name.startswith(method):
                 return cls
         return None
@@ -121,7 +123,7 @@ class Stream(object):
         raise NotImplementedError("This method must be overrided by subclass")
 
     @staticmethod
-    def open_block((error, stream)):
+    def open_block(error_stream):
         """Blocks until a Stream completes its connection attempt, either
         succeeding or failing.  (error, stream) should be the tuple returned by
         Stream.open().  Returns a tuple of the same form.
@@ -129,6 +131,8 @@ class Stream(object):
         Typical usage:
         error, stream = Stream.open_block(Stream.open("unix:/tmp/socket"))"""
 
+        # Py3 doesn't support tuple parameter unpacking - PEP 3113
+        error, stream = error_stream
         if not error:
             while True:
                 error = stream.connect()
@@ -198,7 +202,7 @@ class Stream(object):
 
         try:
             return (0, self.socket.recv(n))
-        except socket.error, e:
+        except socket.error as e:
             return (ovs.socket_util.get_exception_errno(e), "")
 
     def send(self, buf):
@@ -219,8 +223,12 @@ class Stream(object):
             return 0
 
         try:
+            # Python 3 has separate types for strings and bytes.  We must have
+            # bytes here.
+            if six.PY3 and not isinstance(buf, six.binary_type):
+                buf = six.binary_type(buf, 'utf-8')
             return self.socket.send(buf)
-        except socket.error, e:
+        except socket.error as e:
             return -ovs.socket_util.get_exception_errno(e)
 
     def run(self):
@@ -261,9 +269,9 @@ class PassiveStream(object):
     @staticmethod
     def is_valid_name(name):
         """Returns True if 'name' is a passive stream name in the form
-        "TYPE:ARGS" and TYPE is a supported passive stream type (currently only
-        "punix:"), otherwise False."""
-        return name.startswith("punix:")
+        "TYPE:ARGS" and TYPE is a supported passive stream type (currently
+        "punix:" or "ptcp"), otherwise False."""
+        return name.startswith("punix:") | name.startswith("ptcp:")
 
     def __init__(self, sock, name, bind_path):
         self.name = name
@@ -274,8 +282,8 @@ class PassiveStream(object):
     def open(name):
         """Attempts to start listening for remote stream connections.  'name'
         is a connection name in the form "TYPE:ARGS", where TYPE is an passive
-        stream class's name and ARGS are stream class-specific.  Currently the
-        only supported TYPE is "punix".
+        stream class's name and ARGS are stream class-specific. Currently the
+        supported values for TYPE are "punix" and "ptcp".
 
         Returns (error, pstream): on success 'error' is 0 and 'pstream' is the
         new PassiveStream, on failure 'error' is a positive errno value and
@@ -286,14 +294,24 @@ class PassiveStream(object):
         bind_path = name[6:]
         if name.startswith("punix:"):
             bind_path = ovs.util.abs_file_name(ovs.dirs.RUNDIR, bind_path)
-        error, sock = ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
-                                                       True, bind_path, None)
-        if error:
-            return error, None
+            error, sock = ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
+                                                           True, bind_path,
+                                                           None)
+            if error:
+                return error, None
+
+        elif name.startswith("ptcp:"):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            remote = name.split(':')
+            sock.bind((remote[1], int(remote[2])))
+
+        else:
+            raise Exception('Unknown connection string')
 
         try:
             sock.listen(10)
-        except socket.error, e:
+        except socket.error as e:
             vlog.err("%s: listen: %s" % (name, os.strerror(e.error)))
             sock.close()
             return e.error, None
@@ -320,8 +338,11 @@ class PassiveStream(object):
             try:
                 sock, addr = self.socket.accept()
                 ovs.socket_util.set_nonblocking(sock)
-                return 0, Stream(sock, "unix:%s" % addr, 0)
-            except socket.error, e:
+                if (sock.family == socket.AF_UNIX):
+                    return 0, Stream(sock, "unix:%s" % addr, 0)
+                return 0, Stream(sock, 'ptcp:%s:%s' % (addr[0],
+                                                       str(addr[1])), 0)
+            except socket.error as e:
                 error = ovs.socket_util.get_exception_errno(e)
                 if error != errno.EAGAIN:
                     # XXX rate-limit
@@ -350,8 +371,8 @@ class UnixStream(Stream):
     @staticmethod
     def _open(suffix, dscp):
         connect_path = suffix
-        return  ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
-                                                 True, None, connect_path)
+        return ovs.socket_util.make_unix_socket(socket.SOCK_STREAM,
+                                                True, None, connect_path)
 Stream.register_method("unix", UnixStream)
 
 

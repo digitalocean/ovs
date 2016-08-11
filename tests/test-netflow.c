@@ -24,8 +24,8 @@
 #include <unistd.h>
 #include "command-line.h"
 #include "daemon.h"
-#include "dynamic-string.h"
-#include "ofpbuf.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/ofpbuf.h"
 #include "ovstest.h"
 #include "packets.h"
 #include "poll-loop.h"
@@ -233,6 +233,9 @@ test_netflow_main(int argc, char *argv[])
         unixctl_server_wait(server);
         poll_block();
     }
+
+    ofpbuf_uninit(&buf);
+    unixctl_server_destroy(server);
 }
 
 static void

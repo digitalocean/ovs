@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,6 @@
  */
 
 #include <config.h>
-
-#include "ofproto/ofproto-dpif.h"
-#include "ofproto/ofproto-provider.h"
-
 #include <errno.h>
 
 #include "bfd.h"
@@ -29,9 +25,7 @@
 #include "connmgr.h"
 #include "coverage.h"
 #include "cfm.h"
-#include "ovs-lldp.h"
 #include "dpif.h"
-#include "dynamic-string.h"
 #include "fail-open.h"
 #include "guarded-list.h"
 #include "hmapx.h"
@@ -39,7 +33,6 @@
 #include "learn.h"
 #include "mac-learning.h"
 #include "mcast-snooping.h"
-#include "meta-flow.h"
 #include "multipath.h"
 #include "netdev-vport.h"
 #include "netdev.h"
@@ -47,11 +40,8 @@
 #include "nx-match.h"
 #include "odp-util.h"
 #include "odp-execute.h"
-#include "ofp-util.h"
-#include "ofpbuf.h"
-#include "ofp-actions.h"
-#include "ofp-parse.h"
-#include "ofp-print.h"
+#include "ofproto/ofproto-dpif.h"
+#include "ofproto/ofproto-provider.h"
 #include "ofproto-dpif-ipfix.h"
 #include "ofproto-dpif-mirror.h"
 #include "ofproto-dpif-monitor.h"
@@ -59,9 +49,18 @@
 #include "ofproto-dpif-sflow.h"
 #include "ofproto-dpif-upcall.h"
 #include "ofproto-dpif-xlate.h"
-#include "poll-loop.h"
+#include "openvswitch/ofp-actions.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/meta-flow.h"
+#include "openvswitch/ofp-parse.h"
+#include "openvswitch/ofp-print.h"
+#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofpbuf.h"
+#include "openvswitch/vlog.h"
+#include "ovs-lldp.h"
 #include "ovs-rcu.h"
 #include "ovs-router.h"
+#include "poll-loop.h"
 #include "seq.h"
 #include "simap.h"
 #include "smap.h"
@@ -69,8 +68,8 @@
 #include "tunnel.h"
 #include "unaligned.h"
 #include "unixctl.h"
+#include "util.h"
 #include "vlan-bitmap.h"
-#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_dpif);
 
@@ -97,6 +96,8 @@ struct rule_dpif {
     * 'rule->new_rule->stats_mutex' must be held together, acquire them in that
     * order, */
     struct rule_dpif *new_rule OVS_GUARDED;
+    bool forward_counts OVS_GUARDED;   /* Forward counts? 'used' time will be
+                                        * forwarded in all cases. */
 
     /* If non-zero then the recirculation id that has
      * been allocated for use with this rule.
@@ -111,7 +112,7 @@ BUILD_ASSERT_DECL(offsetof(struct rule_dpif, up) == 0);
 static void rule_get_stats(struct rule *, uint64_t *packets, uint64_t *bytes,
                            long long int *used);
 static struct rule_dpif *rule_dpif_cast(const struct rule *);
-static void rule_expire(struct rule_dpif *);
+static void rule_expire(struct rule_dpif *, long long now);
 
 struct group_dpif {
     struct ofgroup up;
@@ -191,33 +192,7 @@ struct ofport_dpif {
     /* Queue to DSCP mapping. */
     struct ofproto_port_queue *qdscp;
     size_t n_qdscp;
-
-    /* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
-     *
-     * This is deprecated.  It is only for compatibility with broken device
-     * drivers in old versions of Linux that do not properly support VLANs when
-     * VLAN devices are not used.  When broken device drivers are no longer in
-     * widespread use, we will delete these interfaces. */
-    ofp_port_t realdev_ofp_port;
-    int vlandev_vid;
 };
-
-/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
- *
- * This is deprecated.  It is only for compatibility with broken device drivers
- * in old versions of Linux that do not properly support VLANs when VLAN
- * devices are not used.  When broken device drivers are no longer in
- * widespread use, we will delete these interfaces. */
-struct vlan_splinter {
-    struct hmap_node realdev_vid_node;
-    struct hmap_node vlandev_node;
-    ofp_port_t realdev_ofp_port;
-    ofp_port_t vlandev_ofp_port;
-    int vid;
-};
-
-static void vsp_remove(struct ofport_dpif *);
-static void vsp_add(struct ofport_dpif *, ofp_port_t realdev_ofp_port, int vid);
 
 static odp_port_t ofp_port_to_odp_port(const struct ofproto_dpif *,
                                        ofp_port_t);
@@ -296,14 +271,18 @@ struct ofproto_dpif {
     struct ofproto up;
     struct dpif_backer *backer;
 
-    ATOMIC(cls_version_t) tables_version;  /* For classifier lookups. */
+    /* Unique identifier for this instantiation of this bridge in this running
+     * process.  */
+    struct uuid uuid;
+
+    ATOMIC(ovs_version_t) tables_version;  /* For classifier lookups. */
 
     uint64_t dump_seq; /* Last read of udpif_dump_seq(). */
 
     /* Special OpenFlow rules. */
     struct rule_dpif *miss_rule; /* Sends flow table misses to controller. */
     struct rule_dpif *no_packet_in_rule; /* Drops flow table misses. */
-    struct rule_dpif *drop_frags_rule; /* Used in OFPC_FRAG_DROP mode. */
+    struct rule_dpif *drop_frags_rule; /* Used in OFPUTIL_FRAG_DROP mode. */
 
     /* Bridging. */
     struct netflow *netflow;
@@ -328,11 +307,6 @@ struct ofproto_dpif {
     struct rstp *rstp;
     long long int rstp_last_tick;
 
-    /* VLAN splinters. */
-    struct ovs_mutex vsp_mutex;
-    struct hmap realdev_vid_map OVS_GUARDED; /* (realdev,vid) -> vlandev. */
-    struct hmap vlandev_map OVS_GUARDED;     /* vlandev -> (realdev,vid). */
-
     /* Ports. */
     struct sset ports;             /* Set of standard port names. */
     struct sset ghost_ports;       /* Ports with no datapath port. */
@@ -341,9 +315,9 @@ struct ofproto_dpif {
     uint64_t change_seq;           /* Connectivity status changes. */
 
     /* Work queues. */
-    struct guarded_list pins;      /* Contains "struct ofputil_packet_in"s. */
-    struct seq *pins_seq;          /* For notifying 'pins' reception. */
-    uint64_t pins_seqno;
+    struct guarded_list ams;      /* Contains "struct ofproto_async_msgs"s. */
+    struct seq *ams_seq;          /* For notifying 'ams' reception. */
+    uint64_t ams_seqno;
 };
 
 /* All existing ofproto_dpif instances, indexed by ->up.name. */
@@ -388,32 +362,22 @@ void
 ofproto_dpif_flow_mod(struct ofproto_dpif *ofproto,
                       const struct ofputil_flow_mod *fm)
 {
-    struct ofproto_flow_mod ofm;
-
-    /* Multiple threads may do this for the same 'fm' at the same time.
-     * Allocate ofproto_flow_mod with execution context from stack.
-     *
-     * Note: This copy could be avoided by making ofproto_flow_mod more
-     * complex, but that may not be desireable, and a learn action is not that
-     * fast to begin with. */
-    ofm.fm = *fm;
-    ofproto_flow_mod(&ofproto->up, &ofm);
+    ofproto_flow_mod(&ofproto->up, fm);
 }
 
-/* Appends 'pin' to the queue of "packet ins" to be sent to the controller.
- * Takes ownership of 'pin' and pin->packet. */
+/* Appends 'am' to the queue of asynchronous messages to be sent to the
+ * controller.  Takes ownership of 'am' and any data it points to. */
 void
-ofproto_dpif_send_packet_in(struct ofproto_dpif *ofproto,
-                            struct ofproto_packet_in *pin)
+ofproto_dpif_send_async_msg(struct ofproto_dpif *ofproto,
+                            struct ofproto_async_msg *am)
 {
-    if (!guarded_list_push_back(&ofproto->pins, &pin->list_node, 1024)) {
+    if (!guarded_list_push_back(&ofproto->ams, &am->list_node, 1024)) {
         COVERAGE_INC(packet_in_overflow);
-        free(CONST_CAST(void *, pin->up.packet));
-        free(pin);
+        ofproto_async_msg_free(am);
     }
 
     /* Wakes up main thread for packet-in I/O. */
-    seq_change(ofproto->pins_seq);
+    seq_change(ofproto->ams_seq);
 }
 
 /* The default "table-miss" behaviour for OpenFlow1.3+ is to drop the
@@ -533,6 +497,8 @@ type_run(const char *type)
         return 0;
     }
 
+    /* This must be called before dpif_run() */
+    dpif_poll_threads_set(backer->dpif, pmd_cpu_mask);
 
     if (dpif_run(backer->dpif)) {
         backer->need_revalidate = REV_RECONFIGURE;
@@ -560,8 +526,6 @@ type_run(const char *type)
     if (backer->recv_set_enable) {
         udpif_set_threads(backer->udpif, n_handlers, n_revalidators);
     }
-
-    dpif_poll_threads_set(backer->dpif, n_dpdk_rxqs, pmd_cpu_mask);
 
     if (backer->need_revalidate) {
         struct ofproto_dpif *ofproto;
@@ -891,8 +855,6 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     const char *name;
     int error;
 
-    recirc_init();
-
     backer = shash_find_data(&all_dpif_backers, type);
     if (backer) {
         backer->refcount++;
@@ -950,14 +912,14 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
 
     /* Loop through the ports already on the datapath and remove any
      * that we don't need anymore. */
-    list_init(&garbage_list);
+    ovs_list_init(&garbage_list);
     dpif_port_dump_start(&port_dump, backer->dpif);
     while (dpif_port_dump_next(&port_dump, &port)) {
         node = shash_find(&init_ofp_ports, port.name);
         if (!node && strcmp(port.name, dpif_base_name(backer->dpif))) {
             garbage = xmalloc(sizeof *garbage);
             garbage->odp_port = port.port_no;
-            list_push_front(&garbage_list, &garbage->list_node);
+            ovs_list_push_front(&garbage_list, &garbage->list_node);
         }
     }
     dpif_port_dump_done(&port_dump);
@@ -1093,6 +1055,7 @@ check_variable_length_userdata(struct dpif_backer *backer)
     struct ofpbuf actions;
     struct dpif_execute execute;
     struct dp_packet packet;
+    struct flow flow;
     size_t start;
     int error;
 
@@ -1115,11 +1078,14 @@ check_variable_length_userdata(struct dpif_backer *backer)
     eth = dp_packet_put_zeros(&packet, ETH_HEADER_LEN);
     eth->eth_type = htons(0x1234);
 
+    flow_extract(&packet, &flow);
+
     /* Execute the actions.  On older datapaths this fails with ERANGE, on
      * newer datapaths it succeeds. */
     execute.actions = actions.data;
     execute.actions_len = actions.size;
     execute.packet = &packet;
+    execute.flow = &flow;
     execute.needs_help = false;
     execute.probe = true;
     execute.mtu = 0;
@@ -1196,6 +1162,7 @@ check_masked_set_action(struct dpif_backer *backer)
     struct ofpbuf actions;
     struct dpif_execute execute;
     struct dp_packet packet;
+    struct flow flow;
     int error;
     struct ovs_key_ethernet key, mask;
 
@@ -1214,11 +1181,14 @@ check_masked_set_action(struct dpif_backer *backer)
     eth = dp_packet_put_zeros(&packet, ETH_HEADER_LEN);
     eth->eth_type = htons(0x1234);
 
+    flow_extract(&packet, &flow);
+
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
     execute.actions = actions.data;
     execute.actions_len = actions.size;
     execute.packet = &packet;
+    execute.flow = &flow;
     execute.needs_help = false;
     execute.probe = true;
     execute.mtu = 0;
@@ -1236,7 +1206,64 @@ check_masked_set_action(struct dpif_backer *backer)
     return !error;
 }
 
-#define CHECK_FEATURE__(NAME, FIELD)                                        \
+/* Tests whether 'backer''s datapath supports truncation of a packet in
+ * OVS_ACTION_ATTR_TRUNC.  We need to disable some features on older
+ * datapaths that don't support this feature. */
+static bool
+check_trunc_action(struct dpif_backer *backer)
+{
+    struct eth_header *eth;
+    struct ofpbuf actions;
+    struct dpif_execute execute;
+    struct dp_packet packet;
+    struct ovs_action_trunc *trunc;
+    struct flow flow;
+    int error;
+
+    /* Compose an action with output(port:1,
+     *              max_len:OVS_ACTION_OUTPUT_MIN + 1).
+     * This translates to one truncate action and one output action. */
+    ofpbuf_init(&actions, 64);
+    trunc = nl_msg_put_unspec_uninit(&actions,
+                            OVS_ACTION_ATTR_TRUNC, sizeof *trunc);
+
+    trunc->max_len = ETH_HEADER_LEN + 1;
+    nl_msg_put_odp_port(&actions, OVS_ACTION_ATTR_OUTPUT, u32_to_odp(1));
+
+    /* Compose a dummy Ethernet packet. */
+    dp_packet_init(&packet, ETH_HEADER_LEN);
+    eth = dp_packet_put_zeros(&packet, ETH_HEADER_LEN);
+    eth->eth_type = htons(0x1234);
+
+    flow_extract(&packet, &flow);
+
+    /* Execute the actions.  On older datapaths this fails with EINVAL, on
+     * newer datapaths it succeeds. */
+    execute.actions = actions.data;
+    execute.actions_len = actions.size;
+    execute.packet = &packet;
+    execute.flow = &flow;
+    execute.needs_help = false;
+    execute.probe = true;
+    execute.mtu = 0;
+
+    error = dpif_execute(backer->dpif, &execute);
+
+    dp_packet_uninit(&packet);
+    ofpbuf_uninit(&actions);
+
+    if (error) {
+        VLOG_INFO("%s: Datapath does not support truncate action",
+                  dpif_name(backer->dpif));
+    } else {
+        VLOG_INFO("%s: Datapath supports truncate action",
+                  dpif_name(backer->dpif));
+    }
+
+    return !error;
+}
+
+#define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE)                        \
 static bool                                                                 \
 check_##NAME(struct dpif_backer *backer)                                    \
 {                                                                           \
@@ -1247,12 +1274,12 @@ check_##NAME(struct dpif_backer *backer)                                    \
     struct odp_flow_key_parms odp_parms = {                                 \
         .flow = &flow,                                                      \
         .support = {                                                        \
-            .NAME = true,                                                   \
+            .SUPPORT = true,                                                \
         },                                                                  \
     };                                                                      \
                                                                             \
     memset(&flow, 0, sizeof flow);                                          \
-    flow.FIELD = 1;                                                         \
+    flow.FIELD = VALUE;                                                     \
                                                                             \
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);                         \
     odp_flow_key_from_flow(&odp_parms, &key);                               \
@@ -1267,12 +1294,13 @@ check_##NAME(struct dpif_backer *backer)                                    \
                                                                             \
     return enable;                                                          \
 }
-#define CHECK_FEATURE(FIELD) CHECK_FEATURE__(FIELD, FIELD)
+#define CHECK_FEATURE(FIELD) CHECK_FEATURE__(FIELD, FIELD, FIELD, 1)
 
 CHECK_FEATURE(ct_state)
 CHECK_FEATURE(ct_zone)
 CHECK_FEATURE(ct_mark)
-CHECK_FEATURE__(ct_label, ct_label.u64.lo)
+CHECK_FEATURE__(ct_label, ct_label, ct_label.u64.lo, 1)
+CHECK_FEATURE__(ct_state_nat, ct_state, ct_state, CS_TRACKED|CS_SRC_NAT)
 
 #undef CHECK_FEATURE
 #undef CHECK_FEATURE__
@@ -1286,6 +1314,7 @@ check_support(struct dpif_backer *backer)
     backer->support.odp.recirc = check_recirc(backer);
     backer->support.odp.max_mpls_depth = check_max_mpls_depth(backer);
     backer->support.masked_set_action = check_masked_set_action(backer);
+    backer->support.trunc = check_trunc_action(backer);
     backer->support.ufid = check_ufid(backer);
     backer->support.tnl_push_pop = dpif_supports_tnl_push_pop(backer->dpif);
 
@@ -1293,6 +1322,8 @@ check_support(struct dpif_backer *backer)
     backer->support.odp.ct_zone = check_ct_zone(backer);
     backer->support.odp.ct_mark = check_ct_mark(backer);
     backer->support.odp.ct_label = check_ct_label(backer);
+
+    backer->support.odp.ct_state_nat = check_ct_state_nat(backer);
 }
 
 static int
@@ -1310,7 +1341,8 @@ construct(struct ofproto *ofproto_)
         return error;
     }
 
-    atomic_init(&ofproto->tables_version, CLS_MIN_VERSION);
+    uuid_generate(&ofproto->uuid);
+    atomic_init(&ofproto->tables_version, OVS_VERSION_MIN);
     ofproto->netflow = NULL;
     ofproto->sflow = NULL;
     ofproto->ipfix = NULL;
@@ -1324,20 +1356,16 @@ construct(struct ofproto *ofproto_)
     ofproto->has_bonded_bundles = false;
     ofproto->lacp_enabled = false;
     ovs_mutex_init_adaptive(&ofproto->stats_mutex);
-    ovs_mutex_init(&ofproto->vsp_mutex);
 
-    guarded_list_init(&ofproto->pins);
-
-    hmap_init(&ofproto->vlandev_map);
-    hmap_init(&ofproto->realdev_vid_map);
+    guarded_list_init(&ofproto->ams);
 
     sset_init(&ofproto->ports);
     sset_init(&ofproto->ghost_ports);
     sset_init(&ofproto->port_poll_set);
     ofproto->port_poll_errno = 0;
     ofproto->change_seq = 0;
-    ofproto->pins_seq = seq_create();
-    ofproto->pins_seqno = seq_read(ofproto->pins_seq);
+    ofproto->ams_seq = seq_create();
+    ofproto->ams_seqno = seq_read(ofproto->ams_seq);
 
 
     SHASH_FOR_EACH_SAFE (node, next, &init_ofp_ports) {
@@ -1403,8 +1431,8 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     controller = ofpact_put_CONTROLLER(&ofpacts);
     controller->max_len = UINT16_MAX;
     controller->controller_id = 0;
-    controller->reason = OFPR_NO_MATCH;
-    ofpact_pad(&ofpacts);
+    controller->reason = OFPR_IMPLICIT_MISS;
+    ofpact_finish_CONTROLLER(&ofpacts, &controller);
 
     error = add_internal_miss_flow(ofproto, id++, &ofpacts,
                                    &ofproto->miss_rule);
@@ -1442,10 +1470,10 @@ static void
 destruct(struct ofproto *ofproto_)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
-    struct ofproto_packet_in *pin;
+    struct ofproto_async_msg *am;
     struct rule_dpif *rule;
     struct oftable *table;
-    struct ovs_list pins;
+    struct ovs_list ams;
 
     ofproto->backer->need_revalidate = REV_RECONFIGURE;
     xlate_txn_start();
@@ -1465,12 +1493,11 @@ destruct(struct ofproto *ofproto_)
     }
     ofproto_group_delete_all(&ofproto->up);
 
-    guarded_list_pop_all(&ofproto->pins, &pins);
-    LIST_FOR_EACH_POP (pin, list_node, &pins) {
-        free(CONST_CAST(void *, pin->up.packet));
-        free(pin);
+    guarded_list_pop_all(&ofproto->ams, &ams);
+    LIST_FOR_EACH_POP (am, list_node, &ams) {
+        ofproto_async_msg_free(am);
     }
-    guarded_list_destroy(&ofproto->pins);
+    guarded_list_destroy(&ofproto->ams);
 
     recirc_free_ofproto(ofproto, ofproto->up.name);
 
@@ -1483,17 +1510,13 @@ destruct(struct ofproto *ofproto_)
     mac_learning_unref(ofproto->ml);
     mcast_snooping_unref(ofproto->ms);
 
-    hmap_destroy(&ofproto->vlandev_map);
-    hmap_destroy(&ofproto->realdev_vid_map);
-
     sset_destroy(&ofproto->ports);
     sset_destroy(&ofproto->ghost_ports);
     sset_destroy(&ofproto->port_poll_set);
 
     ovs_mutex_destroy(&ofproto->stats_mutex);
-    ovs_mutex_destroy(&ofproto->vsp_mutex);
 
-    seq_destroy(ofproto->pins_seq);
+    seq_destroy(ofproto->ams_seq);
 
     close_dpif_backer(ofproto->backer);
 }
@@ -1512,23 +1535,22 @@ run(struct ofproto *ofproto_)
         mcast_snooping_mdb_flush(ofproto->ms);
     }
 
-    /* Always updates the ofproto->pins_seqno to avoid frequent wakeup during
+    /* Always updates the ofproto->ams_seqno to avoid frequent wakeup during
      * flow restore.  Even though nothing is processed during flow restore,
-     * all queued 'pins' will be handled immediately when flow restore
+     * all queued 'ams' will be handled immediately when flow restore
      * completes. */
-    ofproto->pins_seqno = seq_read(ofproto->pins_seq);
+    ofproto->ams_seqno = seq_read(ofproto->ams_seq);
 
     /* Do not perform any periodic activity required by 'ofproto' while
      * waiting for flow restore to complete. */
     if (!ofproto_get_flow_restore_wait()) {
-        struct ofproto_packet_in *pin;
-        struct ovs_list pins;
+        struct ofproto_async_msg *am;
+        struct ovs_list ams;
 
-        guarded_list_pop_all(&ofproto->pins, &pins);
-        LIST_FOR_EACH_POP (pin, list_node, &pins) {
-            connmgr_send_packet_in(ofproto->up.connmgr, pin);
-            free(CONST_CAST(void *, pin->up.packet));
-            free(pin);
+        guarded_list_pop_all(&ofproto->ams, &ams);
+        LIST_FOR_EACH_POP (am, list_node, &ams) {
+            connmgr_send_async_msg(ofproto->up.connmgr, am);
+            ofproto_async_msg_free(am);
         }
     }
 
@@ -1575,6 +1597,7 @@ run(struct ofproto *ofproto_)
     new_dump_seq = seq_read(udpif_dump_seq(ofproto->backer->udpif));
     if (ofproto->dump_seq != new_dump_seq) {
         struct rule *rule, *next_rule;
+        long long now = time_msec();
 
         /* We know stats are relatively fresh, so now is a good time to do some
          * periodic work. */
@@ -1585,7 +1608,7 @@ run(struct ofproto *ofproto_)
         ovs_mutex_lock(&ofproto_mutex);
         LIST_FOR_EACH_SAFE (rule, next_rule, expirable,
                             &ofproto->up.expirable) {
-            rule_expire(rule_dpif_cast(rule));
+            rule_expire(rule_dpif_cast(rule), now);
         }
         ovs_mutex_unlock(&ofproto_mutex);
 
@@ -1605,7 +1628,7 @@ run(struct ofproto *ofproto_)
 }
 
 static void
-wait(struct ofproto *ofproto_)
+ofproto_dpif_wait(struct ofproto *ofproto_)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
@@ -1639,7 +1662,7 @@ wait(struct ofproto *ofproto_)
     }
 
     seq_wait(udpif_dump_seq(ofproto->backer->udpif), ofproto->dump_seq);
-    seq_wait(ofproto->pins_seq, ofproto->pins_seqno);
+    seq_wait(ofproto->ams_seq, ofproto->ams_seqno);
 }
 
 static void
@@ -1687,13 +1710,13 @@ query_tables(struct ofproto *ofproto,
 }
 
 static void
-set_tables_version(struct ofproto *ofproto_, cls_version_t version)
+set_tables_version(struct ofproto *ofproto_, ovs_version_t version)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
     atomic_store_relaxed(&ofproto->tables_version, version);
+    ofproto->backer->need_revalidate = REV_FLOW_TABLE;
 }
-
 
 static struct ofport *
 port_alloc(void)
@@ -1734,8 +1757,6 @@ port_construct(struct ofport *port_)
     port->peer = NULL;
     port->qdscp = NULL;
     port->n_qdscp = 0;
-    port->realdev_ofp_port = 0;
-    port->vlandev_vid = 0;
     port->carrier_seq = netdev_get_carrier_resets(netdev);
     port->is_layer3 = netdev_vport_is_layer3(netdev);
 
@@ -1991,6 +2012,21 @@ set_ipfix(
 }
 
 static int
+get_ipfix_stats(const struct ofproto *ofproto_,
+                bool bridge_ipfix,
+                struct ovs_list *replies)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    struct dpif_ipfix *di = ofproto->ipfix;
+
+    if (!di) {
+        return OFPERR_NXST_NOT_CONFIGURED;
+    }
+
+    return dpif_ipfix_get_stats(di, bridge_ipfix, replies);
+}
+
+static int
 set_cfm(struct ofport *ofport_, const struct cfm_settings *s)
 {
     struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
@@ -2177,7 +2213,7 @@ rstp_send_bpdu_cb(struct dp_packet *pkt, void *ofport_, void *ofproto_)
                      "does not have a configured source MAC address.",
                      ofproto->up.name, ofp_to_u16(ofport->up.ofp_port));
     } else {
-        ofproto_dpif_send_packet(ofport, pkt);
+        ofproto_dpif_send_packet(ofport, false, pkt);
     }
     dp_packet_delete(pkt);
 }
@@ -2201,7 +2237,7 @@ send_bpdu_cb(struct dp_packet *pkt, int port_num, void *ofproto_)
             VLOG_WARN_RL(&rl, "%s: cannot send BPDU on port %d "
                          "with unknown MAC", ofproto->up.name, port_num);
         } else {
-            ofproto_dpif_send_packet(ofport, pkt);
+            ofproto_dpif_send_packet(ofport, false, pkt);
         }
     }
     dp_packet_delete(pkt);
@@ -2757,7 +2793,7 @@ bundle_del_port(struct ofport_dpif *port)
 
     bundle->ofproto->backer->need_revalidate = REV_RECONFIGURE;
 
-    list_remove(&port->bundle_node);
+    ovs_list_remove(&port->bundle_node);
     port->bundle = NULL;
 
     if (bundle->lacp) {
@@ -2788,7 +2824,7 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port,
         }
 
         port->bundle = bundle;
-        list_push_back(&bundle->ports, &port->bundle_node);
+        ovs_list_push_back(&bundle->ports, &port->bundle_node);
         if (port->up.pp.config & OFPUTIL_PC_NO_FLOOD
             || port->is_layer3
             || (bundle->ofproto->stp && !stp_forward_in_state(port->stp_state))
@@ -2865,7 +2901,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->aux = aux;
         bundle->name = NULL;
 
-        list_init(&bundle->ports);
+        ovs_list_init(&bundle->ports);
         bundle->vlan_mode = PORT_VLAN_TRUNK;
         bundle->vlan = -1;
         bundle->trunks = NULL;
@@ -2903,7 +2939,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
             ok = false;
         }
     }
-    if (!ok || list_size(&bundle->ports) != s->n_slaves) {
+    if (!ok || ovs_list_size(&bundle->ports) != s->n_slaves) {
         struct ofport_dpif *next_port;
 
         LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
@@ -2917,9 +2953,9 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         found: ;
         }
     }
-    ovs_assert(list_size(&bundle->ports) <= s->n_slaves);
+    ovs_assert(ovs_list_size(&bundle->ports) <= s->n_slaves);
 
-    if (list_is_empty(&bundle->ports)) {
+    if (ovs_list_is_empty(&bundle->ports)) {
         bundle_destroy(bundle);
         return EINVAL;
     }
@@ -2987,7 +3023,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     }
 
     /* Bonding. */
-    if (!list_is_short(&bundle->ports)) {
+    if (!ovs_list_is_short(&bundle->ports)) {
         bundle->ofproto->has_bonded_bundles = true;
         if (bundle->bond) {
             if (bond_reconfigure(bundle->bond, s->bond)) {
@@ -3024,9 +3060,9 @@ bundle_remove(struct ofport *port_)
 
     if (bundle) {
         bundle_del_port(port);
-        if (list_is_empty(&bundle->ports)) {
+        if (ovs_list_is_empty(&bundle->ports)) {
             bundle_destroy(bundle);
-        } else if (list_is_short(&bundle->ports)) {
+        } else if (ovs_list_is_short(&bundle->ports)) {
             bond_unref(bundle->bond);
             bundle->bond = NULL;
         }
@@ -3051,7 +3087,7 @@ send_pdu_cb(void *port_, const void *pdu, size_t pdu_size)
                                  pdu_size);
         memcpy(packet_pdu, pdu, pdu_size);
 
-        ofproto_dpif_send_packet(port, &packet);
+        ofproto_dpif_send_packet(port, false, &packet);
         dp_packet_uninit(&packet);
     } else {
         VLOG_ERR_RL(&rl, "port %s: cannot obtain Ethernet address of iface "
@@ -3073,7 +3109,7 @@ bundle_send_learning_packets(struct ofbundle *bundle)
     } *pkt_node;
     struct ovs_list packets;
 
-    list_init(&packets);
+    ovs_list_init(&packets);
     ovs_rwlock_rdlock(&ofproto->ml->rwlock);
     LIST_FOR_EACH (e, lru_node, &ofproto->ml->lrus) {
         if (mac_entry_get_port(ofproto->ml, e) != bundle) {
@@ -3081,7 +3117,7 @@ bundle_send_learning_packets(struct ofbundle *bundle)
             pkt_node->pkt = bond_compose_learning_packet(bundle->bond,
                                                          e->mac, e->vlan,
                                                          (void **)&pkt_node->port);
-            list_push_back(&packets, &pkt_node->list_node);
+            ovs_list_push_back(&packets, &pkt_node->list_node);
         }
     }
     ovs_rwlock_unlock(&ofproto->ml->rwlock);
@@ -3090,7 +3126,7 @@ bundle_send_learning_packets(struct ofbundle *bundle)
     LIST_FOR_EACH_POP (pkt_node, list_node, &packets) {
         int ret;
 
-        ret = ofproto_dpif_send_packet(pkt_node->port, pkt_node->pkt);
+        ret = ofproto_dpif_send_packet(pkt_node->port, false, pkt_node->pkt);
         dp_packet_delete(pkt_node->pkt);
         free(pkt_node);
         if (ret) {
@@ -3174,7 +3210,8 @@ mirror_set__(struct ofproto *ofproto_, void *aux,
 
     error = mirror_set(ofproto->mbridge, aux, s->name, srcs, s->n_srcs, dsts,
                        s->n_dsts, s->src_vlans,
-                       bundle_lookup(ofproto, s->out_bundle), s->out_vlan);
+                       bundle_lookup(ofproto, s->out_bundle),
+                       s->snaplen, s->out_vlan);
     free(srcs);
     free(dsts);
     return error;
@@ -3499,6 +3536,20 @@ port_del(struct ofproto *ofproto_, ofp_port_t ofp_port)
 }
 
 static int
+port_set_config(const struct ofport *ofport_, const struct smap *cfg)
+{
+    struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofport->up.ofproto);
+
+    if (sset_contains(&ofproto->ghost_ports,
+                      netdev_get_name(ofport->up.netdev))) {
+        return 0;
+    }
+
+    return dpif_port_set_config(ofproto->backer->dpif, ofport->odp_port, cfg);
+}
+
+static int
 port_get_stats(const struct ofport *ofport_, struct netdev_stats *stats)
 {
     struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
@@ -3553,8 +3604,7 @@ port_get_lacp_stats(const struct ofport *ofport_, struct lacp_slave_stats *stats
 }
 
 struct port_dump_state {
-    uint32_t bucket;
-    uint32_t offset;
+    struct sset_position pos;
     bool ghost;
 
     struct ofproto_port port;
@@ -3582,7 +3632,7 @@ port_dump_next(const struct ofproto *ofproto_, void *state_,
         state->has_port = false;
     }
     sset = state->ghost ? &ofproto->ghost_ports : &ofproto->ports;
-    while ((node = sset_at_position(sset, &state->bucket, &state->offset))) {
+    while ((node = sset_at_position(sset, &state->pos))) {
         int error;
 
         error = port_query_by_name(ofproto_, node->name, &state->port);
@@ -3597,8 +3647,7 @@ port_dump_next(const struct ofproto *ofproto_, void *state_,
 
     if (!state->ghost) {
         state->ghost = true;
-        state->bucket = 0;
-        state->offset = 0;
+        memset(&state->pos, 0, sizeof state->pos);
         return port_dump_next(ofproto_, state_, port);
     }
 
@@ -3655,11 +3704,10 @@ port_is_lacp_current(const struct ofport *ofport_)
 /* If 'rule' is an OpenFlow rule, that has expired according to OpenFlow rules,
  * then delete it entirely. */
 static void
-rule_expire(struct rule_dpif *rule)
+rule_expire(struct rule_dpif *rule, long long now)
     OVS_REQUIRES(ofproto_mutex)
 {
     uint16_t hard_timeout, idle_timeout;
-    long long int now = time_msec();
     int reason = -1;
 
     hard_timeout = rule->up.hard_timeout;
@@ -3696,18 +3744,27 @@ rule_expire(struct rule_dpif *rule)
     }
 }
 
+static void
+ofproto_dpif_set_packet_odp_port(const struct ofproto_dpif *ofproto,
+                                 ofp_port_t in_port, struct dp_packet *packet)
+{
+    if (in_port == OFPP_NONE) {
+        in_port = OFPP_LOCAL;
+    }
+    packet->md.in_port.odp_port = ofp_port_to_odp_port(ofproto, in_port);
+}
+
 int
 ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
                                const struct flow *flow,
                                struct rule_dpif *rule,
                                const struct ofpact *ofpacts, size_t ofpacts_len,
-                               int recurse, int resubmits,
+                               int indentation, int depth, int resubmits,
                                struct dp_packet *packet)
 {
     struct dpif_flow_stats stats;
     struct xlate_out xout;
     struct xlate_in xin;
-    ofp_port_t in_port;
     struct dpif_execute execute;
     int error;
 
@@ -3726,7 +3783,8 @@ ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
     xin.ofpacts = ofpacts;
     xin.ofpacts_len = ofpacts_len;
     xin.resubmit_stats = &stats;
-    xin.recurse = recurse;
+    xin.indentation = indentation;
+    xin.depth = depth;
     xin.resubmits = resubmits;
     if (xlate_actions(&xin, &xout) != XLATE_OK) {
         error = EINVAL;
@@ -3738,16 +3796,13 @@ ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
 
     pkt_metadata_from_flow(&packet->md, flow);
     execute.packet = packet;
+    execute.flow = flow;
     execute.needs_help = (xout.slow & SLOW_ACTION) != 0;
     execute.probe = false;
     execute.mtu = 0;
 
     /* Fix up in_port. */
-    in_port = flow->in_port.ofp_port;
-    if (in_port == OFPP_NONE) {
-        in_port = OFPP_LOCAL;
-    }
-    execute.packet->md.in_port.odp_port = ofp_port_to_odp_port(ofproto, in_port);
+    ofproto_dpif_set_packet_odp_port(ofproto, flow->in_port.ofp_port, packet);
 
     error = dpif_execute(ofproto->backer->dpif, &execute);
 out:
@@ -3767,7 +3822,20 @@ ofproto_dpif_execute_actions(struct ofproto_dpif *ofproto,
                              struct dp_packet *packet)
 {
     return ofproto_dpif_execute_actions__(ofproto, flow, rule, ofpacts,
-                                          ofpacts_len, 0, 0, packet);
+                                          ofpacts_len, 0, 0, 0, packet);
+}
+
+static void
+rule_dpif_credit_stats__(struct rule_dpif *rule,
+                         const struct dpif_flow_stats *stats,
+                         bool credit_counts)
+    OVS_REQUIRES(rule->stats_mutex)
+{
+    if (credit_counts) {
+        rule->stats.n_packets += stats->n_packets;
+        rule->stats.n_bytes += stats->n_bytes;
+    }
+    rule->stats.used = MAX(rule->stats.used, stats->used);
 }
 
 void
@@ -3776,11 +3844,11 @@ rule_dpif_credit_stats(struct rule_dpif *rule,
 {
     ovs_mutex_lock(&rule->stats_mutex);
     if (OVS_UNLIKELY(rule->new_rule)) {
-        rule_dpif_credit_stats(rule->new_rule, stats);
+        ovs_mutex_lock(&rule->new_rule->stats_mutex);
+        rule_dpif_credit_stats__(rule->new_rule, stats, rule->forward_counts);
+        ovs_mutex_unlock(&rule->new_rule->stats_mutex);
     } else {
-        rule->stats.n_packets += stats->n_packets;
-        rule->stats.n_bytes += stats->n_bytes;
-        rule->stats.used = MAX(rule->stats.used, stats->used);
+        rule_dpif_credit_stats__(rule, stats, true);
     }
     ovs_mutex_unlock(&rule->stats_mutex);
 }
@@ -3832,10 +3900,10 @@ rule_set_recirc_id(struct rule *rule_, uint32_t id)
     ovs_mutex_unlock(&rule->up.mutex);
 }
 
-cls_version_t
+ovs_version_t
 ofproto_dpif_get_tables_version(struct ofproto_dpif *ofproto OVS_UNUSED)
 {
-    cls_version_t version;
+    ovs_version_t version;
 
     atomic_read_relaxed(&ofproto->tables_version, &version);
 
@@ -3849,7 +3917,7 @@ ofproto_dpif_get_tables_version(struct ofproto_dpif *ofproto OVS_UNUSED)
  * 'flow' is non-const to allow for temporary modifications during the lookup.
  * Any changes are restored before returning. */
 static struct rule_dpif *
-rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, cls_version_t version,
+rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, ovs_version_t version,
                           uint8_t table_id, struct flow *flow,
                           struct flow_wildcards *wc)
 {
@@ -3885,7 +3953,7 @@ rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, cls_version_t version,
  * Any changes are restored before returning. */
 struct rule_dpif *
 rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
-                            cls_version_t version, struct flow *flow,
+                            ovs_version_t version, struct flow *flow,
                             struct flow_wildcards *wc,
                             const struct dpif_flow_stats *stats,
                             uint8_t *table_id, ofp_port_t in_port,
@@ -3900,13 +3968,13 @@ rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
     /* We always unwildcard nw_frag (for IP), so they
      * need not be unwildcarded here. */
     if (flow->nw_frag & FLOW_NW_FRAG_ANY
-        && ofproto->up.frag_handling != OFPC_FRAG_NX_MATCH) {
-        if (ofproto->up.frag_handling == OFPC_FRAG_NORMAL) {
+        && ofproto->up.frag_handling != OFPUTIL_FRAG_NX_MATCH) {
+        if (ofproto->up.frag_handling == OFPUTIL_FRAG_NORMAL) {
             /* We must pretend that transport ports are unavailable. */
             flow->tp_src = htons(0);
             flow->tp_dst = htons(0);
         } else {
-            /* Must be OFPC_FRAG_DROP (we don't have OFPC_FRAG_REASM).
+            /* Must be OFPUTIL_FRAG_DROP (we don't have OFPUTIL_FRAG_REASM).
              * Use the drop_frags_rule (which cannot disappear). */
             rule = ofproto->drop_frags_rule;
             if (stats) {
@@ -3984,15 +4052,6 @@ out:
     return rule;
 }
 
-static void
-complete_operation(struct rule_dpif *rule)
-    OVS_REQUIRES(ofproto_mutex)
-{
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(rule->up.ofproto);
-
-    ofproto->backer->need_revalidate = REV_FLOW_TABLE;
-}
-
 static struct rule_dpif *rule_dpif_cast(const struct rule *rule)
 {
     return rule ? CONTAINER_OF(rule, struct rule_dpif, up) : NULL;
@@ -4023,7 +4082,7 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
     support = &ofproto_dpif_get_support(ofproto)->odp;
     ct_state = MINIFLOW_GET_U16(flow, ct_state);
     if (support->ct_state && support->ct_zone && support->ct_mark
-        && support->ct_label) {
+        && support->ct_label && support->ct_state_nat) {
         return ct_state & CS_UNSUPPORTED_MASK ? OFPERR_OFPBMC_BAD_MASK : 0;
     }
 
@@ -4033,9 +4092,10 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
 
     if ((ct_state && !support->ct_state)
         || (ct_state & CS_UNSUPPORTED_MASK)
+        || ((ct_state & (CS_SRC_NAT | CS_DST_NAT)) && !support->ct_state_nat)
         || (ct_zone && !support->ct_zone)
         || (ct_mark && !support->ct_mark)
-        || (!ovs_u128_is_zero(&ct_label) && !support->ct_label)) {
+        || (!ovs_u128_is_zero(ct_label) && !support->ct_label)) {
         return OFPERR_OFPBMC_BAD_MASK;
     }
 
@@ -4070,6 +4130,12 @@ check_actions(const struct ofproto_dpif *ofproto,
         OFPACT_FOR_EACH(a, ct->actions, ofpact_ct_get_action_len(ct)) {
             const struct mf_field *dst = ofpact_get_mf_dst(a);
 
+            if (a->type == OFPACT_NAT && !support->ct_state_nat) {
+                /* The backer doesn't seem to support the NAT bits in
+                 * 'ct_state': assume that it doesn't support the NAT
+                 * action. */
+                return OFPERR_OFPBAC_BAD_TYPE;
+            }
             if (dst && ((dst->id == MFF_CT_MARK && !support->ct_mark)
                         || (dst->id == MFF_CT_LABEL && !support->ct_label))) {
                 return OFPERR_OFPBAC_BAD_SET_ARGUMENT;
@@ -4111,17 +4177,18 @@ rule_construct(struct rule *rule_)
     rule->stats.used = rule->up.modified;
     rule->recirc_id = 0;
     rule->new_rule = NULL;
+    rule->forward_counts = false;
 
     return 0;
 }
 
 static void
-rule_insert(struct rule *rule_, struct rule *old_rule_, bool forward_stats)
+rule_insert(struct rule *rule_, struct rule *old_rule_, bool forward_counts)
     OVS_REQUIRES(ofproto_mutex)
 {
     struct rule_dpif *rule = rule_dpif_cast(rule_);
 
-    if (old_rule_ && forward_stats) {
+    if (old_rule_) {
         struct rule_dpif *old_rule = rule_dpif_cast(old_rule_);
 
         ovs_assert(!old_rule->new_rule);
@@ -4133,20 +4200,18 @@ rule_insert(struct rule *rule_, struct rule *old_rule_, bool forward_stats)
         ovs_mutex_lock(&old_rule->stats_mutex);
         ovs_mutex_lock(&rule->stats_mutex);
         old_rule->new_rule = rule;       /* Forward future stats. */
-        rule->stats = old_rule->stats;   /* Transfer stats to the new rule. */
+        old_rule->forward_counts = forward_counts;
+
+        if (forward_counts) {
+            rule->stats = old_rule->stats;   /* Transfer stats to the new
+                                              * rule. */
+        } else {
+            /* Used timestamp must be forwarded whenever a rule is modified. */
+            rule->stats.used = old_rule->stats.used;
+        }
         ovs_mutex_unlock(&rule->stats_mutex);
         ovs_mutex_unlock(&old_rule->stats_mutex);
     }
-
-    complete_operation(rule);
-}
-
-static void
-rule_delete(struct rule *rule_)
-    OVS_REQUIRES(ofproto_mutex)
-{
-    struct rule_dpif *rule = rule_dpif_cast(rule_);
-    complete_operation(rule);
 }
 
 static void
@@ -4229,7 +4294,7 @@ group_construct_stats(struct group_dpif *group)
     group->packet_count = 0;
     group->byte_count = 0;
 
-    group_dpif_get_buckets(group, &buckets);
+    buckets = group_dpif_get_buckets(group);
     LIST_FOR_EACH (bucket, list_node, buckets) {
         bucket->stats.packet_count = 0;
         bucket->stats.byte_count = 0;
@@ -4250,7 +4315,7 @@ group_dpif_credit_stats(struct group_dpif *group,
     } else { /* Credit to all buckets */
         const struct ovs_list *buckets;
 
-        group_dpif_get_buckets(group, &buckets);
+        buckets = group_dpif_get_buckets(group);
         LIST_FOR_EACH (bucket, list_node, buckets) {
             bucket->stats.packet_count += stats->n_packets;
             bucket->stats.byte_count += stats->n_bytes;
@@ -4278,14 +4343,12 @@ group_destruct(struct ofgroup *group_)
     ovs_mutex_destroy(&group->stats_mutex);
 }
 
-static enum ofperr
+static void
 group_modify(struct ofgroup *group_)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(group_->ofproto);
 
     ofproto->backer->need_revalidate = REV_FLOW_TABLE;
-
-    return 0;
 }
 
 static enum ofperr
@@ -4300,7 +4363,7 @@ group_get_stats(const struct ofgroup *group_, struct ofputil_group_stats *ogs)
     ogs->packet_count = group->packet_count;
     ogs->byte_count = group->byte_count;
 
-    group_dpif_get_buckets(group, &buckets);
+    buckets = group_dpif_get_buckets(group);
     bucket_stats = ogs->bucket_stats;
     LIST_FOR_EACH (bucket, list_node, buckets) {
         bucket_stats->packet_count = bucket->stats.packet_count;
@@ -4316,24 +4379,19 @@ group_get_stats(const struct ofgroup *group_, struct ofputil_group_stats *ogs)
  *
  * Make sure to call group_dpif_unref() after no longer needing to maintain
  * a reference to the group. */
-bool
+struct group_dpif *
 group_dpif_lookup(struct ofproto_dpif *ofproto, uint32_t group_id,
-                  struct group_dpif **group)
+                  ovs_version_t version, bool take_ref)
 {
-    struct ofgroup *ofgroup;
-    bool found;
-
-    found = ofproto_group_lookup(&ofproto->up, group_id, &ofgroup);
-    *group = found ?  group_dpif_cast(ofgroup) : NULL;
-
-    return found;
+    struct ofgroup *ofgroup = ofproto_group_lookup(&ofproto->up, group_id,
+                                                   version, take_ref);
+    return ofgroup ? group_dpif_cast(ofgroup) : NULL;
 }
 
-void
-group_dpif_get_buckets(const struct group_dpif *group,
-                       const struct ovs_list **buckets)
+const struct ovs_list *
+group_dpif_get_buckets(const struct group_dpif *group)
 {
-    *buckets = &group->up.buckets;
+    return &group->up.buckets;
 }
 
 enum ofp11_group_type
@@ -4348,16 +4406,18 @@ group_dpif_get_selection_method(const struct group_dpif *group)
     return group->up.props.selection_method;
 }
 
-/* Sends 'packet' out 'ofport'.
+/* Sends 'packet' out 'ofport'. If 'port' is a tunnel and that tunnel type
+ * supports a notion of an OAM flag, sets it if 'oam' is true.
  * May modify 'packet'.
  * Returns 0 if successful, otherwise a positive errno value. */
 int
-ofproto_dpif_send_packet(const struct ofport_dpif *ofport, struct dp_packet *packet)
+ofproto_dpif_send_packet(const struct ofport_dpif *ofport, bool oam,
+                         struct dp_packet *packet)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofport->up.ofproto);
     int error;
 
-    error = xlate_send_packet(ofport, packet);
+    error = xlate_send_packet(ofport, oam, packet);
 
     ovs_mutex_lock(&ofproto->stats_mutex);
     ofproto->stats.tx_packets++;
@@ -4391,10 +4451,10 @@ get_datapath_version(const struct ofproto *ofproto_)
 
 static bool
 set_frag_handling(struct ofproto *ofproto_,
-                  enum ofp_config_flags frag_handling)
+                  enum ofputil_frag_handling frag_handling)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
-    if (frag_handling != OFPC_FRAG_REASM) {
+    if (frag_handling != OFPUTIL_FRAG_REASM) {
         ofproto->backer->need_revalidate = REV_RECONFIGURE;
         return true;
     } else {
@@ -4412,6 +4472,50 @@ packet_out(struct ofproto *ofproto_, struct dp_packet *packet,
     ofproto_dpif_execute_actions(ofproto, flow, NULL, ofpacts,
                                  ofpacts_len, packet);
     return 0;
+}
+
+static enum ofperr
+nxt_resume(struct ofproto *ofproto_,
+           const struct ofputil_packet_in_private *pin)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    /* Translate pin into datapath actions. */
+    uint64_t odp_actions_stub[1024 / 8];
+    struct ofpbuf odp_actions = OFPBUF_STUB_INITIALIZER(odp_actions_stub);
+    enum slow_path_reason slow;
+    enum ofperr error = xlate_resume(ofproto, pin, &odp_actions, &slow);
+
+    /* Steal 'pin->packet' and put it into a dp_packet. */
+    struct dp_packet packet;
+    dp_packet_init(&packet, pin->public.packet_len);
+    dp_packet_put(&packet, pin->public.packet, pin->public.packet_len);
+
+    pkt_metadata_from_flow(&packet.md, &pin->public.flow_metadata.flow);
+
+    /* Fix up in_port. */
+    ofproto_dpif_set_packet_odp_port(ofproto,
+                                     pin->public.flow_metadata.flow.in_port.ofp_port,
+                                     &packet);
+
+    struct flow headers;
+    flow_extract(&packet, &headers);
+
+    /* Execute the datapath actions on the packet. */
+    struct dpif_execute execute = {
+        .actions = odp_actions.data,
+        .actions_len = odp_actions.size,
+        .needs_help = (slow & SLOW_ACTION) != 0,
+        .packet = &packet,
+        .flow = &headers,
+    };
+    dpif_execute(ofproto->backer->dpif, &execute);
+
+    /* Clean up. */
+    ofpbuf_uninit(&odp_actions);
+    dp_packet_uninit(&packet);
+
+    return error;
 }
 
 /* NetFlow. */
@@ -4519,7 +4623,7 @@ ofproto_unixctl_mcast_snooping_flush(struct unixctl_conn *conn, int argc,
 static struct ofport_dpif *
 ofbundle_get_a_port(const struct ofbundle *bundle)
 {
-    return CONTAINER_OF(list_front(&bundle->ports), struct ofport_dpif,
+    return CONTAINER_OF(ovs_list_front(&bundle->ports), struct ofport_dpif,
                         bundle_node);
 }
 
@@ -4705,62 +4809,63 @@ trace_format_megaflow(struct ds *result, int level, const char *title,
     ds_put_char(result, '\n');
 }
 
-static void trace_report(struct xlate_in *, int recurse,
+static void trace_report(struct xlate_in *, int indentation,
                          const char *format, ...)
     OVS_PRINTF_FORMAT(3, 4);
-static void trace_report_valist(struct xlate_in *, int recurse,
+static void trace_report_valist(struct xlate_in *, int indentation,
                                 const char *format, va_list args)
     OVS_PRINTF_FORMAT(3, 0);
 
 static void
-trace_resubmit(struct xlate_in *xin, struct rule_dpif *rule, int recurse)
+trace_resubmit(struct xlate_in *xin, struct rule_dpif *rule, int indentation)
 {
     struct trace_ctx *trace = CONTAINER_OF(xin, struct trace_ctx, xin);
     struct ds *result = trace->result;
 
-    if (!recurse) {
+    if (!indentation) {
         if (rule == xin->ofproto->miss_rule) {
-            trace_report(xin, recurse,
+            trace_report(xin, indentation,
                          "No match, flow generates \"packet in\"s.");
         } else if (rule == xin->ofproto->no_packet_in_rule) {
-            trace_report(xin, recurse, "No match, packets dropped because "
+            trace_report(xin, indentation, "No match, packets dropped because "
                          "OFPPC_NO_PACKET_IN is set on in_port.");
         } else if (rule == xin->ofproto->drop_frags_rule) {
-            trace_report(xin, recurse, "Packets dropped because they are IP "
-                         "fragments and the fragment handling mode is "
-                         "\"drop\".");
+            trace_report(xin, indentation,
+                         "Packets dropped because they are IP fragments and "
+                         "the fragment handling mode is \"drop\".");
         }
     }
 
     ds_put_char(result, '\n');
-    if (recurse) {
-        trace_format_flow(result, recurse, "Resubmitted flow", trace);
-        trace_format_regs(result, recurse, "Resubmitted regs", trace);
-        trace_format_odp(result,  recurse, "Resubmitted  odp", trace);
-        trace_format_megaflow(result, recurse, "Resubmitted megaflow", trace);
+    if (indentation) {
+        trace_format_flow(result, indentation, "Resubmitted flow", trace);
+        trace_format_regs(result, indentation, "Resubmitted regs", trace);
+        trace_format_odp(result,  indentation, "Resubmitted  odp", trace);
+        trace_format_megaflow(result, indentation, "Resubmitted megaflow",
+                              trace);
     }
-    trace_format_rule(result, recurse, rule);
+    trace_format_rule(result, indentation, rule);
 }
 
 static void
-trace_report_valist(struct xlate_in *xin, int recurse,
+trace_report_valist(struct xlate_in *xin, int indentation,
                     const char *format, va_list args)
 {
     struct trace_ctx *trace = CONTAINER_OF(xin, struct trace_ctx, xin);
     struct ds *result = trace->result;
 
-    ds_put_char_multiple(result, '\t', recurse);
+    ds_put_char_multiple(result, '\t', indentation);
     ds_put_format_valist(result, format, args);
     ds_put_char(result, '\n');
 }
 
 static void
-trace_report(struct xlate_in *xin, int recurse, const char *format, ...)
+trace_report(struct xlate_in *xin, int indentation, const char *format, ...)
 {
     va_list args;
 
     va_start(args, format);
-    trace_report_valist(xin, recurse, format, args);
+    trace_report_valist(xin, indentation, format, args);
     va_end(args);
 }
 
@@ -4856,9 +4961,6 @@ parse_flow_and_packet(int argc, const char *argv[],
             error = "Invalid datapath flow";
             goto exit;
         }
-
-        vsp_adjust_flow(*ofprotop, flow, NULL);
-
     } else {
         char *err = parse_ofp_exact_flow(flow, NULL, argv[argc - 1], NULL);
 
@@ -5063,6 +5165,7 @@ ofproto_trace(struct ofproto_dpif *ofproto, struct flow *flow,
 
     error = xlate_actions(&trace.xin, &trace.xout);
     ds_put_char(ds, '\n');
+    trace.xin.flow.actset_output = 0;
     trace_format_flow(ds, 0, "Final flow", &trace);
     trace_format_megaflow(ds, 0, "Megaflow", &trace);
 
@@ -5324,6 +5427,24 @@ disable_tnl_push_pop(struct unixctl_conn *conn OVS_UNUSED, int argc OVS_UNUSED,
 }
 
 static void
+disable_datapath_truncate(struct unixctl_conn *conn OVS_UNUSED,
+                          int argc OVS_UNUSED,
+                          const char *argv[] OVS_UNUSED,
+                          void *aux OVS_UNUSED)
+{
+    const struct shash_node **backers;
+    int i;
+
+    backers = shash_sort(&all_dpif_backers);
+    for (i = 0; i < shash_count(&all_dpif_backers); i++) {
+        struct dpif_backer *backer = backers[i]->data;
+        backer->support.trunc = false;
+    }
+    free(backers);
+    unixctl_command_reply(conn, "Datapath truncate action diabled");
+}
+
+static void
 ofproto_unixctl_init(void)
 {
     static bool registered;
@@ -5357,6 +5478,9 @@ ofproto_unixctl_init(void)
 
     unixctl_command_register("ofproto/tnl-push-pop", "[on]|[off]", 1, 1,
                              disable_tnl_push_pop, NULL);
+
+    unixctl_command_register("dpif/disable-truncate", "", 0, 0,
+                             disable_datapath_truncate, NULL);
 }
 
 /* Returns true if 'table' is the table used for internal rules,
@@ -5367,239 +5491,6 @@ table_is_internal(uint8_t table_id)
     return table_id == TBL_INTERNAL;
 }
 
-/* Linux VLAN device support (e.g. "eth0.10" for VLAN 10.)
- *
- * This is deprecated.  It is only for compatibility with broken device drivers
- * in old versions of Linux that do not properly support VLANs when VLAN
- * devices are not used.  When broken device drivers are no longer in
- * widespread use, we will delete these interfaces. */
-
-static int
-set_realdev(struct ofport *ofport_, ofp_port_t realdev_ofp_port, int vid)
-{
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofport_->ofproto);
-    struct ofport_dpif *ofport = ofport_dpif_cast(ofport_);
-
-    if (realdev_ofp_port == ofport->realdev_ofp_port
-        && vid == ofport->vlandev_vid) {
-        return 0;
-    }
-
-    ofproto->backer->need_revalidate = REV_RECONFIGURE;
-
-    if (ofport->realdev_ofp_port) {
-        vsp_remove(ofport);
-    }
-    if (realdev_ofp_port && ofport->bundle) {
-        /* vlandevs are enslaved to their realdevs, so they are not allowed to
-         * themselves be part of a bundle. */
-        bundle_set(ofport_->ofproto, ofport->bundle, NULL);
-    }
-
-    ofport->realdev_ofp_port = realdev_ofp_port;
-    ofport->vlandev_vid = vid;
-
-    if (realdev_ofp_port) {
-        vsp_add(ofport, realdev_ofp_port, vid);
-    }
-
-    return 0;
-}
-
-static uint32_t
-hash_realdev_vid(ofp_port_t realdev_ofp_port, int vid)
-{
-    return hash_2words(ofp_to_u16(realdev_ofp_port), vid);
-}
-
-bool
-ofproto_has_vlan_splinters(const struct ofproto_dpif *ofproto)
-    OVS_EXCLUDED(ofproto->vsp_mutex)
-{
-    /* hmap_is_empty is thread safe. */
-    return !hmap_is_empty(&ofproto->realdev_vid_map);
-}
-
-
-static ofp_port_t
-vsp_realdev_to_vlandev__(const struct ofproto_dpif *ofproto,
-                         ofp_port_t realdev_ofp_port, ovs_be16 vlan_tci)
-    OVS_REQUIRES(ofproto->vsp_mutex)
-{
-    if (!hmap_is_empty(&ofproto->realdev_vid_map)) {
-        int vid = vlan_tci_to_vid(vlan_tci);
-        const struct vlan_splinter *vsp;
-
-        HMAP_FOR_EACH_WITH_HASH (vsp, realdev_vid_node,
-                                 hash_realdev_vid(realdev_ofp_port, vid),
-                                 &ofproto->realdev_vid_map) {
-            if (vsp->realdev_ofp_port == realdev_ofp_port
-                && vsp->vid == vid) {
-                return vsp->vlandev_ofp_port;
-            }
-        }
-    }
-    return realdev_ofp_port;
-}
-
-/* Returns the OFP port number of the Linux VLAN device that corresponds to
- * 'vlan_tci' on the network device with port number 'realdev_ofp_port' in
- * 'struct ofport_dpif'.  For example, given 'realdev_ofp_port' of eth0 and
- * 'vlan_tci' 9, it would return the port number of eth0.9.
- *
- * Unless VLAN splinters are enabled for port 'realdev_ofp_port', this
- * function just returns its 'realdev_ofp_port' argument. */
-ofp_port_t
-vsp_realdev_to_vlandev(const struct ofproto_dpif *ofproto,
-                       ofp_port_t realdev_ofp_port, ovs_be16 vlan_tci)
-    OVS_EXCLUDED(ofproto->vsp_mutex)
-{
-    ofp_port_t ret;
-
-    /* hmap_is_empty is thread safe, see if we can return immediately. */
-    if (hmap_is_empty(&ofproto->realdev_vid_map)) {
-        return realdev_ofp_port;
-    }
-    ovs_mutex_lock(&ofproto->vsp_mutex);
-    ret = vsp_realdev_to_vlandev__(ofproto, realdev_ofp_port, vlan_tci);
-    ovs_mutex_unlock(&ofproto->vsp_mutex);
-    return ret;
-}
-
-static struct vlan_splinter *
-vlandev_find(const struct ofproto_dpif *ofproto, ofp_port_t vlandev_ofp_port)
-{
-    struct vlan_splinter *vsp;
-
-    HMAP_FOR_EACH_WITH_HASH (vsp, vlandev_node,
-                             hash_ofp_port(vlandev_ofp_port),
-                             &ofproto->vlandev_map) {
-        if (vsp->vlandev_ofp_port == vlandev_ofp_port) {
-            return vsp;
-        }
-    }
-
-    return NULL;
-}
-
-/* Returns the OpenFlow port number of the "real" device underlying the Linux
- * VLAN device with OpenFlow port number 'vlandev_ofp_port' and stores the
- * VLAN VID of the Linux VLAN device in '*vid'.  For example, given
- * 'vlandev_ofp_port' of eth0.9, it would return the OpenFlow port number of
- * eth0 and store 9 in '*vid'.
- *
- * Returns 0 and does not modify '*vid' if 'vlandev_ofp_port' is not a Linux
- * VLAN device.  Unless VLAN splinters are enabled, this is what this function
- * always does.*/
-static ofp_port_t
-vsp_vlandev_to_realdev(const struct ofproto_dpif *ofproto,
-                       ofp_port_t vlandev_ofp_port, int *vid)
-    OVS_REQUIRES(ofproto->vsp_mutex)
-{
-    if (!hmap_is_empty(&ofproto->vlandev_map)) {
-        const struct vlan_splinter *vsp;
-
-        vsp = vlandev_find(ofproto, vlandev_ofp_port);
-        if (vsp) {
-            if (vid) {
-                *vid = vsp->vid;
-            }
-            return vsp->realdev_ofp_port;
-        }
-    }
-    return 0;
-}
-
-/* Given 'flow', a flow representing a packet received on 'ofproto', checks
- * whether 'flow->in_port' represents a Linux VLAN device.  If so, changes
- * 'flow->in_port' to the "real" device backing the VLAN device, sets
- * 'flow->vlan_tci' to the VLAN VID, and returns true.  Optionally pushes the
- * appropriate VLAN on 'packet' if provided.  Otherwise (which is always the
- * case unless VLAN splinters are enabled), returns false without making any
- * changes. */
-bool
-vsp_adjust_flow(const struct ofproto_dpif *ofproto, struct flow *flow,
-                struct dp_packet *packet)
-    OVS_EXCLUDED(ofproto->vsp_mutex)
-{
-    ofp_port_t realdev;
-    int vid;
-
-    /* hmap_is_empty is thread safe. */
-    if (hmap_is_empty(&ofproto->vlandev_map)) {
-        return false;
-    }
-
-    ovs_mutex_lock(&ofproto->vsp_mutex);
-    realdev = vsp_vlandev_to_realdev(ofproto, flow->in_port.ofp_port, &vid);
-    ovs_mutex_unlock(&ofproto->vsp_mutex);
-    if (!realdev) {
-        return false;
-    }
-
-    /* Cause the flow to be processed as if it came in on the real device with
-     * the VLAN device's VLAN ID. */
-    flow->in_port.ofp_port = realdev;
-    flow->vlan_tci = htons((vid & VLAN_VID_MASK) | VLAN_CFI);
-
-    if (packet) {
-        /* Make the packet resemble the flow, so that it gets sent to an
-         * OpenFlow controller properly, so that it looks correct for sFlow,
-         * and so that flow_extract() will get the correct vlan_tci if it is
-         * called on 'packet'. */
-        eth_push_vlan(packet, htons(ETH_TYPE_VLAN), flow->vlan_tci);
-    }
-
-    return true;
-}
-
-static void
-vsp_remove(struct ofport_dpif *port)
-{
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(port->up.ofproto);
-    struct vlan_splinter *vsp;
-
-    ovs_mutex_lock(&ofproto->vsp_mutex);
-    vsp = vlandev_find(ofproto, port->up.ofp_port);
-    if (vsp) {
-        hmap_remove(&ofproto->vlandev_map, &vsp->vlandev_node);
-        hmap_remove(&ofproto->realdev_vid_map, &vsp->realdev_vid_node);
-        free(vsp);
-
-        port->realdev_ofp_port = 0;
-    } else {
-        VLOG_ERR("missing vlan device record");
-    }
-    ovs_mutex_unlock(&ofproto->vsp_mutex);
-}
-
-static void
-vsp_add(struct ofport_dpif *port, ofp_port_t realdev_ofp_port, int vid)
-{
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(port->up.ofproto);
-
-    ovs_mutex_lock(&ofproto->vsp_mutex);
-    if (!vsp_vlandev_to_realdev(ofproto, port->up.ofp_port, NULL)
-        && (vsp_realdev_to_vlandev__(ofproto, realdev_ofp_port, htons(vid))
-            == realdev_ofp_port)) {
-        struct vlan_splinter *vsp;
-
-        vsp = xmalloc(sizeof *vsp);
-        vsp->realdev_ofp_port = realdev_ofp_port;
-        vsp->vlandev_ofp_port = port->up.ofp_port;
-        vsp->vid = vid;
-
-        port->realdev_ofp_port = realdev_ofp_port;
-
-        hmap_insert(&ofproto->vlandev_map, &vsp->vlandev_node,
-                    hash_ofp_port(port->up.ofp_port));
-        hmap_insert(&ofproto->realdev_vid_map, &vsp->realdev_vid_node,
-                    hash_realdev_vid(realdev_ofp_port, vid));
-    } else {
-        VLOG_ERR("duplicate vlan device record");
-    }
-    ovs_mutex_unlock(&ofproto->vsp_mutex);
-}
 
 static odp_port_t
 ofp_port_to_odp_port(const struct ofproto_dpif *ofproto, ofp_port_t ofp_port)
@@ -5646,29 +5537,22 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
                                const struct ofpbuf *ofpacts,
                                struct rule **rulep)
 {
-    struct ofproto_flow_mod ofm;
+    struct ofputil_flow_mod fm;
     struct rule_dpif *rule;
     int error;
 
-    ofm.fm.match = *match;
-    ofm.fm.priority = priority;
-    ofm.fm.new_cookie = htonll(0);
-    ofm.fm.cookie = htonll(0);
-    ofm.fm.cookie_mask = htonll(0);
-    ofm.fm.modify_cookie = false;
-    ofm.fm.table_id = TBL_INTERNAL;
-    ofm.fm.command = OFPFC_ADD;
-    ofm.fm.idle_timeout = idle_timeout;
-    ofm.fm.hard_timeout = 0;
-    ofm.fm.importance = 0;
-    ofm.fm.buffer_id = 0;
-    ofm.fm.out_port = 0;
-    ofm.fm.flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY;
-    ofm.fm.ofpacts = ofpacts->data;
-    ofm.fm.ofpacts_len = ofpacts->size;
-    ofm.fm.delete_reason = OVS_OFPRR_NONE;
+    fm = (struct ofputil_flow_mod) {
+        .match = *match,
+        .priority = priority,
+        .table_id = TBL_INTERNAL,
+        .command = OFPFC_ADD,
+        .idle_timeout = idle_timeout,
+        .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
+        .ofpacts = ofpacts->data,
+        .ofpacts_len = ofpacts->size,
+    };
 
-    error = ofproto_flow_mod(&ofproto->up, &ofm);
+    error = ofproto_flow_mod(&ofproto->up, &fm);
     if (error) {
         VLOG_ERR_RL(&rl, "failed to add internal flow (%s)",
                     ofperr_to_string(error));
@@ -5678,8 +5562,8 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
 
     rule = rule_dpif_lookup_in_table(ofproto,
                                      ofproto_dpif_get_tables_version(ofproto),
-                                     TBL_INTERNAL, &ofm.fm.match.flow,
-                                     &ofm.fm.match.wc);
+                                     TBL_INTERNAL, &fm.match.flow,
+                                     &fm.match.wc);
     if (rule) {
         *rulep = &rule->up;
     } else {
@@ -5692,20 +5576,18 @@ int
 ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
                                   struct match *match, int priority)
 {
-    struct ofproto_flow_mod ofm;
+    struct ofputil_flow_mod fm;
     int error;
 
-    ofm.fm.match = *match;
-    ofm.fm.priority = priority;
-    ofm.fm.new_cookie = htonll(0);
-    ofm.fm.cookie = htonll(0);
-    ofm.fm.cookie_mask = htonll(0);
-    ofm.fm.modify_cookie = false;
-    ofm.fm.table_id = TBL_INTERNAL;
-    ofm.fm.flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY;
-    ofm.fm.command = OFPFC_DELETE_STRICT;
+    fm = (struct ofputil_flow_mod) {
+        .match = *match,
+        .priority = priority,
+        .table_id = TBL_INTERNAL,
+        .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
+        .command = OFPFC_DELETE_STRICT,
+    };
 
-    error = ofproto_flow_mod(&ofproto->up, &ofm);
+    error = ofproto_flow_mod(&ofproto->up, &fm);
     if (error) {
         VLOG_ERR_RL(&rl, "failed to delete internal flow (%s)",
                     ofperr_to_string(error));
@@ -5713,6 +5595,12 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
     }
 
     return 0;
+}
+
+const struct uuid *
+ofproto_dpif_get_uuid(const struct ofproto_dpif *ofproto)
+{
+    return &ofproto->uuid;
 }
 
 const struct ofproto_class ofproto_dpif_class = {
@@ -5728,7 +5616,7 @@ const struct ofproto_class ofproto_dpif_class = {
     destruct,
     dealloc,
     run,
-    wait,
+    ofproto_dpif_wait,
     NULL,                       /* get_memory_usage. */
     type_get_memory_usage,
     flush,
@@ -5743,6 +5631,7 @@ const struct ofproto_class ofproto_dpif_class = {
     port_query_by_name,
     port_add,
     port_del,
+    port_set_config,
     port_get_stats,
     port_dump_start,
     port_dump_next,
@@ -5755,17 +5644,19 @@ const struct ofproto_class ofproto_dpif_class = {
     rule_alloc,
     rule_construct,
     rule_insert,
-    rule_delete,
+    NULL,                       /* rule_delete */
     rule_destruct,
     rule_dealloc,
     rule_get_stats,
     rule_execute,
     set_frag_handling,
     packet_out,
+    nxt_resume,
     set_netflow,
     get_netflow_ids,
     set_sflow,
     set_ipfix,
+    get_ipfix_stats,
     set_cfm,
     cfm_status_changed,
     get_cfm_status,
@@ -5799,7 +5690,6 @@ const struct ofproto_class ofproto_dpif_class = {
     set_mac_table_config,
     set_mcast_snooping,
     set_mcast_snooping_port,
-    set_realdev,
     NULL,                       /* meter_get_features */
     NULL,                       /* meter_set */
     NULL,                       /* meter_get */

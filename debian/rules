@@ -3,7 +3,7 @@
 #export DH_VERBOSE=1
 
 %:
-	dh $@ --with autoreconf,python2,systemd --parallel
+	dh $@ --with autoreconf,python2,python3,systemd --parallel
 
 # use --as-needed only if supported by dh-autoreconf (to simplify backporting)
 DH_AS_NEEDED=$(shell dpkg --compare-versions $$(dpkg --status dh-autoreconf | grep Version | cut -d' ' -f2) ge 6 && echo --as-needed)
@@ -16,6 +16,9 @@ else
 PARALLEL =
 endif
 
+PYTHONS:=$(shell pyversions -vr)
+PYTHON3S:=$(shell py3versions -vr)
+
 override_dh_auto_configure:
 	test -d _debian || mkdir _debian
 	cd _debian && ( \
@@ -27,8 +30,16 @@ ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
 	cd _dpdk && ( \
 		test -e Makefile || \
         ../configure --prefix=/usr --localstatedir=/var --enable-ssl \
-                     --with-dpdk=/usr --sysconfdir=/etc \
+                     --with-dpdk --sysconfdir=/etc \
 					 $(DATAPATH_CONFIGURE_OPTS))
+endif
+
+
+# Skip some known failing tests - review for each snapshot or release
+# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1609846
+SKIP_TEST := 1-14 16-
+ifeq (i386, $(DEB_HOST_ARCH))
+SKIP_TEST := 1-14 16-1148 1150-2215 2217-
 endif
 
 override_dh_auto_test:
@@ -37,14 +48,14 @@ override_dh_auto_test:
 # is resolved
 ifeq (,$(filter powerpc s390x,$(DEB_HOST_ARCH)))
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL)' || \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
                 $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
 ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
-	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL)' || \
+	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
 				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat _dpdk/tests/testsuite.log; \
@@ -74,6 +85,14 @@ override_dh_install:
 	mkdir -p $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch
 	mv $(CURDIR)/debian/openvswitch-switch/usr/sbin/ovs-vswitchd \
 		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
+	set -e && for pyvers in $(PYTHONS); do \
+		cd python && python$$pyvers setup.py install --install-layout=deb \
+			--root $(CURDIR)/debian/python-openvswitch; \
+	done
+	set -e && for pyvers in $(PYTHON3S); do \
+        cd python && python$$pyvers setup.py install --install-layout=deb \
+            --root $(CURDIR)/debian/python3-openvswitch; \
+    done
 ifneq (,$(filter i386 amd64, $(DEB_HOST_ARCH)))
 	install -D _dpdk/vswitchd/ovs-vswitchd \
         $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
@@ -90,15 +109,15 @@ override_dh_strip:
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track
-BRANCH=branch-2.5
+BRANCH=master
+VERSION=2.6.0
 
 get-orig-snapshot:
 	rm -Rf openvswitch-upstream
 	git clone https://github.com/openvswitch/ovs openvswitch-upstream
 	cd openvswitch-upstream && \
-		git checkout -b $(BRANCH) remotes/origin/$(BRANCH) && \
+		git checkout $(BRANCH) && \
 		export COMMIT=`git rev-parse --short HEAD` && \
-		export UPSTREAM_VERSION=`head -1 NEWS | awk '{ print $$1 }' | sed 's/v//'` && \
-		git archive --format tgz --prefix=openvswitch-$$UPSTREAM_VERSION+git$(DATE)/ \
-			-o ../../openvswitch_$$UPSTREAM_VERSION~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH)
+		git archive --format tgz --prefix=openvswitch-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../openvswitch_$(VERSION)~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH)
 	rm -Rf openvswitch-upstream

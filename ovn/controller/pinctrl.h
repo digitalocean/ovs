@@ -1,5 +1,5 @@
 
-/* Copyright (c) 2015 Nicira, Inc.
+/* Copyright (c) 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,21 +14,24 @@
  * limitations under the License.
  */
 
-#ifndef DHCP_H
-#define DHCP_H 1
+#ifndef PINCTRL_H
+#define PINCTRL_H 1
 
 #include <stdint.h>
 
-#include "meta-flow.h"
+#include "openvswitch/meta-flow.h"
 
+struct hmap;
+struct lport_index;
 struct ovsrec_bridge;
 struct controller_ctx;
 
-/* Interface for OVN main loop. */
 void pinctrl_init(void);
-void pinctrl_run(struct controller_ctx *ctx,
-                 const struct ovsrec_bridge *br_int);
-void pinctrl_wait(void);
+void pinctrl_run(struct controller_ctx *, const struct lport_index *,
+                 const struct ovsrec_bridge *,
+                 const char *chassis_id,
+                 struct hmap *local_datapaths);
+void pinctrl_wait(struct controller_ctx *);
 void pinctrl_destroy(void);
 
-#endif /* ovn/dhcp.h */
+#endif /* ovn/pinctrl.h */

@@ -46,7 +46,6 @@ EXTRA_DIST += \
 	debian/ovn-host.postrm \
 	debian/ovn-host.default \
 	debian/ovs-monitor-ipsec \
-	debian/python-openvswitch.install \
 	debian/rules \
 	debian/ifupdown.sh \
 	debian/source/format

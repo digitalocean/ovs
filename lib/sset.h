@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013, 2015 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #ifndef SSET_H
 #define SSET_H
 
-#include "hmap.h"
+#include "openvswitch/hmap.h"
 #include "util.h"
 
 #ifdef __cplusplus
@@ -43,6 +43,9 @@ void sset_clone(struct sset *, const struct sset *);
 void sset_swap(struct sset *, struct sset *);
 void sset_moved(struct sset *);
 
+void sset_from_delimited_string(struct sset *, const char *s,
+                                const char *delimiters);
+
 /* Count. */
 bool sset_is_empty(const struct sset *);
 size_t sset_count(const struct sset *);
@@ -64,8 +67,13 @@ char *sset_pop(struct sset *);
 struct sset_node *sset_find(const struct sset *, const char *);
 bool sset_contains(const struct sset *, const char *);
 bool sset_equals(const struct sset *, const struct sset *);
+
+struct sset_position {
+    struct hmap_position pos;
+};
+
 struct sset_node *sset_at_position(const struct sset *,
-                                   uint32_t *bucketp, uint32_t *offsetp);
+                                   struct sset_position *);
 
 /* Set operations. */
 void sset_intersect(struct sset *, const struct sset *);
@@ -95,10 +103,13 @@ const char **sset_sort(const struct sset *);
     ? NULL                                  \
     : (CONST_CAST(const char *, (SSET_NODE_FROM_HMAP_NODE(HMAP_NODE)->name)))
 #define SSET_NODE_FROM_NAME(NAME) CONTAINER_OF(NAME, struct sset_node, name)
-#define SSET_FIRST(SSET) SSET_NAME_FROM_HMAP_NODE(hmap_first(&(SSET)->map))
+#define SSET_FIRST(SSET)                                    \
+    (BUILD_ASSERT_TYPE(SSET, struct sset *),                \
+     SSET_NAME_FROM_HMAP_NODE(hmap_first(&(SSET)->map)))
 #define SSET_NEXT(SSET, NAME)                                           \
-    SSET_NAME_FROM_HMAP_NODE(                                           \
-        hmap_next(&(SSET)->map, &SSET_NODE_FROM_NAME(NAME)->hmap_node))
+    (BUILD_ASSERT_TYPE(SSET, struct sset *),                            \
+     SSET_NAME_FROM_HMAP_NODE(                                          \
+         hmap_next(&(SSET)->map, &SSET_NODE_FROM_NAME(NAME)->hmap_node)))
 
 #ifdef __cplusplus
 }

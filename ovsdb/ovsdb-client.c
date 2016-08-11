@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,9 +30,9 @@
 #include "compiler.h"
 #include "daemon.h"
 #include "dirs.h"
-#include "dynamic-string.h"
+#include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
-#include "json.h"
+#include "openvswitch/json.h"
 #include "jsonrpc.h"
 #include "lib/table.h"
 #include "ovsdb.h"
@@ -44,6 +44,8 @@
 #include "stream.h"
 #include "stream-ssl.h"
 #include "table.h"
+#include "monitor.h"
+#include "condition.h"
 #include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
@@ -83,7 +85,7 @@ int
 main(int argc, char *argv[])
 {
     const struct ovsdb_client_command *command;
-    const char *database;
+    char *database;
     struct jsonrpc *rpc;
 
     ovs_cmdl_proctitle_init(argc, argv);
@@ -127,12 +129,13 @@ main(int argc, char *argv[])
         fetch_dbs(rpc, &dbs);
         if (argc - optind > command->min_args
             && svec_contains(&dbs, argv[optind])) {
-            database = argv[optind++];
+            database = xstrdup(argv[optind++]);
         } else if (dbs.n == 1) {
             database = xstrdup(dbs.names[0]);
         } else if (svec_contains(&dbs, "Open_vSwitch")) {
-            database = "Open_vSwitch";
+            database = xstrdup("Open_vSwitch");
         } else {
+            jsonrpc_close(rpc);
             ovs_fatal(0, "no default database for `%s' command, please "
                       "specify a database name", command->name);
         }
@@ -143,12 +146,14 @@ main(int argc, char *argv[])
 
     if (argc - optind < command->min_args ||
         argc - optind > command->max_args) {
+        free(database);
         VLOG_FATAL("invalid syntax for '%s' (use --help for help)",
                     command->name);
     }
 
     command->handler(rpc, database, argc - optind, argv + optind);
 
+    free(database);
     jsonrpc_close(rpc);
 
     if (ferror(stdout)) {
@@ -253,11 +258,22 @@ usage(void)
            "    monitor contents of COLUMNs in TABLE in DATABASE on SERVER.\n"
            "    COLUMNs may include !initial, !insert, !delete, !modify\n"
            "    to avoid seeing the specified kinds of changes.\n"
+           "\n  monitor-cond [SERVER] [DATABASE] CONDITION TABLE [COLUMN,...]...\n"
+           "    monitor contents that match CONDITION of COLUMNs in TABLE in\n"
+           "    DATABASE on SERVER.\n"
+           "    COLUMNs may include !initial, !insert, !delete, !modify\n"
+           "    to avoid seeing the specified kinds of changes.\n"
            "\n  monitor [SERVER] [DATABASE] ALL\n"
            "    monitor all changes to all columns in all tables\n"
            "    in DATBASE on SERVER.\n"
-           "\n  dump [SERVER] [DATABASE] [TABLE [COLUMN]...]\n"
+           "\n  dump [SERVER] [DATABASE]\n"
            "    dump contents of DATABASE on SERVER to stdout\n"
+           "\n  lock [SERVER] LOCK\n"
+           "    create or wait for LOCK in SERVER\n"
+           "\n  steal [SERVER] LOCK\n"
+           "    steal LOCK from SERVER\n"
+           "\n  unlock [SERVER] LOCK\n"
+           "    unlock LOCK from SERVER\n"
            "\nThe default SERVER is unix:%s/db.sock.\n"
            "The default DATABASE is Open_vSwitch.\n",
            program_name, program_name, ovs_rundir());
@@ -451,6 +467,7 @@ do_list_tables(struct jsonrpc *rpc, const char *database,
     }
     ovsdb_schema_destroy(schema);
     table_print(&t, &table_style);
+    table_destroy(&t);
 }
 
 static void
@@ -489,6 +506,7 @@ do_list_columns(struct jsonrpc *rpc, const char *database,
     }
     ovsdb_schema_destroy(schema);
     table_print(&t, &table_style);
+    table_destroy(&t);
 }
 
 static void
@@ -617,6 +635,100 @@ monitor_print(struct json *table_updates,
 }
 
 static void
+monitor2_print_row(struct json *row, const char *type, const char *uuid,
+                   const struct ovsdb_column_set *columns, struct table *t)
+{
+    if (!strcmp(type, "delete")) {
+        if (row->type != JSON_NULL) {
+            ovs_error(0, "delete method does not expect <row>");
+            return;
+        }
+
+        table_add_row(t);
+        table_add_cell(t)->text = xstrdup(uuid);
+        table_add_cell(t)->text = xstrdup(type);
+    } else {
+        if (!row || row->type != JSON_OBJECT) {
+            ovs_error(0, "<row> is not object");
+            return;
+        }
+        monitor_print_row(row, type, uuid, columns, t);
+    }
+}
+
+static void
+monitor2_print_table(struct json *table_update2,
+                    const struct monitored_table *mt, char *caption)
+{
+    const struct ovsdb_table_schema *table = mt->table;
+    const struct ovsdb_column_set *columns = &mt->columns;
+    struct shash_node *node;
+    struct table t;
+
+    if (table_update2->type != JSON_OBJECT) {
+        ovs_error(0, "<table-update> for table %s is not object", table->name);
+        return;
+    }
+
+    table_init(&t);
+    table_set_timestamp(&t, timestamp);
+    table_set_caption(&t, caption);
+
+    table_add_column(&t, "row");
+    table_add_column(&t, "action");
+    for (size_t i = 0; i < columns->n_columns; i++) {
+        table_add_column(&t, "%s", columns->columns[i]->name);
+    }
+    SHASH_FOR_EACH (node, json_object(table_update2)) {
+        struct json *row_update2 = node->data;
+        const char *operation;
+        struct json *row;
+        const char *ops[] = {"delete", "initial", "modify", "insert"};
+
+        if (row_update2->type != JSON_OBJECT) {
+            ovs_error(0, "<row-update2> is not object");
+            continue;
+        }
+
+        /* row_update2 contains one of objects indexed by ops[] */
+        for (int i = 0; i < ARRAY_SIZE(ops); i++) {
+            operation = ops[i];
+            row = shash_find_data(json_object(row_update2), operation);
+
+            if (row) {
+                monitor2_print_row(row, operation, node->name, columns, &t);
+                break;
+            }
+        }
+    }
+    table_print(&t, &table_style);
+    table_destroy(&t);
+}
+
+static void
+monitor2_print(struct json *table_updates2,
+               const struct monitored_table *mts, size_t n_mts)
+{
+    size_t i;
+
+    if (table_updates2->type != JSON_OBJECT) {
+        ovs_error(0, "<table-updates2> is not object");
+        return;
+    }
+
+    for (i = 0; i < n_mts; i++) {
+        const struct monitored_table *mt = &mts[i];
+        struct json *table_update = shash_find_data(
+                                        json_object(table_updates2),
+                                        mt->table->name);
+        if (table_update) {
+            monitor2_print_table(table_update, mt,
+                                n_mts > 1 ? xstrdup(mt->table->name) : NULL);
+        }
+    }
+}
+
+static void
 add_column(const char *server, const struct ovsdb_column *column,
            struct ovsdb_column_set *columns, struct json *columns_json)
 {
@@ -735,14 +847,41 @@ ovsdb_client_unblock(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+ovsdb_client_cond_change(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                     const char *argv[], void *rpc_)
+{
+    struct jsonrpc *rpc = rpc_;
+    struct json *monitor_cond_update_requests = json_object_create();
+    struct json *monitor_cond_update_request = json_object_create();
+    struct json *params;
+    struct jsonrpc_msg *request;
+
+    json_object_put(monitor_cond_update_request, "where",
+                    json_from_string(argv[2]));
+    json_object_put(monitor_cond_update_requests,
+                    argv[1],
+                    json_array_create_1(monitor_cond_update_request));
+
+    params = json_array_create_3(json_null_create(),json_null_create(),
+                                 monitor_cond_update_requests);
+
+    request = jsonrpc_create_request("monitor_cond_change", params, NULL);
+    jsonrpc_send(rpc, request);
+
+    VLOG_DBG("cond change %s %s", argv[1], argv[2]);
+    unixctl_command_reply(conn, "condiiton changed");
+}
+
+static void
 add_monitored_table(int argc, char *argv[],
                     const char *server, const char *database,
+                    struct json *condition,
                     struct ovsdb_table_schema *table,
                     struct json *monitor_requests,
                     struct monitored_table **mts,
                     size_t *n_mts, size_t *allocated_mts)
 {
-    struct json *monitor_request_array;
+    struct json *monitor_request_array, *mr;
     struct monitored_table *mt;
 
     if (*n_mts >= *allocated_mts) {
@@ -757,27 +896,46 @@ add_monitored_table(int argc, char *argv[],
         int i;
 
         for (i = 1; i < argc; i++) {
-            json_array_add(
-                monitor_request_array,
-                parse_monitor_columns(argv[i], server, database, table,
-                                      &mt->columns));
+            mr = parse_monitor_columns(argv[i], server, database, table,
+                                       &mt->columns);
+            if (i == 1 && condition) {
+                json_object_put(mr, "where", condition);
+            }
+            json_array_add(monitor_request_array, mr);
         }
     } else {
         /* Allocate a writable empty string since parse_monitor_columns()
          * is going to strtok() it and that's risky with literal "". */
         char empty[] = "";
-        json_array_add(
-            monitor_request_array,
-            parse_monitor_columns(empty, server, database,
-                                  table, &mt->columns));
+
+        mr = parse_monitor_columns(empty, server, database,
+                                   table, &mt->columns);
+        if (condition) {
+            json_object_put(mr, "where", condition);
+        }
+        json_array_add(monitor_request_array, mr);
     }
 
     json_object_put(monitor_requests, table->name, monitor_request_array);
 }
 
 static void
-do_monitor(struct jsonrpc *rpc, const char *database,
-           int argc, char *argv[])
+destroy_monitored_table(struct monitored_table *mts, size_t n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        struct monitored_table *mt = &mts[i];
+        ovsdb_column_set_destroy(&mt->columns);
+    }
+
+    free(mts);
+}
+
+static void
+do_monitor__(struct jsonrpc *rpc, const char *database,
+             enum ovsdb_monitor_version version,
+             int argc, char *argv[], struct json *condition)
 {
     const char *server = jsonrpc_get_name(rpc);
     const char *table_name = argv[0];
@@ -790,6 +948,8 @@ do_monitor(struct jsonrpc *rpc, const char *database,
 
     struct monitored_table *mts;
     size_t n_mts, allocated_mts;
+
+    ovs_assert(version < OVSDB_MONITOR_VERSION_MAX);
 
     daemon_save_fd(STDOUT_FILENO);
     daemonize_start(false);
@@ -807,6 +967,8 @@ do_monitor(struct jsonrpc *rpc, const char *database,
                                  ovsdb_client_block, &blocked);
         unixctl_command_register("ovsdb-client/unblock", "", 0, 0,
                                  ovsdb_client_unblock, &blocked);
+        unixctl_command_register("ovsdb-client/cond_change", "TABLE COND", 2, 2,
+                                 ovsdb_client_cond_change, rpc);
     } else {
         unixctl = NULL;
     }
@@ -826,17 +988,21 @@ do_monitor(struct jsonrpc *rpc, const char *database,
                       server, database, table_name);
         }
 
-        add_monitored_table(argc, argv, server, database, table,
+        add_monitored_table(argc, argv, server, database, condition, table,
                             monitor_requests, &mts, &n_mts, &allocated_mts);
     } else {
         size_t n = shash_count(&schema->tables);
         const struct shash_node **nodes = shash_sort(&schema->tables);
         size_t i;
 
+        if (condition) {
+            ovs_fatal(0, "ALL tables are not allowed with condition");
+        }
+
         for (i = 0; i < n; i++) {
             struct ovsdb_table_schema *table = nodes[i]->data;
 
-            add_monitored_table(argc, argv, server, database, table,
+            add_monitored_table(argc, argv, server, database, NULL, table,
                                 monitor_requests,
                                 &mts, &n_mts, &allocated_mts);
         }
@@ -845,7 +1011,10 @@ do_monitor(struct jsonrpc *rpc, const char *database,
 
     monitor = json_array_create_3(json_string_create(database),
                                   json_null_create(), monitor_requests);
-    request = jsonrpc_create_request("monitor", monitor, NULL);
+    const char *method = version == OVSDB_MONITOR_V2 ? "monitor_cond"
+                                                     : "monitor";
+
+    request = jsonrpc_create_request(method, monitor, NULL);
     request_id = json_clone(request->id);
     jsonrpc_send(rpc, request);
 
@@ -867,7 +1036,17 @@ do_monitor(struct jsonrpc *rpc, const char *database,
                                                        msg->id));
             } else if (msg->type == JSONRPC_REPLY
                        && json_equal(msg->id, request_id)) {
-                monitor_print(msg->result, mts, n_mts, true);
+                switch(version) {
+                case OVSDB_MONITOR_V1:
+                    monitor_print(msg->result, mts, n_mts, true);
+                    break;
+                case OVSDB_MONITOR_V2:
+                    monitor2_print(msg->result, mts, n_mts);
+                    break;
+                case OVSDB_MONITOR_VERSION_MAX:
+                default:
+                    OVS_NOT_REACHED();
+                }
                 fflush(stdout);
                 daemonize_complete();
             } else if (msg->type == JSONRPC_NOTIFY
@@ -877,6 +1056,16 @@ do_monitor(struct jsonrpc *rpc, const char *database,
                     && params->u.array.n == 2
                     && params->u.array.elems[0]->type == JSON_NULL) {
                     monitor_print(params->u.array.elems[1], mts, n_mts, false);
+                    fflush(stdout);
+                }
+            } else if (msg->type == JSONRPC_NOTIFY
+                       && version == OVSDB_MONITOR_V2
+                       && !strcmp(msg->method, "update2")) {
+                struct json *params = msg->params;
+                if (params->type == JSON_ARRAY
+                    && params->u.array.n == 2
+                    && params->u.array.elems[0]->type == JSON_NULL) {
+                    monitor2_print(params->u.array.elems[1], mts, n_mts);
                     fflush(stdout);
                 }
             }
@@ -895,6 +1084,43 @@ do_monitor(struct jsonrpc *rpc, const char *database,
         unixctl_server_wait(unixctl);
         poll_block();
     }
+
+    json_destroy(request_id);
+    unixctl_server_destroy(unixctl);
+    ovsdb_schema_destroy(schema);
+    destroy_monitored_table(mts, n_mts);
+}
+
+static void
+do_monitor(struct jsonrpc *rpc, const char *database,
+           int argc, char *argv[])
+{
+    do_monitor__(rpc, database, OVSDB_MONITOR_V1, argc, argv, NULL);
+}
+
+static void
+do_monitor_cond(struct jsonrpc *rpc, const char *database,
+           int argc, char *argv[])
+{
+    struct ovsdb_condition cnd;
+    struct json *condition = NULL;
+    struct ovsdb_schema *schema;
+    struct ovsdb_table_schema *table;
+    const char *table_name = argv[1];
+
+    ovs_assert(argc > 1);
+    schema = fetch_schema(rpc, database);
+    table = shash_find_data(&schema->tables, table_name);
+    if (!table) {
+        ovs_fatal(0, "%s does not have a table named \"%s\"",
+                  database, table_name);
+    }
+    condition = parse_json(argv[0]);
+    check_ovsdb_error(ovsdb_condition_from_json(table, condition,
+                                                    NULL, &cnd));
+    ovsdb_condition_destroy(&cnd);
+    do_monitor__(rpc, database, OVSDB_MONITOR_V2, --argc, ++argv, condition);
+    ovsdb_schema_destroy(schema);
 }
 
 struct dump_table_aux {
@@ -1152,6 +1378,193 @@ do_help(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
     usage();
 }
 
+
+/* "lock" command. */
+
+struct ovsdb_client_lock_req {
+    const char *method;
+    char *lock;
+};
+
+static void
+lock_req_init(struct ovsdb_client_lock_req *lock_req,
+              const char *method, const char *lock_name)
+{
+    if (lock_req->method || lock_req->lock) {
+        return;
+    }
+    lock_req->method = method;
+    lock_req->lock = xstrdup(lock_name);
+}
+
+static bool
+lock_req_is_set(struct ovsdb_client_lock_req *lock_req)
+{
+    return lock_req->method;
+}
+
+static void
+lock_req_destroy(struct ovsdb_client_lock_req *lock_req)
+{
+    free(lock_req->lock);
+    lock_req->method = NULL;
+    lock_req->lock = NULL;
+}
+
+/* Create a lock class request. Caller is responsible for free
+ * the 'request' message. */
+static struct jsonrpc_msg *
+create_lock_request(struct ovsdb_client_lock_req *lock_req)
+{
+    struct json *locks, *lock;
+
+    locks = json_array_create_empty();
+    lock = json_string_create(lock_req->lock);
+    json_array_add(locks, lock);
+
+    return jsonrpc_create_request(lock_req->method, locks, NULL);
+}
+
+static void
+ovsdb_client_lock(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                  const char *argv[], void *lock_req_)
+{
+    struct ovsdb_client_lock_req *lock_req = lock_req_;
+    lock_req_init(lock_req, "lock", argv[1]);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+ovsdb_client_unlock(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                    const char *argv[], void *lock_req_)
+{
+    struct ovsdb_client_lock_req *lock_req = lock_req_;
+    lock_req_init(lock_req, "unlock", argv[1]);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+ovsdb_client_steal(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                   const char *argv[], void *lock_req_)
+{
+    struct ovsdb_client_lock_req *lock_req = lock_req_;
+    lock_req_init(lock_req, "steal", argv[1]);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+do_lock(struct jsonrpc *rpc, const char *method, const char *lock)
+{
+    struct ovsdb_client_lock_req lock_req = {NULL, NULL};
+    struct unixctl_server *unixctl;
+    struct jsonrpc_msg *request;
+    struct json *request_id = NULL;
+    bool exiting = false;
+    bool enable_lock_request = true; /* Don't send another request before
+                                        getting a reply of the previous
+                                        request. */
+    daemon_save_fd(STDOUT_FILENO);
+    daemonize_start(false);
+    lock_req_init(&lock_req, method, lock);
+
+    if (get_detach()) {
+        int error;
+
+        error = unixctl_server_create(NULL, &unixctl);
+        if (error) {
+            ovs_fatal(error, "failed to create unixctl server");
+        }
+
+        unixctl_command_register("unlock", "LOCK", 1, 1,
+                                  ovsdb_client_unlock, &lock_req);
+        unixctl_command_register("steal", "LOCK", 1, 1,
+                                  ovsdb_client_steal, &lock_req);
+        unixctl_command_register("lock", "LOCK", 1, 1,
+                                  ovsdb_client_lock, &lock_req);
+        unixctl_command_register("exit", "", 0, 0,
+                                 ovsdb_client_exit, &exiting);
+    } else {
+        unixctl = NULL;
+    }
+
+    for (;;) {
+        struct jsonrpc_msg *msg;
+        int error;
+
+        unixctl_server_run(unixctl);
+        if (enable_lock_request && lock_req_is_set(&lock_req)) {
+            request = create_lock_request(&lock_req);
+            request_id = json_clone(request->id);
+            jsonrpc_send(rpc, request);
+            lock_req_destroy(&lock_req);
+        }
+
+        error = jsonrpc_recv(rpc, &msg);
+        if (error == EAGAIN) {
+            goto no_msg;
+        } else if (error) {
+            ovs_fatal(error, "%s: receive failed", jsonrpc_get_name(rpc));
+        }
+
+        if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
+            jsonrpc_send(rpc, jsonrpc_create_reply(json_clone(msg->params),
+                                                   msg->id));
+        } else if (msg->type == JSONRPC_REPLY
+                   && json_equal(msg->id, request_id)) {
+            print_json(msg->result);
+            putchar('\n');
+            fflush(stdout);
+            enable_lock_request = true;
+            json_destroy(request_id);
+            request_id = NULL;
+            daemonize_complete();
+        } else if (msg->type == JSONRPC_NOTIFY) {
+            puts(msg->method);
+            print_json(msg->params);
+            putchar('\n');
+            fflush(stdout);
+        }
+
+        jsonrpc_msg_destroy(msg);
+
+no_msg:
+        if (exiting) {
+            break;
+        }
+
+        jsonrpc_run(rpc);
+        jsonrpc_wait(rpc);
+        jsonrpc_recv_wait(rpc);
+
+        unixctl_server_wait(unixctl);
+        poll_block();
+    }
+
+    json_destroy(request_id);
+    unixctl_server_destroy(unixctl);
+}
+
+static void
+do_lock_create(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+               int argc OVS_UNUSED, char *argv[])
+{
+    do_lock(rpc, "lock", argv[0]);
+}
+
+static void
+do_lock_steal(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+              int argc OVS_UNUSED, char *argv[])
+{
+    do_lock(rpc, "steal", argv[0]);
+}
+
+static void
+do_lock_unlock(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+               int argc OVS_UNUSED, char *argv[])
+{
+    do_lock(rpc, "unlock", argv[0]);
+}
+
 /* All command handlers (except for "help") are expected to take an optional
  * server socket name (e.g. "unix:...") as their first argument.  The socket
  * name argument must be included in max_args (but left out of min_args).  The
@@ -1167,8 +1580,11 @@ static const struct ovsdb_client_command all_commands[] = {
     { "list-columns",       NEED_DATABASE, 0, 1,       do_list_columns },
     { "transact",           NEED_RPC,      1, 1,       do_transact },
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
+    { "monitor-cond",       NEED_DATABASE, 2, 3,       do_monitor_cond },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
-
+    { "lock",               NEED_RPC,      1, 1,       do_lock_create },
+    { "steal",              NEED_RPC,      1, 1,       do_lock_steal },
+    { "unlock",             NEED_RPC,      1, 1,       do_lock_unlock },
     { "help",               NEED_NONE,     0, INT_MAX, do_help },
 
     { NULL,                 0,             0, 0,       NULL },

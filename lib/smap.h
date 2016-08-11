@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, 2014, 2015 Nicira, Inc.
+/* Copyright (c) 2012, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,9 @@
 #ifndef SMAP_H
 #define SMAP_H 1
 
-#include "hmap.h"
+#include <netinet/in.h>
+#include "hash.h"
+#include "openvswitch/hmap.h"
 
 struct json;
 struct uuid;
@@ -33,11 +35,17 @@ struct smap_node {
 
 #define SMAP_INITIALIZER(SMAP) { HMAP_INITIALIZER(&(SMAP)->map) }
 
-#define SMAP_FOR_EACH(SMAP_NODE, SMAP) \
-    HMAP_FOR_EACH (SMAP_NODE, node, &(SMAP)->map)
+#define SMAP_FOR_EACH(SMAP_NODE, SMAP)                                  \
+    HMAP_FOR_EACH_INIT (SMAP_NODE, node, &(SMAP)->map,                  \
+                        BUILD_ASSERT_TYPE(SMAP_NODE, struct smap_node *), \
+                        BUILD_ASSERT_TYPE(SMAP, struct smap *))
 
-#define SMAP_FOR_EACH_SAFE(SMAP_NODE, NEXT, SMAP) \
-    HMAP_FOR_EACH_SAFE (SMAP_NODE, NEXT, node, &(SMAP)->map)
+#define SMAP_FOR_EACH_SAFE(SMAP_NODE, NEXT, SMAP)           \
+    HMAP_FOR_EACH_SAFE_INIT (                               \
+        SMAP_NODE, NEXT, node, &(SMAP)->map,                \
+        BUILD_ASSERT_TYPE(SMAP_NODE, struct smap_node *),   \
+        BUILD_ASSERT_TYPE(NEXT, struct smap_node *),        \
+        BUILD_ASSERT_TYPE(SMAP, struct smap *))
 
 /* Initializer for an immutable struct smap 'SMAP' that contains a single
  * 'KEY'-'VALUE' pair, e.g.
@@ -74,10 +82,14 @@ void smap_remove_node(struct smap *, struct smap_node *);
 void smap_steal(struct smap *, struct smap_node *, char **keyp, char **valuep);
 void smap_clear(struct smap *);
 
-const char *smap_get(const struct smap *, const char *);
+const char *smap_get(const struct smap *, const char *key);
+const char *smap_get_def(const struct smap *, const char *key,
+                         const char *def);
 struct smap_node *smap_get_node(const struct smap *, const char *);
 bool smap_get_bool(const struct smap *smap, const char *key, bool def);
 int smap_get_int(const struct smap *smap, const char *key, int def);
+unsigned long long int smap_get_ullong(const struct smap *, const char *key,
+                                       unsigned long long def);
 bool smap_get_uuid(const struct smap *, const char *key, struct uuid *);
 
 bool smap_is_empty(const struct smap *);

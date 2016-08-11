@@ -1,11 +1,16 @@
 # -*- shell-script -*-
 HAVE_OPENSSL='@HAVE_OPENSSL@'
 HAVE_PYTHON='@HAVE_PYTHON@'
+HAVE_PYTHON3='@HAVE_PYTHON3@'
 EGREP='@EGREP@'
 PERL='@PERL@'
 
 if test x"$PYTHON" = x; then
     PYTHON='@PYTHON@'
+fi
+
+if test x"$PYTHON3" = x; then
+    PYTHON3='@PYTHON3@'
 fi
 
 PYTHONPATH=$abs_top_srcdir/python:$abs_top_builddir/tests:$PYTHONPATH
@@ -117,3 +122,20 @@ if test "$HAVE_PYTHON" = "yes" \
 else
     HAVE_PYFTPDLIB="no"
 fi
+
+# Determine correct netcat option to quit on stdin EOF
+if nc --version 2>&1 | grep -q nmap.org; then
+    NC_EOF_OPT="--send-only"
+else
+    NC_EOF_OPT="-q 1"
+fi
+
+# Turn off proxies.
+unset http_proxy
+unset https_proxy
+unset ftp_proxy
+unset no_proxy
+unset HTTP_PROXY
+unset HTTPS_PROXY
+unset FTP_PROXY
+unset NO_PROXY

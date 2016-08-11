@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,26 +15,26 @@
  */
 
 #include <config.h>
-#include "fail-open.h"
 #include <inttypes.h>
 #include <stdlib.h>
 #include "classifier.h"
 #include "connmgr.h"
+#include "dp-packet.h"
+#include "fail-open.h"
 #include "flow.h"
 #include "mac-learning.h"
 #include "odp-util.h"
-#include "ofpbuf.h"
-#include "ofp-actions.h"
-#include "ofp-util.h"
+#include "openvswitch/ofp-actions.h"
+#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofpbuf.h"
+#include "openvswitch/vconn.h"
+#include "openvswitch/vlog.h"
 #include "ofproto.h"
 #include "ofproto-provider.h"
 #include "pktbuf.h"
-#include "dp-packet.h"
 #include "poll-loop.h"
 #include "rconn.h"
 #include "timeval.h"
-#include "openvswitch/vconn.h"
-#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(fail_open);
 
@@ -118,7 +118,6 @@ fail_open_is_active(const struct fail_open *fo)
 static void
 send_bogus_packet_ins(struct fail_open *fo)
 {
-    struct ofproto_packet_in pin;
     struct eth_addr mac;
     struct dp_packet b;
 
@@ -126,15 +125,25 @@ send_bogus_packet_ins(struct fail_open *fo)
     eth_addr_nicira_random(&mac);
     compose_rarp(&b, mac);
 
-    memset(&pin, 0, sizeof pin);
-    pin.up.packet = dp_packet_data(&b);
-    pin.up.packet_len = dp_packet_size(&b);
-    pin.up.reason = OFPR_NO_MATCH;
-    match_init_catchall(&pin.up.flow_metadata);
-    match_set_in_port(&pin.up.flow_metadata, OFPP_LOCAL);
-    pin.send_len = dp_packet_size(&b);
-    pin.miss_type = OFPROTO_PACKET_IN_NO_MISS;
-    connmgr_send_packet_in(fo->connmgr, &pin);
+    struct ofproto_async_msg am = {
+        .oam = OAM_PACKET_IN,
+        .pin = {
+            .up = {
+                .public = {
+                    .packet = dp_packet_data(&b),
+                    .packet_len = dp_packet_size(&b),
+                    .flow_metadata = MATCH_CATCHALL_INITIALIZER,
+                    .flow_metadata.flow.in_port.ofp_port = OFPP_LOCAL,
+                    .flow_metadata.wc.masks.in_port.ofp_port
+                    = u16_to_ofp(UINT16_MAX),
+                    .reason = OFPR_NO_MATCH,
+                    .cookie = OVS_BE64_MAX,
+                },
+            },
+            .max_len = UINT16_MAX,
+        }
+    };
+    connmgr_send_async_msg(fo->connmgr, &am);
 
     dp_packet_uninit(&b);
 }
@@ -229,7 +238,6 @@ fail_open_flushed(struct fail_open *fo)
          * OFPP_NORMAL. */
         ofpbuf_init(&ofpacts, OFPACT_OUTPUT_SIZE);
         ofpact_put_OUTPUT(&ofpacts)->port = OFPP_NORMAL;
-        ofpact_pad(&ofpacts);
 
         match_init_catchall(&match);
         ofproto_add_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY,

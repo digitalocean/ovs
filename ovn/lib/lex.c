@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Nicira, Inc.
+ * Copyright (c) 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,13 @@
  */
 
 #include <config.h>
-#include "lex.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
-#include "dynamic-string.h"
-#include "json.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/json.h"
+#include "ovn/lex.h"
+#include "packets.h"
 #include "util.h"
 
 /* Returns a string that represents 'format'. */
@@ -55,7 +56,10 @@ lex_token_init(struct lex_token *token)
 void
 lex_token_destroy(struct lex_token *token)
 {
-    free(token->s);
+    if (token->s != token->buffer) {
+        free(token->s);
+    }
+    token->s = NULL;
 }
 
 /* Exchanges 'a' and 'b'. */
@@ -65,6 +69,48 @@ lex_token_swap(struct lex_token *a, struct lex_token *b)
     struct lex_token tmp = *a;
     *a = *b;
     *b = tmp;
+
+    /* Before swap, if 's' was pointed to 'buffer', its value shall be changed
+     * to point to the 'buffer' with the copied value. */
+    if (a->s == b->buffer) {
+        a->s = a->buffer;
+    }
+    if (b->s == a->buffer) {
+        b->s = b->buffer;
+    }
+}
+
+/* The string 's' need not be null-terminated at 'length'. */
+void
+lex_token_strcpy(struct lex_token *token, const char *s, size_t length)
+{
+    lex_token_destroy(token);
+    token->s = (length + 1 <= sizeof token->buffer
+                ? token->buffer
+                : xmalloc(length + 1));
+    memcpy(token->s, s, length);
+    token->buffer[length] = '\0';
+}
+
+void
+lex_token_strset(struct lex_token *token, char *s)
+{
+    lex_token_destroy(token);
+    token->s = s;
+}
+
+void
+lex_token_vsprintf(struct lex_token *token, const char *format, va_list args)
+{
+    lex_token_destroy(token);
+
+    va_list args2;
+    va_copy(args2, args);
+    token->s = (vsnprintf(token->buffer, sizeof token->buffer, format, args)
+                < sizeof token->buffer
+                ? token->buffer
+                : xvasprintf(format, args2));
+    va_end(args2);
 }
 
 /* lex_token_format(). */
@@ -181,6 +227,10 @@ lex_token_format(const struct lex_token *token, struct ds *s)
         lex_token_format_masked_integer(token, s);
         break;
 
+    case LEX_T_MACRO:
+        ds_put_format(s, "$%s", token->s);
+        break;
+
     case LEX_T_LPAREN:
         ds_put_cstr(s, "(");
         break;
@@ -244,6 +294,9 @@ lex_token_format(const struct lex_token *token, struct ds *s)
     case LEX_T_DECREMENT:
         ds_put_cstr(s, "--");
         break;
+    case LEX_T_COLON:
+        ds_put_char(s, ':');
+        break;
     default:
         OVS_NOT_REACHED();
     }
@@ -260,7 +313,7 @@ lex_error(struct lex_token *token, const char *message, ...)
 
     va_list args;
     va_start(args, message);
-    token->s = xvasprintf(message, args);
+    lex_token_vsprintf(token, message, args);
     va_end(args);
 }
 
@@ -292,10 +345,37 @@ lex_parse_integer__(const char *p, struct lex_token *token)
     lex_token_init(token);
     token->type = LEX_T_INTEGER;
     memset(&token->value, 0, sizeof token->value);
+
+    /* Find the extent of an "integer" token, which can be in decimal or
+     * hexadecimal, or an Ethernet address or IPv4 or IPv6 address, as 'start'
+     * through 'end'.
+     *
+     * Special cases we handle here are:
+     *
+     *     - The ellipsis token "..", used as e.g. 123..456.  A doubled dot
+     *       is never valid syntax as part of an "integer", so we stop if
+     *       we encounter two dots in a row.
+     *
+     *     - Syntax like 1.2.3.4:1234 to indicate an IPv4 address followed by a
+     *       port number should be considered three tokens: 1.2.3.4 : 1234.
+     *       The obvious approach is to allow just dots or just colons within a
+     *       given integer, but that would disallow IPv4-mapped IPv6 addresses,
+     *       e.g. ::ffff:192.0.2.128.  However, even in those addresses, a
+     *       colon never follows a dot, so we stop if we encounter a colon
+     *       after a dot.
+     *
+     *       (There is no corresponding way to parse an IPv6 address followed
+     *       by a port number: ::1:2:3:4:1234 is unavoidably ambiguous.)
+     */
     const char *start = p;
     const char *end = start;
-    while (isalnum((unsigned char) *end) || *end == ':'
+    bool saw_dot = false;
+    while (isalnum((unsigned char) *end)
+           || (*end == ':' && !saw_dot)
            || (*end == '.' && end[1] != '.')) {
+        if (*end == '.') {
+            saw_dot = true;
+        }
         end++;
     }
     size_t len = end - start;
@@ -338,13 +418,9 @@ lex_parse_integer__(const char *p, struct lex_token *token)
         memcpy(copy, p, len);
         copy[len] = '\0';
 
-        struct in_addr ipv4;
-        struct in6_addr ipv6;
-        if (inet_pton(AF_INET, copy, &ipv4) == 1) {
-            token->value.ipv4 = ipv4.s_addr;
+        if (ip_parse(copy, &token->value.ipv4)) {
             token->format = LEX_F_IPV4;
-        } else if (inet_pton(AF_INET6, copy, &ipv6) == 1) {
-            token->value.ipv6 = ipv6;
+        } else if (ipv6_parse(copy, &token->value.ipv6)) {
             token->format = LEX_F_IPV6;
         } else {
             lex_error(token, "Invalid numeric constant.");
@@ -431,6 +507,7 @@ static const char *
 lex_parse_string(const char *p, struct lex_token *token)
 {
     const char *start = ++p;
+    char * s = NULL;
     for (;;) {
         switch (*p) {
         case '\0':
@@ -438,8 +515,9 @@ lex_parse_string(const char *p, struct lex_token *token)
             return p;
 
         case '"':
-            token->type = (json_string_unescape(start, p - start, &token->s)
+            token->type = (json_string_unescape(start, p - start, &s)
                            ? LEX_T_STRING : LEX_T_ERROR);
+            lex_token_strset(token, s);
             return p + 1;
 
         case '\\':
@@ -470,7 +548,7 @@ lex_is_idn(unsigned char c)
 }
 
 static const char *
-lex_parse_id(const char *p, struct lex_token *token)
+lex_parse_id(const char *p, enum lex_type type, struct lex_token *token)
 {
     const char *start = p;
 
@@ -478,9 +556,21 @@ lex_parse_id(const char *p, struct lex_token *token)
         p++;
     } while (lex_is_idn(*p));
 
-    token->type = LEX_T_ID;
-    token->s = xmemdup0(start, p - start);
+    token->type = type;
+    lex_token_strcpy(token, start, p - start);
     return p;
+}
+
+static const char *
+lex_parse_macro(const char *p, struct lex_token *token)
+{
+    p++;
+    if (!lex_is_id1(*p)) {
+        lex_error(token, "`$' must be followed by a valid identifier.");
+        return p;
+    }
+
+    return lex_parse_id(p, LEX_T_MACRO, token);
 }
 
 /* Initializes 'token' and parses the first token from the beginning of
@@ -653,9 +743,19 @@ next:
         }
         break;
 
+    case '$':
+        p = lex_parse_macro(p, token);
+        break;
+
+    case ':':
+        if (p[1] != ':') {
+            token->type = LEX_T_COLON;
+            p++;
+            break;
+        }
+        /* IPv6 address beginning with "::".  Fall through. */
     case '0': case '1': case '2': case '3': case '4':
     case '5': case '6': case '7': case '8': case '9':
-    case ':':
         p = lex_parse_integer(p, token);
         break;
 
@@ -671,12 +771,12 @@ next:
          * digits followed by a colon, but identifiers never do. */
         p = (p[strspn(p, "0123456789abcdefABCDEF")] == ':'
              ? lex_parse_integer(p, token)
-             : lex_parse_id(p, token));
+             : lex_parse_id(p, LEX_T_ID, token));
         break;
 
     default:
         if (lex_is_id1(*p)) {
-            p = lex_parse_id(p, token);
+            p = lex_parse_id(p, LEX_T_ID, token);
         } else {
             if (isprint((unsigned char) *p)) {
                 lex_error(token, "Invalid character `%c' in input.", *p);

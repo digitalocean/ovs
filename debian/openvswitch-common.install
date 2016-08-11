@@ -1,13 +1,11 @@
 etc/bash_completion.d/ovs-appctl-bashcomp.bash usr/share/bash-completion/completions
 usr/bin/ovs-appctl
-usr/bin/ovs-benchmark
 usr/bin/ovs-docker
 usr/bin/ovs-ofctl
 usr/bin/ovs-parse-backtrace
 usr/bin/ovs-pki
 usr/bin/ovsdb-client
 usr/sbin/ovs-bugtool
-usr/share/man/man1/ovs-benchmark.1
 usr/share/man/man1/ovsdb-client.1
 usr/share/man/man1/ovsdb-tool.1
 usr/share/man/man8/ovs-appctl.8

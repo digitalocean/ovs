@@ -1,6 +1,7 @@
 AT_BANNER([ovn-controller])
 
 AT_SETUP([ovn-controller - ovn-bridge-mappings])
+AT_KEYWORDS([ovn])
 ovn_init_db ovn-sb
 net_add n1
 sim_add hv
@@ -20,14 +21,14 @@ check_patches () {
     echo 'ovs-vsctl -f csv -d bare --no-headings --columns=name find Interface type=patch | sort' > query
     for patch
     do
-	echo $patch
+        echo $patch
     done | cut -d' ' -f 2 | sort > expout
 
     # Generate code to verify that the configuration of each patch
     # port is correct.
     for patch
     do
-	set $patch; bridge=$1 port=$2 peer=$3
+        set $patch; bridge=$1 port=$2 peer=$3
         echo >>query "ovs-vsctl iface-to-br $port -- get Interface $port type options"
         echo >>expout "$bridge
 patch
@@ -45,24 +46,45 @@ patch
                     diff -u stdout expout >/dev/null])
 }
 
+# Make sure that the configured bridge mappings in the Open_vSwitch db
+# is mirrored into the Chassis record in the OVN_Southbound db.
+check_bridge_mappings () {
+    local_mappings=$1
+    sysid=$(ovs-vsctl get Open_vSwitch . external_ids:system-id)
+    chassis_mappings=$(ovn-sbctl get Chassis ${sysid} external_ids:ovn-bridge-mappings | sed -e 's/\"//g')
+    echo $local_mappings
+    echo $chassis_mappings
+    AT_CHECK([test "${local_mappings}" = "${chassis_mappings}"])
+}
+
 # Initially there should be no patch ports.
 check_patches
 
-# Configure two ovn-bridge mappings to create two patch ports.
+# Configure two ovn-bridge mappings, but no patch ports should be created yet
 AT_CHECK([ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-eth0,physnet2:br-eth1])
-check_patches \
-    'br-eth0 patch-br-eth0-to-br-int patch-br-int-to-br-eth0' \
-    'br-int  patch-br-int-to-br-eth0 patch-br-eth0-to-br-int' \
-    'br-eth1 patch-br-eth1-to-br-int patch-br-int-to-br-eth1' \
-    'br-int  patch-br-int-to-br-eth1 patch-br-eth1-to-br-int'
+check_bridge_mappings "physnet1:br-eth0,physnet2:br-eth1"
+check_patches
 
-# Change the mapping and the patch ports should change.
-AT_CHECK([ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-eth2,physnet2:br-eth1])
+# Create a localnet port, but we should still have no patch ports, as they
+# won't be created until there's a localnet port on a logical switch with
+# another logical port bound to this chassis.
+ovn-sbctl \
+    -- --id=@dp101 create Datapath_Binding tunnel_key=101 \
+    -- create Port_Binding datapath=@dp101 logical_port=localnet1 tunnel_key=1 \
+        type=localnet options:network_name=physnet1
+check_patches
+
+# Create a localnet port on a logical switch with a port bound to this chassis.
+# Now we should get some patch ports created.
+ovn-sbctl \
+    -- --id=@dp102 create Datapath_Binding tunnel_key=102 \
+    -- create Port_Binding datapath=@dp102 logical_port=localnet2 tunnel_key=1 \
+        type=localnet options:network_name=physnet1 \
+    -- create Port_Binding datapath=@dp102 logical_port=localvif2 tunnel_key=2
+ovs-vsctl add-port br-int localvif2 -- set Interface localvif2 external_ids:iface-id=localvif2
 check_patches \
-    'br-eth2 patch-br-eth2-to-br-int patch-br-int-to-br-eth2' \
-    'br-int  patch-br-int-to-br-eth2 patch-br-eth2-to-br-int' \
-    'br-eth1 patch-br-eth1-to-br-int patch-br-int-to-br-eth1' \
-    'br-int  patch-br-int-to-br-eth1 patch-br-eth1-to-br-int'
+    'br-int  patch-br-int-to-localnet2 patch-localnet2-to-br-int' \
+    'br-eth0 patch-localnet2-to-br-int patch-br-int-to-localnet2'
 
 # Add logical patch ports.
 AT_CHECK([ovn-sbctl \
@@ -76,16 +98,15 @@ AT_CHECK([ovn-sbctl \
 <3>
 ])
 check_patches \
-    'br-eth2 patch-br-eth2-to-br-int patch-br-int-to-br-eth2' \
-    'br-int  patch-br-int-to-br-eth2 patch-br-eth2-to-br-int' \
-    'br-eth1 patch-br-eth1-to-br-int patch-br-int-to-br-eth1' \
-    'br-int  patch-br-int-to-br-eth1 patch-br-eth1-to-br-int' \
+    'br-int  patch-br-int-to-localnet2 patch-localnet2-to-br-int' \
+    'br-eth0 patch-localnet2-to-br-int patch-br-int-to-localnet2' \
     'br-int  patch-foo-to-bar        patch-bar-to-foo' \
     'br-int  patch-bar-to-foo        patch-foo-to-bar'
 
 # Delete the mapping and the ovn-bridge-mapping patch ports should go away;
 # the ones from the logical patch port remain.
 AT_CHECK([ovs-vsctl remove Open_vSwitch . external-ids ovn-bridge-mappings])
+check_bridge_mappings
 check_patches \
     'br-int patch-foo-to-bar patch-bar-to-foo' \
     'br-int patch-bar-to-foo patch-foo-to-bar'
@@ -99,11 +120,34 @@ check_patches \
     'br-int patch-quux-to-baz patch-baz-to-quux' \
     'br-int patch-baz-to-quux patch-quux-to-baz'
 
+# Create an empty database, serve it and switch to it
+# and verify that the OVS patch ports disappear
+# then put it back and verify that they reappear
+
+on_exit 'kill `cat $ovs_base/ovn-sb/ovsdb-server-2.pid`'
+
+ovsdb-tool create $ovs_base/ovn-sb/ovn-sb1.db "$abs_top_srcdir"/ovn/ovn-sb.ovsschema
+as ovn-sb ovsdb-server --detach --pidfile=$ovs_base/ovn-sb/ovsdb-server-2.pid --remote=punix:$ovs_base/ovn-sb/ovn-sb1.sock $ovs_base/ovn-sb/ovn-sb1.db \
+   --unixctl=$ovs_base/ovn-sb/ovsdb-server-2.ctl
+AT_CHECK([ovs-vsctl -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb1.sock])
+check_patches
+AT_CHECK([ovs-vsctl -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock])
+check_patches \
+    'br-int patch-quux-to-baz patch-baz-to-quux' \
+    'br-int patch-baz-to-quux patch-quux-to-baz'
+
 # Change the logical patch ports to VIFs and verify that the OVS patch
 # ports disappear.
 AT_CHECK([ovn-sbctl \
     -- set Port_Binding quux type='""' options='{}' \
     -- set Port_Binding baz type='""' options='{}'])
 check_patches
+
+# Gracefully terminate daemons
+OVN_CLEANUP_SBOX([hv])
+OVN_CLEANUP_VSWITCH([main])
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT_BY_TARGET([$ovs_base/ovn-sb/ovsdb-server-2.ctl], [$ovs_base/ovn-sb/ovsdb-server-2.pid])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 AT_CLEANUP

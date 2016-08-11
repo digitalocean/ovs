@@ -56,11 +56,6 @@ typedef struct _OVS_STT_VPORT {
     UINT16 dstPort;
     UINT64 ackNo;
     UINT64 ipId;
-
-    UINT64 inPkts;
-    UINT64 outPkts;
-    UINT64 slowInPkts;
-    UINT64 slowOutPkts;
 } OVS_STT_VPORT, *POVS_STT_VPORT;
 
 typedef struct _OVS_STT_PKT_KEY {
@@ -73,6 +68,8 @@ typedef struct _OVS_STT_PKT_ENTRY {
     OVS_STT_PKT_KEY     ovsPktKey;
     UINT64              timeout;
     UINT32              recvdLen;
+    UINT32              allocatedLen;
+    UINT8               ecn;
     SttHdr              sttHdr;
     PCHAR               packetBuf;
     LIST_ENTRY          link;

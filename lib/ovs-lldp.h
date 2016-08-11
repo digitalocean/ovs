@@ -21,8 +21,8 @@
 
 #include <stdint.h>
 #include "dp-packet.h"
-#include "hmap.h"
-#include "list.h"
+#include "openvswitch/hmap.h"
+#include "openvswitch/list.h"
 #include "lldp/lldpd.h"
 #include "ovs-atomic.h"
 #include "packets.h"
@@ -103,5 +103,6 @@ int aa_mapping_unregister(void *aux);
 
 /* Used by unit tests */
 struct lldp * lldp_create_dummy(void);
+void lldp_destroy_dummy(struct lldp *);
 
 #endif /* OVS_LLDP_H */

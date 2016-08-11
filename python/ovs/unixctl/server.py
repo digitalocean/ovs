@@ -15,7 +15,10 @@
 import copy
 import errno
 import os
-import types
+import sys
+
+import six
+from six.moves import range
 
 import ovs.dirs
 import ovs.jsonrpc
@@ -27,7 +30,7 @@ import ovs.vlog
 
 Message = ovs.jsonrpc.Message
 vlog = ovs.vlog.Vlog("unixctl_server")
-strtypes = types.StringTypes
+strtypes = six.string_types
 
 
 class UnixctlConnection(object):
@@ -123,7 +126,7 @@ class UnixctlConnection(object):
                     break
 
             if error is None:
-                unicode_params = [unicode(p) for p in params]
+                unicode_params = [six.text_type(p) for p in params]
                 command.callback(self, unicode_params, command.aux)
 
         if error:
@@ -134,6 +137,7 @@ def _unixctl_version(conn, unused_argv, version):
     assert isinstance(conn, UnixctlConnection)
     version = "%s (Open vSwitch) %s" % (ovs.util.PROGRAM_NAME, version)
     conn.reply(version)
+
 
 class UnixctlServer(object):
     def __init__(self, listener):
@@ -185,8 +189,13 @@ class UnixctlServer(object):
         if path is not None:
             path = "punix:%s" % ovs.util.abs_file_name(ovs.dirs.RUNDIR, path)
         else:
-            path = "punix:%s/%s.%d.ctl" % (ovs.dirs.RUNDIR,
-                                           ovs.util.PROGRAM_NAME, os.getpid())
+            if sys.platform == "win32":
+                path = "punix:%s/%s.ctl" % (ovs.dirs.RUNDIR,
+                                            ovs.util.PROGRAM_NAME)
+            else:
+                path = "punix:%s/%s.%d.ctl" % (ovs.dirs.RUNDIR,
+                                               ovs.util.PROGRAM_NAME,
+                                               os.getpid())
 
         if version is None:
             version = ovs.version.VERSION

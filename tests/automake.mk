@@ -48,6 +48,7 @@ TESTSUITE_AT = \
 	tests/json.at \
 	tests/jsonrpc.at \
 	tests/jsonrpc-py.at \
+	tests/pmd.at \
 	tests/tunnel.at \
 	tests/tunnel-push-pop.at \
 	tests/tunnel-push-pop-ipv6.at \
@@ -58,8 +59,8 @@ TESTSUITE_AT = \
 	tests/dpctl.at \
 	tests/ofproto-dpif.at \
 	tests/bridge.at \
-	tests/vlan-splinters.at \
 	tests/ofproto.at \
+	tests/netdev-type.at \
 	tests/ovsdb.at \
 	tests/ovsdb-log.at \
 	tests/ovsdb-types.at \
@@ -75,9 +76,11 @@ TESTSUITE_AT = \
 	tests/ovsdb-execution.at \
 	tests/ovsdb-trigger.at \
 	tests/ovsdb-tool.at \
+	tests/ovsdb-replication.at \
 	tests/ovsdb-server.at \
 	tests/ovsdb-monitor.at \
 	tests/ovsdb-idl.at \
+	tests/ovsdb-lock.at \
 	tests/ovs-vsctl.at \
 	tests/ovs-monitor-ipsec.at \
 	tests/ovs-xapi-sync.at \
@@ -100,10 +103,12 @@ SYSTEM_KMOD_TESTSUITE_AT = \
 
 SYSTEM_USERSPACE_TESTSUITE_AT = \
 	tests/system-userspace-testsuite.at \
+	tests/system-ovn.at \
 	tests/system-userspace-macros.at
 
 SYSTEM_TESTSUITE_AT = \
 	tests/system-common-macros.at \
+	tests/system-ovn.at \
 	tests/system-traffic.at
 
 TESTSUITE = $(srcdir)/tests/testsuite
@@ -115,7 +120,8 @@ DISTCLEANFILES += tests/atconfig tests/atlocal
 AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
 
 check-local: tests/atconfig tests/atlocal $(TESTSUITE)
-	$(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
+	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
 # Python Coverage support.
 # Requires coverage.py http://nedbatchelder.com/code/coverage/.
@@ -132,9 +138,30 @@ check-pycov: all tests/atconfig tests/atlocal $(TESTSUITE) clean-pycov
 	@echo
 	@COVERAGE_FILE=$(COVERAGE_FILE) $(COVERAGE) report
 
+# lcov support
+# Requires build with --enable-coverage and lcov/genhtml in $PATH
+CLEAN_LOCAL += clean-lcov
+clean-lcov:
+	rm -fr tests/lcov
+
+LCOV_OPTS = -b $(abs_top_builddir) -d $(abs_top_builddir) -q -c --rc lcov_branch_coverage=1
+GENHTML_OPTS = -q --branch-coverage --num-spaces 4
+check-lcov: all tests/atconfig tests/atlocal $(TESTSUITE) $(check_DATA) clean-lcov
+	find . -name '*.gcda' | xargs -n1 rm -f
+	-set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	mkdir -p tests/lcov
+	lcov $(LCOV_OPTS) -o tests/lcov/coverage.info
+	genhtml $(GENHTML_OPTS) -o tests/lcov tests/lcov/coverage.info
+	@echo "coverage report generated at tests/lcov/index.html"
+
 # valgrind support
 
 valgrind_wrappers = \
+	tests/valgrind/ovn-controller \
+	tests/valgrind/ovn-nbctl \
+	tests/valgrind/ovn-northd \
+	tests/valgrind/ovn-sbctl \
 	tests/valgrind/ovs-appctl \
 	tests/valgrind/ovs-ofctl \
 	tests/valgrind/ovstest \
@@ -148,6 +175,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-bundle \
 	tests/valgrind/test-byte-order \
 	tests/valgrind/test-classifier \
+	tests/valgrind/test-ccmap \
 	tests/valgrind/test-cmap \
 	tests/valgrind/test-csum \
 	tests/valgrind/test-flows \
@@ -170,6 +198,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-stp \
 	tests/valgrind/test-type-props \
 	tests/valgrind/test-unix-socket \
+	tests/valgrind/test-unixctl \
 	tests/valgrind/test-uuid \
 	tests/valgrind/test-vconn
 
@@ -185,6 +214,9 @@ EXTRA_DIST += tests/valgrind-wrapper.in
 VALGRIND = valgrind --log-file=valgrind.%p --leak-check=full \
 	--suppressions=$(abs_top_srcdir)/tests/glibc.supp \
 	--suppressions=$(abs_top_srcdir)/tests/openssl.supp --num-callers=20
+HELGRIND = valgrind --log-file=helgrind.%p --tool=helgrind \
+	--suppressions=$(abs_top_srcdir)/tests/glibc.supp \
+	--suppressions=$(abs_top_srcdir)/tests/openssl.supp --num-callers=20
 EXTRA_DIST += tests/glibc.supp tests/openssl.supp
 check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
                 $(valgrind_wrappers) $(check_DATA)
@@ -193,6 +225,10 @@ check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
 	@echo '----------------------------------------------------------------------'
 	@echo 'Valgrind output can be found in tests/testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
+check-helgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
+                $(valgrind_wrappers) $(check_DATA)
+	-$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(HELGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
+
 
 # OFTest support.
 
@@ -207,16 +243,16 @@ EXTRA_DIST += tests/run-ryu
 
 # Run kmod tests. Assume kernel modules has been installed or linked into the kernel
 check-kernel: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
-	$(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
+	$(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1
 
 # Testing the out of tree Kernel module
 check-kmod: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
 	$(MAKE) modules_install
-	modprobe -r openvswitch
+	modprobe -r -a vport-geneve vport-gre vport-lisp vport-stt vport-vxlan openvswitch
 	$(MAKE) check-kernel
 
 check-system-userspace: all tests/atconfig tests/atlocal $(SYSTEM_USERSPACE_TESTSUITE)
-	$(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS)
+	$(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1
 
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean
@@ -290,7 +326,9 @@ tests_ovstest_SOURCES = \
 	tests/test-bundle.c \
 	tests/test-byte-order.c \
 	tests/test-classifier.c \
+	tests/test-ccmap.c \
 	tests/test-cmap.c \
+	tests/test-conntrack.c \
 	tests/test-csum.c \
 	tests/test-flows.c \
 	tests/test-hash.c \
@@ -308,11 +346,13 @@ tests_ovstest_SOURCES = \
 	tests/test-ovn.c \
 	tests/test-packets.c \
 	tests/test-random.c \
+	tests/test-rcu.c \
 	tests/test-reconnect.c \
 	tests/test-rstp.c \
 	tests/test-sflow.c \
 	tests/test-sha1.c \
 	tests/test-stp.c \
+	tests/test-unixctl.c \
 	tests/test-util.c \
 	tests/test-uuid.c \
 	tests/test-bitmap.c \
@@ -353,6 +393,8 @@ CHECK_PYFILES = \
 	tests/test-vlog.py
 EXTRA_DIST += $(CHECK_PYFILES)
 PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
+
+FLAKE8_PYFILES += $(CHECK_PYFILES)
 
 if HAVE_OPENSSL
 TESTPKI_FILES = \

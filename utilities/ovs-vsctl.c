@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,10 +31,10 @@
 
 #include "command-line.h"
 #include "compiler.h"
-#include "dynamic-string.h"
+#include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
 #include "hash.h"
-#include "json.h"
+#include "openvswitch/json.h"
 #include "ovsdb-data.h"
 #include "ovsdb-idl.h"
 #include "poll-loop.h"
@@ -107,7 +107,7 @@ static void do_vsctl(const char *args, struct ctl_command *, size_t n,
  * either store a positive values on successful implementing the new
  * interface, or -1 on failure.
  *
- * Unless -no-wait command line option is specified,
+ * Unless --no-wait command line option is specified,
  * post_db_reload_do_checks() is called right after any configuration
  * changes is picked up (i.e. reload) by ovs-vswitchd. Any error detected
  * post OVSDB reload is reported as ovs-vsctl errors. OVS-vswitchd logs
@@ -130,7 +130,6 @@ static size_t allocated_neoteric_ifaces;
 int
 main(int argc, char *argv[])
 {
-    extern struct vlog_module VLM_reconnect;
     struct ovsdb_idl *idl;
     struct ctl_command *commands;
     struct shash local_options;
@@ -141,7 +140,7 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
-    vlog_set_levels(&VLM_reconnect, VLF_ANY_DESTINATION, VLL_WARN);
+    vlog_set_levels_from_string_assert("reconnect:warn");
     ovsrec_init();
 
     vsctl_cmd_init();
@@ -270,7 +269,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
             break;
 
         case OPT_NO_SYSLOG:
-            vlog_set_levels(&VLM_vsctl, VLF_SYSLOG, VLL_WARN);
+            vlog_set_levels(&this_module, VLF_SYSLOG, VLL_WARN);
             break;
 
         case OPT_NO_WAIT:
@@ -288,7 +287,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
             }
             shash_add_nocopy(local_options,
                              xasprintf("--%s", options[idx].name),
-                             optarg ? xstrdup(optarg) : NULL);
+                             nullable_xstrdup(optarg));
             break;
 
         case 'h':
@@ -544,7 +543,7 @@ add_bridge_to_cache(struct vsctl_context *vsctl_ctx,
     struct vsctl_bridge *br = xmalloc(sizeof *br);
     br->br_cfg = br_cfg;
     br->name = xstrdup(name);
-    list_init(&br->ports);
+    ovs_list_init(&br->ports);
     br->parent = parent;
     br->vlan = vlan;
     hmap_init(&br->children);
@@ -583,7 +582,7 @@ ovs_delete_bridge(const struct ovsrec_open_vswitch *ovs,
 static void
 del_cached_bridge(struct vsctl_context *vsctl_ctx, struct vsctl_bridge *br)
 {
-    ovs_assert(list_is_empty(&br->ports));
+    ovs_assert(ovs_list_is_empty(&br->ports));
     ovs_assert(hmap_is_empty(&br->children));
     if (br->parent) {
         hmap_remove(&br->parent->children, &br->children_node);
@@ -638,8 +637,8 @@ add_port_to_cache(struct vsctl_context *vsctl_ctx, struct vsctl_bridge *parent,
     }
 
     port = xmalloc(sizeof *port);
-    list_push_back(&parent->ports, &port->ports_node);
-    list_init(&port->ifaces);
+    ovs_list_push_back(&parent->ports, &port->ports_node);
+    ovs_list_init(&port->ifaces);
     port->port_cfg = port_cfg;
     port->bridge = parent;
     shash_add(&vsctl_ctx->ports, port_cfg->name, port);
@@ -650,8 +649,8 @@ add_port_to_cache(struct vsctl_context *vsctl_ctx, struct vsctl_bridge *parent,
 static void
 del_cached_port(struct vsctl_context *vsctl_ctx, struct vsctl_port *port)
 {
-    ovs_assert(list_is_empty(&port->ifaces));
-    list_remove(&port->ports_node);
+    ovs_assert(ovs_list_is_empty(&port->ifaces));
+    ovs_list_remove(&port->ports_node);
     shash_find_and_delete(&vsctl_ctx->ports, port->port_cfg->name);
     ovsrec_port_delete(port->port_cfg);
     free(port);
@@ -664,7 +663,7 @@ add_iface_to_cache(struct vsctl_context *vsctl_ctx, struct vsctl_port *parent,
     struct vsctl_iface *iface;
 
     iface = xmalloc(sizeof *iface);
-    list_push_back(&parent->ifaces, &iface->ifaces_node);
+    ovs_list_push_back(&parent->ifaces, &iface->ifaces_node);
     iface->iface_cfg = iface_cfg;
     iface->port = parent;
     shash_add(&vsctl_ctx->ifaces, iface_cfg->name, iface);
@@ -675,7 +674,7 @@ add_iface_to_cache(struct vsctl_context *vsctl_ctx, struct vsctl_port *parent,
 static void
 del_cached_iface(struct vsctl_context *vsctl_ctx, struct vsctl_iface *iface)
 {
-    list_remove(&iface->ifaces_node);
+    ovs_list_remove(&iface->ifaces_node);
     shash_find_and_delete(&vsctl_ctx->ifaces, iface->iface_cfg->name);
     ovsrec_interface_delete(iface->iface_cfg);
     free(iface);
@@ -2349,7 +2348,9 @@ static const struct ctl_table_class tables[] = {
       {NULL, NULL, NULL}}},
 
     {&ovsrec_table_flow_sample_collector_set,
-     {{NULL, NULL, NULL},
+     {{&ovsrec_table_flow_sample_collector_set,
+       &ovsrec_flow_sample_collector_set_col_id,
+       NULL},
       {NULL, NULL, NULL}}},
 
     {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
@@ -2468,6 +2469,51 @@ run_prerequisites(struct ctl_command *commands, size_t n_commands,
     }
 }
 
+static char *
+vsctl_parent_process_info(void)
+{
+#ifdef __linux__
+    pid_t parent_pid;
+    struct ds s;
+
+    parent_pid = getppid();
+    ds_init(&s);
+
+    /* Retrive the command line of the parent process, except the init
+     * process since /proc/0 does not exist. */
+    if (parent_pid) {
+        char *procfile;
+        FILE *f;
+
+        procfile = xasprintf("/proc/%d/cmdline", parent_pid);
+
+        f = fopen(procfile, "r");
+        if (!f) {
+            free(procfile);
+            return NULL;
+        }
+        free(procfile);
+
+        for (;;) {
+            int c = getc(f);
+            if (!c || c == EOF) {
+            break;
+            }
+            ds_put_char(&s, c);
+        }
+        fclose(f);
+    } else {
+        ds_put_cstr(&s, "init");
+    }
+
+    ds_put_format(&s, " (pid %d)", parent_pid);
+
+    return ds_steal_cstr(&s);
+#else
+    return NULL;
+#endif
+}
+
 static void
 do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
          struct ovsdb_idl *idl)
@@ -2481,13 +2527,21 @@ do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
     struct shash_node *node;
     int64_t next_cfg = 0;
     char *error = NULL;
+    char *ppid_info = NULL;
 
     txn = the_idl_txn = ovsdb_idl_txn_create(idl);
     if (dry_run) {
         ovsdb_idl_txn_set_dry_run(txn);
     }
 
-    ovsdb_idl_txn_add_comment(txn, "ovs-vsctl: %s", args);
+    ppid_info = vsctl_parent_process_info();
+    if (ppid_info) {
+        ovsdb_idl_txn_add_comment(txn, "ovs-vsctl (invoked by %s): %s",
+                                  ppid_info, args);
+        free(ppid_info);
+    } else {
+        ovsdb_idl_txn_add_comment(txn, "ovs-vsctl: %s", args);
+    }
 
     ovs = ovsrec_open_vswitch_first(idl);
     if (!ovs) {
@@ -2497,7 +2551,7 @@ do_vsctl(const char *args, struct ctl_command *commands, size_t n_commands,
 
     if (wait_for_reload) {
         ovsdb_idl_txn_increment(txn, &ovs->header_,
-                                &ovsrec_open_vswitch_col_next_cfg);
+                                &ovsrec_open_vswitch_col_next_cfg, false);
     }
 
     post_db_reload_check_init();
