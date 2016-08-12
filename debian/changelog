@@ -1,3 +1,9 @@
+openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu3) yakkety; urgency=medium
+
+  * Revert DPDK support on arm64.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 12 Aug 2016 08:25:57 +0100
+
 openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu2) yakkety; urgency=medium
 
   * Enable dpdk builds for arm64.
