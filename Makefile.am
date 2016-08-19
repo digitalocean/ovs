@@ -192,11 +192,12 @@ if GNU_MAKE
 ALL_LOCAL += dist-hook-git
 dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
-	  (cd datapath && $(MAKE) distfiles); \
-	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) | \
-	    LC_ALL=C sort -u > all-distfiles; \
-	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' | \
-	    LC_ALL=C sort -u > all-gitfiles; \
+	  (cd datapath && $(MAKE) distfiles);				    \
+	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) |	    \
+	    LC_ALL=C sort -u > all-distfiles;				    \
+	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' |	    \
+	    grep -v 'digitalocean/script' |                                 \
+	    LC_ALL=C sort -u > all-gitfiles;				    \
 	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
 	  if test -s missing-distfiles; then \
 	    echo "The following files are in git but not the distribution:"; \

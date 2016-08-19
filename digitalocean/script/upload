@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+# shamelessly copied from libvirt
+
+if [ -z "$1" ]; then
+    echo "Usage: `basename $0` <ubuntu distribution>"
+    exit 1
+fi
+
+set -e
+set -o errexit
+set -o nounset
+
+if [ ! -n "$BUILDKITE" ]; then
+    echo "This script will only work within the buildkite environment"
+    exit 1
+fi
+
+if [ ! -n "$PACKAGECLOUD_TOKEN" ]; then
+    echo "PACKAGECLOUD_TOKEN must be set"
+    exit 1
+fi
+
+distribution=$1
+
+# default packagecloud repo
+: "${PACKAGECLOUD_REPOSITORY:=digitalocean-eng/test-packages}"
+
+# packagecloud uploader
+uploader=quay.io/digitalocean/package_builder_uploader
+
+# obtain build SHA to upload
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+target=$DIR/../../
+version=$(git -C ${target} rev-parse --short HEAD)
+
+echo "--- Downloading artifacts from build phase"
+[ ! -d packages ] && mkdir packages
+buildkite-agent artifact download "*" packages/
+
+echo "--- Uploading packages to ${PACKAGECLOUD_REPOSITORY} respository"
+docker run --rm -t -e "PACKAGECLOUD_TOKEN=${PACKAGECLOUD_TOKEN}" -v "$(pwd)/packages":/packages ${uploader} bash -c "package_cloud push ${PACKAGECLOUD_REPOSITORY}/ubuntu/${distribution} /packages/**/*${version}*.deb"
