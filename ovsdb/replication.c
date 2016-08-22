@@ -32,7 +32,7 @@
 #include "table.h"
 #include "transaction.h"
 
-static char *remote_ovsdb_server;
+static char *active_ovsdb_server;
 static struct jsonrpc *rpc;
 static struct sset monitored_tables = SSET_INITIALIZER(&monitored_tables);
 static struct sset tables_blacklist = SSET_INITIALIZER(&tables_blacklist);
@@ -84,7 +84,7 @@ replication_init(void)
 void
 replication_run(struct shash *all_dbs)
 {
-    if (sset_is_empty(&monitored_tables) && remote_ovsdb_server) {
+    if (sset_is_empty(&monitored_tables) && active_ovsdb_server) {
         /* Reset local databases. */
         if (reset_dbs) {
             struct ovsdb_error *error = reset_databases(all_dbs);
@@ -98,7 +98,7 @@ replication_run(struct shash *all_dbs)
 
         /* Open JSON-RPC. */
         jsonrpc_close(rpc);
-        rpc = open_jsonrpc(remote_ovsdb_server);
+        rpc = open_jsonrpc(active_ovsdb_server);
         if (!rpc) {
             return;
         }
@@ -112,15 +112,23 @@ replication_run(struct shash *all_dbs)
 }
 
 void
-set_remote_ovsdb_server(const char *remote_server)
+replication_wait(void)
 {
-    remote_ovsdb_server = nullable_xstrdup(remote_server);
+    if (rpc) {
+        jsonrpc_wait(rpc);
+    }
+}
+
+void
+set_active_ovsdb_server(const char *active_server)
+{
+    active_ovsdb_server = nullable_xstrdup(active_server);
 }
 
 const char *
-get_remote_ovsdb_server(void)
+get_active_ovsdb_server(void)
 {
-    return remote_ovsdb_server;
+    return active_ovsdb_server;
 }
 
 void
@@ -139,23 +147,24 @@ get_tables_blacklist(void)
 }
 
 void
-disconnect_remote_server(void)
+disconnect_active_server(void)
 {
     jsonrpc_close(rpc);
+    rpc = NULL;
     sset_clear(&monitored_tables);
     sset_clear(&tables_blacklist);
 }
 
 void
-destroy_remote_server(void)
+destroy_active_server(void)
 {
-    jsonrpc_close(rpc);
+    disconnect_active_server();
     sset_destroy(&monitored_tables);
     sset_destroy(&tables_blacklist);
 
-    if (remote_ovsdb_server) {
-        free(remote_ovsdb_server);
-        remote_ovsdb_server = NULL;
+    if (active_ovsdb_server) {
+        free(active_ovsdb_server);
+        active_ovsdb_server = NULL;
     }
 }
 
@@ -402,10 +411,10 @@ check_for_notifications(struct shash *all_dbs)
         return;
     } else if (error) {
         jsonrpc_close(rpc);
-        rpc = open_jsonrpc(remote_ovsdb_server);
+        rpc = open_jsonrpc(active_ovsdb_server);
         if (!rpc) {
-            /* Remote server went down. */
-            disconnect_remote_server();
+            /* Active server went down. */
+            disconnect_active_server();
         }
         jsonrpc_msg_destroy(msg);
         return;
@@ -466,7 +475,7 @@ process_notification(struct json *table_updates, struct ovsdb *database)
 error:
     if (error) {
         ovsdb_error_assert(error);
-        disconnect_remote_server();
+        disconnect_active_server();
     }
 }
 
@@ -650,7 +659,7 @@ replication_usage(void)
 {
     printf("\n\
 Syncing options:\n\
-  --sync-from=SERVER      sync DATABASE from remote SERVER\n\
+  --sync-from=SERVER      sync DATABASE from active SERVER\n\
   --sync-exclude-tables=DB:TABLE,...\n\
                           exclude the TABLE in DB from syncing\n");
 }

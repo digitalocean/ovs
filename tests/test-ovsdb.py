@@ -149,14 +149,15 @@ def do_parse_schema(schema_string):
     print(ovs.json.to_string(schema.to_json(), sort_keys=True))
 
 
-def get_simple_table_printable_row(row):
-    simple_columns = ["i", "r", "b", "s", "u", "ia",
-                      "ra", "ba", "sa", "ua", "uuid"]
+def get_simple_printable_row_string(row, columns):
     s = ""
-    for column in simple_columns:
+    for column in columns:
         if hasattr(row, column) and not (type(getattr(row, column))
                                          is ovs.db.data.Atom):
-            s += "%s=%s " % (column, getattr(row, column))
+            value = getattr(row, column)
+            if isinstance(value, dict):
+                value = sorted(value.items())
+            s += "%s=%s " % (column, value)
     s = s.strip()
     s = re.sub('""|,|u?\'', "", s)
     s = re.sub('UUID\(([^)]+)\)', r'\1', s)
@@ -166,6 +167,22 @@ def get_simple_table_printable_row(row):
     return s
 
 
+def get_simple_table_printable_row(row):
+    simple_columns = ["i", "r", "b", "s", "u", "ia",
+                      "ra", "ba", "sa", "ua", "uuid"]
+    return get_simple_printable_row_string(row, simple_columns)
+
+
+def get_simple2_table_printable_row(row):
+    simple2_columns = ["name", "smap", "imap"]
+    return get_simple_printable_row_string(row, simple2_columns)
+
+
+def get_simple3_table_printable_row(row):
+    simple3_columns = ["name", "uset"]
+    return get_simple_printable_row_string(row, simple3_columns)
+
+
 def print_idl(idl, step):
     n = 0
     if "simple" in idl.tables:
@@ -173,6 +190,22 @@ def print_idl(idl, step):
         for row in six.itervalues(simple):
             s = "%03d: " % step
             s += get_simple_table_printable_row(row)
+            print(s)
+            n += 1
+
+    if "simple2" in idl.tables:
+        simple2 = idl.tables["simple2"].rows
+        for row in six.itervalues(simple2):
+            s = "%03d: " % step
+            s += get_simple2_table_printable_row(row)
+            print(s)
+            n += 1
+
+    if "simple3" in idl.tables:
+        simple3 = idl.tables["simple3"].rows
+        for row in six.itervalues(simple3):
+            s = "%03d: " % step
+            s += get_simple3_table_printable_row(row)
             print(s)
             n += 1
 
@@ -242,6 +275,20 @@ def parse_uuids(json, symtab):
 def idltest_find_simple(idl, i):
     for row in six.itervalues(idl.tables["simple"].rows):
         if row.i == i:
+            return row
+    return None
+
+
+def idltest_find_simple2(idl, i):
+    for row in six.itervalues(idl.tables["simple2"].rows):
+        if row.name == i:
+            return row
+    return None
+
+
+def idltest_find_simple3(idl, i):
+    for row in six.itervalues(idl.tables["simple3"].rows):
+        if row.name == i:
             return row
     return None
 
@@ -381,6 +428,48 @@ def idl_set(idl, commands, step):
             i = getattr(l1, 'i', 1)
             assert i == 2
             l1.k = [l1]
+        elif name == 'partialmapinsertelement':
+            row = idltest_find_simple2(idl, 'myString1')
+            row.setkey('smap', 'key1', 'myList1')
+            row.setkey('imap', 3, 'myids2')
+            row.__setattr__('name', 'String2')
+        elif name == 'partialmapinsertmultipleelements':
+            row = idltest_find_simple2(idl, 'String2')
+            row.setkey('smap', 'key2', 'myList2')
+            row.setkey('smap', 'key3', 'myList3')
+        elif name == 'partialmapdelelements':
+            row = idltest_find_simple2(idl, 'String2')
+            row.delkey('smap', 'key1', 'myList1')
+            row.delkey('smap', 'key2', 'wrongvalue')
+            row.delkey('smap', 'key3')
+        elif name == 'partialrenamesetadd':
+            row = idltest_find_simple3(idl, 'mySet1')
+            row.addvalue('uset',
+                         uuid.UUID("001e43d2-dd3f-4616-ab6a-83a490bb0991"))
+            row.__setattr__('name', 'String2')
+        elif name == 'partialduplicateadd':
+            row = idltest_find_simple3(idl, 'String2')
+            row.addvalue('uset',
+                         uuid.UUID("0026b3ba-571b-4729-8227-d860a5210ab8"))
+            row.addvalue('uset',
+                         uuid.UUID("0026b3ba-571b-4729-8227-d860a5210ab8"))
+        elif name == 'partialsetdel':
+            row = idltest_find_simple3(idl, 'String2')
+            row.delvalue('uset',
+                         uuid.UUID("001e43d2-dd3f-4616-ab6a-83a490bb0991"))
+        elif name == 'partialsetref':
+            new_row = txn.insert(idl.tables["simple4"])
+            new_row.__setattr__('name', 'test')
+            row = idltest_find_simple3(idl, 'String2')
+            row.addvalue('uref', new_row.uuid)
+        elif name == 'partialsetoverrideops':
+            row = idltest_find_simple3(idl, 'String2')
+            row.addvalue('uset',
+                         uuid.UUID("579e978d-776c-4f19-a225-268e5890e670"))
+            row.delvalue('uset',
+                         uuid.UUID("0026b3ba-571b-4729-8227-d860a5210ab8"))
+            row.__setattr__('uset',
+                [uuid.UUID("0026b3ba-571b-4729-8227-d860a5210ab8")])
         else:
             sys.stderr.write("unknown command %s\n" % name)
             sys.exit(1)

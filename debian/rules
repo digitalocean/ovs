@@ -106,7 +106,7 @@ override_dh_strip:
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track
-BRANCH=master
+BRANCH=branch-2.6
 VERSION=2.6.0
 
 get-orig-snapshot:

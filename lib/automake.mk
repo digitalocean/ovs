@@ -187,6 +187,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovsdb-idl.h \
 	lib/ovsdb-map-op.c \
 	lib/ovsdb-map-op.h \
+	lib/ovsdb-set-op.c \
+	lib/ovsdb-set-op.h \
 	lib/ovsdb-condition.h \
 	lib/ovsdb-condition.c \
 	lib/ovsdb-parser.c \
@@ -434,6 +436,7 @@ EXTRA_DIST += \
 	lib/dh2048.pem \
 	lib/dh4096.pem \
 	lib/common.xml \
+	lib/daemon.xml \
 	lib/dirs.c.in \
 	lib/db-ctl-base.xml \
 	lib/ssl.xml \

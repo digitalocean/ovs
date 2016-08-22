@@ -20,6 +20,7 @@
 #include "lflow.h"
 #include "lib/poll-loop.h"
 #include "ofctrl.h"
+#include "openvswitch/hmap.h"
 #include "openvswitch/match.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofpbuf.h"
@@ -57,6 +58,15 @@ physical_register_ovs_idl(struct ovsdb_idl *ovs_idl)
 static struct simap localvif_to_ofport =
     SIMAP_INITIALIZER(&localvif_to_ofport);
 static struct hmap tunnels = HMAP_INITIALIZER(&tunnels);
+
+struct uuid_hash_node {
+    struct hmap_node node;
+    struct uuid uuid;
+};
+
+static struct hmap port_binding_uuids = HMAP_INITIALIZER(&port_binding_uuids);
+static struct hmap multicast_group_uuids =
+    HMAP_INITIALIZER(&multicast_group_uuids);
 
 /* UUID to identify OF flows not associated with ovsdb rows. */
 static struct uuid *hc_uuid = NULL;
@@ -474,13 +484,31 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
                         &match, ofpacts_p, &binding->header_.uuid);
     } else {
         /* Remote port connected by tunnel */
-        /* Table 32, priority 100.
-         * =======================
+
+        /* Table 32, priority 150 and 100.
+         * ===============================
          *
-         * Implements output to remote hypervisors.  Each flow matches an
-         * output port that includes a logical port on a remote hypervisor,
-         * and tunnels the packet to that hypervisor.
+         * Priority 150 is for packets received from a VXLAN tunnel
+         * which get resubmitted to OFTABLE_LOG_INGRESS_PIPELINE due to
+         * lack of needed metadata in VXLAN, explicitly skip sending
+         * back out any tunnels and resubmit to table 33 for local
+         * delivery.
+         *
+         * Priority 100 is for all other traffic which need to be sent
+         * to a remote hypervisor.  Each flow matches an output port
+         * that includes a logical port on a remote hypervisor, and
+         * tunnels the packet to that hypervisor.
          */
+        match_init_catchall(&match);
+        ofpbuf_clear(ofpacts_p);
+        match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
+                             MLF_RCV_FROM_VXLAN, MLF_RCV_FROM_VXLAN);
+
+        /* Resubmit to table 33. */
+        put_resubmit(OFTABLE_LOCAL_OUTPUT, ofpacts_p);
+        ofctrl_add_flow(OFTABLE_REMOTE_OUTPUT, 150, &match, ofpacts_p,
+                        &binding->header_.uuid);
+
 
         match_init_catchall(&match);
         ofpbuf_clear(ofpacts_p);
@@ -618,6 +646,35 @@ consider_mc_group(enum mf_field_id mff_ovn_geneve,
     sset_destroy(&remote_chassis);
 }
 
+static bool
+find_uuid_in_hmap(struct hmap *hmap_p, struct uuid *uuid)
+{
+    struct uuid_hash_node *candidate;
+    HMAP_FOR_EACH_WITH_HASH (candidate, node, uuid_hash(uuid), hmap_p) {
+        if (uuid_equals(uuid, &candidate->uuid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Deletes the flows whose UUIDs are in 'old' but not 'new', and then replaces
+ * 'old' by 'new'. */
+static void
+rationalize_hmap_and_delete_flows(struct hmap *old, struct hmap *new)
+{
+    struct uuid_hash_node *uuid_node, *old_node;
+    HMAP_FOR_EACH_SAFE (uuid_node, old_node, node, old) {
+        if (!find_uuid_in_hmap(new, &uuid_node->uuid)) {
+            ofctrl_remove_flows(&uuid_node->uuid);
+        }
+    }
+    hmap_swap(old, new);
+    HMAP_FOR_EACH_POP(uuid_node, node, new) {
+        free(uuid_node);
+    }
+}
+
 void
 physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
              const struct ovsrec_bridge *br_int, const char *this_chassis_id,
@@ -652,6 +709,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
                                         "ovn-localnet-port");
         const char *l2gateway = smap_get(&port_rec->external_ids,
                                         "ovn-l2gateway-port");
+        const char *l3gateway = smap_get(&port_rec->external_ids,
+                                        "ovn-l3gateway-port");
         const char *logpatch = smap_get(&port_rec->external_ids,
                                         "ovn-logical-patch-port");
 
@@ -677,6 +736,10 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
             } else if (is_patch && l2gateway) {
                 /* L2 gateway patch ports can be handled just like VIFs. */
                 simap_put(&new_localvif_to_ofport, l2gateway, ofport);
+                break;
+            } else if (is_patch && l3gateway) {
+                /* L3 gateway patch ports can be handled just like VIFs. */
+                simap_put(&new_localvif_to_ofport, l3gateway, ofport);
                 break;
             } else if (is_patch && logpatch) {
                 /* Logical patch ports can be handled just like VIFs. */
@@ -773,6 +836,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
      * 64 for logical-to-physical translation. */
     const struct sbrec_port_binding *binding;
     if (full_binding_processing) {
+        struct hmap new_port_binding_uuids =
+            HMAP_INITIALIZER(&new_port_binding_uuids);
         SBREC_PORT_BINDING_FOR_EACH (binding, ctx->ovnsb_idl) {
             /* Because it is possible in the above code to enter this
              * for loop without having cleared the flow table first, we
@@ -780,7 +845,14 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
             ofctrl_remove_flows(&binding->header_.uuid);
             consider_port_binding(mff_ovn_geneve, ct_zones, local_datapaths,
                                   patched_datapaths, binding, &ofpacts);
+            struct uuid_hash_node *hash_node = xzalloc(sizeof *hash_node);
+            hash_node->uuid = binding->header_.uuid;
+            hmap_insert(&new_port_binding_uuids, &hash_node->node,
+                        uuid_hash(&hash_node->uuid));
         }
+        rationalize_hmap_and_delete_flows(&port_binding_uuids,
+                                          &new_port_binding_uuids);
+        hmap_destroy(&new_port_binding_uuids);
         full_binding_processing = false;
     } else {
         SBREC_PORT_BINDING_FOR_EACH_TRACKED (binding, ctx->ovnsb_idl) {
@@ -800,6 +872,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
     const struct sbrec_multicast_group *mc;
     struct ofpbuf remote_ofpacts;
     ofpbuf_init(&remote_ofpacts, 0);
+    struct hmap new_multicast_group_uuids =
+        HMAP_INITIALIZER(&new_multicast_group_uuids);
     SBREC_MULTICAST_GROUP_FOR_EACH (mc, ctx->ovnsb_idl) {
         /* As multicast groups are always reprocessed each time,
          * the first step is to clean the old flows for the group
@@ -807,7 +881,14 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
         ofctrl_remove_flows(&mc->header_.uuid);
         consider_mc_group(mff_ovn_geneve, ct_zones,
                           local_datapaths, mc, &ofpacts, &remote_ofpacts);
+        struct uuid_hash_node *hash_node = xzalloc(sizeof *hash_node);
+        hash_node->uuid = mc->header_.uuid;
+        hmap_insert(&new_multicast_group_uuids, &hash_node->node,
+                    uuid_hash(&hash_node->uuid));
     }
+    rationalize_hmap_and_delete_flows(&multicast_group_uuids,
+                                      &new_multicast_group_uuids);
+    hmap_destroy(&new_multicast_group_uuids);
 
     ofpbuf_uninit(&remote_ofpacts);
 
@@ -859,11 +940,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
      * metadata, we only support VXLAN for connections to gateways.  The
      * VNI is used to populate MFF_LOG_DATAPATH.  The gateway's logical
      * port is set to MFF_LOG_INPORT.  Then the packet is resubmitted to
-     * table 16 to determine the logical egress port.
-     *
-     * xxx Due to resubmitting to table 16, broadcasts will be re-sent to
-     * xxx all logical ports, including non-local ones which could cause
-     * xxx duplicate packets to be received by multiply-connected gateways. */
+     * table 16 to determine the logical egress port. */
     HMAP_FOR_EACH (tun, hmap_node, &tunnels) {
         if (tun->type != VXLAN) {
             continue;
@@ -883,6 +960,9 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
             ofpbuf_clear(&ofpacts);
             put_move(MFF_TUN_ID, 0,  MFF_LOG_DATAPATH, 0, 24, &ofpacts);
             put_load(binding->tunnel_key, MFF_LOG_INPORT, 0, 15, &ofpacts);
+            /* For packets received from a vxlan tunnel, set a flag to that
+             * effect. */
+            put_load(1, MFF_LOG_FLAGS, MLF_RCV_FROM_VXLAN_BIT, 1, &ofpacts);
             put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
 
             ofctrl_add_flow(OFTABLE_PHY_TO_LOG, 100, &match, &ofpacts, hc_uuid);

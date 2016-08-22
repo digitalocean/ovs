@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -472,12 +472,12 @@ destroy_classifier(struct classifier *cls)
 }
 
 static void
-cpvector_verify(const struct cpvector *cpvec)
+pvector_verify(const struct pvector *pvec)
 {
     void *ptr OVS_UNUSED;
     int prev_priority = INT_MAX;
 
-    CPVECTOR_FOR_EACH (ptr, cpvec) {
+    PVECTOR_FOR_EACH (ptr, pvec) {
         int priority = cursor__.vector[cursor__.entry_idx].priority;
         if (priority > prev_priority) {
             ovs_abort(0, "Priority vector is out of order (%u > %u)",
@@ -533,7 +533,7 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
     int found_visible_but_removable = 0;
     int found_rules2 = 0;
 
-    cpvector_verify(&cls->subtables);
+    pvector_verify(&cls->subtables);
     CMAP_FOR_EACH (table, cmap_node, &cls->subtables_map) {
         const struct cls_match *head;
         int max_priority = INT_MIN;
@@ -543,7 +543,7 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
         const struct cls_subtable *iter;
 
         /* Locate the subtable from 'subtables'. */
-        CPVECTOR_FOR_EACH (iter, &cls->subtables) {
+        PVECTOR_FOR_EACH (iter, &cls->subtables) {
             if (iter == table) {
                 if (found) {
                     ovs_abort(0, "Subtable %p duplicated in 'subtables'.",
@@ -647,7 +647,7 @@ check_tables(const struct classifier *cls, int n_tables, int n_rules,
     }
 
     assert(found_tables == cmap_count(&cls->subtables_map));
-    assert(found_tables == cpvector_count(&cls->subtables));
+    assert(found_tables == pvector_count(&cls->subtables));
     assert(n_tables == -1 || n_tables == found_tables_with_visible_rules);
     assert(n_rules == -1 || found_rules == n_rules + found_invisible);
     assert(n_dups == -1 || found_dups == n_dups);
@@ -1838,23 +1838,23 @@ static void help(struct ovs_cmdl_context *ctx);
 
 static const struct ovs_cmdl_command commands[] = {
     /* Classifier tests. */
-    {"empty", NULL, 0, 0, test_empty},
-    {"destroy-null", NULL, 0, 0, test_destroy_null},
-    {"single-rule", NULL, 0, 0, test_single_rule},
-    {"rule-replacement", NULL, 0, 0, test_rule_replacement},
-    {"many-rules-in-one-list", NULL, 0, 1, test_many_rules_in_one_list},
-    {"many-rules-in-one-table", NULL, 0, 1, test_many_rules_in_one_table},
-    {"many-rules-in-two-tables", NULL, 0, 0, test_many_rules_in_two_tables},
-    {"many-rules-in-five-tables", NULL, 0, 0, test_many_rules_in_five_tables},
-    {"benchmark", NULL, 0, 5, run_benchmarks},
+    {"empty", NULL, 0, 0, test_empty, OVS_RO },
+    {"destroy-null", NULL, 0, 0, test_destroy_null, OVS_RO },
+    {"single-rule", NULL, 0, 0, test_single_rule, OVS_RO },
+    {"rule-replacement", NULL, 0, 0, test_rule_replacement, OVS_RO },
+    {"many-rules-in-one-list", NULL, 0, 1, test_many_rules_in_one_list, OVS_RO },
+    {"many-rules-in-one-table", NULL, 0, 1, test_many_rules_in_one_table, OVS_RO },
+    {"many-rules-in-two-tables", NULL, 0, 0, test_many_rules_in_two_tables, OVS_RO },
+    {"many-rules-in-five-tables", NULL, 0, 0, test_many_rules_in_five_tables, OVS_RO },
+    {"benchmark", NULL, 0, 5, run_benchmarks, OVS_RO },
 
     /* Miniflow and minimask tests. */
-    {"miniflow", NULL, 0, 0, test_miniflow},
-    {"minimask_has_extra", NULL, 0, 0, test_minimask_has_extra},
-    {"minimask_combine", NULL, 0, 0, test_minimask_combine},
+    {"miniflow", NULL, 0, 0, test_miniflow, OVS_RO },
+    {"minimask_has_extra", NULL, 0, 0, test_minimask_has_extra, OVS_RO },
+    {"minimask_combine", NULL, 0, 0, test_minimask_combine, OVS_RO },
 
-    {"--help", NULL, 0, 0, help},
-    {NULL, NULL, 0, 0, NULL},
+    {"--help", NULL, 0, 0, help, OVS_RO },
+    {NULL, NULL, 0, 0, NULL, OVS_RO },
 };
 
 static void

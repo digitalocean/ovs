@@ -526,7 +526,7 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
  * changes in the device miimon status, so we can use atomic_count. */
 static atomic_count miimon_cnt = ATOMIC_COUNT_INIT(0);
 
-static void netdev_linux_run(void);
+static void netdev_linux_run(const struct netdev_class *);
 
 static int netdev_linux_do_ethtool(const char *name, struct ethtool_cmd *,
                                    int cmd, const char *cmd_name);
@@ -623,7 +623,7 @@ netdev_linux_miimon_enabled(void)
 }
 
 static void
-netdev_linux_run(void)
+netdev_linux_run(const struct netdev_class *netdev_class OVS_UNUSED)
 {
     struct nl_sock *sock;
     int error;
@@ -697,7 +697,7 @@ netdev_linux_run(void)
 }
 
 static void
-netdev_linux_wait(void)
+netdev_linux_wait(const struct netdev_class *netdev_class OVS_UNUSED)
 {
     struct nl_sock *sock;
 
@@ -1382,7 +1382,7 @@ netdev_linux_get_mtu(const struct netdev *netdev_, int *mtup)
  * networking ioctl interface.
  */
 static int
-netdev_linux_set_mtu(const struct netdev *netdev_, int mtu)
+netdev_linux_set_mtu(struct netdev *netdev_, int mtu)
 {
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
     struct ifreq ifr;

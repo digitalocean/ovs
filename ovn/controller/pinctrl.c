@@ -37,6 +37,7 @@
 #include "ovn-controller.h"
 #include "ovn/actions.h"
 #include "ovn/lib/logical-fields.h"
+#include "ovn/lib/ovn-dhcp.h"
 #include "ovn/lib/ovn-util.h"
 #include "poll-loop.h"
 #include "rconn.h"
@@ -366,6 +367,290 @@ exit:
     }
 }
 
+static bool
+compose_out_dhcpv6_opts(struct ofpbuf *userdata,
+                        struct ofpbuf *out_dhcpv6_opts, ovs_be32 iaid)
+{
+    while (userdata->size) {
+        struct dhcp_opt6_header *userdata_opt = ofpbuf_try_pull(
+            userdata, sizeof *userdata_opt);
+        if (!userdata_opt) {
+            return false;
+        }
+
+        uint8_t *userdata_opt_data = ofpbuf_try_pull(userdata,
+                                                     userdata_opt->len);
+        if (!userdata_opt_data) {
+            return false;
+        }
+
+        switch (userdata_opt->code) {
+        case DHCPV6_OPT_SERVER_ID_CODE:
+        {
+            /* The Server Identifier option carries a DUID
+             * identifying a server between a client and a server.
+             * See RFC 3315 Sec 9 and Sec 22.3.
+             *
+             * We use DUID Based on Link-layer Address [DUID-LL].
+             */
+
+            struct dhcpv6_opt_server_id *opt_server_id = ofpbuf_put_zeros(
+                out_dhcpv6_opts, sizeof *opt_server_id);
+
+            opt_server_id->opt.code = htons(DHCPV6_OPT_SERVER_ID_CODE);
+            opt_server_id->opt.len = htons(userdata_opt->len + 4);
+            opt_server_id->duid_type = htons(DHCPV6_DUID_LL);
+            opt_server_id->hw_type = htons(DHCPV6_HW_TYPE_ETH);
+            memcpy(&opt_server_id->mac, userdata_opt_data,
+                    sizeof(struct eth_addr));
+            break;
+        }
+
+        case DHCPV6_OPT_IA_ADDR_CODE:
+        {
+            if (userdata_opt->len != sizeof(struct in6_addr)) {
+                return false;
+            }
+
+            /* IA Address option is used to specify IPv6 addresses associated
+             * with an IA_NA or IA_TA. The IA Address option must be
+             * encapsulated in the Options field of an IA_NA or IA_TA option.
+             *
+             * We will encapsulate the IA Address within the IA_NA option.
+             * Please see RFC 3315 section 22.5 and 22.6
+             */
+            struct dhcpv6_opt_ia_na *opt_ia_na = ofpbuf_put_zeros(
+                out_dhcpv6_opts, sizeof *opt_ia_na);
+            opt_ia_na->opt.code = htons(DHCPV6_OPT_IA_NA_CODE);
+            /* IA_NA length (in bytes)-
+             *  IAID - 4
+             *  T1   - 4
+             *  T2   - 4
+             *  IA Address - sizeof(struct dhcpv6_opt_ia_addr)
+             */
+            opt_ia_na->opt.len = htons(12 + sizeof(struct dhcpv6_opt_ia_addr));
+            opt_ia_na->iaid = iaid;
+            /* Set the lifetime of the address(es) to infinity */
+            opt_ia_na->t1 = OVS_BE32_MAX;
+            opt_ia_na->t2 = OVS_BE32_MAX;
+
+            struct dhcpv6_opt_ia_addr *opt_ia_addr = ofpbuf_put_zeros(
+                out_dhcpv6_opts, sizeof *opt_ia_addr);
+            opt_ia_addr->opt.code = htons(DHCPV6_OPT_IA_ADDR_CODE);
+            opt_ia_addr->opt.len = htons(userdata_opt->len + 8);
+            memcpy(opt_ia_addr->ipv6.s6_addr, userdata_opt_data,
+                   userdata_opt->len);
+            opt_ia_addr->t1 = OVS_BE32_MAX;
+            opt_ia_addr->t2 = OVS_BE32_MAX;
+            break;
+        }
+
+        case DHCPV6_OPT_DNS_SERVER_CODE:
+        {
+            struct dhcpv6_opt_header *opt_dns = ofpbuf_put_zeros(
+                out_dhcpv6_opts, sizeof *opt_dns);
+            opt_dns->code = htons(DHCPV6_OPT_DNS_SERVER_CODE);
+            opt_dns->len = htons(userdata_opt->len);
+            ofpbuf_put(out_dhcpv6_opts, userdata_opt_data, userdata_opt->len);
+            break;
+        }
+
+        case DHCPV6_OPT_DOMAIN_SEARCH_CODE:
+        {
+            struct dhcpv6_opt_header *opt_dsl = ofpbuf_put_zeros(
+                out_dhcpv6_opts, sizeof *opt_dsl);
+            opt_dsl->code = htons(DHCPV6_OPT_DOMAIN_SEARCH_CODE);
+            opt_dsl->len = htons(userdata_opt->len + 2);
+            uint8_t *data = ofpbuf_put_zeros(out_dhcpv6_opts,
+                                              userdata_opt->len + 2);
+            *data = userdata_opt->len;
+            memcpy(data + 1, userdata_opt_data, userdata_opt->len);
+            break;
+        }
+
+        default:
+            return false;
+        }
+    }
+    return true;
+}
+
+static void
+pinctrl_handle_put_dhcpv6_opts(
+    struct dp_packet *pkt_in, struct ofputil_packet_in *pin,
+    struct ofpbuf *userdata, struct ofpbuf *continuation OVS_UNUSED)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    enum ofp_version version = rconn_get_version(swconn);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    struct dp_packet *pkt_out_ptr = NULL;
+    uint32_t success = 0;
+
+    /* Parse result field. */
+    const struct mf_field *f;
+    enum ofperr ofperr = nx_pull_header(userdata, &f, NULL);
+    if (ofperr) {
+       VLOG_WARN_RL(&rl, "bad result OXM (%s)", ofperr_to_string(ofperr));
+       goto exit;
+    }
+
+    /* Parse result offset. */
+    ovs_be32 *ofsp = ofpbuf_try_pull(userdata, sizeof *ofsp);
+    if (!ofsp) {
+        VLOG_WARN_RL(&rl, "offset not present in the userdata");
+        goto exit;
+    }
+
+    /* Check that the result is valid and writable. */
+    struct mf_subfield dst = { .field = f, .ofs = ntohl(*ofsp), .n_bits = 1 };
+    ofperr = mf_check_dst(&dst, NULL);
+    if (ofperr) {
+        VLOG_WARN_RL(&rl, "bad result bit (%s)", ofperr_to_string(ofperr));
+        goto exit;
+    }
+
+    if (!userdata->size) {
+        VLOG_WARN_RL(&rl, "DHCPv6 options not present in the userdata");
+        goto exit;
+    }
+
+    struct udp_header *in_udp = dp_packet_l4(pkt_in);
+    const uint8_t *in_dhcpv6_data = dp_packet_get_udp_payload(pkt_in);
+    uint8_t out_dhcpv6_msg_type;
+    switch(*in_dhcpv6_data) {
+    case DHCPV6_MSG_TYPE_SOLICIT:
+        out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_ADVT;
+        break;
+
+    case DHCPV6_MSG_TYPE_REQUEST:
+    case DHCPV6_MSG_TYPE_CONFIRM:
+    case DHCPV6_MSG_TYPE_DECLINE:
+        out_dhcpv6_msg_type = DHCPV6_MSG_TYPE_REPLY;
+        break;
+
+    default:
+        /* Invalid or unsupported DHCPv6 message type */
+        goto exit;
+    }
+
+    /* Skip 4 bytes (message type (1 byte) + transaction ID (3 bytes). */
+    in_dhcpv6_data += 4;
+    /* We need to extract IAID from the IA-NA option of the client's DHCPv6
+     * solicit/request/confirm packet and copy the same IAID in the Server's
+     * response. */
+    ovs_be32 iaid = 0;
+    struct dhcpv6_opt_header const *in_opt_client_id = NULL;
+    size_t udp_len = ntohs(in_udp->udp_len);
+    size_t l4_len = dp_packet_l4_size(pkt_in);
+    uint8_t *end = (uint8_t *)in_udp + MIN(udp_len, l4_len);
+    while (in_dhcpv6_data < end) {
+        struct dhcpv6_opt_header const *in_opt =
+             (struct dhcpv6_opt_header *)in_dhcpv6_data;
+        switch(ntohs(in_opt->code)) {
+        case DHCPV6_OPT_IA_NA_CODE:
+        {
+            struct dhcpv6_opt_ia_na *opt_ia_na = (
+                struct dhcpv6_opt_ia_na *)in_opt;
+            iaid = opt_ia_na->iaid;
+            break;
+        }
+
+        case DHCPV6_OPT_CLIENT_ID_CODE:
+            in_opt_client_id = in_opt;
+            break;
+
+        default:
+            break;
+        }
+        in_dhcpv6_data += sizeof *in_opt + ntohs(in_opt->len);
+    }
+
+    if (!in_opt_client_id) {
+        VLOG_WARN_RL(&rl, "DHCPv6 option - Client id not present in the "
+                     " DHCPv6 packet");
+        goto exit;
+    }
+
+    if (!iaid) {
+        VLOG_WARN_RL(&rl, "DHCPv6 option - IA NA not present in the "
+                     " DHCPv6 packet");
+        goto exit;
+    }
+
+    uint64_t out_ofpacts_dhcpv6_opts_stub[256 / 8];
+    struct ofpbuf out_dhcpv6_opts =
+        OFPBUF_STUB_INITIALIZER(out_ofpacts_dhcpv6_opts_stub);
+
+    if (!compose_out_dhcpv6_opts(userdata, &out_dhcpv6_opts, iaid)) {
+        VLOG_WARN_RL(&rl, "Invalid userdata");
+        goto exit;
+    }
+
+    uint16_t new_l4_size
+        = (UDP_HEADER_LEN + 4 + sizeof *in_opt_client_id +
+           ntohs(in_opt_client_id->len) + out_dhcpv6_opts.size);
+    size_t new_packet_size = pkt_in->l4_ofs + new_l4_size;
+
+    struct dp_packet pkt_out;
+    dp_packet_init(&pkt_out, new_packet_size);
+    dp_packet_clear(&pkt_out);
+    dp_packet_prealloc_tailroom(&pkt_out, new_packet_size);
+    pkt_out_ptr = &pkt_out;
+
+    /* Copy L2 and L3 headers from pkt_in. */
+    dp_packet_put(&pkt_out, dp_packet_pull(pkt_in, pkt_in->l4_ofs),
+                  pkt_in->l4_ofs);
+
+    pkt_out.l2_5_ofs = pkt_in->l2_5_ofs;
+    pkt_out.l2_pad_size = pkt_in->l2_pad_size;
+    pkt_out.l3_ofs = pkt_in->l3_ofs;
+    pkt_out.l4_ofs = pkt_in->l4_ofs;
+
+    /* Pull the DHCPv6 message type and transaction id from the pkt_in.
+     * Need to preserve the transaction id in the DHCPv6 reply packet. */
+    struct udp_header *out_udp = dp_packet_put(
+        &pkt_out, dp_packet_pull(pkt_in, UDP_HEADER_LEN), UDP_HEADER_LEN);
+    uint8_t *out_dhcpv6 = dp_packet_put(&pkt_out, dp_packet_pull(pkt_in, 4), 4);
+
+    /* Set the proper DHCPv6 message type. */
+    *out_dhcpv6 = out_dhcpv6_msg_type;
+
+    /* Copy the Client Identifier. */
+    dp_packet_put(&pkt_out, in_opt_client_id,
+                  sizeof *in_opt_client_id + ntohs(in_opt_client_id->len));
+
+    /* Copy the DHCPv6 Options. */
+    dp_packet_put(&pkt_out, out_dhcpv6_opts.data, out_dhcpv6_opts.size);
+    out_udp->udp_len = htons(new_l4_size);
+    out_udp->udp_csum = 0;
+
+    struct ovs_16aligned_ip6_hdr *out_ip6 = dp_packet_l3(&pkt_out);
+    out_ip6->ip6_ctlun.ip6_un1.ip6_un1_plen = out_udp->udp_len;
+
+    uint32_t csum;
+    csum = packet_csum_pseudoheader6(dp_packet_l3(&pkt_out));
+    csum = csum_continue(csum, out_udp, dp_packet_size(&pkt_out) -
+                         ((const unsigned char *)out_udp -
+                         (const unsigned char *)dp_packet_l2(&pkt_out)));
+    out_udp->udp_csum = csum_finish(csum);
+    if (!out_udp->udp_csum) {
+        out_udp->udp_csum = htons(0xffff);
+    }
+
+    pin->packet = dp_packet_data(&pkt_out);
+    pin->packet_len = dp_packet_size(&pkt_out);
+    ofpbuf_uninit(&out_dhcpv6_opts);
+    success = 1;
+exit:
+    if (!ofperr) {
+        union mf_subvalue sv;
+        sv.u8_val = success;
+        mf_write_subfield(&dst, &sv, &pin->flow_metadata);
+    }
+    queue_msg(ofputil_encode_resume(pin, continuation, proto));
+    dp_packet_uninit(pkt_out_ptr);
+}
+
 static void
 process_packet_in(const struct ofp_header *msg)
 {
@@ -421,6 +706,11 @@ process_packet_in(const struct ofp_header *msg)
                                        false);
         break;
 
+    case ACTION_OPCODE_PUT_DHCPV6_OPTS:
+        pinctrl_handle_put_dhcpv6_opts(&packet, &pin, &userdata,
+                                       &continuation);
+        break;
+
     default:
         VLOG_WARN_RL(&rl, "unrecognized packet-in opcode %"PRIu32,
                      ntohl(ah->opcode));
@@ -461,18 +751,12 @@ pinctrl_run(struct controller_ctx *ctx, const struct lport_index *lports,
             const char *chassis_id,
             struct hmap *local_datapaths)
 {
-    if (br_int) {
-        char *target;
-
-        target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
-        if (strcmp(target, rconn_get_target(swconn))) {
-            VLOG_INFO("%s: connecting to switch", target);
-            rconn_connect(swconn, target, target);
-        }
-        free(target);
-    } else {
-        rconn_disconnect(swconn);
+    char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
+    if (strcmp(target, rconn_get_target(swconn))) {
+        VLOG_INFO("%s: connecting to switch", target);
+        rconn_connect(swconn, target, target);
     }
+    free(target);
 
     rconn_run(swconn);
 
@@ -726,10 +1010,24 @@ destroy_send_garps(void)
     shash_destroy_free_data(&send_garp_data);
 }
 
+static void
+add_garp(const char *name, ofp_port_t ofport,
+         const struct eth_addr ea, ovs_be32 ip)
+{
+    struct garp_data *garp = xmalloc(sizeof *garp);
+    garp->ea = ea;
+    garp->ipv4 = ip;
+    garp->announce_time = time_msec() + 1000;
+    garp->backoff = 1;
+    garp->ofport = ofport;
+    shash_add(&send_garp_data, name, garp);
+}
+
 /* Add or update a vif for which GARPs need to be announced. */
 static void
 send_garp_update(const struct sbrec_port_binding *binding_rec,
-                 struct simap *localnet_ofports, struct hmap *local_datapaths)
+                 struct simap *localnet_ofports, struct hmap *local_datapaths,
+                 struct shash *nat_addresses)
 {
     /* Find the localnet ofport to send this GARP. */
     struct local_datapath *ld
@@ -741,9 +1039,31 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
     ofp_port_t ofport = u16_to_ofp(simap_get(localnet_ofports,
                                              ld->localnet_port->logical_port));
 
-    /* Update GARP if it exists. */
-    struct garp_data *garp = shash_find_data(&send_garp_data,
-                                             binding_rec->logical_port);
+    volatile struct garp_data *garp = NULL;
+    /* Update GARP for NAT IP if it exists. */
+    if (!strcmp(binding_rec->type, "l3gateway")) {
+        struct lport_addresses *laddrs = NULL;
+        laddrs = shash_find_data(nat_addresses, binding_rec->logical_port);
+        if (!laddrs) {
+            return;
+        }
+        int i;
+        for (i = 0; i < laddrs->n_ipv4_addrs; i++) {
+            char *name = xasprintf("%s-%s", binding_rec->logical_port,
+                                            laddrs->ipv4_addrs[i].addr_s);
+            garp = shash_find_data(&send_garp_data, name);
+            if (garp) {
+                garp->ofport = ofport;
+            } else {
+                add_garp(name, ofport, laddrs->ea, laddrs->ipv4_addrs[i].addr);
+            }
+            free(name);
+        }
+        return;
+    }
+
+    /* Update GARP for vif if it exists. */
+    garp = shash_find_data(&send_garp_data, binding_rec->logical_port);
     if (garp) {
         garp->ofport = ofport;
         return;
@@ -758,13 +1078,8 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
             continue;
         }
 
-        struct garp_data *garp = xmalloc(sizeof *garp);
-        garp->ea = laddrs.ea;
-        garp->ipv4 = laddrs.ipv4_addrs[0].addr;
-        garp->announce_time = time_msec() + 1000;
-        garp->backoff = 1;
-        garp->ofport = ofport;
-        shash_add(&send_garp_data, binding_rec->logical_port, garp);
+        add_garp(binding_rec->logical_port, ofport,
+                 laddrs.ea, laddrs.ipv4_addrs[0].addr);
 
         destroy_lport_addresses(&laddrs);
         break;
@@ -823,14 +1138,15 @@ send_garp(struct garp_data *garp, long long int current_time)
     return garp->announce_time;
 }
 
-/* Get localnet vifs, and ofport for localnet patch ports. */
+/* Get localnet vifs, local l3gw ports and ofport for localnet patch ports. */
 static void
-get_localnet_vifs(const struct ovsrec_bridge *br_int,
+get_localnet_vifs_l3gwports(const struct ovsrec_bridge *br_int,
                   const char *this_chassis_id,
                   const struct lport_index *lports,
                   struct hmap *local_datapaths,
                   struct sset *localnet_vifs,
-                  struct simap *localnet_ofports)
+                  struct simap *localnet_ofports,
+                  struct sset *local_l3gw_ports)
 {
     for (int i = 0; i < br_int->n_ports; i++) {
         const struct ovsrec_port *port_rec = br_int->ports[i];
@@ -844,6 +1160,8 @@ get_localnet_vifs(const struct ovsrec_bridge *br_int,
         }
         const char *localnet = smap_get(&port_rec->external_ids,
                                         "ovn-localnet-port");
+        const char *l3_gateway_port = smap_get(&port_rec->external_ids,
+                                               "ovn-l3gateway-port");
         for (int j = 0; j < port_rec->n_interfaces; j++) {
             const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
             if (!iface_rec->n_ofport) {
@@ -855,6 +1173,10 @@ get_localnet_vifs(const struct ovsrec_bridge *br_int,
                     continue;
                 }
                 simap_put(localnet_ofports, localnet, ofport);
+                continue;
+            }
+            if (l3_gateway_port) {
+                sset_add(local_l3gw_ports, l3_gateway_port);
                 continue;
             }
             const char *iface_id = smap_get(&iface_rec->external_ids,
@@ -878,6 +1200,41 @@ get_localnet_vifs(const struct ovsrec_bridge *br_int,
 }
 
 static void
+get_nat_addresses_and_keys(struct sset *nat_address_keys,
+                           struct sset *local_l3gw_ports,
+                           const struct lport_index *lports,
+                           struct shash *nat_addresses)
+{
+    const char *gw_port;
+    SSET_FOR_EACH(gw_port, local_l3gw_ports) {
+        const struct sbrec_port_binding *pb = lport_lookup_by_name(lports,
+                                                                   gw_port);
+        if (!pb) {
+            continue;
+        }
+        const char *nat_addresses_options = smap_get(&pb->options,
+                                                     "nat-addresses");
+        if (!nat_addresses_options) {
+            continue;
+        }
+
+        struct lport_addresses *laddrs = xmalloc(sizeof *laddrs);
+        if (!extract_lsp_addresses(nat_addresses_options, laddrs)) {
+            free(laddrs);
+            continue;
+        }
+        int i;
+        for (i = 0; i < laddrs->n_ipv4_addrs; i++) {
+            char *name = xasprintf("%s-%s", pb->logical_port,
+                                            laddrs->ipv4_addrs[i].addr_s);
+            sset_add(nat_address_keys, name);
+            free(name);
+        }
+        shash_add(nat_addresses, pb->logical_port, laddrs);
+    }
+}
+
+static void
 send_garp_wait(void)
 {
     poll_timer_wait_until(send_garp_time);
@@ -889,15 +1246,23 @@ send_garp_run(const struct ovsrec_bridge *br_int, const char *chassis_id,
               struct hmap *local_datapaths)
 {
     struct sset localnet_vifs = SSET_INITIALIZER(&localnet_vifs);
+    struct sset local_l3gw_ports = SSET_INITIALIZER(&local_l3gw_ports);
+    struct sset nat_ip_keys = SSET_INITIALIZER(&nat_ip_keys);
     struct simap localnet_ofports = SIMAP_INITIALIZER(&localnet_ofports);
+    struct shash nat_addresses;
 
-    get_localnet_vifs(br_int, chassis_id, lports, local_datapaths,
-                      &localnet_vifs, &localnet_ofports);
+    shash_init(&nat_addresses);
 
-    /* For deleted ports, remove from send_garp_data. */
+    get_localnet_vifs_l3gwports(br_int, chassis_id, lports, local_datapaths,
+                      &localnet_vifs, &localnet_ofports, &local_l3gw_ports);
+
+    get_nat_addresses_and_keys(&nat_ip_keys, &local_l3gw_ports, lports,
+                               &nat_addresses);
+    /* For deleted ports and deleted nat ips, remove from send_garp_data. */
     struct shash_node *iter, *next;
     SHASH_FOR_EACH_SAFE (iter, next, &send_garp_data) {
-        if (!sset_contains(&localnet_vifs, iter->name)) {
+        if (!sset_contains(&localnet_vifs, iter->name) &&
+            !sset_contains(&nat_ip_keys, iter->name)) {
             send_garp_delete(iter->name);
         }
     }
@@ -908,7 +1273,19 @@ send_garp_run(const struct ovsrec_bridge *br_int, const char *chassis_id,
         const struct sbrec_port_binding *pb = lport_lookup_by_name(lports,
                                                                    iface_id);
         if (pb) {
-            send_garp_update(pb, &localnet_ofports, local_datapaths);
+            send_garp_update(pb, &localnet_ofports, local_datapaths,
+                             &nat_addresses);
+        }
+    }
+
+    /* Update send_garp_data for nat-addresses. */
+    const char *gw_port;
+    SSET_FOR_EACH (gw_port, &local_l3gw_ports) {
+        const struct sbrec_port_binding *pb = lport_lookup_by_name(lports,
+                                                                gw_port);
+        if (pb) {
+            send_garp_update(pb, &localnet_ofports, local_datapaths,
+                             &nat_addresses);
         }
     }
 
@@ -922,7 +1299,18 @@ send_garp_run(const struct ovsrec_bridge *br_int, const char *chassis_id,
         }
     }
     sset_destroy(&localnet_vifs);
+    sset_destroy(&local_l3gw_ports);
     simap_destroy(&localnet_ofports);
+
+    SHASH_FOR_EACH_SAFE (iter, next, &nat_addresses) {
+        struct lport_addresses *laddrs = iter->data;
+        destroy_lport_addresses(laddrs);
+        shash_delete(&nat_addresses, iter);
+        free(laddrs);
+    }
+    shash_destroy(&nat_addresses);
+
+    sset_destroy(&nat_ip_keys);
 }
 
 static void

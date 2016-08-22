@@ -1,3 +1,10 @@
+openvswitch (2.6.0~git20160822.2cff273-0ubuntu1) yakkety; urgency=medium
+
+  * New upstream snapshot from branch-2.6.
+  * d/rules: Switch to branch-2.6 now its been cut upstream.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 22 Aug 2016 11:48:27 +0100
+
 openvswitch (2.6.0~git20160810.7f5f2bd-0ubuntu3) yakkety; urgency=medium
 
   * Revert DPDK support on arm64.

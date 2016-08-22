@@ -1808,6 +1808,14 @@ struct mf_bitmap {
 #error "Need to update CASE_MFF_XXREGS to match FLOW_N_XXREGS"
 #endif
 
+static inline bool
+mf_is_register(enum mf_field_id id)
+{
+    return ((id >= MFF_REG0   && id < MFF_REG0   + FLOW_N_REGS) ||
+            (id >= MFF_XREG0  && id < MFF_XREG0  + FLOW_N_XREGS) ||
+            (id >= MFF_XXREG0 && id < MFF_XXREG0 + FLOW_N_XXREGS));
+}
+
 /* Use this macro as CASE_MFF_TUN_METADATA: in a switch statement to choose
  * all of the MFF_TUN_METADATAn cases. */
 #define CASE_MFF_TUN_METADATA                         \
@@ -1988,6 +1996,7 @@ union mf_subvalue {
     ovs_be16 be16[64];
     ovs_be32 be32[32];
     ovs_be64 be64[16];
+    ovs_be128 be128[8];
 
     /* Convenient access to just least-significant bits in various forms. */
     struct {
@@ -2115,6 +2124,12 @@ void mf_read_subfield(const struct mf_subfield *, const struct flow *,
                       union mf_subvalue *);
 uint64_t mf_get_subfield(const struct mf_subfield *, const struct flow *);
 
+void mf_subfield_copy(const struct mf_subfield *src,
+                      const struct mf_subfield *dst,
+                      struct flow *, struct flow_wildcards *);
+void mf_subfield_swap(const struct mf_subfield *,
+                      const struct mf_subfield *,
+                      struct flow *flow, struct flow_wildcards *);
 
 enum ofperr mf_check_src(const struct mf_subfield *, const struct flow *);
 enum ofperr mf_check_dst(const struct mf_subfield *, const struct flow *);

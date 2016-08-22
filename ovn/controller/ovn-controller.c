@@ -350,7 +350,7 @@ main(int argc, char *argv[])
     ovsrec_init();
     sbrec_init();
 
-    ofctrl_init();
+    ofctrl_init(&group_table);
     pinctrl_init();
     lflow_init();
 
@@ -433,7 +433,7 @@ main(int argc, char *argv[])
 
         const struct sbrec_chassis *chassis = NULL;
         if (chassis_id) {
-            chassis = chassis_run(&ctx, chassis_id);
+            chassis = chassis_run(&ctx, chassis_id, br_int);
             encaps_run(&ctx, br_int, chassis_id);
             binding_run(&ctx, br_int, chassis_id, &local_datapaths,
                         &all_lports);
@@ -459,7 +459,7 @@ main(int argc, char *argv[])
                          br_int, chassis_id, &ct_zones,
                          &local_datapaths, &patched_datapaths);
 
-            ofctrl_put(&group_table, get_nb_cfg(ctx.ovnsb_idl));
+            ofctrl_put(get_nb_cfg(ctx.ovnsb_idl));
             if (ctx.ovnsb_idl_txn) {
                 int64_t cur_cfg = ofctrl_get_cur_cfg();
                 if (cur_cfg && cur_cfg != chassis->nb_cfg) {
@@ -482,6 +482,7 @@ main(int argc, char *argv[])
         ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop);
         ovsdb_idl_loop_commit_and_wait(&ovs_idl_loop);
         ovsdb_idl_track_clear(ovnsb_idl_loop.idl);
+        ovsdb_idl_track_clear(ovs_idl_loop.idl);
         poll_block();
         if (should_service_stop()) {
             exiting = true;

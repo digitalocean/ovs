@@ -232,8 +232,13 @@ consider_local_datapath(struct controller_ctx *ctx,
             sset_add(all_lports, binding_rec->logical_port);
             add_local_datapath(local_datapaths, binding_rec);
         }
-    } else if (chassis_rec && binding_rec->chassis == chassis_rec
-               && strcmp(binding_rec->type, "l3gateway")) {
+    } else if (!strcmp(binding_rec->type, "l3gateway")) {
+        const char *chassis = smap_get(&binding_rec->options,
+                                       "l3gateway-chassis");
+        if (!strcmp(chassis, chassis_rec->name) && ctx->ovnsb_idl_txn) {
+            add_local_datapath(local_datapaths, binding_rec);
+        }
+    } else if (chassis_rec && binding_rec->chassis == chassis_rec) {
         if (ctx->ovnsb_idl_txn) {
             VLOG_INFO("Releasing lport %s from this chassis.",
                       binding_rec->logical_port);
@@ -302,6 +307,12 @@ binding_run(struct controller_ctx *ctx, const struct ovsrec_bridge *br_int,
                 remove_local_datapath(local_datapaths, old_ld);
             }
         }
+        struct local_datapath *ld;
+        HMAP_FOR_EACH_SAFE (ld, next, uuid_hmap_node,
+                            &keep_local_datapath_by_uuid) {
+            hmap_remove(&keep_local_datapath_by_uuid, &ld->uuid_hmap_node);
+            free(ld);
+        }
         hmap_destroy(&keep_local_datapath_by_uuid);
 
         /* Any remaining entries in removed_lports are logical ports that
@@ -310,6 +321,7 @@ binding_run(struct controller_ctx *ctx, const struct ovsrec_bridge *br_int,
         SSET_FOR_EACH(cur_id, &removed_lports) {
             sset_find_and_delete(all_lports, cur_id);
         }
+        sset_destroy(&removed_lports);
 
         process_full_binding = false;
     } else {

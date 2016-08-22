@@ -5657,7 +5657,7 @@ OVS_VSWITCHD_DISABLE_TUNNEL_PUSH_POP
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
 
 AT_CHECK([ovs-appctl dpif/show | tail -n +3], [0], [dnl
-		br0 65534/100: (dummy)
+		br0 65534/100: (dummy-internal)
 		p1 1/1: (gre: key=5, local_ip=2.2.2.2, remote_ip=1.1.1.1)
 		p2 2/2: (dummy)
 ])
@@ -5829,10 +5829,10 @@ AT_CHECK([ovs-vsctl -- add-port int-br t1 -- set Interface t1 type=gre \
 AT_CHECK([ovs-appctl dpif/show], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
 	br0:
-		br0 65534/100: (dummy)
+		br0 65534/100: (dummy-internal)
 		p0 1/1: (dummy: ifindex=1010)
 	int-br:
-		int-br 65534/2: (dummy)
+		int-br 65534/2: (dummy-internal)
 		t1 4/4: (gre: key=456, remote_ip=1.1.2.92)
 		vm1 5/3: (dummy: ifindex=2011)
 ])
@@ -6573,11 +6573,11 @@ add_of_ports br1 3
 AT_CHECK([ovs-appctl dpif/show | sed 's/\(dummy-pmd: \).*)/\1<cleared>)/'], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
 	br0:
-		br0 65534/100: (dummy)
+		br0 65534/100: (dummy-internal)
 		p1 1/1: (dummy-pmd: <cleared>)
 		p2 2/2: (dummy-pmd: <cleared>)
 	br1:
-		br1 65534/101: (dummy)
+		br1 65534/101: (dummy-internal)
 		p3 3/3: (dummy)
 ])
 OVS_VSWITCHD_STOP
@@ -6757,11 +6757,11 @@ sleep 1  # wait for log writer
 AT_CHECK([ovs-appctl dpif/show], [0], [dnl
 dummy@ovs-dummy: hit:13 missed:2
 	br0:
-		br0 65534/100: (dummy)
+		br0 65534/100: (dummy-internal)
 		p2 2/2: (dummy)
 		pbr0 1/none: (patch: peer=pbr1)
 	br1:
-		br1 65534/101: (dummy)
+		br1 65534/101: (dummy-internal)
 		p3 3/3: (dummy)
 		pbr1 1/none: (patch: peer=pbr0)
 ])
@@ -6822,11 +6822,11 @@ OVS_WAIT_UNTIL([test `grep flow_add ovs-vswitchd.log | wc -l` -ge 1])
 AT_CHECK([ovs-appctl dpif/show], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:1
 	br0:
-		br0 65534/100: (dummy)
+		br0 65534/100: (dummy-internal)
 		p2 2/2: (dummy)
 		pbr0 1/none: (patch: peer=pbr1)
 	br1:
-		br1 65534/101: (dummy)
+		br1 65534/101: (dummy-internal)
 		p3 3/3: (dummy)
 		pbr1 1/none: (patch: peer=pbr0)
 ])
@@ -8856,6 +8856,36 @@ AT_CHECK([ovs-ofctl dump-flows br0 | grep cookie=0x1 | grep -o "n_packets=[[0-9]
 dnl No dropped packets
 n_packets=0
 ])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - set mtu])
+OVS_VSWITCHD_START
+
+add_of_ports br0 1
+
+# Check that initial MTU is 1500 for 'br0' and 'p1'.
+AT_CHECK([ovs-vsctl get Interface br0 mtu], [0], [dnl
+1500
+])
+AT_CHECK([ovs-vsctl get Interface p1 mtu], [0], [dnl
+1500
+])
+
+# Request new MTU for 'p1'
+AT_CHECK([ovs-vsctl set Interface p1 mtu_request=1600])
+
+# Check that the new MTU is applied
+AT_CHECK([ovs-vsctl --timeout=10 wait-until Interface p1 mtu=1600])
+# The internal port 'br0' should have the same MTU value as p1, becase it's
+# the new bridge minimum.
+AT_CHECK([ovs-vsctl --timeout=10 wait-until Interface br0 mtu=1600])
+
+AT_CHECK([ovs-vsctl del-port br0 p1])
+
+# When 'p1' is deleted, the internal port should return to the default MTU
+AT_CHECK([ovs-vsctl --timeout=10 wait-until Interface br0 mtu=1500])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
