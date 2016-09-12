@@ -36,8 +36,12 @@ endif
 
 
 # Skip some known failing tests - review for each snapshot or release
-# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1609846
-SKIP_TEST := 1-14 16-1148 1150-2215 2217-
+# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1622751
+ifeq (ppc64el, $(DEB_HOST_ARCH))
+SKIP_TEST = 1866
+else
+SKIP_TEST =
+endif
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on powerpc/s390x until

@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include "bitmap.h"
 #include "command-line.h"
 #include "daemon.h"
 #include "dirs.h"
@@ -62,6 +63,8 @@ static const char *ovnsb_db;
 /* MAC address management (macam) table of "struct eth_addr"s, that holds the
  * MAC addresses allocated by the OVN ipam module. */
 static struct hmap macam = HMAP_INITIALIZER(&macam);
+
+#define MAX_OVN_TAGS 4096
 
 /* Pipeline stages. */
 
@@ -121,11 +124,12 @@ enum ovn_stage {
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,   0, "lr_in_admission")    \
     PIPELINE_STAGE(ROUTER, IN,  IP_INPUT,    1, "lr_in_ip_input")     \
-    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,      2, "lr_in_unsnat")       \
-    PIPELINE_STAGE(ROUTER, IN,  DNAT,        3, "lr_in_dnat")         \
-    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,  4, "lr_in_ip_routing")   \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE, 5, "lr_in_arp_resolve")  \
-    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST, 6, "lr_in_arp_request")  \
+    PIPELINE_STAGE(ROUTER, IN,  DEFRAG,      2, "lr_in_defrag")       \
+    PIPELINE_STAGE(ROUTER, IN,  UNSNAT,      3, "lr_in_unsnat")       \
+    PIPELINE_STAGE(ROUTER, IN,  DNAT,        4, "lr_in_dnat")         \
+    PIPELINE_STAGE(ROUTER, IN,  IP_ROUTING,  5, "lr_in_ip_routing")   \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_RESOLVE, 6, "lr_in_arp_resolve")  \
+    PIPELINE_STAGE(ROUTER, IN,  ARP_REQUEST, 7, "lr_in_arp_request")  \
                                                                       \
     /* Logical router egress stages. */                               \
     PIPELINE_STAGE(ROUTER, OUT, SNAT,      0, "lr_out_snat")          \
@@ -885,18 +889,13 @@ ipam_allocate_addresses(struct ovn_datapath *od, struct ovn_port *op,
 }
 
 static void
-build_ipam(struct northd_context *ctx, struct hmap *datapaths,
-           struct hmap *ports)
+build_ipam(struct hmap *datapaths, struct hmap *ports)
 {
     /* IPAM generally stands for IP address management.  In non-virtualized
      * world, MAC addresses come with the hardware.  But, with virtualized
      * workloads, they need to be assigned and managed.  This function
      * does both IP address management (ipam) and MAC address management
      * (macam). */
-
-    if (!ctx->ovnnb_txn) {
-        return;
-    }
 
     /* If the switch's other_config:subnet is set, allocate new addresses for
      * ports that have the "dynamic" keyword in their addresses column. */
@@ -955,12 +954,110 @@ build_ipam(struct northd_context *ctx, struct hmap *datapaths,
     }
 }
 
+/* Tag allocation for nested containers.
+ *
+ * For a logical switch port with 'parent_name' and a request to allocate tags,
+ * keeps a track of all allocated tags. */
+struct tag_alloc_node {
+    struct hmap_node hmap_node;
+    char *parent_name;
+    unsigned long *allocated_tags;  /* A bitmap to track allocated tags. */
+};
+
+static void
+tag_alloc_destroy(struct hmap *tag_alloc_table)
+{
+    struct tag_alloc_node *node;
+    HMAP_FOR_EACH_POP (node, hmap_node, tag_alloc_table) {
+        bitmap_free(node->allocated_tags);
+        free(node->parent_name);
+        free(node);
+    }
+    hmap_destroy(tag_alloc_table);
+}
+
+static struct tag_alloc_node *
+tag_alloc_get_node(struct hmap *tag_alloc_table, const char *parent_name)
+{
+    /* If a node for the 'parent_name' exists, return it. */
+    struct tag_alloc_node *tag_alloc_node;
+    HMAP_FOR_EACH_WITH_HASH (tag_alloc_node, hmap_node,
+                             hash_string(parent_name, 0),
+                             tag_alloc_table) {
+        if (!strcmp(tag_alloc_node->parent_name, parent_name)) {
+            return tag_alloc_node;
+        }
+    }
+
+    /* Create a new node. */
+    tag_alloc_node = xmalloc(sizeof *tag_alloc_node);
+    tag_alloc_node->parent_name = xstrdup(parent_name);
+    tag_alloc_node->allocated_tags = bitmap_allocate(MAX_OVN_TAGS);
+    /* Tag 0 is invalid for nested containers. */
+    bitmap_set1(tag_alloc_node->allocated_tags, 0);
+    hmap_insert(tag_alloc_table, &tag_alloc_node->hmap_node,
+                hash_string(parent_name, 0));
+
+    return tag_alloc_node;
+}
+
+static void
+tag_alloc_add_existing_tags(struct hmap *tag_alloc_table,
+                            const struct nbrec_logical_switch_port *nbsp)
+{
+    /* Add the tags of already existing nested containers.  If there is no
+     * 'nbsp->parent_name' or no 'nbsp->tag' set, there is nothing to do. */
+    if (!nbsp->parent_name || !nbsp->parent_name[0] || !nbsp->tag) {
+        return;
+    }
+
+    struct tag_alloc_node *tag_alloc_node;
+    tag_alloc_node = tag_alloc_get_node(tag_alloc_table, nbsp->parent_name);
+    bitmap_set1(tag_alloc_node->allocated_tags, *nbsp->tag);
+}
+
+static void
+tag_alloc_create_new_tag(struct hmap *tag_alloc_table,
+                         const struct nbrec_logical_switch_port *nbsp)
+{
+    if (!nbsp->tag_request) {
+        return;
+    }
+
+    if (nbsp->parent_name && nbsp->parent_name[0]
+        && *nbsp->tag_request == 0) {
+        /* For nested containers that need allocation, do the allocation. */
+
+        if (nbsp->tag) {
+            /* This has already been allocated. */
+            return;
+        }
+
+        struct tag_alloc_node *tag_alloc_node;
+        int64_t tag;
+        tag_alloc_node = tag_alloc_get_node(tag_alloc_table,
+                                            nbsp->parent_name);
+        tag = bitmap_scan(tag_alloc_node->allocated_tags, 0, 1, MAX_OVN_TAGS);
+        if (tag == MAX_OVN_TAGS) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_ERR_RL(&rl, "out of vlans for logical switch ports with "
+                        "parent %s", nbsp->parent_name);
+            return;
+        }
+        bitmap_set1(tag_alloc_node->allocated_tags, tag);
+        nbrec_logical_switch_port_set_tag(nbsp, &tag, 1);
+    } else if (*nbsp->tag_request != 0) {
+        /* For everything else, copy the contents of 'tag_request' to 'tag'. */
+        nbrec_logical_switch_port_set_tag(nbsp, nbsp->tag_request, 1);
+    }
+}
+
 
 static void
 join_logical_ports(struct northd_context *ctx,
                    struct hmap *datapaths, struct hmap *ports,
-                   struct ovs_list *sb_only, struct ovs_list *nb_only,
-                   struct ovs_list *both)
+                   struct hmap *tag_alloc_table, struct ovs_list *sb_only,
+                   struct ovs_list *nb_only, struct ovs_list *both)
 {
     hmap_init(ports);
     ovs_list_init(sb_only);
@@ -1053,6 +1150,7 @@ join_logical_ports(struct northd_context *ctx,
 
                 op->od = od;
                 ipam_add_port_addresses(od, op);
+                tag_alloc_add_existing_tags(tag_alloc_table, nbsp);
             }
         } else {
             for (size_t i = 0; i < od->nbr->n_ports; i++) {
@@ -1219,6 +1317,19 @@ ovn_port_update_sbrec(const struct ovn_port *op)
     }
 }
 
+/* Remove mac_binding entries that refer to logical_ports which are
+ * deleted. */
+static void
+cleanup_mac_bindings(struct northd_context *ctx, struct hmap *ports)
+{
+    const struct sbrec_mac_binding *b, *n;
+    SBREC_MAC_BINDING_FOR_EACH_SAFE (b, n, ctx->ovnsb_idl) {
+        if (!ovn_port_find(ports, b->logical_port)) {
+            sbrec_mac_binding_delete(b);
+        }
+    }
+}
+
 /* Updates the southbound Port_Binding table so that it contains the logical
  * switch ports specified by the northbound database.
  *
@@ -1230,13 +1341,21 @@ build_ports(struct northd_context *ctx, struct hmap *datapaths,
             struct hmap *ports)
 {
     struct ovs_list sb_only, nb_only, both;
+    struct hmap tag_alloc_table;
+    hmap_init(&tag_alloc_table);
 
-    join_logical_ports(ctx, datapaths, ports, &sb_only, &nb_only, &both);
+    join_logical_ports(ctx, datapaths, ports, &tag_alloc_table, &sb_only,
+                       &nb_only, &both);
 
-    /* For logical ports that are in both databases, update the southbound
-     * record based on northbound data.  Also index the in-use tunnel_keys. */
     struct ovn_port *op, *next;
+    /* For logical ports that are in both databases, update the southbound
+     * record based on northbound data.  Also index the in-use tunnel_keys.
+     * For logical ports that are in NB database, do any tag allocation
+     * needed. */
     LIST_FOR_EACH_SAFE (op, next, list, &both) {
+        if (op->nbsp) {
+            tag_alloc_create_new_tag(&tag_alloc_table, op->nbsp);
+        }
         ovn_port_update_sbrec(op);
 
         add_tnlid(&op->od->port_tnlids, op->sb->tunnel_key);
@@ -1259,12 +1378,22 @@ build_ports(struct northd_context *ctx, struct hmap *datapaths,
         sbrec_port_binding_set_tunnel_key(op->sb, tunnel_key);
     }
 
+    bool remove_mac_bindings = false;
+    if (!ovs_list_is_empty(&sb_only)) {
+        remove_mac_bindings = true;
+    }
+
     /* Delete southbound records without northbound matches. */
     LIST_FOR_EACH_SAFE(op, next, list, &sb_only) {
         ovs_list_remove(&op->list);
         sbrec_port_binding_delete(op->sb);
         ovn_port_destroy(ports, op);
     }
+    if (remove_mac_bindings) {
+        cleanup_mac_bindings(ctx, ports);
+    }
+
+    tag_alloc_destroy(&tag_alloc_table);
 }
 
 #define OVN_MIN_MULTICAST 32768
@@ -2325,6 +2454,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
                     ovn_lflow_add(
                         lflows, od, S_SWITCH_OUT_ACL, 34000, ds_cstr(&match),
                         actions);
+                    ds_destroy(&match);
                 }
             }
 
@@ -2351,6 +2481,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
                     ovn_lflow_add(
                         lflows, od, S_SWITCH_OUT_ACL, 34000, ds_cstr(&match),
                         actions);
+                    ds_destroy(&match);
                 }
             }
         }
@@ -3269,6 +3400,66 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                           ds_cstr(&match), ds_cstr(&actions));
         }
 
+        /* A set to hold all load-balancer vips that need ARP responses. */
+        struct sset all_ips = SSET_INITIALIZER(&all_ips);
+
+        for (int i = 0; i < op->od->nbr->n_load_balancer; i++) {
+            struct nbrec_load_balancer *lb = op->od->nbr->load_balancer[i];
+            struct smap *vips = &lb->vips;
+            struct smap_node *node;
+
+            SMAP_FOR_EACH (node, vips) {
+                /* node->key contains IP:port or just IP. */
+                char *ip_address = NULL;
+                uint16_t port;
+
+                ip_address_and_port_from_lb_key(node->key, &ip_address, &port);
+                if (!ip_address) {
+                    continue;
+                }
+
+                if (!sset_contains(&all_ips, ip_address)) {
+                    sset_add(&all_ips, ip_address);
+                }
+
+                free(ip_address);
+            }
+        }
+
+        const char *ip_address;
+        SSET_FOR_EACH(ip_address, &all_ips) {
+            ovs_be32 ip;
+            if (!ip_parse(ip_address, &ip) || !ip) {
+                continue;
+            }
+
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && arp.tpa == "IP_FMT" && arp.op == 1",
+                          op->json_key, IP_ARGS(ip));
+
+            ds_clear(&actions);
+            ds_put_format(&actions,
+                "eth.dst = eth.src; "
+                "eth.src = %s; "
+                "arp.op = 2; /* ARP reply */ "
+                "arp.tha = arp.sha; "
+                "arp.sha = %s; "
+                "arp.tpa = arp.spa; "
+                "arp.spa = "IP_FMT"; "
+                "outport = %s; "
+                "flags.loopback = 1; "
+                "output;",
+                op->lrp_networks.ea_s,
+                op->lrp_networks.ea_s,
+                IP_ARGS(ip),
+                op->json_key);
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
+                          ds_cstr(&match), ds_cstr(&actions));
+        }
+
+        sset_destroy(&all_ips);
+
         ovs_be32 *snat_ips = xmalloc(sizeof *snat_ips * op->od->nbr->n_nat);
         size_t n_snat_ips = 0;
         for (int i = 0; i < op->od->nbr->n_nat; i++) {
@@ -3423,21 +3614,89 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
     }
 
-    /* NAT in Gateway routers. */
+    /* NAT, Defrag and load balancing in Gateway routers. */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (!od->nbr) {
             continue;
         }
 
         /* Packets are allowed by default. */
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_ROUTER_IN_UNSNAT, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 0, "1", "next;");
 
-        /* NAT rules are only valid on Gateway routers. */
+        /* NAT rules, packet defrag and load balancing are only valid on
+         * Gateway routers. */
         if (!smap_get(&od->nbr->options, "chassis")) {
             continue;
         }
+
+        /* A set to hold all ips that need defragmentation and tracking. */
+        struct sset all_ips = SSET_INITIALIZER(&all_ips);
+
+        for (int i = 0; i < od->nbr->n_load_balancer; i++) {
+            struct nbrec_load_balancer *lb = od->nbr->load_balancer[i];
+            struct smap *vips = &lb->vips;
+            struct smap_node *node;
+
+            SMAP_FOR_EACH (node, vips) {
+                uint16_t port = 0;
+
+                /* node->key contains IP:port or just IP. */
+                char *ip_address = NULL;
+                ip_address_and_port_from_lb_key(node->key, &ip_address, &port);
+                if (!ip_address) {
+                    continue;
+                }
+
+                if (!sset_contains(&all_ips, ip_address)) {
+                    sset_add(&all_ips, ip_address);
+                }
+
+                /* Higher priority rules are added in DNAT table to match on
+                 * ct.new which in-turn have group id as an action for load
+                 * balancing. */
+                ds_clear(&actions);
+                ds_put_format(&actions, "ct_lb(%s);", node->value);
+
+                ds_clear(&match);
+                ds_put_format(&match, "ct.new && ip && ip4.dst == %s",
+                              ip_address);
+                free(ip_address);
+
+                if (port) {
+                    if (lb->protocol && !strcmp(lb->protocol, "udp")) {
+                        ds_put_format(&match, "&& udp && udp.dst == %d", port);
+                    } else {
+                        ds_put_format(&match, "&& tcp && tcp.dst == %d", port);
+                    }
+                    ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT,
+                                  120, ds_cstr(&match), ds_cstr(&actions));
+                } else {
+                    ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT,
+                                  110, ds_cstr(&match), ds_cstr(&actions));
+                }
+            }
+        }
+
+        /* If there are any load balancing rules, we should send the
+         * packet to conntrack for defragmentation and tracking.  This helps
+         * with two things.
+         *
+         * 1. With tracking, we can send only new connections to pick a
+         *    DNAT ip address from a group.
+         * 2. If there are L4 ports in load balancing rules, we need the
+         *    defragmentation to match on L4 ports. */
+        const char *ip_address;
+        SSET_FOR_EACH(ip_address, &all_ips) {
+            ds_clear(&match);
+            ds_put_format(&match, "ip && ip4.dst == %s", ip_address);
+            ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG,
+                          100, ds_cstr(&match), "ct_next;");
+        }
+
+        sset_destroy(&all_ips);
 
         for (int i = 0; i < od->nbr->n_nat; i++) {
             const struct nbrec_nat *nat;
@@ -3533,7 +3792,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
 
         /* Re-circulate every packet through the DNAT zone.
-        * This helps with two things.
+        * This helps with three things.
         *
         * 1. Any packet that needs to be unDNATed in the reverse
         * direction gets unDNATed. Ideally this could be done in
@@ -3542,7 +3801,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         * ip address being external IP address for IP routing,
         * we can do it here, saving a future re-circulation.
         *
-        * 2. Any packet that was sent through SNAT zone in the
+        * 2. Established load-balanced connections automatically get
+        * DNATed.
+        *
+        * 3. Any packet that was sent through SNAT zone in the
         * previous table automatically gets re-circulated to get
         * back the new destination IP address that is needed for
         * routing in the openflow pipeline. */
@@ -3963,13 +4225,13 @@ sync_address_sets(struct northd_context *ctx)
 static void
 ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
 {
-    if (!ctx->ovnsb_txn || !ovsdb_idl_has_ever_connected(ctx->ovnnb_idl)) {
+    if (!ctx->ovnsb_txn || !ctx->ovnnb_txn) {
         return;
     }
     struct hmap datapaths, ports;
     build_datapaths(ctx, &datapaths);
     build_ports(ctx, &datapaths, &ports);
-    build_ipam(ctx, &datapaths, &ports);
+    build_ipam(&datapaths, &ports);
     build_lflows(ctx, &datapaths, &ports);
 
     sync_address_sets(ctx);
@@ -4349,6 +4611,12 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_options);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_mac);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
+    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_mac_binding);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_datapath);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_ip);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_mac);
+    add_column_noalert(ovnsb_idl_loop.idl,
+                       &sbrec_mac_binding_col_logical_port);
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_dhcp_options);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcp_options_col_code);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcp_options_col_type);

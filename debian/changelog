@@ -1,3 +1,11 @@
+openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu1) yakkety; urgency=medium
+
+  * New upstream snapshot from branch-2.6 (LP: #1609846).
+  * d/rules: Skip test 1866 on ppc64el.
+  * d/rules: Re-enable all tests across other archs.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 12 Sep 2016 22:42:46 +0100
+
 openvswitch (2.6.0~git20160822.2cff273-0ubuntu1) yakkety; urgency=medium
 
   * New upstream snapshot from branch-2.6.

@@ -172,7 +172,7 @@ A: The following table lists the Linux kernel versions against which the
 |    2.3.x     | 2.6.32 to 3.14
 |    2.4.x     | 2.6.32 to 4.0
 |    2.5.x     | 2.6.32 to 4.3
-|    2.6.x     | 3.10 to 4.6
+|    2.6.x     | 3.10 to 4.7
 
    Open vSwitch userspace should also work with the Linux kernel module
    built into Linux 3.3 and later.
@@ -1064,6 +1064,33 @@ A: This is expected behavior on virtual switches.  RFC2544 tests were
    the max-idle timeout settings should be changed to 50000 ms.
 
    ovs-vsctl --no-wait set Open_vSwitch . other_config:max-idle=50000
+
+### Q: How can I configure the bridge internal interface MTU? Why does Open
+    vSwitch keep changing internal ports MTU?
+
+A: By default Open vSwitch overrides the internal interfaces (e.g. br0) MTU.
+   If you have just an internal interface (e.g. br0) and a physical interface
+   (e.g. eth0), then every change in MTU to eth0 will be reflected to br0.
+   Any manual MTU configuration using `ip` or `ifconfig` on internal interfaces
+   is going to be overridden by Open vSwitch to match the current bridge
+   minimum.
+
+   Sometimes this behavior is not desirable, for example with tunnels.  The
+   MTU of an internal interface can be explicitly set using the following
+   command:
+
+       ovs-vsctl set int br0 mtu_request=1450
+
+   After this, Open vSwitch will configure br0 MTU to 1450.  Since this
+   setting is in the database it will be persistent (compared to what
+   happens with `ip` or `ifconfig`).
+
+   The MTU configuration can be removed to restore the default behavior with
+
+       ovs-vsctl set int br0 mtu_request=[]
+
+   The mtu_request column can be used to configure MTU even for physical
+   interfaces (e.g. eth0).
 
 ## QOS
 
@@ -2010,6 +2037,15 @@ A: When a switch sends a packet to an OpenFlow controller using a
    ovs-vswitchd(8) describes some details of Open vSwitch packet
    buffering that the OpenFlow specification requires implementations
    to document.
+
+   Note that the packet buffering support is deprecated in OVS 2.6
+   release, and will be removed in OVS 2.7.  After the change OVS
+   always sends the 'buffer_id' as 0xffffffff in "packet-in" messages
+   and will send an error response if any other value of this field is
+   included in "packet-out" and "flow mod" sent by a controller.
+   Controllers are already expected to work properly in cases where
+   the switch can not buffer packets, so this change should not affect
+   existing users.
 
 ### Q: How does OVS divide flows among buckets in an OpenFlow "select" group?
 
