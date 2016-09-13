@@ -17,6 +17,17 @@ set -e
 # for details, see http://www.debian.org/doc/debian-policy/ or
 # the debian-policy package
 
+CONFFILE=/etc/init.d/openvswitch-switch
+if ([ ! -e "$CONFFILE" ] && [ -e "$CONFFILE".dpkg-dist ]) \
+    || [ $(readlink -f "$CONFFILE") = /lib/init/upstart-job ]
+then
+    rm -f "$CONFFILE"
+    if [ -e "$CONFFILE".dpkg-new ]; then
+        mv "$CONFFILE".dpkg-new "$CONFFILE"
+    elif [ -e "$CONFFILE".dpkg-dist ]; then
+        mv "$CONFFILE".dpkg-dist "$CONFFILE"
+    fi
+fi
 
 case "$1" in
     configure)
