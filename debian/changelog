@@ -1,3 +1,10 @@
+openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu2) yakkety; urgency=medium
+
+  * d/rules: Re-enable previously disabled SKIP_TEST list; builds under load
+    still exhibit races in a number of tests.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 13 Sep 2016 14:37:51 +0100
+
 openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu1) yakkety; urgency=medium
 
   * New upstream snapshot from branch-2.6 (LP: #1609846).
