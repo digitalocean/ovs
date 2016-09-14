@@ -1,3 +1,10 @@
+openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu3) yakkety; urgency=medium
+
+  * d/rules: Tidy SKIP_TEST list, document in rules file actual test
+    failures as test numbers change between releases.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 14 Sep 2016 18:02:24 +0100
+
 openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu2) yakkety; urgency=medium
 
   * d/rules: Re-enable previously disabled SKIP_TEST list; builds under load
