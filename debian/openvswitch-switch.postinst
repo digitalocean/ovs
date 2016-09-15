@@ -29,8 +29,10 @@ then
     fi
 fi
 
-dpkg-maintscript-helper rm_conffile /etc/init/openvswitch-switch.conf -- "$@"
-dpkg-maintscript-helper rm_conffile /etc/init/openvswitch-force-reload-kmod.conf -- "$@"
+if dpkg-maintscript-helper supports rm_conffile 2>/dev/null; then
+    dpkg-maintscript-helper rm_conffile /etc/init/openvswitch-switch.conf -- "$@"
+    dpkg-maintscript-helper rm_conffile /etc/init/openvswitch-force-reload-kmod.conf -- "$@"
+fi
 
 case "$1" in
     configure)
