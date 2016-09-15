@@ -40,11 +40,11 @@ endif
 # https://bugs.launchpad.net/bugs/1609846
 #
 # 15: bfd - bfd decay
-# 1149: ofproto-dpif - in place modification (vlan)
+# 1150: ofproto-dpif - in place modification (vlan)
 # 1866: ovsdb-server/active-backup-role-switching
 # 2227: ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS vtep
 #
-SKIP_TEST = 1-14 16-1148 1150-1865 1867-2226 2228-
+SKIP_TEST = 1-14 16-1149 1151-1865 1867-2226 2228-
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on powerpc/s390x until

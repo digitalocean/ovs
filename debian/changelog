@@ -1,3 +1,9 @@
+openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu4) yakkety; urgency=medium
+
+  * d/rules: Correct SKIP_TEST 1149 -> 1150 (racey on arm64).
+
+ -- James Page <james.page@ubuntu.com>  Thu, 15 Sep 2016 09:18:59 +0100
+
 openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu3) yakkety; urgency=medium
 
   * d/rules: Tidy SKIP_TEST list, document in rules file actual test
