@@ -31,6 +31,7 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.logrotate \
 	debian/openvswitch-switch.manpages \
 	debian/openvswitch-switch.postinst \
+	debian/openvswitch-switch.preinst \
 	debian/openvswitch-switch.postrm \
 	debian/openvswitch-switch.template \
 	debian/openvswitch-switch.links \
