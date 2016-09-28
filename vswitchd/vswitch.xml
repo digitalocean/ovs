@@ -2008,6 +2008,9 @@
           <dd>
             An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4/IPv6
             IPsec tunnel.
+            IPsec tunnel ports are deprecated. The support will be completely
+            removed in next version.
+
           </dd>
 
           <dt><code>vxlan</code></dt>
@@ -2370,11 +2373,9 @@
       <column name="options" key="vhost-server-path"
               type='{"type": "string"}'>
         <p>
-          When specified, switches the given port permanently to 'client'
-          mode. The value specifies the path to the socket associated with a
-          vHost User client mode device that has been or will be created by
-          QEMU.
-          Only supported by DPDK vHost interfaces.
+          The value specifies the path to the socket associated with a vHost
+          User client mode device that has been or will be created by QEMU.
+          Only supported by dpdkvhostuserclient interfaces.
         </p>
       </column>
     </group>

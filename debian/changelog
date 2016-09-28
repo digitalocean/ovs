@@ -1,3 +1,10 @@
+openvswitch (2.6.0-0ubuntu1) yakkety; urgency=medium
+
+  * New upstream release:
+    - d/rules: Update SKIP_TEST numbers inline with upstream.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 28 Sep 2016 13:09:26 +0100
+
 openvswitch (2.6.0~git20160912.dc61b4e-0ubuntu4) yakkety; urgency=medium
 
   * d/rules: Correct SKIP_TEST 1149 -> 1150 (racey on arm64).

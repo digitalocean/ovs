@@ -133,6 +133,14 @@ struct ofconn {
 
     /* Active bundles. Contains "struct ofp_bundle"s. */
     struct hmap bundles;
+    long long int next_bundle_expiry_check;
+};
+
+/* vswitchd/ovs-vswitchd.8.in documents the value of BUNDLE_IDLE_LIFETIME in
+ * seconds.  That documentation must be kept in sync with the value below. */
+enum {
+    BUNDLE_EXPIRY_INTERVAL = 1000,  /* Check bundle expiry every 1 sec. */
+    BUNDLE_IDLE_TIMEOUT = 10000,    /* Expire idle bundles after 10 seconds. */
 };
 
 static struct ofconn *ofconn_create(struct connmgr *, struct rconn *,
@@ -193,7 +201,10 @@ struct connmgr {
 
     /* OpenFlow connections. */
     struct hmap controllers;     /* All OFCONN_PRIMARY controllers. */
-    struct ovs_list all_conns;   /* All controllers. */
+    struct ovs_list all_conns;   /* All controllers.  All modifications are
+                                    protected by ofproto_mutex, so that any
+                                    traversals from other threads can be made
+                                    safe by holding the ofproto_mutex. */
     uint64_t master_election_id; /* monotonically increasing sequence number
                                   * for master election */
     bool master_election_id_defined;
@@ -257,6 +268,7 @@ connmgr_create(struct ofproto *ofproto,
 /* Frees 'mgr' and all of its resources. */
 void
 connmgr_destroy(struct connmgr *mgr)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofservice *ofservice, *next_ofservice;
     struct ofconn *ofconn, *next_ofconn;
@@ -266,11 +278,9 @@ connmgr_destroy(struct connmgr *mgr)
         return;
     }
 
-    ovs_mutex_lock(&ofproto_mutex);
     LIST_FOR_EACH_SAFE (ofconn, next_ofconn, node, &mgr->all_conns) {
         ofconn_destroy(ofconn);
     }
-    ovs_mutex_unlock(&ofproto_mutex);
 
     hmap_destroy(&mgr->controllers);
 
@@ -774,7 +784,9 @@ update_fail_open(struct connmgr *mgr)
             mgr->fail_open = fail_open_create(mgr->ofproto, mgr);
         }
     } else {
+        ovs_mutex_lock(&ofproto_mutex);
         fail_open_destroy(mgr->fail_open);
+        ovs_mutex_unlock(&ofproto_mutex);
         mgr->fail_open = NULL;
     }
 }
@@ -1179,8 +1191,6 @@ ofconn_get_bundle(struct ofconn *ofconn, uint32_t id)
 enum ofperr
 ofconn_insert_bundle(struct ofconn *ofconn, struct ofp_bundle *bundle)
 {
-    /* XXX: Check the limit of open bundles */
-
     hmap_insert(&ofconn->bundles, &bundle->node, bundle_hash(bundle->id));
 
     return 0;
@@ -1200,7 +1210,21 @@ bundle_remove_all(struct ofconn *ofconn)
     struct ofp_bundle *b, *next;
 
     HMAP_FOR_EACH_SAFE (b, next, node, &ofconn->bundles) {
-        ofp_bundle_remove__(ofconn, b, false);
+        ofp_bundle_remove__(ofconn, b);
+    }
+}
+
+static void
+bundle_remove_expired(struct ofconn *ofconn, long long int now)
+{
+    struct ofp_bundle *b, *next;
+    long long int limit = now - BUNDLE_IDLE_TIMEOUT;
+
+    HMAP_FOR_EACH_SAFE (b, next, node, &ofconn->bundles) {
+        if (b->used <= limit) {
+            ofconn_send_error(ofconn, &b->ofp_msg, OFPERR_OFPBFC_TIMEOUT);
+            ofp_bundle_remove__(ofconn, b);
+        }
     }
 }
 
@@ -1215,6 +1239,7 @@ ofconn_get_target(const struct ofconn *ofconn)
 static struct ofconn *
 ofconn_create(struct connmgr *mgr, struct rconn *rconn, enum ofconn_type type,
               bool enable_async_msgs)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofconn *ofconn;
 
@@ -1229,6 +1254,7 @@ ofconn_create(struct connmgr *mgr, struct rconn *rconn, enum ofconn_type type,
     ovs_list_init(&ofconn->updates);
 
     hmap_init(&ofconn->bundles);
+    ofconn->next_bundle_expiry_check = time_msec() + BUNDLE_EXPIRY_INTERVAL;
 
     ofconn_flush(ofconn);
 
@@ -1378,7 +1404,14 @@ ofconn_run(struct ofconn *ofconn,
         ofpbuf_delete(of_msg);
     }
 
-    if (time_msec() >= ofconn->next_op_report) {
+    long long int now = time_msec();
+
+    if (now >= ofconn->next_bundle_expiry_check) {
+        ofconn->next_bundle_expiry_check = now + BUNDLE_EXPIRY_INTERVAL;
+        bundle_remove_expired(ofconn, now);
+    }
+
+    if (now >= ofconn->next_op_report) {
         ofconn_log_flow_mods(ofconn);
     }
 
@@ -1624,10 +1657,13 @@ connmgr_send_requestforward(struct connmgr *mgr, const struct ofconn *source,
 }
 
 /* Sends an OFPT_FLOW_REMOVED or NXT_FLOW_REMOVED message based on 'fr' to
- * appropriate controllers managed by 'mgr'. */
+ * appropriate controllers managed by 'mgr'.
+ *
+ * This may be called from the RCU thread. */
 void
 connmgr_send_flow_removed(struct connmgr *mgr,
                           const struct ofputil_flow_removed *fr)
+    OVS_REQUIRES(ofproto_mutex)
 {
     struct ofconn *ofconn;
 

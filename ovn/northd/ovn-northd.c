@@ -2564,9 +2564,9 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows)
             ds_put_format(&match, "ct.new && ip && ip4.dst == %s", ip_address);
             if (port) {
                 if (lb->protocol && !strcmp(lb->protocol, "udp")) {
-                    ds_put_format(&match, "&& udp && udp.dst == %d", port);
+                    ds_put_format(&match, " && udp && udp.dst == %d", port);
                 } else {
-                    ds_put_format(&match, "&& tcp && tcp.dst == %d", port);
+                    ds_put_format(&match, " && tcp && tcp.dst == %d", port);
                 }
                 ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL,
                               120, ds_cstr(&match), action);
@@ -2575,6 +2575,7 @@ build_stateful(struct ovn_datapath *od, struct hmap *lflows)
                               110, ds_cstr(&match), action);
             }
 
+            free(ip_address);
             ds_destroy(&match);
             free(action);
        }
@@ -3667,9 +3668,11 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
                 if (port) {
                     if (lb->protocol && !strcmp(lb->protocol, "udp")) {
-                        ds_put_format(&match, "&& udp && udp.dst == %d", port);
+                        ds_put_format(&match, " && udp && udp.dst == %d",
+                                      port);
                     } else {
-                        ds_put_format(&match, "&& tcp && tcp.dst == %d", port);
+                        ds_put_format(&match, " && tcp && tcp.dst == %d",
+                                      port);
                     }
                     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT,
                                   120, ds_cstr(&match), ds_cstr(&actions));
@@ -4042,8 +4045,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             continue;
         }
 
-        ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 0, "1",
-                      "get_arp(outport, reg0); next;");
         ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_RESOLVE, 0, "ip4",
                       "get_arp(outport, reg0); next;");
 
@@ -4252,11 +4253,15 @@ ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
      *
      * Also set up to update sb_cfg once our southbound transaction commits. */
     const struct nbrec_nb_global *nb = nbrec_nb_global_first(ctx->ovnnb_idl);
-    const struct sbrec_sb_global *sb = sbrec_sb_global_first(ctx->ovnsb_idl);
-    if (nb && sb) {
-        sbrec_sb_global_set_nb_cfg(sb, nb->nb_cfg);
-        sb_loop->next_cfg = nb->nb_cfg;
+    if (!nb) {
+        nb = nbrec_nb_global_insert(ctx->ovnnb_txn);
     }
+    const struct sbrec_sb_global *sb = sbrec_sb_global_first(ctx->ovnsb_idl);
+    if (!sb) {
+        sb = sbrec_sb_global_insert(ctx->ovnsb_txn);
+    }
+    sbrec_sb_global_set_nb_cfg(sb, nb->nb_cfg);
+    sb_loop->next_cfg = nb->nb_cfg;
 
     cleanup_macam(&macam);
 }

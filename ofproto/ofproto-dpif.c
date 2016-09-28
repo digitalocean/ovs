@@ -25,6 +25,7 @@
 #include "connmgr.h"
 #include "coverage.h"
 #include "cfm.h"
+#include "ct-dpif.h"
 #include "dpif.h"
 #include "fail-open.h"
 #include "guarded-list.h"
@@ -4343,14 +4344,6 @@ group_destruct(struct ofgroup *group_)
     ovs_mutex_destroy(&group->stats_mutex);
 }
 
-static void
-group_modify(struct ofgroup *group_)
-{
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(group_->ofproto);
-
-    ofproto->backer->need_revalidate = REV_FLOW_TABLE;
-}
-
 static enum ofperr
 group_get_stats(const struct ofgroup *group_, struct ofputil_group_stats *ogs)
 {
@@ -4447,6 +4440,14 @@ get_datapath_version(const struct ofproto *ofproto_)
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
     return ofproto->backer->dp_version_string;
+}
+
+static void
+ct_flush(const struct ofproto *ofproto_, const uint16_t *zone)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    ct_dpif_flush(ofproto->backer->dpif, zone);
 }
 
 static bool
@@ -5698,7 +5699,8 @@ const struct ofproto_class ofproto_dpif_class = {
     group_construct,            /* group_construct */
     group_destruct,             /* group_destruct */
     group_dealloc,              /* group_dealloc */
-    group_modify,               /* group_modify */
+    NULL,                       /* group_modify */
     group_get_stats,            /* group_get_stats */
     get_datapath_version,       /* get_datapath_version */
+    ct_flush,                   /* ct_flush */
 };

@@ -4319,6 +4319,73 @@ OVN_CLEANUP([hv1])
 
 AT_CLEANUP
 
+# 1 hypervisor, 1 port
+# make sure that the OF rules created to support a datapath are added/cleared
+# when logical switch is created and removed.
+AT_SETUP([ovn -- datapath rules added/removed])
+AT_KEYWORDS([ovn datapath cleanup])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1 ovs-vsctl add-br br-phys
+as hv1 ovn_attach n1 br-phys 192.168.0.1
+
+# This shell function checks if OF rules in br-int have clauses
+# related to OVN datapaths. The caller determines if it should find
+# a match in the output, or not.
+#
+# EXPECT_DATAPATH param determines whether flows that refer to
+#                 datapath to should be present or not. 0 means
+#                 they should not be.
+# STAGE_INFO param is a simple string to help identify the stage
+#            in the test when this function was invoked.
+test_datapath_in_of_rules() {
+    local expect_datapath=$1 stage_info=$2
+    echo "------ ovn-nbctl show ${stage_info} ------"
+    ovn-nbctl show
+    echo "------ ovn-sbctl show ${stage_info} ------"
+    ovn-sbctl show
+    echo "------ OF rules ${stage_info} ------"
+    AT_CHECK([ovs-ofctl dump-flows br-int], [0], [stdout])
+    # if there is a datapath mentioned in the output, check for the
+    # magic keyword that represents one, based on the exit status of
+    # a quiet grep
+    if test $expect_datapath != 0; then
+       AT_CHECK([grep --quiet -i 'metadata=' stdout], [0], [ignore-nolog])
+    else
+       AT_CHECK([grep --quiet -i 'metadata=' stdout], [1], [ignore-nolog])
+    fi
+}
+
+test_datapath_in_of_rules 0 "before ls+port create"
+
+ovn-nbctl ls-add ls1
+ovn-nbctl lsp-add ls1 lp1
+ovn-nbctl lsp-set-addresses lp1 unknown
+
+as hv1 ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1
+OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp1` = xup])
+
+test_datapath_in_of_rules 1 "after port is bound"
+
+as hv1 ovs-vsctl del-port br-int vif1
+OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp1` = xdown])
+
+ovn-nbctl lsp-set-addresses lp1
+ovn-nbctl lsp-del lp1
+ovn-nbctl ls-del ls1
+
+# wait for earlier changes to take effect
+AT_CHECK([ovn-nbctl --timeout=3 --wait=sb sync], [0], [ignore])
+
+# ensure OF rules are no longer present. There used to be a bug here.
+test_datapath_in_of_rules 0 "after lport+ls removal"
+
+OVN_CLEANUP([hv1])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- nd_na ])
 AT_KEYWORDS([ovn-nd_na])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
@@ -4436,7 +4503,7 @@ AT_CHECK([ovn-nbctl get Logical-Switch-Port p0 dynamic_addresses], [0],
 
 # Add 9 more ports to sw0, addresses should all be unique.
 for n in `seq 1 9`; do
-    ovn-nbctl lsp-add sw0 "p$n" -- lsp-set-addresses "p$n" dynamic
+    ovn-nbctl --wait=sb lsp-add sw0 "p$n" -- lsp-set-addresses "p$n" dynamic
 done
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p1 dynamic_addresses], [0],
     ["0a:00:00:00:00:02 192.168.1.3"
@@ -4470,13 +4537,13 @@ AT_CHECK([ovn-nbctl get Logical-Switch-Port p9 dynamic_addresses], [0],
 # across both switches but IP's only need to be unique within the same switch.
 ovn-nbctl ls-add sw1
 ovn-nbctl lsp-add sw1 p10 -- lsp-set-addresses p10 dynamic
-ovn-nbctl add Logical-Switch sw1 other_config subnet=192.168.1.0/24
+ovn-nbctl --wait=sb add Logical-Switch sw1 other_config subnet=192.168.1.0/24
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p10 dynamic_addresses], [0],
      ["0a:00:00:00:00:0b 192.168.1.2"
 ])
 
 for n in `seq 11 19`; do
-    ovn-nbctl lsp-add sw1 "p$n" -- lsp-set-addresses "p$n" dynamic
+    ovn-nbctl --wait=sb lsp-add sw1 "p$n" -- lsp-set-addresses "p$n" dynamic
 done
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p11 dynamic_addresses], [0],
      ["0a:00:00:00:00:0c 192.168.1.3"
@@ -4509,7 +4576,7 @@ AT_CHECK([ovn-nbctl get Logical-Switch-Port p19 dynamic_addresses], [0],
 # Change a port's address to test for multiple ip's for a single address entry
 # and addresses set by the user.
 ovn-nbctl lsp-set-addresses p0 "0a:00:00:00:00:15 192.168.1.12 192.168.1.14"
-ovn-nbctl lsp-add sw0 p20 -- lsp-set-addresses p20 dynamic
+ovn-nbctl --wait=sb lsp-add sw0 p20 -- lsp-set-addresses p20 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p20 dynamic_addresses], [0],
      ["0a:00:00:00:00:16 192.168.1.13"
 ])
@@ -4520,14 +4587,14 @@ ovn-nbctl -- --id=@lrp create Logical_Router_port name=sw0 \
 network="192.168.1.1/24" mac=\"0a:00:00:00:00:17\" \
 -- add Logical_Router R1 ports @lrp -- lsp-add sw0 rp-sw0 \
 -- set Logical_Switch_Port rp-sw0 type=router options:router-port=sw0
-ovn-nbctl lsp-add sw0 p21 -- lsp-set-addresses p21 dynamic
+ovn-nbctl --wait=sb lsp-add sw0 p21 -- lsp-set-addresses p21 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p21 dynamic_addresses], [0],
      ["0a:00:00:00:00:18 192.168.1.15"
 ])
 
 # Test for address reuse after logical port is deleted.
 ovn-nbctl lsp-del p0
-ovn-nbctl lsp-add sw0 p23 -- lsp-set-addresses p23 dynamic
+ovn-nbctl --wait=sb lsp-add sw0 p23 -- lsp-set-addresses p23 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p23 dynamic_addresses], [0],
      ["0a:00:00:00:00:19 192.168.1.2"
 ])
@@ -4535,19 +4602,19 @@ AT_CHECK([ovn-nbctl get Logical-Switch-Port p23 dynamic_addresses], [0],
 # Test for multiple addresses to one logical port.
 ovn-nbctl lsp-add sw0 p25 -- lsp-set-addresses p25 \
 "0a:00:00:00:00:1a 192.168.1.12" "0a:00:00:00:00:1b 192.168.1.14"
-ovn-nbctl lsp-add sw0 p26 -- lsp-set-addresses p26 dynamic
+ovn-nbctl --wait=sb lsp-add sw0 p26 -- lsp-set-addresses p26 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p26 dynamic_addresses], [0],
      ["0a:00:00:00:00:1c 192.168.1.16"
 ])
 
 # Test for exhausting subnet address space.
 ovn-nbctl ls-add sw2 -- add Logical-Switch sw2 other_config subnet=172.16.1.0/30
-ovn-nbctl lsp-add sw2 p27 -- lsp-set-addresses p27 dynamic
+ovn-nbctl --wait=sb lsp-add sw2 p27 -- lsp-set-addresses p27 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p27 dynamic_addresses], [0],
      ["0a:00:00:00:00:1d 172.16.1.2"
 ])
 
-ovn-nbctl lsp-add sw2 p28 -- lsp-set-addresses p28 dynamic
+ovn-nbctl --wait=sb lsp-add sw2 p28 -- lsp-set-addresses p28 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p28 dynamic_addresses], [0],
      [[[]]
 ])
@@ -4561,7 +4628,7 @@ ovn-nbctl -- --id=@lrp create Logical_Router_port name=sw3 \
 network="192.168.2.1/24" mac=\"0a:00:00:00:00:1f\" \
 -- add Logical_Router R2 ports @lrp -- lsp-add sw3 rp-sw3 \
 -- set Logical_Switch_Port rp-sw3 type=router options:router-port=sw3
-ovn-nbctl lsp-add sw0 p30 -- lsp-set-addresses p30 dynamic
+ovn-nbctl --wait=sb lsp-add sw0 p30 -- lsp-set-addresses p30 dynamic
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p30 dynamic_addresses], [0],
      ["0a:00:00:00:00:20 192.168.1.17"
 ])
@@ -5168,4 +5235,74 @@ AT_CHECK([ovn-nbctl --wait=sb  set logical_switch_port local1 tag_request=50])
 AT_CHECK([ovn-nbctl lsp-get-tag local1], [0], [50
 ])
 
+AT_CLEANUP
+
+AT_SETUP([ovn -- lsp deletion and broadcast-flow deletion on localnet])
+AT_KEYWORDS([ovn])
+ovn_start
+ovn-nbctl ls-add lsw0
+net_add n1
+for i in 1 2; do
+    sim_add hv$i
+    as hv$i
+    ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.$i
+    ovs-vsctl add-br br-eth0
+    AT_CHECK([ovs-vsctl set Open_vSwitch . external-ids:ovn-bridge-mappings=physnet1:br-eth0])
+done
+
+# Create a localnet port.
+AT_CHECK([ovn-nbctl lsp-add lsw0 ln_port])
+AT_CHECK([ovn-nbctl lsp-set-addresses ln_port unknown])
+AT_CHECK([ovn-nbctl lsp-set-type ln_port localnet])
+AT_CHECK([ovn-nbctl lsp-set-options ln_port network_name=physnet1])
+
+
+# Create 3 vifs.
+AT_CHECK([ovn-nbctl lsp-add lsw0 localvif1])
+AT_CHECK([ovn-nbctl lsp-set-addresses localvif1 "f0:00:00:00:00:01 192.168.1.1"])
+AT_CHECK([ovn-nbctl lsp-set-port-security localvif1 "f0:00:00:00:00:01"])
+AT_CHECK([ovn-nbctl lsp-add lsw0 localvif2])
+AT_CHECK([ovn-nbctl lsp-set-addresses localvif2 "f0:00:00:00:00:01 192.168.1.2"])
+AT_CHECK([ovn-nbctl lsp-set-port-security localvif2 "f0:00:00:00:00:02"])
+AT_CHECK([ovn-nbctl lsp-add lsw0 localvif3])
+AT_CHECK([ovn-nbctl lsp-set-addresses localvif3 "f0:00:00:00:00:03 192.168.1.3"])
+AT_CHECK([ovn-nbctl lsp-set-port-security localvif3 "f0:00:00:00:00:03"])
+
+# Bind the localvif1 to hv1.
+as hv1
+AT_CHECK([ovs-vsctl add-port br-int localvif1 -- set Interface localvif1 external_ids:iface-id=localvif1])
+
+# On hv1, check that there are no flows outputting bcast to tunnel
+OVS_WAIT_UNTIL([test `ovs-ofctl dump-flows br-int table=32 | ofctl_strip | grep output | wc -l` -eq 0])
+
+# On hv2, check that there is 1 flow outputting bcast to tunnel to hv1.
+as hv2
+OVS_WAIT_UNTIL([test `ovs-ofctl dump-flows br-int table=32 | ofctl_strip | grep output | wc -l` -eq 1])
+
+# Now bind vif2 on hv2.
+AT_CHECK([ovs-vsctl add-port br-int localvif2 -- set Interface localvif2 external_ids:iface-id=localvif2])
+
+# At this point, the broadcast flow on vif2 should be deleted.
+# because, there is now a localnet vif bound (table=32 programming logic)
+OVS_WAIT_UNTIL([test `ovs-ofctl dump-flows br-int table=32 | ofctl_strip | grep output | wc -l` -eq 0])
+
+# Verify that the local net patch port exists on hv2.
+OVS_WAIT_UNTIL([test `ovs-vsctl show | grep "Port patch-br-int-to-ln_port" | wc -l` -eq 1])
+
+# Now bind vif3 on hv2.
+AT_CHECK([ovs-vsctl add-port br-int localvif3 -- set Interface localvif3 external_ids:iface-id=localvif3])
+
+# Verify that the local net patch port still exists on hv2
+OVS_WAIT_UNTIL([test `ovs-vsctl show | grep "Port patch-br-int-to-ln_port" | wc -l` -eq 1])
+
+# Delete localvif2
+AT_CHECK([ovn-nbctl lsp-del localvif2])
+
+# Verify that the local net patch port still exists on hv2,
+# because, localvif3 is still bound.
+OVS_WAIT_UNTIL([test `ovs-vsctl show | grep "Port patch-br-int-to-ln_port" | wc -l` -eq 1])
+
+
+OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP

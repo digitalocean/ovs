@@ -1831,6 +1831,13 @@ struct ofproto_class {
      * This function should be NULL if an implementation does not support it.
      */
     const char *(*get_datapath_version)(const struct ofproto *);
+
+/* ## ------------------- ## */
+/* ## Connection tracking ## */
+/* ## ------------------- ## */
+    /* Flushes the connection tracking tables. If 'zone' is not NULL,
+     * only deletes connections in '*zone'. */
+    void (*ct_flush)(const struct ofproto *, const uint16_t *zone);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;
@@ -1918,7 +1925,7 @@ void ofproto_add_flow(struct ofproto *, const struct match *, int priority,
                       const struct ofpact *ofpacts, size_t ofpacts_len)
     OVS_EXCLUDED(ofproto_mutex);
 void ofproto_delete_flow(struct ofproto *, const struct match *, int priority)
-    OVS_EXCLUDED(ofproto_mutex);
+    OVS_REQUIRES(ofproto_mutex);
 void ofproto_flush_flows(struct ofproto *);
 
 enum ofperr ofproto_check_ofpacts(struct ofproto *,
