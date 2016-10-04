@@ -40,3 +40,32 @@ and to switch back:
    sudo service openvswitch-switch restart
 
  -- James Page <james.page@ubuntu.com>  Tue, 21 Jul 2015 12:06:49 +0100
+
+Since Open vSwitch >= 2.6 the configuration of DPDK features has changed.
+Instead of providing DPDK_OPTS in /etc/default/openvswitch-switch one now has
+to use ovs-vsctl to enter the config into the database.
+
+An example basic configuration workflow might look like:
+ # Enable DPDK
+ $ ovs-vsctl set Open_vSwitch . "other_config:dpdk-init=true"
+ # run on cores 3,4 8,9
+ $ ovs-vsctl set Open_vSwitch . "other_config:dpdk-lcore-mask=0x318"
+ # Allocate 2G huge pages (not Numa node aware)
+ $ ovs-vsctl set Open_vSwitch . "other_config:dpdk-alloc-mem=2048"
+ # group/permissions for vhost-user sockets (required to work with libvirt/qemu)
+ $ ovs-vsctl set Open_vSwitch . \
+    "other_config:dpdk-extra=--vhost-owner libvirt-qemu:kvm --vhost-perm 0666"
+
+There are also tunables like:
+ $ ovs-vsctl set Open_vSwitch . "other_config:pmd-cpu-mask=0x318"
+ $ ovs-vsctl set Open_vSwitch . "other_config:n-dpdk-rxqs=4"
+
+Any of those changes require openvswitch to be restarted to take effect.
+
+Please see the associated upstream documentation and the man page of the
+vswitch configuration for more details:
+ - /usr/share/doc/openvswitch-common/INSTALL.DPDK.md.gz
+ - /usr/share/doc/openvswitch-common/INSTALL.DPDK-ADVANCED.md.gz
+ - man ovs-vswitchd.conf.db
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Tue, 04 Oct 2016 11:17:12 +0200

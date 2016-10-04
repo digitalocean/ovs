@@ -7,5 +7,13 @@
 # a suitable place to specify --ovs-vswitchd-wrapper=valgrind.
 # OVS_CTL_OPTS=
 
-# DPDK options - see /usr/share/doc/openvswitch-common/INSTALL.DPDK.md.gz
-# DPDK_OPTS='--dpdk -c 0x1 -n 4'
+# DPDK options are now configured via ovs-vsctl/ovsdb, see:
+# - /usr/share/doc/openvswitch-common/INSTALL.DPDK.md.gz
+# - /usr/share/doc/openvswitch-common/INSTALL.DPDK-ADVANCED.md.gz
+# dpdk-extra is the fallback for users who formerly set e.g.
+#  '--vhost-owner libvirt-qemu:kvm --vhost-perm 0664'
+# here or any other DPDK EAL arguments via DPDK_OPTS which are not covered by
+# the default switches provided by ovs-vsctl.
+# This is an arbitrary string that will get appended to the EAL commandline.
+# For more on the new ovsdb based configuration of DPDK features, see:
+# `man ovs-vswitchd.conf.db`

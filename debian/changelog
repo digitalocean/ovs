@@ -1,3 +1,12 @@
+openvswitch (2.6.0-0ubuntu2) yakkety; urgency=medium
+
+  * Updates to cover the new way Openvswitch is configurging DPDK (LP: #1625542)
+    - d/openvswitch-switch.default
+    - d/openvswitch-switch-dpdk.README.Debian
+    - drop d/p/ovs-ctl-dpdk.patch
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Tue, 04 Oct 2016 11:07:08 +0200
+
 openvswitch (2.6.0-0ubuntu1) yakkety; urgency=medium
 
   * New upstream release:
