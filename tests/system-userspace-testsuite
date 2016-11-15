@@ -979,7 +979,7 @@ fi
 # List of tests.
 if $at_list_p; then
   cat <<_ATEOF || at_write_fail=1
-openvswitch 2.6.0 test suite test groups:
+openvswitch 2.6.1 test suite test groups:
 
  NUM: FILE-NAME:LINE     TEST-GROUP-NAME
       KEYWORDS
@@ -1020,7 +1020,7 @@ _ATEOF
   exit $at_write_fail
 fi
 if $at_version_p; then
-  $as_echo "$as_me (openvswitch 2.6.0)" &&
+  $as_echo "$as_me (openvswitch 2.6.1)" &&
   cat <<\_ATEOF || at_write_fail=1
 
 Copyright (C) 2012 Free Software Foundation, Inc.
@@ -1214,11 +1214,11 @@ exec 5>>"$at_suite_log"
 
 # Banners and logs.
 $as_echo "## ----------------------------- ##
-## openvswitch 2.6.0 test suite. ##
+## openvswitch 2.6.1 test suite. ##
 ## ----------------------------- ##"
 {
   $as_echo "## ----------------------------- ##
-## openvswitch 2.6.0 test suite. ##
+## openvswitch 2.6.1 test suite. ##
 ## ----------------------------- ##"
   echo
 
@@ -1570,6 +1570,20 @@ if test "$IS_WIN32" = "yes"; then
         return $retval
     }
 fi
+
+# parent_pid PID
+#
+# Prints the PID of the parent of process PID.
+parent_pid () {
+    # Using "ps" is portable to any POSIX system, but busybox "ps" (used in
+    # e.g. Alpine Linux) is noncompliant, so we use a Linux-specific approach
+    # when it's available.
+    if test ! -e /proc/$1/status; then
+        ps -o ppid= -p $1
+    else
+        sed -n 's/^PPid:	\([0-9]*\)/\1/p' /proc/$1/status
+    fi
+}
 
 on_exit () {
     (echo "$1"; cat cleanup) > cleanup.tmp
@@ -2506,7 +2520,7 @@ _ASBOX
   $as_echo "Please send $at_msg and all information you think might help:
 
    To: <bugs@openvswitch.org>
-   Subject: [openvswitch 2.6.0] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
+   Subject: [openvswitch 2.6.1] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
 
 You may investigate any problem if you feel able to do so, in which
 case the test suite provides a good starting point.  Its output may

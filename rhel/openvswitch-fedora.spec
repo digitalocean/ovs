@@ -43,7 +43,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 2.6.0
+Version: 2.6.1
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -345,14 +345,10 @@ rm -rf $RPM_BUILD_ROOT
 /usr/sbin/semodule -i %{_datadir}/selinux/packages/%{name}/openvswitch-custom.pp &> /dev/null || :
 
 %postun
-%if 0%{?systemd_postun_with_restart:1}
-    %systemd_postun_with_restart %{name}.service
+%if 0%{?systemd_postun:1}
+    %systemd_postun %{name}.service
 %else
     /bin/systemctl daemon-reload >/dev/null 2>&1 || :
-    if [ "$1" -ge "1" ] ; then
-    # Package upgrade, not uninstall
-        /bin/systemctl try-restart %{name}.service >/dev/null 2>&1 || :
-    fi
 %endif
 
 %postun ovn-central

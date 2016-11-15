@@ -1,3 +1,13 @@
+openvswitch (2.6.1-0ubuntu1) zesty; urgency=medium
+
+  * New upstream point release (LP: #1641956).
+  * d/openvswitch-switch.openvswitch-nonetwork.service: Update Unit
+    definition to ensure that openvswitch starts prior to configuration
+    of any network interfaces (LP: #1448254).  Thanks to Mark Dunn for
+    this fix.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 15 Nov 2016 14:15:06 +0000
+
 openvswitch (2.6.0-0ubuntu2) yakkety; urgency=medium
 
   * Updates to cover the new way Openvswitch is configurging DPDK (LP: #1625542)

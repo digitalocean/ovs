@@ -1,7 +1,10 @@
 [Unit]
 Description=Open vSwitch Internal Unit
 PartOf=openvswitch-switch.service
-Wants=openvswitch-switch.service
+DefaultDependencies=no
+After=apparmor.service local-fs.target systemd-tmpfiles-setup.service
+Wants=network-pre.target openvswitch-switch.service
+Before=network-pre.target openvswitch-switch.service
 
 [Service]
 Type=oneshot
