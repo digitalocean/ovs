@@ -1,3 +1,9 @@
+openvswitch (2.6.1-0ubuntu3) zesty; urgency=medium
+
+  * No change rebuild against DPDK 16.11 (was DPDK stuck in NEW before)
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Thu, 19 Jan 2017 14:02:45 +0100
+
 openvswitch (2.6.1-0ubuntu2) zesty; urgency=medium
 
   * No change rebuild against DPDK 16.11
