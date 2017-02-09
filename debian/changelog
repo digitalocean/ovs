@@ -1,3 +1,11 @@
+openvswitch (2.6.1-0ubuntu5) zesty; urgency=medium
+
+  * Enable openvswitch-switch-dpdk for ppc64el (LP: #1663206)
+    - debian/control: add ppc64el architecture to package and build dependency
+    - debian/rules: build and test openvswitch-switch-dpdk for ppc64el
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Thu, 09 Feb 2017 11:02:44 +0100
+
 openvswitch (2.6.1-0ubuntu4) zesty; urgency=medium
 
   * No change rebuild against refreshed DPDK 16.11-1ubuntu1
