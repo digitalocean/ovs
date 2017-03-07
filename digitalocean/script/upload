@@ -21,7 +21,7 @@ if [ ! -n "$PACKAGECLOUD_TOKEN" ]; then
     exit 1
 fi
 
-distribution=$1
+distribution=$(echo $1 | egrep -o '[a-z]*')
 
 # default packagecloud repo
 : "${PACKAGECLOUD_REPOSITORY:=digitalocean-eng/test-packages}"
