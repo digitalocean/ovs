@@ -45,23 +45,25 @@ echo "--- Pulling latest version of ${builder}"
 docker pull ${builder}
 
 echo "--- Building within ${builder} container"
-env_options="-e VERSION=${version}"
+declare -a env_options=("-e" "VERSION=${version}")
 
-if [ -n DEB_BUILD_OPTIONS ]; then
-        env_options="${env_options} -e DEB_BUILD_OPTIONS=${DEB_BUILD_OPTIONS}"
+if [ -n "$DEB_BUILD_OPTIONS" ]; then
+        env_options=(${env_options[@]} -e "DEB_BUILD_OPTIONS=${DEB_BUILD_OPTIONS}")
 fi
 
-if [ -n DOCKER_DEBUILD_OPTS ]; then
-        env_options="${env_options} -e DOCKER_DEBUILD_OPTS=${DOCKER_DEBUILD_OPTS}"
+if [ -n "$DOCKER_DEBUILD_OPTS" ]; then
+        env_options=(${env_options[@]} -e "DOCKER_DEBUILD_OPTS=${DOCKER_DEBUILD_OPTS}")
 fi
 
 # build.log upload handled via automatic artifact uploading
 echo "--- Building..."
+IFS='%'
 docker run --rm \
         -v ${target}:/target \
-        ${env_options} \
+        ${env_options[@]} \
         -i -t ${builder} | tee build.log
 
+unset IFS
 if [ -n "$BUILDKITE" ]; then
         echo "--- Uploading artifacts"
         buildkite-agent artifact upload "debuild/*"
