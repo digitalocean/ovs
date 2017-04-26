@@ -127,6 +127,7 @@ struct ovsdb_jsonrpc_remote {
     struct pstream *listener;   /* Listener, if passive. */
     struct ovs_list sessions;   /* List of "struct ovsdb_jsonrpc_session"s. */
     uint8_t dscp;
+    bool read_only;
 };
 
 static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
@@ -268,11 +269,12 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
     remote->listener = listener;
     ovs_list_init(&remote->sessions);
     remote->dscp = options->dscp;
+    remote->read_only = options->read_only;
     shash_add(&svr->remotes, name, remote);
 
     if (!listener) {
         ovsdb_jsonrpc_session_create(remote, jsonrpc_session_open(name, true),
-                                      svr->read_only);
+                                      svr->read_only || remote->read_only);
     }
     return remote;
 }
@@ -366,7 +368,8 @@ ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
                 struct jsonrpc_session *js;
                 js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
                                                      remote->dscp);
-                ovsdb_jsonrpc_session_create(remote, js, svr->read_only);
+                ovsdb_jsonrpc_session_create(remote, js, svr->read_only ||
+                                                         remote->read_only);
             } else if (error != EAGAIN) {
                 VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                              pstream_get_name(remote->listener),
@@ -941,6 +944,13 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         }
         reply = jsonrpc_create_reply(json_array_create(dbs, n_dbs),
                                      request->id);
+    } else if (!strcmp(request->method, "get_server_id")) {
+        const struct uuid *uuid = &s->up.server->uuid;
+        struct json *result;
+
+        result = json_string_create_nocopy(xasprintf(UUID_FMT,
+                                                    UUID_ARGS(uuid)));
+        reply = jsonrpc_create_reply(result, request->id);
     } else if (!strcmp(request->method, "lock")) {
         reply = ovsdb_jsonrpc_session_lock(s, request, OVSDB_LOCK_WAIT);
     } else if (!strcmp(request->method, "steal")) {
@@ -1570,6 +1580,12 @@ ovsdb_jsonrpc_create_notify(const struct ovsdb_jsonrpc_monitor *m,
     }
 
     return jsonrpc_create_notify(method, params);
+}
+
+const struct uuid *
+ovsdb_jsonrpc_server_get_uuid(const struct ovsdb_jsonrpc_server *s)
+{
+    return &s->up.uuid;
 }
 
 static void

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2011-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "nx-match.h"
 #include "openvswitch/ofp-util.h"
+#include "ovs-rcu.h"
 #include "ovs-thread.h"
 #include "packets.h"
 #include "random.h"
@@ -37,6 +38,7 @@
 #include "util.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/vlog.h"
+#include "vl-mff-map.h"
 
 VLOG_DEFINE_THIS_MODULE(meta_flow);
 
@@ -78,6 +80,17 @@ mf_from_name(const char *name)
 {
     nxm_init();
     return shash_find_data(&mf_by_name, name);
+}
+
+/* Returns the field with the given 'name' (which is 'len' bytes long), or a
+ * null pointer if no field has that name. */
+const struct mf_field *
+mf_from_name_len(const char *name, size_t len)
+{
+    nxm_init();
+
+    struct shash_node *node = shash_find_len(&mf_by_name, name, len);
+    return node ? node->data : NULL;
 }
 
 static void
@@ -416,7 +429,7 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
  * all.  For example, the MFF_VLAN_TCI field will never have a nonzero value
  * without the VLAN_CFI bit being set, but we can't reject those values because
  * it is still legitimate to test just for those bits (see the documentation
- * for NXM_OF_VLAN_TCI in nicira-ext.h).  On the other hand, there is never a
+ * for NXM_OF_VLAN_TCI in meta-flow.h).  On the other hand, there is never a
  * reason to set the low bit of MFF_IP_DSCP to 1, so we reject that. */
 bool
 mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
@@ -2627,4 +2640,119 @@ field_array_set(enum mf_field_id id, const union mf_value *value,
     bitmap_set1(fa->used.bm, id);
 
     memcpy(fa->values + offset, value, value_size);
+}
+
+/* A wrapper for variable length mf_fields that is maintained by
+ * struct vl_mff_map.*/
+struct vl_mf_field {
+    struct mf_field mf;
+    struct cmap_node cmap_node; /* In ofproto->vl_mff_map->cmap. */
+};
+
+static inline uint32_t
+mf_field_hash(uint32_t key)
+{
+    return hash_int(key, 0);
+}
+
+void
+mf_vl_mff_map_clear(struct vl_mff_map *vl_mff_map)
+    OVS_REQUIRES(vl_mff_map->mutex)
+{
+    struct vl_mf_field *vmf;
+
+    CMAP_FOR_EACH (vmf, cmap_node, &vl_mff_map->cmap) {
+        cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
+                    mf_field_hash(vmf->mf.id));
+        ovsrcu_postpone(free, vmf);
+    }
+}
+
+static struct vl_mf_field *
+mf_get_vl_mff__(uint32_t id, const struct vl_mff_map *vl_mff_map)
+{
+    struct vl_mf_field *vmf;
+
+    CMAP_FOR_EACH_WITH_HASH (vmf, cmap_node, mf_field_hash(id),
+                             &vl_mff_map->cmap) {
+        if (vmf->mf.id == id) {
+            return vmf;
+        }
+    }
+
+    return NULL;
+}
+
+/* If 'mff' is a variable length field, looks up 'vl_mff_map', returns a
+ * pointer to the variable length meta-flow field corresponding to 'mff'.
+ * Returns NULL if no mapping is existed for 'mff'. */
+const struct mf_field *
+mf_get_vl_mff(const struct mf_field *mff,
+              const struct vl_mff_map *vl_mff_map)
+{
+    if (mff && mff->variable_len && vl_mff_map) {
+        return &mf_get_vl_mff__(mff->id, vl_mff_map)->mf;
+    }
+
+    return NULL;
+}
+
+/* Updates the tun_metadata mf_field in 'vl_mff_map' according to 'ttm'.
+ * This function is supposed to be invoked after tun_metadata_table_mod(). */
+enum ofperr
+mf_vl_mff_map_mod_from_tun_metadata(struct vl_mff_map *vl_mff_map,
+                                    const struct ofputil_tlv_table_mod *ttm)
+    OVS_REQUIRES(vl_mff_map->mutex)
+{
+    struct ofputil_tlv_map *tlv_map;
+
+    if (ttm->command == NXTTMC_CLEAR) {
+        mf_vl_mff_map_clear(vl_mff_map);
+        return 0;
+    }
+
+    LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
+        unsigned int idx = MFF_TUN_METADATA0 + tlv_map->index;
+        struct vl_mf_field *vmf;
+
+        if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
+            return OFPERR_NXTTMFC_BAD_FIELD_IDX;
+        }
+
+        switch (ttm->command) {
+        case NXTTMC_ADD:
+            vmf = xmalloc(sizeof *vmf);
+            vmf->mf = mf_fields[idx];
+            vmf->mf.n_bytes = tlv_map->option_len;
+            vmf->mf.n_bits = tlv_map->option_len * 8;
+            vmf->mf.mapped = true;
+
+            cmap_insert(&vl_mff_map->cmap, &vmf->cmap_node,
+                        mf_field_hash(idx));
+            break;
+
+        case NXTTMC_DELETE:
+            vmf = mf_get_vl_mff__(idx, vl_mff_map);
+            if (vmf) {
+                cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
+                            mf_field_hash(idx));
+                ovsrcu_postpone(free, vmf);
+            }
+            break;
+
+        case NXTTMC_CLEAR:
+        default:
+            OVS_NOT_REACHED();
+        }
+    }
+
+    return 0;
+}
+
+/* Returns true if a variable length meta-flow field 'mff' is not mapped in
+ * the 'vl_mff_map'. */
+bool
+mf_vl_mff_invalid(const struct mf_field *mff, const struct vl_mff_map *map)
+{
+    return map && mff && mff->variable_len && !mff->mapped;
 }

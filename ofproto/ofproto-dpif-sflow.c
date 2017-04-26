@@ -61,7 +61,6 @@ enum dpif_sflow_tunnel_type {
     DPIF_SFLOW_TUNNEL_VXLAN,
     DPIF_SFLOW_TUNNEL_GRE,
     DPIF_SFLOW_TUNNEL_LISP,
-    DPIF_SFLOW_TUNNEL_IPSEC_GRE,
     DPIF_SFLOW_TUNNEL_GENEVE
 };
 
@@ -582,8 +581,6 @@ dpif_sflow_tunnel_type(struct ofport *ofport) {
     if (type) {
 	if (strcmp(type, "gre") == 0) {
 	    return DPIF_SFLOW_TUNNEL_GRE;
-	} else if (strcmp(type, "ipsec_gre") == 0) {
-	    return DPIF_SFLOW_TUNNEL_IPSEC_GRE;
 	} else if (strcmp(type, "vxlan") == 0) {
 	    return DPIF_SFLOW_TUNNEL_VXLAN;
 	} else if (strcmp(type, "lisp") == 0) {
@@ -604,10 +601,6 @@ dpif_sflow_tunnel_proto(enum dpif_sflow_tunnel_type tunnel_type)
 
     case DPIF_SFLOW_TUNNEL_GRE:
         ipproto = IPPROTO_GRE;
-        break;
-
-    case DPIF_SFLOW_TUNNEL_IPSEC_GRE:
-        ipproto = IPPROTO_ESP;
         break;
 
     case DPIF_SFLOW_TUNNEL_VXLAN:
@@ -958,7 +951,7 @@ sflow_read_set_action(const struct nlattr *attr,
             /* Do not handle multi-encap for now. */
             sflow_actions->tunnel_err = true;
         } else {
-            if (odp_tun_key_from_attr(attr, false, &sflow_actions->tunnel)
+            if (odp_tun_key_from_attr(attr, &sflow_actions->tunnel)
                 == ODP_FIT_ERROR) {
                 /* Tunnel parsing error. */
                 sflow_actions->tunnel_err = true;
@@ -1096,7 +1089,7 @@ dpif_sflow_read_actions(const struct flow *flow,
 	    /* Capture the output port in case we need it
 	     * to get the output tunnel type.
 	     */
-	    sflow_actions->out_port = u32_to_odp(nl_attr_get_u32(a));
+	    sflow_actions->out_port = nl_attr_get_odp_port(a);
 	    break;
 
 	case OVS_ACTION_ATTR_TUNNEL_POP:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include "flow.h"
 #include "hash.h"
 #include "openvswitch/hmap.h"
+#include "openvswitch/ofp-actions.h"
 #include "odp-netlink.h"
 #include "openflow/openflow.h"
 #include "util.h"
@@ -150,11 +151,12 @@ struct odputil_keybuf {
     uint32_t keybuf[DIV_ROUND_UP(ODPUTIL_FLOW_KEY_BYTES, 4)];
 };
 
-enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *, bool udpif,
+enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *,
                                            struct flow_tnl *);
 
 int odp_ufid_from_string(const char *s_, ovs_u128 *ufid);
 void odp_format_ufid(const ovs_u128 *ufid, struct ds *);
+
 void odp_flow_format(const struct nlattr *key, size_t key_len,
                      const struct nlattr *mask, size_t mask_len,
                      const struct hmap *portno_names, struct ds *,
@@ -232,19 +234,8 @@ enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
                                           struct flow *);
 enum odp_key_fitness odp_flow_key_to_mask(const struct nlattr *mask_key,
                                           size_t mask_key_len,
-                                          const struct nlattr *flow_key,
-                                          size_t flow_key_len,
                                           struct flow_wildcards *mask,
                                           const struct flow *flow);
-
-enum odp_key_fitness odp_flow_key_to_flow_udpif(const struct nlattr *, size_t,
-                                                struct flow *);
-enum odp_key_fitness odp_flow_key_to_mask_udpif(const struct nlattr *mask_key,
-                                                size_t mask_key_len,
-                                                const struct nlattr *flow_key,
-                                                size_t flow_key_len,
-                                                struct flow_wildcards *mask,
-                                                const struct flow *flow);
 
 const char *odp_key_fitness_to_string(enum odp_key_fitness);
 
@@ -274,8 +265,7 @@ enum user_action_cookie_type {
     USER_ACTION_COOKIE_IPFIX,        /* Packet for per-bridge IPFIX sampling. */
 };
 
-/* user_action_cookie is passed as argument to OVS_ACTION_ATTR_USERSPACE.
- * Since it is passed to kernel as u64, its size has to be 8 bytes. */
+/* user_action_cookie is passed as argument to OVS_ACTION_ATTR_USERSPACE. */
 union user_action_cookie {
     uint16_t type;              /* enum user_action_cookie_type. */
 
@@ -298,6 +288,7 @@ union user_action_cookie {
         uint32_t obs_domain_id; /* Observation Domain ID. */
         uint32_t obs_point_id;  /* Observation Point ID. */
         odp_port_t output_odp_port; /* The output odp port. */
+        enum nx_action_sample_direction direction;
     } flow_sample;
 
     struct {
@@ -305,7 +296,7 @@ union user_action_cookie {
         odp_port_t output_odp_port; /* The output odp port. */
     } ipfix;
 };
-BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 20);
+BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 24);
 
 size_t odp_put_userspace_action(uint32_t pid,
                                 const void *userdata, size_t userdata_size,

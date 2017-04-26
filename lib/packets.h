@@ -537,6 +537,14 @@ mpls_lse_to_bos(ovs_be32 mpls_lse)
         &((uint8_t *) ip)[2],                               \
         &((uint8_t *) ip)[3]
 
+#define IP_PORT_SCAN_FMT "%"SCNu8".%"SCNu8".%"SCNu8".%"SCNu8":%"SCNu16
+#define IP_PORT_SCAN_ARGS(ip, port)                                    \
+        ((void) (ovs_be32) *(ip), &((uint8_t *) ip)[0]),    \
+        &((uint8_t *) ip)[1],                               \
+        &((uint8_t *) ip)[2],                               \
+        &((uint8_t *) ip)[3],                               \
+        ((void) (ovs_be16) *(port), (uint16_t *) port)
+
 /* Returns true if 'netmask' is a CIDR netmask, that is, if it consists of N
  * high-order 1-bits and 32-N low-order 0-bits. */
 static inline bool
@@ -558,6 +566,8 @@ ip_is_local_multicast(ovs_be32 ip)
 int ip_count_cidr_bits(ovs_be32 netmask);
 void ip_format_masked(ovs_be32 ip, ovs_be32 mask, struct ds *);
 bool ip_parse(const char *s, ovs_be32 *ip);
+char *ip_parse_port(const char *s, ovs_be32 *ip, ovs_be16 *port)
+    OVS_WARN_UNUSED_RESULT;
 char *ip_parse_masked(const char *s, ovs_be32 *ip, ovs_be32 *mask)
     OVS_WARN_UNUSED_RESULT;
 char *ip_parse_cidr(const char *s, ovs_be32 *ip, unsigned int *plen)
@@ -830,6 +840,8 @@ struct icmp6_header {
 BUILD_ASSERT_DECL(ICMP6_HEADER_LEN == sizeof(struct icmp6_header));
 
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
+uint16_t packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
+                                 const void *, uint8_t, uint16_t);
 
 /* Neighbor Discovery option field.
  * ND options are always a multiple of 8 bytes in size. */
@@ -1083,14 +1095,16 @@ void *snap_compose(struct dp_packet *, const struct eth_addr eth_dst,
                    unsigned int oui, uint16_t snap_type, size_t size);
 void packet_set_ipv4(struct dp_packet *, ovs_be32 src, ovs_be32 dst, uint8_t tos,
                      uint8_t ttl);
-void packet_set_ipv6(struct dp_packet *, const ovs_be32 src[4],
-                     const ovs_be32 dst[4], uint8_t tc,
+void packet_set_ipv4_addr(struct dp_packet *packet, ovs_16aligned_be32 *addr,
+                          ovs_be32 new_addr);
+void packet_set_ipv6(struct dp_packet *, const struct in6_addr *src,
+                     const struct in6_addr *dst, uint8_t tc,
                      ovs_be32 fl, uint8_t hlmit);
 void packet_set_tcp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_udp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_sctp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_icmp(struct dp_packet *, uint8_t type, uint8_t code);
-void packet_set_nd(struct dp_packet *, const ovs_be32 target[4],
+void packet_set_nd(struct dp_packet *, const struct in6_addr *target,
                    const struct eth_addr sll, const struct eth_addr tll);
 
 void packet_format_tcp_flags(struct ds *, uint16_t);

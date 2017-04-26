@@ -74,6 +74,8 @@ struct db {
 static char *private_key_file;
 static char *certificate_file;
 static char *ca_cert_file;
+static char *ssl_protocols;
+static char *ssl_ciphers;
 static bool bootstrap_ca_cert;
 
 static unixctl_cb_func ovsdb_server_exit;
@@ -137,9 +139,9 @@ static void load_config(FILE *config_file, struct sset *remotes,
 
 static void
 ovsdb_replication_init(const char *sync_from, const char *exclude,
-                       struct shash *all_dbs)
+                       struct shash *all_dbs, const struct uuid *server_uuid)
 {
-    replication_init(sync_from, exclude);
+    replication_init(sync_from, exclude, server_uuid);
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
@@ -197,8 +199,8 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         if (*is_backup) {
             replication_run();
             if (!replication_is_alive()) {
-                int retval = replication_get_last_error();
-                ovs_fatal(retval, "replication connection failed");
+                disconnect_active_server();
+                *is_backup = false;
             }
         }
 
@@ -423,7 +425,9 @@ main(int argc, char *argv[])
                              ovsdb_server_disable_monitor_cond, jsonrpc);
 
     if (is_backup) {
-        ovsdb_replication_init(sync_from, sync_exclude, &all_dbs);
+        const struct uuid *server_uuid;
+        server_uuid = ovsdb_jsonrpc_server_get_uuid(jsonrpc);
+        ovsdb_replication_init(sync_from, sync_exclude, &all_dbs, server_uuid);
     }
 
     main_loop(jsonrpc, &all_dbs, unixctl, &remotes, run_process, &exiting,
@@ -781,6 +785,17 @@ read_string_column(const struct ovsdb_row *row, const char *column_name,
     return atom != NULL;
 }
 
+static bool
+read_bool_column(const struct ovsdb_row *row, const char *column_name,
+                   bool *boolp)
+{
+    const union ovsdb_atom *atom;
+
+    atom = read_column(row, column_name, OVSDB_TYPE_BOOLEAN);
+    *boolp = atom ? atom->boolean : false;
+    return atom != NULL;
+}
+
 static void
 write_bool_column(struct ovsdb_row *row, const char *column_name, bool value)
 {
@@ -849,6 +864,7 @@ add_manager_options(struct shash *remotes, const struct ovsdb_row *row)
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     struct ovsdb_jsonrpc_options *options;
     long long int max_backoff, probe_interval;
+    bool read_only;
     const char *target, *dscp_string;
 
     if (!read_string_column(row, "target", &target) || !target) {
@@ -863,6 +879,9 @@ add_manager_options(struct shash *remotes, const struct ovsdb_row *row)
     }
     if (read_integer_column(row, "inactivity_probe", &probe_interval)) {
         options->probe_interval = probe_interval;
+    }
+    if (read_bool_column(row, "read_only", &read_only)) {
+        options->read_only = read_only;
     }
 
     options->dscp = DSCP_DEFAULT;
@@ -1095,13 +1114,19 @@ reconfigure_ssl(const struct shash *all_dbs)
     const char *resolved_private_key;
     const char *resolved_certificate;
     const char *resolved_ca_cert;
+    const char *resolved_ssl_protocols;
+    const char *resolved_ssl_ciphers;
 
     resolved_private_key = query_db_string(all_dbs, private_key_file, &errors);
     resolved_certificate = query_db_string(all_dbs, certificate_file, &errors);
     resolved_ca_cert = query_db_string(all_dbs, ca_cert_file, &errors);
+    resolved_ssl_protocols = query_db_string(all_dbs, ssl_protocols, &errors);
+    resolved_ssl_ciphers = query_db_string(all_dbs, ssl_ciphers, &errors);
 
     stream_ssl_set_key_and_cert(resolved_private_key, resolved_certificate);
     stream_ssl_set_ca_cert_file(resolved_ca_cert, bootstrap_ca_cert);
+    stream_ssl_set_protocols(resolved_ssl_protocols);
+    stream_ssl_set_ciphers(resolved_ssl_ciphers);
 
     return errors.string;
 }
@@ -1162,8 +1187,10 @@ ovsdb_server_connect_active_ovsdb_server(struct unixctl_conn *conn,
     if ( !*config->sync_from) {
         msg = "Unable to connect: active server is not specified.\n";
     } else {
+        const struct uuid *server_uuid;
+        server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
         ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                               config->all_dbs);
+                               config->all_dbs, server_uuid);
         if (!*config->is_backup) {
             *config->is_backup = true;
             save_config(config);
@@ -1200,8 +1227,10 @@ ovsdb_server_set_sync_exclude_tables(struct unixctl_conn *conn,
         *config->sync_exclude = xstrdup(argv[1]);
         save_config(config);
         if (*config->is_backup) {
+            const struct uuid *server_uuid;
+            server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
             ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                                   config->all_dbs);
+                                   config->all_dbs, server_uuid);
         }
         err = set_blacklist_tables(argv[1], false);
     }
@@ -1407,8 +1436,10 @@ ovsdb_server_add_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
     if (!error) {
         save_config(config);
         if (*config->is_backup) {
+            const struct uuid *server_uuid;
+            server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
             ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                                   config->all_dbs);
+                                   config->all_dbs, server_uuid);
         }
         unixctl_command_reply(conn, NULL);
     } else {
@@ -1441,8 +1472,10 @@ ovsdb_server_remove_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
     save_config(config);
     if (*config->is_backup) {
+        const struct uuid *server_uuid;
+        server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
         ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                               config->all_dbs);
+                               config->all_dbs, server_uuid);
     }
     unixctl_command_reply(conn, NULL);
 }
@@ -1502,7 +1535,8 @@ parse_options(int *argcp, char **argvp[],
         OPT_SYNC_EXCLUDE,
         OPT_ACTIVE,
         VLOG_OPTION_ENUMS,
-        DAEMON_OPTION_ENUMS
+        DAEMON_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
         {"remote",      required_argument, NULL, OPT_REMOTE},
@@ -1516,9 +1550,7 @@ parse_options(int *argcp, char **argvp[],
         VLOG_LONG_OPTIONS,
         {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
         {"peer-ca-cert", required_argument, NULL, OPT_PEER_CA_CERT},
-        {"private-key", required_argument, NULL, 'p'},
-        {"certificate", required_argument, NULL, 'c'},
-        {"ca-cert",     required_argument, NULL, 'C'},
+        STREAM_SSL_LONG_OPTIONS,
         {"sync-from",   required_argument, NULL, OPT_SYNC_FROM},
         {"sync-exclude-tables", required_argument, NULL, OPT_SYNC_EXCLUDE},
         {"active", no_argument, NULL, OPT_ACTIVE},
@@ -1573,6 +1605,14 @@ parse_options(int *argcp, char **argvp[],
         case 'C':
             ca_cert_file = optarg;
             bootstrap_ca_cert = false;
+            break;
+
+        case OPT_SSL_PROTOCOLS:
+            ssl_protocols = optarg;
+            break;
+
+        case OPT_SSL_CIPHERS:
+            ssl_ciphers = optarg;
             break;
 
         case OPT_BOOTSTRAP_CA_CERT:

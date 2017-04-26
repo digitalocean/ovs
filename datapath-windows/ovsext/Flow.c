@@ -1737,6 +1737,9 @@ OvsTunnelAttrToIPv4TunnelKey(PNL_ATTR attr,
         case OVS_TUNNEL_KEY_ATTR_OAM:
             tunKey->flags |= OVS_TNL_F_OAM;
             break;
+        case OVS_TUNNEL_KEY_ATTR_TP_DST:
+            tunKey->dst_port = NlAttrGetBe16(a);
+            break;
         case OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS:
             if (hasOpt) {
                 /* Duplicate options attribute is not allowed. */
@@ -1810,6 +1813,11 @@ MapTunAttrToFlowPut(PNL_ATTR *keyAttrs,
 
         if (tunAttrs[OVS_TUNNEL_KEY_ATTR_OAM]) {
         destKey->tunKey.flags |= OVS_TNL_F_OAM;
+        }
+
+        if (tunAttrs[OVS_TUNNEL_KEY_ATTR_TP_DST]) {
+            destKey->tunKey.dst_port =
+                NlAttrGetU16(tunAttrs[OVS_TUNNEL_KEY_ATTR_TP_DST]);
         }
 
         if (tunAttrs[OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS]) {
@@ -2595,7 +2603,7 @@ OvsHashFlow(const OvsFlowKey *key)
     UINT8 *start;
 
     ASSERT(key->tunKey.dst || offset == sizeof(OvsIPv4TunnelKey));
-    ASSERT(!key->tunKey.dst || offset == 0);
+    ASSERT(!key->tunKey.dst || offset == OvsGetFlowL2Offset(&key->tunKey));
     start = (UINT8 *)key + offset;
     return OvsJhashBytes(start, size, 0);
 }

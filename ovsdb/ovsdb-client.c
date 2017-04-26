@@ -175,7 +175,8 @@ parse_options(int argc, char *argv[])
         OPT_TIMESTAMP,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS,
-        TABLE_OPTION_ENUMS
+        TABLE_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
@@ -191,6 +192,8 @@ parse_options(int argc, char *argv[])
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
+
+    table_style.format = TF_TABLE;
 
     for (;;) {
         int c;

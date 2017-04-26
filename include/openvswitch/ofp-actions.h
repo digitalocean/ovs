@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,8 @@
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/types.h"
+
+struct vl_mff_map;
 
 /* List of OVS abstracted actions.
  *
@@ -107,8 +109,10 @@
     OFPACT(SAMPLE,          ofpact_sample,      ofpact, "sample")       \
     OFPACT(UNROLL_XLATE,    ofpact_unroll_xlate, ofpact, "unroll_xlate") \
     OFPACT(CT,              ofpact_conntrack,   ofpact, "ct")           \
+    OFPACT(CT_CLEAR,        ofpact_null,        ofpact, "ct_clear")     \
     OFPACT(NAT,             ofpact_nat,         ofpact, "nat")          \
     OFPACT(OUTPUT_TRUNC,    ofpact_output_trunc,ofpact, "output_trunc") \
+    OFPACT(CLONE,           ofpact_nest,        actions, "clone")       \
                                                                         \
     /* Debugging actions.                                               \
      *                                                                  \
@@ -158,8 +162,8 @@ enum {
  *       NXAST_SET_TUNNEL64.  In these cases, if the "struct ofpact" originated
  *       from OpenFlow, then we want to make sure that, if it gets translated
  *       back to OpenFlow later, it is translated back to the same action type.
- *       (Otherwise, we'd violate the promise made in DESIGN, in the "Action
- *       Reproduction" section.)
+ *       (Otherwise, we'd violate the promise made in the topics/design doc, in
+ *       the "Action Reproduction" section.)
  *
  *       For such actions, the 'raw' member should be the "enum ofp_raw_action"
  *       originally extracted from the OpenFlow action.  (If the action didn't
@@ -203,22 +207,6 @@ ofpact_end(const struct ofpact *ofpacts, size_t ofpacts_len)
 }
 
 static inline const struct ofpact *
-ofpact_find_type(const struct ofpact *a, enum ofpact_type type,
-                 const struct ofpact * const end)
-{
-    while (a < end) {
-        if (a->type == type) {
-            return a;
-        }
-        a = ofpact_next(a);
-    }
-    return NULL;
-}
-
-#define OFPACT_FIND_TYPE(A, TYPE, END) \
-    ofpact_get_##TYPE##_nullable(ofpact_find_type(A, OFPACT_##TYPE, END))
-
-static inline const struct ofpact *
 ofpact_find_type_flattened(const struct ofpact *a, enum ofpact_type type,
                            const struct ofpact * const end)
 {
@@ -240,13 +228,6 @@ ofpact_find_type_flattened(const struct ofpact *a, enum ofpact_type type,
 #define OFPACT_FOR_EACH(POS, OFPACTS, OFPACTS_LEN)                      \
     for ((POS) = (OFPACTS); (POS) < ofpact_end(OFPACTS, OFPACTS_LEN);  \
          (POS) = ofpact_next(POS))
-
-#define OFPACT_FOR_EACH_TYPE(POS, TYPE, OFPACTS, OFPACTS_LEN)           \
-    for ((POS) = OFPACT_FIND_TYPE(OFPACTS, TYPE,                        \
-                                  ofpact_end(OFPACTS, OFPACTS_LEN));    \
-         (POS);                                                         \
-         (POS) = OFPACT_FIND_TYPE(ofpact_next(&(POS)->ofpact), TYPE,    \
-                                  ofpact_end(OFPACTS, OFPACTS_LEN)))
 
 /* Assigns POS to each ofpact, in turn, in the OFPACTS_LEN bytes of ofpacts
  * starting at OFPACTS.
@@ -555,9 +536,9 @@ struct ofpact_meter {
     uint32_t meter_id;
 };
 
-/* OFPACT_WRITE_ACTIONS.
+/* OFPACT_WRITE_ACTIONS, OFPACT_CLONE.
  *
- * Used for OFPIT11_WRITE_ACTIONS. */
+ * Used for OFPIT11_WRITE_ACTIONS, NXAST_CLONE. */
 struct ofpact_nest {
     OFPACT_PADDED_MEMBERS(struct ofpact ofpact;);
     struct ofpact actions[];
@@ -565,6 +546,12 @@ struct ofpact_nest {
 BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions) % OFPACT_ALIGNTO == 0);
 BUILD_ASSERT_DECL(offsetof(struct ofpact_nest, actions)
                   == sizeof(struct ofpact_nest));
+
+static inline size_t
+ofpact_nest_get_action_len(const struct ofpact_nest *on)
+{
+    return on->ofpact.len - offsetof(struct ofpact_nest, actions);
+}
 
 /* Bits for 'flags' in struct nx_action_conntrack.
  *
@@ -580,6 +567,10 @@ enum nx_conntrack_flags {
 
 #if !defined(IPPORT_FTP)
 #define IPPORT_FTP  21
+#endif
+
+#if !defined(IPPORT_TFTP)
+#define IPPORT_TFTP  69
 #endif
 
 /* OFPACT_CT.
@@ -605,12 +596,6 @@ static inline size_t
 ofpact_ct_get_action_len(const struct ofpact_conntrack *oc)
 {
     return oc->ofpact.len - offsetof(struct ofpact_conntrack, actions);
-}
-
-static inline size_t
-ofpact_nest_get_action_len(const struct ofpact_nest *on)
-{
-    return on->ofpact.len - offsetof(struct ofpact_nest, actions);
 }
 
 void ofpacts_execute_action_set(struct ofpbuf *action_list,
@@ -864,9 +849,23 @@ struct ofpact_note {
     uint8_t data[];
 };
 
+/* Direction of sampled packets. */
+enum nx_action_sample_direction {
+    /* OVS will attempt to infer the sample's direction based on whether
+     * 'sampling_port' is the packet's output port.  This is generally
+     * effective except when sampling happens as part of an output to a patch
+     * port, which doesn't involve a datapath output action. */
+    NX_ACTION_SAMPLE_DEFAULT,
+
+    /* Explicit direction.  This is useful for sampling packets coming in from
+     * or going out of a patch port, where the direction cannot be inferred. */
+    NX_ACTION_SAMPLE_INGRESS,
+    NX_ACTION_SAMPLE_EGRESS
+};
+
 /* OFPACT_SAMPLE.
  *
- * Used for NXAST_SAMPLE and NXAST_SAMPLE2. */
+ * Used for NXAST_SAMPLE, NXAST_SAMPLE2, and NXAST_SAMPLE3. */
 struct ofpact_sample {
     struct ofpact ofpact;
     uint16_t probability;  /* Always positive. */
@@ -874,6 +873,7 @@ struct ofpact_sample {
     uint32_t obs_domain_id;
     uint32_t obs_point_id;
     ofp_port_t sampling_port;
+    enum nx_action_sample_direction direction;
 };
 
 /* OFPACT_DEC_TTL.
@@ -945,11 +945,14 @@ struct ofpact_unroll_xlate {
 enum ofperr ofpacts_pull_openflow_actions(struct ofpbuf *openflow,
                                           unsigned int actions_len,
                                           enum ofp_version version,
+                                          const struct vl_mff_map *,
                                           struct ofpbuf *ofpacts);
-enum ofperr ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
-                                               unsigned int instructions_len,
-                                               enum ofp_version version,
-                                               struct ofpbuf *ofpacts);
+enum ofperr
+ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
+                                   unsigned int instructions_len,
+                                   enum ofp_version version,
+                                   const struct vl_mff_map *vl_mff_map,
+                                   struct ofpbuf *ofpacts);
 enum ofperr ofpacts_check(struct ofpact[], size_t ofpacts_len,
                           struct flow *, ofp_port_t max_ports,
                           uint8_t table_id, uint8_t n_tables,

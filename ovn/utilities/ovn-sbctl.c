@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,6 +48,7 @@
 #include "table.h"
 #include "timeval.h"
 #include "util.h"
+#include "svec.h"
 
 VLOG_DEFINE_THIS_MODULE(sbctl);
 
@@ -97,7 +98,6 @@ main(int argc, char *argv[])
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
     vlog_set_levels_from_string_assert("reconnect:warn");
-    sbrec_init();
 
     sbctl_cmd_init();
 
@@ -162,7 +162,8 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         OPT_COMMANDS,
         OPT_OPTIONS,
         VLOG_OPTION_ENUMS,
-        TABLE_OPTION_ENUMS
+        TABLE_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
     static const struct option global_long_options[] = {
         {"db", required_argument, NULL, OPT_DB},
@@ -199,7 +200,6 @@ parse_options(int argc, char *argv[], struct shash *local_options)
     allocated_options = ARRAY_SIZE(global_long_options);
     n_options = n_global_long_options;
     ctl_add_cmd_options(&options, &n_options, &allocated_options, OPT_LOCAL);
-    table_style.format = TF_LIST;
 
     for (;;) {
         int idx;
@@ -287,8 +287,6 @@ usage(void)
     printf("\
 %s: OVN southbound DB management utility\n\
 \n\
-For debugging and testing only, not for use in production.\n\
-\n\
 usage: %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 General commands:\n\
@@ -306,8 +304,18 @@ Port binding commands:\n\
   lsp-unbind PORT             reset the port binding of logical port PORT\n\
 \n\
 Logical flow commands:\n\
-  lflow-list [DATAPATH]       List logical flows for all or a single datapath\n\
-  dump-flows [DATAPATH]       Alias for lflow-list\n\
+  lflow-list [DATAPATH] [LFLOW...] List logical flows for DATAPATH\n\
+  dump-flows [DATAPATH] [LFLOW...] Alias for lflow-list\n\
+\n\
+Connection commands:\n\
+  get-connection             print the connections\n\
+  del-connection             delete the connections\n\
+  set-connection TARGET...   set the list of connections to TARGET...\n\
+\n\
+SSL commands:\n\
+  get-ssl                     print the SSL configuration\n\
+  del-ssl                     delete the SSL configuration\n\
+  set-ssl PRIV-KEY CERT CA-CERT  set the SSL configuration\n\
 \n\
 %s\
 \n\
@@ -687,98 +695,366 @@ lflow_cmp(const void *lf1_, const void *lf2_)
     return 0;
 }
 
+static char *
+parse_partial_uuid(char *s)
+{
+    /* Accept a full or partial UUID. */
+    if (uuid_is_partial_string(s) == strlen(s)) {
+        return s;
+    }
+
+    /* Accept a full or partial UUID prefixed by 0x, since "ovs-ofctl
+     * dump-flows" prints cookies prefixed by 0x. */
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')
+        && uuid_is_partial_string(s + 2) == strlen(s + 2)) {
+        return s + 2;
+    }
+
+    /* Not a (partial) UUID. */
+    return NULL;
+}
+
+static bool
+is_partial_uuid_match(const struct uuid *uuid, const char *match)
+{
+    char uuid_s[UUID_LEN + 1];
+    snprintf(uuid_s, sizeof uuid_s, UUID_FMT, UUID_ARGS(uuid));
+
+    return !strncmp(uuid_s, match, strlen(match));
+}
+
+static const struct sbrec_datapath_binding *
+lookup_datapath(struct ovsdb_idl *idl, const char *s)
+{
+    struct uuid uuid;
+    if (uuid_from_string(&uuid, s)) {
+        const struct sbrec_datapath_binding *datapath;
+        datapath = sbrec_datapath_binding_get_for_uuid(idl, &uuid);
+        if (datapath) {
+            return datapath;
+        }
+    }
+
+    const struct sbrec_datapath_binding *found = NULL;
+    const struct sbrec_datapath_binding *datapath;
+    SBREC_DATAPATH_BINDING_FOR_EACH (datapath, idl) {
+        const char *name = smap_get(&datapath->external_ids, "name");
+        if (name && !strcmp(name, s)) {
+            if (!found) {
+                found = datapath;
+            } else {
+                ctl_fatal("%s: multiple datapaths with this name", s);
+            }
+        }
+    }
+    return found;
+}
+
 static void
 cmd_lflow_list(struct ctl_context *ctx)
 {
-    const char *datapath = ctx->argc == 2 ? ctx->argv[1] : NULL;
-    struct uuid datapath_uuid = { .parts = { 0, }};
-    const struct sbrec_logical_flow **lflows;
-    const struct sbrec_logical_flow *lflow;
-    size_t n_flows = 0, n_capacity = 64;
-
-    if (datapath && !uuid_from_string(&datapath_uuid, datapath)) {
-        VLOG_ERR("Invalid format of datapath UUID");
-        return;
+    const struct sbrec_datapath_binding *datapath = NULL;
+    if (ctx->argc > 1) {
+        datapath = lookup_datapath(ctx->idl, ctx->argv[1]);
+        if (datapath) {
+            ctx->argc--;
+            ctx->argv++;
+        }
     }
 
-    lflows = xmalloc(sizeof *lflows * n_capacity);
+    for (size_t i = 1; i < ctx->argc; i++) {
+        char *s = parse_partial_uuid(ctx->argv[i]);
+        if (!s) {
+            ctl_fatal("%s is not a UUID or the beginning of a UUID",
+                      ctx->argv[i]);
+        }
+        ctx->argv[i] = s;
+    }
+
+    const struct sbrec_logical_flow **lflows = NULL;
+    size_t n_flows = 0;
+    size_t n_capacity = 0;
+    const struct sbrec_logical_flow *lflow;
     SBREC_LOGICAL_FLOW_FOR_EACH (lflow, ctx->idl) {
+        if (datapath && lflow->logical_datapath != datapath) {
+            continue;
+        }
+
         if (n_flows == n_capacity) {
             lflows = x2nrealloc(lflows, &n_capacity, sizeof *lflows);
         }
         lflows[n_flows] = lflow;
         n_flows++;
     }
-
     qsort(lflows, n_flows, sizeof *lflows, lflow_cmp);
 
-    const char *cur_pipeline = "";
-    size_t i;
-    for (i = 0; i < n_flows; i++) {
+    bool print_uuid = shash_find(&ctx->options, "--uuid") != NULL;
+
+    const struct sbrec_logical_flow *prev = NULL;
+    for (size_t i = 0; i < n_flows; i++) {
         lflow = lflows[i];
-        if (datapath && !uuid_equals(&datapath_uuid,
-                                     &lflow->logical_datapath->header_.uuid)) {
+
+        /* Figure out whether to print this particular flow.  By default, we
+         * print all flows, but if any UUIDs were listed on the command line
+         * then we only print the matching ones. */
+        bool include;
+        if (ctx->argc > 1) {
+            include = false;
+            for (size_t j = 1; j < ctx->argc; j++) {
+                if (is_partial_uuid_match(&lflow->header_.uuid,
+                                          ctx->argv[j])) {
+                    include = true;
+                    break;
+                }
+            }
+        } else {
+            include = true;
+        }
+        if (!include) {
             continue;
         }
-        if (strcmp(cur_pipeline, lflow->pipeline)) {
+
+        /* Print a header line for this datapath or pipeline, if we haven't
+         * already done so. */
+        if (!prev
+            || prev->logical_datapath != lflow->logical_datapath
+            || strcmp(prev->pipeline, lflow->pipeline)) {
             printf("Datapath: \"%s\" ("UUID_FMT")  Pipeline: %s\n",
                    smap_get_def(&lflow->logical_datapath->external_ids,
                                 "name", ""),
                    UUID_ARGS(&lflow->logical_datapath->header_.uuid),
                    lflow->pipeline);
-            cur_pipeline = lflow->pipeline;
         }
 
-        printf("  table=%-2" PRId64 "(%-19s), priority=%-5" PRId64
+        /* Print the flow. */
+        printf("  ");
+        if (print_uuid) {
+            printf("uuid=0x%08"PRIx32", ", lflow->header_.uuid.parts[0]);
+        }
+        printf("table=%-2"PRId64"(%-19s), priority=%-5"PRId64
                ", match=(%s), action=(%s)\n",
                lflow->table_id,
                smap_get_def(&lflow->external_ids, "stage-name", ""),
                lflow->priority, lflow->match, lflow->actions);
+        prev = lflow;
     }
 
     free(lflows);
 }
 
+static void
+verify_connections(struct ctl_context *ctx)
+{
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    const struct sbrec_connection *conn;
+
+    sbrec_sb_global_verify_connections(sb_global);
+
+    SBREC_CONNECTION_FOR_EACH(conn, ctx->idl) {
+        sbrec_connection_verify_target(conn);
+    }
+}
+
+static void
+pre_connection(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &sbrec_sb_global_col_connections);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_target);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_connection_col_read_only);
+}
+
+static void
+cmd_get_connection(struct ctl_context *ctx)
+{
+    const struct sbrec_connection *conn;
+    struct svec targets;
+    size_t i;
+
+    verify_connections(ctx);
+
+    /* Print the targets in sorted order for reproducibility. */
+    svec_init(&targets);
+
+    SBREC_CONNECTION_FOR_EACH(conn, ctx->idl) {
+        char *s;
+
+        s = xasprintf("%s %s", conn->read_only ? "read-only" : "read-write",
+                               conn->target);
+        svec_add(&targets, s);
+        free(s);
+    }
+
+    svec_sort_unique(&targets);
+    for (i = 0; i < targets.n; i++) {
+        ds_put_format(&ctx->output, "%s\n", targets.names[i]);
+    }
+    svec_destroy(&targets);
+}
+
+static void
+delete_connections(struct ctl_context *ctx)
+{
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    const struct sbrec_connection *conn, *next;
+
+    /* Delete Manager rows pointed to by 'connection_options' column. */
+    SBREC_CONNECTION_FOR_EACH_SAFE(conn, next, ctx->idl) {
+        sbrec_connection_delete(conn);
+    }
+
+    /* Delete 'Manager' row refs in 'manager_options' column. */
+    sbrec_sb_global_set_connections(sb_global, NULL, 0);
+}
+
+static void
+cmd_del_connection(struct ctl_context *ctx)
+{
+    verify_connections(ctx);
+    delete_connections(ctx);
+}
+
+static void
+insert_connections(struct ctl_context *ctx, char *targets[], size_t n)
+{
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    struct sbrec_connection **connections;
+    size_t i, conns=0;
+    bool read_only = false;
+
+    /* Insert each connection in a new row in Connection table. */
+    connections = xmalloc(n * sizeof *connections);
+    for (i = 0; i < n; i++) {
+        if (!strcmp(targets[i], "read-only")) {
+            read_only = true;
+            continue;
+        } else if (!strcmp(targets[i], "read-write")) {
+            read_only = false;
+            continue;
+        } else if (stream_verify_name(targets[i]) &&
+                   pstream_verify_name(targets[i])) {
+            VLOG_WARN("target type \"%s\" is possibly erroneous", targets[i]);
+        }
+
+        connections[conns] = sbrec_connection_insert(ctx->txn);
+        sbrec_connection_set_target(connections[conns], targets[i]);
+        sbrec_connection_set_read_only(connections[conns], read_only);
+        conns++;
+    }
+
+    /* Store uuids of new connection rows in 'connection' column. */
+    sbrec_sb_global_set_connections(sb_global, connections, conns);
+    free(connections);
+}
+
+static void
+cmd_set_connection(struct ctl_context *ctx)
+{
+    const size_t n = ctx->argc - 1;
+
+    verify_connections(ctx);
+    delete_connections(ctx);
+    insert_connections(ctx, &ctx->argv[1], n);
+}
+
+static void
+pre_cmd_get_ssl(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &sbrec_sb_global_col_ssl);
+
+    ovsdb_idl_add_column(ctx->idl, &sbrec_ssl_col_private_key);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_ssl_col_certificate);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_ssl_col_ca_cert);
+    ovsdb_idl_add_column(ctx->idl, &sbrec_ssl_col_bootstrap_ca_cert);
+}
+
+static void
+cmd_get_ssl(struct ctl_context *ctx)
+{
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    const struct sbrec_ssl *ssl = sbrec_ssl_first(ctx->idl);
+
+    sbrec_sb_global_verify_ssl(sb_global);
+    if (ssl) {
+        sbrec_ssl_verify_private_key(ssl);
+        sbrec_ssl_verify_certificate(ssl);
+        sbrec_ssl_verify_ca_cert(ssl);
+        sbrec_ssl_verify_bootstrap_ca_cert(ssl);
+
+        ds_put_format(&ctx->output, "Private key: %s\n", ssl->private_key);
+        ds_put_format(&ctx->output, "Certificate: %s\n", ssl->certificate);
+        ds_put_format(&ctx->output, "CA Certificate: %s\n", ssl->ca_cert);
+        ds_put_format(&ctx->output, "Bootstrap: %s\n",
+                ssl->bootstrap_ca_cert ? "true" : "false");
+    }
+}
+
+static void
+pre_cmd_del_ssl(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &sbrec_sb_global_col_ssl);
+}
+
+static void
+cmd_del_ssl(struct ctl_context *ctx)
+{
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    const struct sbrec_ssl *ssl = sbrec_ssl_first(ctx->idl);
+
+    if (ssl) {
+        sbrec_sb_global_verify_ssl(sb_global);
+        sbrec_ssl_delete(ssl);
+        sbrec_sb_global_set_ssl(sb_global, NULL);
+    }
+}
+
+static void
+pre_cmd_set_ssl(struct ctl_context *ctx)
+{
+    ovsdb_idl_add_column(ctx->idl, &sbrec_sb_global_col_ssl);
+}
+
+static void
+cmd_set_ssl(struct ctl_context *ctx)
+{
+    bool bootstrap = shash_find(&ctx->options, "--bootstrap");
+    const struct sbrec_sb_global *sb_global = sbrec_sb_global_first(ctx->idl);
+    const struct sbrec_ssl *ssl = sbrec_ssl_first(ctx->idl);
+
+    sbrec_sb_global_verify_ssl(sb_global);
+    if (ssl) {
+        sbrec_ssl_delete(ssl);
+    }
+    ssl = sbrec_ssl_insert(ctx->txn);
+
+    sbrec_ssl_set_private_key(ssl, ctx->argv[1]);
+    sbrec_ssl_set_certificate(ssl, ctx->argv[2]);
+    sbrec_ssl_set_ca_cert(ssl, ctx->argv[3]);
+
+    sbrec_ssl_set_bootstrap_ca_cert(ssl, bootstrap);
+
+    sbrec_sb_global_set_ssl(sb_global, ssl);
+}
+
 
-static const struct ctl_table_class tables[] = {
-    {&sbrec_table_sb_global,
-     {{&sbrec_table_sb_global, NULL, NULL},
-      {NULL, NULL, NULL}}},
+static const struct ctl_table_class tables[SBREC_N_TABLES] = {
+    [SBREC_TABLE_CHASSIS].row_ids[0] =
+    {&sbrec_table_chassis, &sbrec_chassis_col_name, NULL},
 
-    {&sbrec_table_chassis,
-     {{&sbrec_table_chassis, &sbrec_chassis_col_name, NULL},
-      {NULL, NULL, NULL}}},
+    [SBREC_TABLE_LOGICAL_FLOW].row_ids[0] =
+     {&sbrec_table_logical_flow, NULL,
+      &sbrec_logical_flow_col_logical_datapath},
 
-    {&sbrec_table_encap,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
+    [SBREC_TABLE_PORT_BINDING].row_ids[0] =
+    {&sbrec_table_port_binding, &sbrec_port_binding_col_logical_port, NULL},
 
-    {&sbrec_table_logical_flow,
-     {{&sbrec_table_logical_flow, NULL,
-       &sbrec_logical_flow_col_logical_datapath},
-      {NULL, NULL, NULL}}},
+    [SBREC_TABLE_MAC_BINDING].row_ids[0] =
+    {&sbrec_table_mac_binding, &sbrec_mac_binding_col_logical_port, NULL},
 
-    {&sbrec_table_multicast_group,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
+    [SBREC_TABLE_ADDRESS_SET].row_ids[0] =
+    {&sbrec_table_address_set, &sbrec_address_set_col_name, NULL},
 
-    {&sbrec_table_datapath_binding,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&sbrec_table_port_binding,
-     {{&sbrec_table_port_binding, &sbrec_port_binding_col_logical_port, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&sbrec_table_mac_binding,
-     {{&sbrec_table_mac_binding, &sbrec_mac_binding_col_logical_port, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&sbrec_table_address_set,
-     {{&sbrec_table_address_set, &sbrec_address_set_col_name, NULL},
-      {NULL, NULL, NULL}}},
-
-    {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
+    [SBREC_TABLE_SSL].row_ids[0] =
+    {&sbrec_table_sb_global, NULL, &sbrec_sb_global_col_ssl},
 };
 
 
@@ -1035,12 +1311,24 @@ static const struct ctl_command_syntax sbctl_commands[] = {
      "--if-exists", RW},
 
     /* Logical flow commands */
-    {"lflow-list", 0, 1, "[DATAPATH]", pre_get_info, cmd_lflow_list, NULL,
-     "", RO},
-    {"dump-flows", 0, 1, "[DATAPATH]", pre_get_info, cmd_lflow_list, NULL,
-     "", RO}, /* Friendly alias for lflow-list */
+    {"lflow-list", 0, INT_MAX, "[DATAPATH] [LFLOW...]",
+     pre_get_info, cmd_lflow_list, NULL,
+     "--uuid", RO},
+    {"dump-flows", 0, INT_MAX, "[DATAPATH] [LFLOW...]",
+     pre_get_info, cmd_lflow_list, NULL,
+     "--uuid", RO}, /* Friendly alias for lflow-list */
 
-    /* SSL commands (To Be Added). */
+    /* Connection commands. */
+    {"get-connection", 0, 0, "", pre_connection, cmd_get_connection, NULL, "", RO},
+    {"del-connection", 0, 0, "", pre_connection, cmd_del_connection, NULL, "", RW},
+    {"set-connection", 1, INT_MAX, "TARGET...", pre_connection, cmd_set_connection,
+     NULL, "", RW},
+
+    /* SSL commands. */
+    {"get-ssl", 0, 0, "", pre_cmd_get_ssl, cmd_get_ssl, NULL, "", RO},
+    {"del-ssl", 0, 0, "", pre_cmd_del_ssl, cmd_del_ssl, NULL, "", RW},
+    {"set-ssl", 3, 3, "PRIVATE-KEY CERTIFICATE CA-CERT", pre_cmd_set_ssl,
+     cmd_set_ssl, NULL, "--bootstrap", RW},
 
     {NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, RO},
 };
@@ -1049,6 +1337,6 @@ static const struct ctl_command_syntax sbctl_commands[] = {
 static void
 sbctl_cmd_init(void)
 {
-    ctl_init(tables, cmd_show_tables, sbctl_exit);
+    ctl_init(sbrec_table_classes, tables, cmd_show_tables, sbctl_exit);
     ctl_register_commands(sbctl_commands);
 }

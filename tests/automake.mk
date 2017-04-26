@@ -52,6 +52,7 @@ TESTSUITE_AT = \
 	tests/tunnel.at \
 	tests/tunnel-push-pop.at \
 	tests/tunnel-push-pop-ipv6.at \
+	tests/ovs-router.at \
 	tests/lockfile.at \
 	tests/reconnect.at \
 	tests/ovs-vswitchd.at \
@@ -82,7 +83,6 @@ TESTSUITE_AT = \
 	tests/ovsdb-idl.at \
 	tests/ovsdb-lock.at \
 	tests/ovs-vsctl.at \
-	tests/ovs-monitor-ipsec.at \
 	tests/ovs-xapi-sync.at \
 	tests/stp.at \
 	tests/rstp.at \
@@ -94,7 +94,8 @@ TESTSUITE_AT = \
 	tests/ovn-nbctl.at \
 	tests/ovn-sbctl.at \
 	tests/ovn-controller.at \
-	tests/ovn-controller-vtep.at
+	tests/ovn-controller-vtep.at \
+	tests/mcast-snooping.at
 
 SYSTEM_KMOD_TESTSUITE_AT = \
 	tests/system-common-macros.at \
@@ -111,6 +112,8 @@ SYSTEM_TESTSUITE_AT = \
 	tests/system-ovn.at \
 	tests/system-traffic.at
 
+check_SCRIPTS += tests/atlocal
+
 TESTSUITE = $(srcdir)/tests/testsuite
 TESTSUITE_PATCH = $(srcdir)/tests/testsuite.patch
 SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
@@ -119,7 +122,7 @@ DISTCLEANFILES += tests/atconfig tests/atlocal
 
 AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
 
-check-local: tests/atconfig tests/atlocal $(TESTSUITE)
+check-local:
 	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
@@ -128,7 +131,7 @@ check-local: tests/atconfig tests/atlocal $(TESTSUITE)
 
 COVERAGE = coverage
 COVERAGE_FILE='$(abs_srcdir)/.coverage'
-check-pycov: all tests/atconfig tests/atlocal $(TESTSUITE) clean-pycov
+check-pycov: all clean-pycov
 	PYTHONDONTWRITEBYTECODE=yes COVERAGE_FILE=$(COVERAGE_FILE) PYTHON='$(COVERAGE) run -p' $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS)
 	@cd $(srcdir) && $(COVERAGE) combine && COVERAGE_FILE=$(COVERAGE_FILE) $(COVERAGE) annotate
 	@echo
@@ -146,7 +149,7 @@ clean-lcov:
 
 LCOV_OPTS = -b $(abs_top_builddir) -d $(abs_top_builddir) -q -c --rc lcov_branch_coverage=1
 GENHTML_OPTS = -q --branch-coverage --num-spaces 4
-check-lcov: all tests/atconfig tests/atlocal $(TESTSUITE) $(check_DATA) clean-lcov
+check-lcov: all $(check_DATA) clean-lcov
 	find . -name '*.gcda' | xargs -n1 rm -f
 	-set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
@@ -218,15 +221,13 @@ HELGRIND = valgrind --log-file=helgrind.%p --tool=helgrind \
 	--suppressions=$(abs_top_srcdir)/tests/glibc.supp \
 	--suppressions=$(abs_top_srcdir)/tests/openssl.supp --num-callers=20
 EXTRA_DIST += tests/glibc.supp tests/openssl.supp
-check-valgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
-                $(valgrind_wrappers) $(check_DATA)
+check-valgrind: all $(valgrind_wrappers) $(check_DATA)
 	$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(VALGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
 	@echo
 	@echo '----------------------------------------------------------------------'
 	@echo 'Valgrind output can be found in tests/testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
-check-helgrind: all tests/atconfig tests/atlocal $(TESTSUITE) \
-                $(valgrind_wrappers) $(check_DATA)
+check-helgrind: all $(valgrind_wrappers) $(check_DATA)
 	-$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(HELGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
 
 
@@ -242,18 +243,19 @@ check-ryu: all
 EXTRA_DIST += tests/run-ryu
 
 # Run kmod tests. Assume kernel modules has been installed or linked into the kernel
-check-kernel: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+check-kernel: all
 	set $(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
 # Testing the out of tree Kernel module
-check-kmod: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+check-kmod: all
 	$(MAKE) modules_install
 	modprobe -r -a vport-geneve vport-gre vport-lisp vport-stt vport-vxlan openvswitch
 	$(MAKE) check-kernel
 
-check-system-userspace: all tests/atconfig tests/atlocal $(SYSTEM_USERSPACE_TESTSUITE)
-	$(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1
+check-system-userspace: all
+	set $(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean

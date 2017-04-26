@@ -5,3 +5,4 @@ usr/share/man/man8/ovn-ctl.8
 usr/share/man/man8/ovn-nbctl.8
 usr/share/man/man8/ovn-sbctl.8
 usr/share/openvswitch/scripts/ovn-ctl
+usr/share/openvswitch/scripts/ovndb-servers.ocf

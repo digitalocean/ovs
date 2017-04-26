@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,7 +118,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
     size_t total_len;
     enum ofperr error;
 
-    error = ofputil_decode_packet_in_private(oh, true,
+    error = ofputil_decode_packet_in_private(oh, true, NULL,
                                              &pin, &total_len, &buffer_id);
     if (error) {
         ofp_print_error(string, error);
@@ -167,14 +167,23 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
                       UUID_ARGS(&pin.bridge));
     }
 
-    if (pin.n_stack) {
-        ds_put_cstr(string, " continuation.stack=");
-        for (size_t i = 0; i < pin.n_stack; i++) {
-            if (i) {
-                ds_put_char(string, ' ');
-            }
-            mf_subvalue_format(&pin.stack[i], string);
+    if (pin.stack_size) {
+        ds_put_cstr(string, " continuation.stack=(top)");
+
+        struct ofpbuf pin_stack;
+        ofpbuf_use_const(&pin_stack, pin.stack, pin.stack_size);
+
+        while (pin_stack.size) {
+            uint8_t len;
+            uint8_t *val = nx_stack_pop(&pin_stack, &len);
+            union mf_subvalue value;
+
+            ds_put_char(string, ' ');
+            memset(&value, 0, sizeof value - len);
+            memcpy(&value.u8[sizeof value - len], val, len);
+            mf_subvalue_format(&value, string);
         }
+        ds_put_cstr(string, " (bottom)\n");
     }
 
     if (pin.mirrors) {
@@ -506,6 +515,8 @@ ofputil_capabilities_to_name(uint32_t bit)
     case OFPUTIL_C_STP:          return "STP";
     case OFPUTIL_C_GROUP_STATS:  return "GROUP_STATS";
     case OFPUTIL_C_PORT_BLOCKED: return "PORT_BLOCKED";
+    case OFPUTIL_C_BUNDLES:      return "BUNDLES";
+    case OFPUTIL_C_FLOW_MONITORING: return "FLOW_MONITORING";
     }
 
     return NULL;
@@ -786,7 +797,7 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
     protocol = ofputil_protocol_set_tid(protocol, true);
 
     ofpbuf_init(&ofpacts, 64);
-    error = ofputil_decode_flow_mod(&fm, oh, protocol, &ofpacts,
+    error = ofputil_decode_flow_mod(&fm, oh, protocol, NULL, NULL, &ofpacts,
                                     OFPP_MAX, 255);
     if (error) {
         ofpbuf_uninit(&ofpacts);
@@ -1261,6 +1272,7 @@ ofp_print_queue_get_config_reply(struct ds *string,
         ofp_print_error(string, retval);
     }
     ds_chomp(string, ' ');
+    free(queues);
 }
 
 static void
@@ -1591,7 +1603,7 @@ ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh)
     struct ofputil_flow_stats_request fsr;
     enum ofperr error;
 
-    error = ofputil_decode_flow_stats_request(&fsr, oh);
+    error = ofputil_decode_flow_stats_request(&fsr, oh, NULL);
     if (error) {
         ofp_print_error(string, error);
         return;
@@ -2368,10 +2380,8 @@ ofp_print_nxst_flow_monitor_reply(struct ds *string,
     for (;;) {
         char reasonbuf[OFP_FLOW_REMOVED_REASON_BUFSIZE];
         struct ofputil_flow_update update;
-        struct match match;
         int retval;
 
-        update.match = &match;
         retval = ofputil_decode_flow_update(&update, &b, &ofpacts);
         if (retval) {
             if (retval != EOF) {
@@ -2415,7 +2425,7 @@ ofp_print_nxst_flow_monitor_reply(struct ds *string,
         ds_put_format(string, " cookie=%#"PRIx64, ntohll(update.cookie));
 
         ds_put_char(string, ' ');
-        match_format(update.match, string, OFP_DEFAULT_PRIORITY);
+        match_format(&update.match, string, OFP_DEFAULT_PRIORITY);
 
         if (update.ofpacts_len) {
             if (string->string[string->length - 1] != ' ') {

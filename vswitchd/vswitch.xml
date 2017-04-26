@@ -73,7 +73,8 @@
       </column>
 
       <column name="external_ids" key="hostname">
-        The hostname for the host running Open vSwitch.
+        The hostname for the host running Open vSwitch. This is a fully
+        qualified domain name since version 2.6.2.
       </column>
 
       <column name="other_config" key="stats-update-interval"
@@ -500,15 +501,8 @@
 
       <column name="db_version">
         <p>
-          The database schema version number in the form
-          <code><var>major</var>.<var>minor</var>.<var>tweak</var></code>,
-          e.g. <code>1.2.3</code>.  Whenever the database schema is changed in
-          a non-backward compatible way (e.g. deleting a column or a table),
-          <var>major</var> is incremented.  When the database schema is changed
-          in a backward compatible way (e.g. adding a new column),
-          <var>minor</var> is incremented.  When the database schema is changed
-          cosmetically (e.g. reindenting its syntax), <var>tweak</var> is
-          incremented.
+          The database schema version number, e.g. <code>1.2.3</code>.  See
+          ovsdb-tool(1) for an explanation of the numbering scheme.
         </p>
 
         <p>
@@ -1778,6 +1772,14 @@
         Bridge?  See ovs-vsctl(8) for more information.
       </column>
 
+      <column name="protected" type='{"type": "boolean"}'>
+        The protected ports feature allows certain ports to be designated as
+        protected. Traffic between protected ports is blocked. Protected
+        ports can send traffic to unprotected ports. Unprotected ports can
+        send traffic to any port.
+        Default is false.
+      </column>
+
       <column name="external_ids" key="fake-bridge-id-*">
         External IDs for a fake bridge (see the <ref column="fake_bridge"/>
         column) are defined by prefixing a <ref table="Bridge"/> <ref
@@ -2004,15 +2006,6 @@
             tunnel.
           </dd>
 
-          <dt><code>ipsec_gre</code></dt>
-          <dd>
-            An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4/IPv6
-            IPsec tunnel.
-            IPsec tunnel ports are deprecated. The support will be completely
-            removed in next version.
-
-          </dd>
-
           <dt><code>vxlan</code></dt>
           <dd>
             <p>
@@ -2075,8 +2068,8 @@
     <group title="Tunnel Options">
       <p>
         These options apply to interfaces with <ref column="type"/> of
-        <code>geneve</code>, <code>gre</code>, <code>ipsec_gre</code>,
-        <code>vxlan</code>, <code>lisp</code> and <code>stt</code>.
+        <code>geneve</code>, <code>gre</code>, <code>vxlan</code>,
+        <code>lisp</code> and <code>stt</code>.
       </p>
 
       <p>
@@ -2243,9 +2236,9 @@
             <li>
               <code>gbp</code>: VXLAN-GBP allows to transport the group policy
               context of a packet across the VXLAN tunnel to other network
-              peers. See the field description of <code>tun_gbp_id</code> and
-              <code>tun_gbp_flags</code> in ovs-ofctl(8) for additional
-              information.
+              peers. See the description of <code>tun_gbp_id</code> and
+              <code>tun_gbp_flags</code> in <code>ovs-fields</code>(7) for
+              additional information.
               (<code>https://tools.ietf.org/html/draft-smith-vxlan-group-policy</code>)
             </li>
           </ul>
@@ -2253,9 +2246,9 @@
 
       </group>
 
-      <group title="Tunnel Options: gre, ipsec_gre, geneve, and vxlan">
+      <group title="Tunnel Options: gre, geneve, and vxlan">
         <p>
-          <code>gre</code>, <code>ipsec_gre</code>, <code>geneve</code>, and
+          <code>gre</code>, <code>geneve</code>, and
           <code>vxlan</code> interfaces support these options.
         </p>
 
@@ -2277,43 +2270,6 @@
             is compatible with.
           </p>
 
-          <p>
-            This option is supported for <code>ipsec_gre</code>, but not useful
-            because GRE checksums are weaker than, and redundant with, IPsec
-            payload authentication.
-          </p>
-        </column>
-      </group>
-
-      <group title="Tunnel Options: ipsec_gre only">
-        <p>
-          Only <code>ipsec_gre</code> interfaces support these options.
-        </p>
-
-        <column name="options" key="peer_cert">
-          Required for certificate authentication.  A string containing the
-          peer's certificate in PEM format.  Additionally the host's
-          certificate must be specified with the <code>certificate</code>
-          option.
-        </column>
-
-        <column name="options" key="certificate">
-          Required for certificate authentication.  The name of a PEM file
-          containing a certificate that will be presented to the peer during
-          authentication.
-        </column>
-
-        <column name="options" key="private_key">
-          Optional for certificate authentication.  The name of a PEM file
-          containing the private key associated with <code>certificate</code>.
-          If <code>certificate</code> contains the private key, this option may
-          be omitted.
-        </column>
-
-        <column name="options" key="psk">
-          Required for pre-shared key authentication.  Specifies a pre-shared
-          key for authentication that must be identical on both sides of the
-          tunnel.
         </column>
       </group>
     </group>
@@ -2347,6 +2303,19 @@
         </p>
       </column>
 
+      <column name="options" key="dpdk-devargs"
+              type='{"type": "string"}'>
+        <p>
+          Specifies the PCI address associated with the port for physical
+          devices, or the virtual driver to be used for the port when a virtual
+          PMD is intended to be used. For the latter, the argument string
+          typically takes the form of eth_&lt;driver_name&gt;&lt;x&gt; where
+          'driver_name' is a valid virtual DPDK PMD driver name and where 'x'
+          lies in the range of 0 to RTE_MAX_ETHPORTS-1.
+          Only supported by the dpdk port type.
+        </p>
+      </column>
+
       <column name="other_config" key="pmd-rxq-affinity">
         <p>Specifies mapping of RX queues of this interface to CPU cores.</p>
         <p>Value should be set in the following form:</p>
@@ -2376,6 +2345,28 @@
           The value specifies the path to the socket associated with a vHost
           User client mode device that has been or will be created by QEMU.
           Only supported by dpdkvhostuserclient interfaces.
+        </p>
+      </column>
+
+      <column name="options" key="n_rxq_desc"
+              type='{"type": "integer", "minInteger": 1, "maxInteger": 4096}'>
+        <p>
+          Specifies the rx queue size (number rx descriptors) for dpdk ports.
+          The value must be a power of 2, less than 4096 and supported
+          by the hardware of the device being configured.
+          If not specified or an incorrect value is specified, 2048 rx
+          descriptors will be used by default.
+        </p>
+      </column>
+
+      <column name="options" key="n_txq_desc"
+              type='{"type": "integer", "minInteger": 1, "maxInteger": 4096}'>
+        <p>
+          Specifies the tx queue size (number tx descriptors) for dpdk ports.
+          The value must be a power of 2, less than 4096 and supported
+          by the hardware of the device being configured.
+          If not specified or an incorrect value is specified, 2048 tx
+          descriptors will be used by default.
         </p>
       </column>
     </group>
@@ -2415,6 +2406,12 @@
         <p>
           Requested MTU (Maximum Transmission Unit) for the interface. A client
           can fill this column to change the MTU of an interface.
+        </p>
+
+        <p>
+          RFC 791 requires every internet module to be able to forward a
+          datagram of 68 octets without further fragmentation.  The maximum
+          size of an IP packet is 65535 bytes.
         </p>
 
         <p>
@@ -3202,6 +3199,20 @@
       </column>
     </group>
 
+    <group title="Rx Checksum Offload Configuration">
+      <p>
+        The checksum validation on the incoming packets are performed on NIC
+        using Rx checksum offload feature. Implemented only for <code>dpdk
+        </code>physical interfaces.
+      </p>
+
+      <column name="options" key="rx-checksum-offload"
+              type='{"type": "boolean"}'>
+        Set to <code>false</code> to disble Rx checksum offloading on <code>
+        dpdk</code>physical ports. By default, Rx checksum offload is enabled.
+      </column>
+    </group>
+
     <group title="Common Columns">
       The overall purpose of these columns is described under <code>Common
       Columns</code> at the beginning of this document.
@@ -3322,7 +3333,7 @@
           <code><var>field</var>[]</code> or
           <code><var>field</var>[<var>start</var>..<var>end</var>]</code>,
           e.g. <code>NXM_OF_IN_PORT[]</code>.  Please see
-          <code>nicira-ext.h</code> for a complete list of NXM field names.
+          <code>meta-flow.h</code> for a complete list of NXM field names.
         </p>
 
         <p>
@@ -4774,8 +4785,7 @@
           <p>type: unsigned 8-bit integer.</p>
           <p>data type semantics: identifier.</p>
           <p>description: Identifier of the layer 2 network overlay network
-          encapsulation type: 0x01 VxLAN, 0x02 GRE, 0x03 LISP, 0x05 IPsec+GRE,
-          0x07 GENEVE.</p>
+          encapsulation type: 0x01 VxLAN, 0x02 GRE, 0x03 LISP, 0x07 GENEVE.</p>
         </dd>
         <dt>tunnelKey:</dt>
         <dd>

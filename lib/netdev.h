@@ -30,7 +30,7 @@ extern "C" {
  *
  * Every port on a switch must have a corresponding netdev that must minimally
  * support a few operations, such as the ability to read the netdev's MTU.
- * The PORTING file at the top of the source tree has more information in the
+ * The Porting section of the documentation has more information in the
  * "Writing a netdev Provider" section.
  *
  * Thread-safety
@@ -97,7 +97,6 @@ struct netdev_tunnel_config {
     bool tos_inherit;
 
     bool csum;
-    bool ipsec;
     bool dont_fragment;
 };
 
@@ -110,6 +109,7 @@ bool netdev_is_reserved_name(const char *name);
 int netdev_n_txq(const struct netdev *netdev);
 int netdev_n_rxq(const struct netdev *netdev);
 bool netdev_is_pmd(const struct netdev *netdev);
+bool netdev_has_tunnel_push_pop(const struct netdev *netdev);
 
 /* Open and close. */
 int netdev_open(const char *name, const char *type, struct netdev **netdevp);

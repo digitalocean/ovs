@@ -332,12 +332,12 @@
         A priority-65535 flow that allows any traffic in the reply
         direction for a connection that has been committed to the
         connection tracker (i.e., established flows), as long as
-        the committed flow does not have <code>ct_label[0]</code> set.
+        the committed flow does not have <code>ct_label.blocked</code> set.
         We only handle traffic in the reply direction here because
         we want all packets going in the request direction to still
         go through the flows that implement the currently defined
         policy based on ACLs.  If a connection is no longer allowed by
-        policy, <code>ct_label[0]</code> will get set and packets in the
+        policy, <code>ct_label.blocked</code> will get set and packets in the
         reply direction will no longer be allowed, either.
       </li>
 
@@ -345,7 +345,7 @@
         A priority-65535 flow that allows any traffic that is considered
         related to a committed flow in the connection tracker (e.g., an
         ICMP Port Unreachable from a non-listening UDP port), as long
-        as the committed flow does not have <code>ct_label[0]</code> set.
+        as the committed flow does not have <code>ct_label.blocked</code> set.
       </li>
 
       <li>
@@ -355,14 +355,34 @@
 
       <li>
         A priority-65535 flow that drops all trafic in the reply direction
-        with <code>ct_label[0]</code> set meaning that the connection
+        with <code>ct_label.blocked</code> set meaning that the connection
         should no longer be allowed due to a policy change.  Packets
         in the request direction are skipped here to let a newly created
         ACL re-allow this connection.
       </li>
     </ul>
 
-    <h3>Ingress Table 7: LB</h3>
+    <h3>Ingress Table 7: <code>from-lport</code> QoS marking</h3>
+
+    <p>
+      Logical flows in this table closely reproduce those in the
+      <code>QoS</code> table in the <code>OVN_Northbound</code> database
+      for the <code>from-lport</code> direction.
+    </p>
+
+    <ul>
+      <li>
+        For every qos_rules for every logical switch a flow will be added at
+        priorities mentioned in the QoS table.
+      </li>
+
+      <li>
+        One priority-0 fallback flow that matches all packets and advances to
+        the next table.
+      </li>
+    </ul>
+
+    <h3>Ingress Table 8: LB</h3>
 
     <p>
       It contains a priority-0 flow that simply moves traffic to the next
@@ -375,7 +395,7 @@
       connection.)
     </p>
 
-    <h3>Ingress Table 8: Stateful</h3>
+    <h3>Ingress Table 9: Stateful</h3>
 
     <ul>
       <li>
@@ -412,23 +432,78 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 9: ARP/ND responder</h3>
+    <h3>Ingress Table 10: ARP/ND responder</h3>
 
     <p>
-      This table implements ARP/ND responder for known IPs.  It contains these
-      logical flows:
+      This table implements ARP/ND responder in a logical switch for known
+      IPs.  The advantage of the ARP responder flow is to limit ARP
+      broadcasts by locally responding to ARP requests without the need to
+      send to other hypervisors.  One common case is when the inport is a
+      logical port associated with a VIF and the broadcast is responded to
+      on the local hypervisor rather than broadcast across the whole
+      network and responded to by the destination VM.  This behavior is
+      proxy ARP.
     </p>
+
+    <p>
+      ARP requests arrive from VMs from a logical switch inport of type
+      default.  For this case, the logical switch proxy ARP rules can be
+      for other VMs or logical router ports.  Logical switch proxy ARP
+      rules may be programmed both for mac binding of IP addresses on
+      other logical switch VIF ports (which are of the default logical
+      switch port type, representing connectivity to VMs or containers),
+      and for mac binding of IP addresses on logical switch router type
+      ports, representing their logical router port peers.  In order to
+      support proxy ARP for logical router ports, an IP address must be
+      configured on the logical switch router type port, with the same
+      value as the peer logical router port.  The configured MAC addresses
+      must match as well.  When a VM sends an ARP request for a distributed
+      logical router port and if the peer router type port of the attached
+      logical switch does not have an IP address configured, the ARP request
+      will be broadcast on the logical switch.  One of the copies of the ARP
+      request will go through the logical switch router type port to the
+      logical router datapath, where the logical router ARP responder will
+      generate a reply.  The MAC binding of a distributed logical router,
+      once learned by an associated VM, is used for all that VM's
+      communication needing routing.  Hence, the action of a VM re-arping for
+      the mac binding of the logical router port should be rare.
+    </p>
+
+    <p>
+      Logical switch ARP responder proxy ARP rules can also be hit when
+      receiving ARP requests externally on a L2 gateway port.  In this case,
+      the hypervisor acting as an L2 gateway, responds to the ARP request on
+      behalf of a destination VM.
+    </p>
+
+    <p>
+      Note that ARP requests received from <code>localnet</code> or
+      <code>vtep</code> logical inports can either go directly to VMs, in
+      which case the VM responds or can hit an ARP responder for a logical
+      router port if the packet is used to resolve a logical router port
+      next hop address.  In either case, logical switch ARP responder rules
+      will not be hit.  It contains these logical flows:
+     </p>
 
     <ul>
       <li>
-        Priority-100 flows to skip ARP responder if inport is of type
-        <code>localnet</code>, and advances directly to the next table.
+        Priority-100 flows to skip the ARP responder if inport is of type
+        <code>localnet</code> or <code>vtep</code> and advances directly
+        to the next table.  ARP requests sent to <code>localnet</code> or
+        <code>vtep</code> ports can be received by multiple hypervisors.
+        Now, because the same mac binding rules are downloaded to all
+        hypervisors, each of the multiple hypervisors will respond.  This
+        will confuse L2 learning on the source of the ARP requests.  ARP
+        requests received on an inport of type <code>router</code> are not
+        expected to hit any logical switch ARP responder flows.  However,
+        no skip flows are installed for these packets, as there would be
+        some additional flow cost for this and the value appears limited.
       </li>
 
       <li>
         <p>
           Priority-50 flows that match ARP requests to each known IP address
-          <var>A</var> of every logical router port, and respond with ARP
+          <var>A</var> of every logical switch port, and respond with ARP
           replies directly with corresponding Ethernet address <var>E</var>:
         </p>
 
@@ -455,7 +530,7 @@ output;
         <p>
           Priority-50 flows that match IPv6 ND neighbor solicitations to
           each known IP address <var>A</var> (and <var>A</var>'s
-          solicited node address) of every logical router port, and
+          solicited node address) of every logical switch port, and
           respond with neighbor advertisements directly with
           corresponding Ethernet address <var>E</var>:
         </p>
@@ -507,7 +582,7 @@ nd_na {
       </li>
     </ul>
 
-    <h3>Ingress Table 10: DHCP option processing</h3>
+    <h3>Ingress Table 11: DHCP option processing</h3>
 
     <p>
       This table adds the DHCPv4 options to a DHCPv4 packet from the
@@ -567,7 +642,7 @@ next;
       </li>
     </ul>
 
-    <h3>Ingress Table 11: DHCP responses</h3>
+    <h3>Ingress Table 12: DHCP responses</h3>
 
     <p>
       This table implements DHCP responder for the DHCP replies generated by
@@ -649,7 +724,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 12: Destination Lookup</h3>
+    <h3>Ingress Table 13 Destination Lookup</h3>
 
     <p>
       This table implements switching behavior.  It contains these logical
@@ -665,9 +740,37 @@ output;
       </li>
 
       <li>
-        One priority-50 flow that matches each known Ethernet address against
-        <code>eth.dst</code> and outputs the packet to the single associated
-        output port.
+        <p>
+          One priority-50 flow that matches each known Ethernet address against
+          <code>eth.dst</code> and outputs the packet to the single associated
+          output port.
+        </p>
+
+        <p>
+          For the Ethernet address on a logical switch port of type
+          <code>router</code>, when that logical switch port's
+          <ref column="addresses" table="Logical_Switch_Port"
+          db="OVN_Northbound"/> column is set to <code>router</code> and
+          the connected logical router port specifies a
+          <code>redirect-chassis</code>:
+        </p>
+
+        <ul>
+          <li>
+            The flow for the connected logical router port's Ethernet
+            address is only programmed on the <code>redirect-chassis</code>.
+          </li>
+
+          <li>
+            If the logical router has rules specified in
+            <ref column="nat" table="Logical_Router" db="OVN_Northbound"/> with
+            <ref column="external_mac" table="NAT" db="OVN_Northbound"/>, then
+            those addresses are also used to populate the switch's destination
+            lookup on the chassis where
+            <ref column="logical_port" table="NAT" db="OVN_Northbound"/> is
+            resident.
+          </li>
+        </ul>
       </li>
 
       <li>
@@ -716,7 +819,14 @@ output;
       <code>to-lport</code> ACLs.
     </p>
 
-    <h3>Egress Table 5: Stateful</h3>
+    <h3>Egress Table 5: <code>to-lport</code> QoS marking</h3>
+
+    <p>
+      This is similar to ingress table <code>QoS marking</code> except for
+      <code>to-lport</code> qos rules.
+    </p>
+
+    <h3>Egress Table 6: Stateful</h3>
 
     <p>
       This is similar to ingress table <code>Stateful</code> except that
@@ -727,10 +837,10 @@ output;
       Also a priority 34000 logical flow is added for each logical port which
       has DHCPv4 options defined to allow the DHCPv4 reply packet and which has
       DHCPv6 options defined to allow the DHCPv6 reply packet from the
-      <code>Ingress Table 11: DHCP responses</code>.
+      <code>Ingress Table 12: DHCP responses</code>.
     </p>
 
-    <h3>Egress Table 6: Egress Port Security - IP</h3>
+    <h3>Egress Table 7: Egress Port Security - IP</h3>
 
     <p>
       This is similar to the port security logic in table
@@ -740,7 +850,7 @@ output;
       <code>ip4.src</code> and <code>ip6.src</code>
     </p>
 
-    <h3>Egress Table 7: Egress Port Security - L2</h3>
+    <h3>Egress Table 8: Egress Port Security - L2</h3>
 
     <p>
       This is similar to the ingress port security logic in ingress table
@@ -780,10 +890,38 @@ output;
       </li>
 
       <li>
-        For each enabled router port <var>P</var> with Ethernet address
-        <var>E</var>, a priority-50 flow that matches <code>inport ==
-        <var>P</var> &amp;&amp; (eth.mcast || eth.dst ==
-        <var>E</var></code>), with action <code>next;</code>.
+        <p>
+          For each enabled router port <var>P</var> with Ethernet address
+          <var>E</var>, a priority-50 flow that matches <code>inport ==
+          <var>P</var> &amp;&amp; (eth.mcast || eth.dst ==
+          <var>E</var></code>), with action <code>next;</code>.
+        </p>
+
+        <p>
+          For the gateway port on a distributed logical router (where
+          one of the logical router ports specifies a
+          <code>redirect-chassis</code>), the above flow matching
+          <code>eth.dst == <var>E</var></code> is only programmed on
+          the gateway port instance on the
+          <code>redirect-chassis</code>.
+        </p>
+      </li>
+
+      <li>
+        <p>
+          For each <code>dnat_and_snat</code> NAT rule on a distributed
+          router that specifies an external Ethernet address <var>E</var>,
+          a priority-50 flow that matches <code>inport == <var>GW</var>
+          &amp;&amp; eth.dst == <var>E</var></code>, where <var>GW</var>
+          is the logical router gateway port, with action
+          <code>next;</code>.
+        </p>
+
+        <p>
+          This flow is only programmed on the gateway port instance on
+          the chassis where the <code>logical_port</code> specified in
+          the NAT rule resides.
+        </p>
       </li>
     </ul>
 
@@ -823,7 +961,9 @@ output;
           </li>
           <li>
             <code>ip4.src</code> or <code>ip6.src</code> is any IP
-            address owned by the router.
+            address owned by the router, unless the packet was recirculated
+            due to egress loopback as indicated by
+            <code>REGBIT_EGRESS_LOOPBACK</code>.
           </li>
           <li>
             <code>ip4.src</code> is the broadcast address of any IP network
@@ -898,6 +1038,17 @@ outport = <var>P</var>;
 flags.loopback = 1;
 output;
         </pre>
+
+        <p>
+          For the gateway port on a distributed logical router (where
+          one of the logical router ports specifies a
+          <code>redirect-chassis</code>), the above flows are only
+          programmed on the gateway port instance on the
+          <code>redirect-chassis</code>.  This behavior avoids generation
+          of multiple ARP responses from different chassis, and allows
+          upstream MAC learning to point to the
+          <code>redirect-chassis</code>.
+        </p>
       </li>
 
       <li>
@@ -924,6 +1075,50 @@ outport = <var>P</var>;
 flags.loopback = 1;
 output;
         </pre>
+
+        <p>
+          For the gateway port on a distributed logical router with NAT
+          (where one of the logical router ports specifies a
+          <code>redirect-chassis</code>):
+        </p>
+
+        <ul>
+          <li>
+            If the corresponding NAT rule cannot be handled in a
+            distributed manner, then this flow is only programmed on
+            the gateway port instance on the
+            <code>redirect-chassis</code>.  This behavior avoids
+            generation of multiple ARP responses from different chassis,
+            and allows upstream MAC learning to point to the
+            <code>redirect-chassis</code>.
+          </li>
+
+          <li>
+            <p>
+              If the corresponding NAT rule can be handled in a distributed
+              manner, then this flow is only programmed on the gateway port
+              instance where the <code>logical_port</code> specified in the
+              NAT rule resides.
+            </p>
+
+            <p>
+              Some of the actions are different for this case, using the
+              <code>external_mac</code> specified in the NAT rule rather
+              than the gateway port's Ethernet address <var>E</var>:
+            </p>
+
+            <pre>
+eth.src = <var>external_mac</var>;
+arp.sha = <var>external_mac</var>;
+            </pre>
+
+            <p>
+              This behavior avoids generation of multiple ARP responses
+              from different chassis, and allows upstream MAC learning to
+              point to the correct chassis.
+            </p>
+          </li>
+        </ul>
       </li>
 
       <li>
@@ -958,6 +1153,17 @@ nd_na {
     output;
 };
         </pre>
+
+        <p>
+          For the gateway port on a distributed logical router (where
+          one of the logical router ports specifies a
+          <code>redirect-chassis</code>), the above flows replying to
+          IPv6 Neighbor Solicitations are only programmed on the
+          gateway port instance on the <code>redirect-chassis</code>.
+          This behavior avoids generation of multiple replies from
+          different chassis, and allows upstream MAC learning to point
+          to the <code>redirect-chassis</code>.
+        </p>
       </li>
 
       <li>
@@ -1115,14 +1321,69 @@ icmp4 {
       unSNATted here.
     </p>
 
+    <p>Ingress Table 3: UNSNAT on Gateway Routers</p>
+
+    <ul>
+      <li>
+        <p>
+          If the Gateway router has been configured to force SNAT any
+          previously DNATted packets to <var>B</var>, a priority-110 flow
+          matches <code>ip &amp;&amp; ip4.dst == <var>B</var></code> with
+          an action <code>ct_snat; next;</code>.
+        </p>
+
+        <p>
+          If the Gateway router has been configured to force SNAT any
+          previously load-balanced packets to <var>B</var>, a priority-100 flow
+          matches <code>ip &amp;&amp; ip4.dst == <var>B</var></code> with
+          an action <code>ct_snat; next;</code>.
+        </p>
+
+        <p>
+          For each NAT configuration in the OVN Northbound database, that asks
+          to change the source IP address of a packet from <var>A</var> to
+          <var>B</var>, a priority-90 flow matches <code>ip &amp;&amp;
+          ip4.dst == <var>B</var></code> with an action
+          <code>ct_snat; next;</code>.
+        </p>
+
+        <p>
+          A priority-0 logical flow with match <code>1</code> has actions
+          <code>next;</code>.
+        </p>
+      </li>
+    </ul>
+
+    <p>Ingress Table 3: UNSNAT on Distributed Routers</p>
+
     <ul>
       <li>
         <p>
           For each configuration in the OVN Northbound database, that asks
           to change the source IP address of a packet from <var>A</var> to
           <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
+          ip4.dst == <var>B</var> &amp;&amp; inport == <var>GW</var></code>,
+          where <var>GW</var> is the logical router gateway port, with an
+          action <code>ct_snat; next;</code>.
+        </p>
+
+        <p>
+          If the NAT rule cannot be handled in a distributed manner, then
+          the priority-100 flow above is only programmed on the
+          <code>redirect-chassis</code>.
+        </p>
+
+        <p>
+          For each configuration in the OVN Northbound database, that asks
+          to change the source IP address of a packet from <var>A</var> to
+          <var>B</var>, a priority-50 flow matches <code>ip &amp;&amp;
           ip4.dst == <var>B</var></code> with an action
-          <code>ct_snat; next;</code>.
+          <code>REGBIT_NAT_REDIRECT = 1; next;</code>.  This flow is for
+          east/west traffic to a NAT destination IPv4 address.  By
+          setting the <code>REGBIT_NAT_REDIRECT</code> flag, in the
+          ingress table <code>Gateway Redirect</code> this will trigger a
+          redirect to the instance of the gateway port on the
+          <code>redirect-chassis</code>.
         </p>
 
         <p>
@@ -1139,6 +1400,9 @@ icmp4 {
       be DNATted from a virtual IP address to a real IP address.  Packets
       in the reverse direction needs to be unDNATed.
     </p>
+
+    <p>Ingress Table 4: DNAT on Gateway Routers</p>
+
     <ul>
       <li>
         For all the configured load balancing rules for Gateway router in
@@ -1149,7 +1413,23 @@ icmp4 {
         &amp;&amp; <var>P</var> &amp;&amp; <var>P</var>.dst == <var>PORT
         </var></code> with an action of <code>ct_lb(<var>args</var>)</code>,
         where <var>args</var> contains comma separated IPv4 addresses (and
-        optional port numbers) to load balance to.
+        optional port numbers) to load balance to.  If the Gateway router
+        is configured to force SNAT any load-balanced packets, the above
+        action will be replaced by <code>flags.force_snat_for_lb = 1;
+        ct_lb(<var>args</var>);</code>.
+      </li>
+
+      <li>
+        For all the configured load balancing rules for Gateway router in
+        <code>OVN_Northbound</code> database that includes a L4 port
+        <var>PORT</var> of protocol <var>P</var> and IPv4 address
+        <var>VIP</var>, a priority-120 flow that matches on
+        <code>ct.est &amp;&amp; ip &amp;&amp; ip4.dst == <var>VIP</var>
+        &amp;&amp; <var>P</var> &amp;&amp; <var>P</var>.dst == <var>PORT
+        </var></code> with an action of <code>ct_dnat;</code>.
+        If the Gateway router is configured to force SNAT any load-balanced
+        packets, the above action will be replaced by
+        <code>flags.force_snat_for_lb = 1; ct_dnat;</code>.
       </li>
 
       <li>
@@ -1159,7 +1439,21 @@ icmp4 {
         <code>ct.new &amp;&amp; ip &amp;&amp; ip4.dst ==
         <var>VIP</var></code> with an action of
         <code>ct_lb(<var>args</var>)</code>, where <var>args</var> contains
-        comma separated IPv4 addresses.
+        comma separated IPv4 addresses.  If the Gateway router
+        is configured to force SNAT any load-balanced packets, the above
+        action will be replaced by <code>flags.force_snat_for_lb = 1;
+        ct_lb(<var>args</var>);</code>.
+      </li>
+
+      <li>
+        For all the configured load balancing rules for Gateway router in
+        <code>OVN_Northbound</code> database that includes just an IP address
+        <var>VIP</var> to match on, a priority-110 flow that matches on
+        <code>ct.est &amp;&amp; ip &amp;&amp; ip4.dst ==
+        <var>VIP</var></code> with an action of <code>ct_dnat;</code>.
+        If the Gateway router is configured to force SNAT any load-balanced
+        packets, the above action will be replaced by
+        <code>flags.force_snat_for_lb = 1; ct_dnat;</code>.
       </li>
 
       <li>
@@ -1167,7 +1461,11 @@ icmp4 {
         to change the destination IP address of a packet from <var>A</var> to
         <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
         ip4.dst == <var>A</var></code> with an action
-        <code>flags.loopback = 1; ct_dnat(<var>B</var>);</code>.
+        <code>flags.loopback = 1; ct_dnat(<var>B</var>);</code>.  If the
+        Gateway router is configured to force SNAT any DNATed packet,
+        the above action will be replaced by
+        <code>flags.force_snat_for_dnat = 1; flags.loopback = 1;
+        ct_dnat(<var>B</var>);</code>.
       </li>
 
       <li>
@@ -1178,6 +1476,53 @@ icmp4 {
       <li>
         A priority-0 logical flow with match <code>1</code> has actions
         <code>next;</code>.
+      </li>
+    </ul>
+
+    <p>Ingress Table 4: DNAT on Distributed Routers</p>
+
+    <p>
+      On distributed routers, the DNAT table only handles packets
+      with destination IP address that needs to be DNATted from a
+      virtual IP address to a real IP address.  The unDNAT processing
+      in the reverse direction is handled in a separate table in the
+      egress pipeline.
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          For each configuration in the OVN Northbound database, that asks
+          to change the destination IP address of a packet from <var>A</var> to
+          <var>B</var>, a priority-100 flow matches <code>ip &amp;&amp;
+          ip4.dst == <var>B</var> &amp;&amp; inport == <var>GW</var></code>,
+          where <var>GW</var> is the logical router gateway port, with an
+          action <code>ct_dnat(<var>B</var>);</code>.
+        </p>
+
+        <p>
+          If the NAT rule cannot be handled in a distributed manner, then
+          the priority-100 flow above is only programmed on the
+          <code>redirect-chassis</code>.
+        </p>
+
+        <p>
+          For each configuration in the OVN Northbound database, that asks
+          to change the destination IP address of a packet from <var>A</var> to
+          <var>B</var>, a priority-50 flow matches <code>ip &amp;&amp;
+          ip4.dst == <var>B</var></code> with an action
+          <code>REGBIT_NAT_REDIRECT = 1; next;</code>.  This flow is for
+          east/west traffic to a NAT destination IPv4 address.  By
+          setting the <code>REGBIT_NAT_REDIRECT</code> flag, in the
+          ingress table <code>Gateway Redirect</code> this will trigger a
+          redirect to the instance of the gateway port on the
+          <code>redirect-chassis</code>.
+        </p>
+
+        <p>
+          A priority-0 logical flow with match <code>1</code> has actions
+          <code>next;</code>.
+        </p>
       </li>
     </ul>
 
@@ -1192,9 +1537,9 @@ icmp4 {
       packet's final destination, unchanged) and advances to the next
       table for ARP resolution.  It also sets <code>reg1</code> (or
       <code>xxreg1</code>) to the IP address owned by the selected router
-      port (Table 7 will generate ARP request, if needed, with
-      <code>reg0</code> as the target protocol address and <code>reg1</code>
-      as the source protocol address).
+      port (ingress table <code>ARP Request</code> will generate an ARP
+      request, if needed, with <code>reg0</code> as the target protocol
+      address and <code>reg1</code> as the source protocol address).
     </p>
 
     <p>
@@ -1202,6 +1547,16 @@ icmp4 {
     </p>
 
     <ul>
+      <li>
+        <p>
+          For distributed logical routers where one of the logical router
+          ports specifies a <code>redirect-chassis</code>, a priority-300
+          logical flow with match <code>REGBIT_NAT_REDIRECT == 1</code> has
+          actions <code>ip.ttl--; next;</code>.  The <code>outport</code>
+          will be set later in the Gateway Redirect table.
+        </p>
+      </li>
+
       <li>
         <p>
           IPv4 routing table.  For each route to IPv4 network <var>N</var> with
@@ -1289,6 +1644,17 @@ next;
     <ul>
       <li>
         <p>
+          For distributed logical routers where one of the logical router
+          ports specifies a <code>redirect-chassis</code>, a priority-200
+          logical flow with match <code>REGBIT_NAT_REDIRECT == 1</code> has
+          actions <code>eth.dst = <var>E</var>; next;</code>, where
+          <var>E</var> is the ethernet address of the router's distributed
+          gateway port.
+        </p>
+      </li>
+
+      <li>
+        <p>
           Static MAC bindings.  MAC bindings can be known statically based on
           data in the <code>OVN_Northbound</code> database.  For router ports
           connected to logical switches, MAC bindings can be known statically
@@ -1338,9 +1704,9 @@ next;
         <p>
           Dynamic MAC bindings.  These flows resolve MAC-to-IP bindings
           that have become known dynamically through ARP or neighbor
-          discovery.  (The next table will issue an ARP or neighbor
-          solicitation request for cases where the binding is not yet
-          known.)
+          discovery.  (The ingress table <code>ARP Request</code> will
+          issue an ARP or neighbor solicitation request for cases where
+          the binding is not yet known.)
         </p>
 
         <p>
@@ -1355,7 +1721,64 @@ next;
       </li>
     </ul>
 
-    <h3>Ingress Table 7: ARP Request</h3>
+    <h3>Ingress Table 7: Gateway Redirect</h3>
+
+    <p>
+      For distributed logical routers where one of the logical router
+      ports specifies a <code>redirect-chassis</code>, this table redirects
+      certain packets to the distributed gateway port instance on the
+      <code>redirect-chassis</code>.  This table has the following flows:
+    </p>
+
+    <ul>
+      <li>
+        A priority-200 logical flow with match
+        <code>REGBIT_NAT_REDIRECT == 1</code> has actions
+        <code>outport = <var>CR</var>; next;</code>, where <var>CR</var>
+        is the <code>chassisredirect</code> port representing the instance
+        of the logical router distributed gateway port on the
+        <code>redirect-chassis</code>.
+      </li>
+
+      <li>
+        A priority-150 logical flow with match
+        <code>outport == <var>GW</var> &amp;&amp;
+        eth.dst == 00:00:00:00:00:00</code> has actions
+        <code>outport = <var>CR</var>; next;</code>, where
+        <var>GW</var> is the logical router distributed gateway
+        port and <var>CR</var> is the <code>chassisredirect</code>
+        port representing the instance of the logical router
+        distributed gateway port on the
+        <code>redirect-chassis</code>.
+      </li>
+
+      <li>
+        For each NAT rule in the OVN Northbound database that can
+        be handled in a distributed manner, a priority-100 logical
+        flow with match <code>ip4.src == <var>B</var> &amp;&amp;
+        outport == <var>GW</var></code>, where <var>GW</var> is
+        the logical router distributed gateway port, with actions
+        <code>next;</code>.
+      </li>
+
+      <li>
+        A priority-50 logical flow with match
+        <code>outport == <var>GW</var></code> has actions
+        <code>outport = <var>CR</var>; next;</code>, where
+        <var>GW</var> is the logical router distributed gateway
+        port and <var>CR</var> is the <code>chassisredirect</code>
+        port representing the instance of the logical router
+        distributed gateway port on the
+        <code>redirect-chassis</code>.
+      </li>
+
+      <li>
+        A priority-0 logical flow with match <code>1</code> has actions
+        <code>next;</code>.
+      </li>
+    </ul>
+
+    <h3>Ingress Table 8: ARP Request</h3>
 
     <p>
       In the common case where the Ethernet destination has been resolved, this
@@ -1381,9 +1804,9 @@ arp {
         </pre>
 
         <p>
-          (Ingress table 4 initialized <code>reg1</code> with the IP address
-          owned by <code>outport</code> and <code>reg0</code> with the next-hop
-          IP address)
+          (Ingress table <code>IP Routing</code> initialized <code>reg1</code>
+          with the IP address owned by <code>outport</code> and
+          <code>reg0</code> with the next-hop IP address)
         </p>
 
         <p>
@@ -1397,14 +1820,76 @@ arp {
       </li>
     </ul>
 
-    <h3>Egress Table 0: SNAT</h3>
+    <h3>Egress Table 0: UNDNAT</h3>
+
+    <p>
+      This is for already established connections' reverse traffic.
+      i.e., DNAT has already been done in ingress pipeline and now the
+      packet has entered the egress pipeline as part of a reply.  For
+      NAT on a distributed router, it is unDNATted here.  For Gateway
+      routers, the unDNAT processing is carried out in the ingress DNAT
+      table.
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          For each configuration in the OVN Northbound database that asks
+          to change the destination IP address of a packet from an IP
+          address of <var>A</var> to <var>B</var>, a priority-100 flow
+          matches <code>ip &amp;&amp; ip4.src == <var>B</var>
+          &amp;&amp; outport == <var>GW</var></code>, where <var>GW</var>
+          is the logical router gateway port, with an action
+          <code>ct_dnat;</code>.
+        </p>
+
+        <p>
+          If the NAT rule cannot be handled in a distributed manner, then
+          the priority-100 flow above is only programmed on the
+          <code>redirect-chassis</code>.
+        </p>
+
+        <p>
+          If the NAT rule can be handled in a distributed manner, then
+          there is an additional action
+          <code>eth.src = <var>EA</var>;</code>, where <var>EA</var>
+          is the ethernet address associated with the IP address
+          <var>A</var> in the NAT rule.  This allows upstream MAC
+          learning to point to the correct chassis.
+        </p>
+      </li>
+
+      <li>
+        A priority-0 logical flow with match <code>1</code> has actions
+        <code>next;</code>.
+      </li>
+    </ul>
+
+    <h3>Egress Table 1: SNAT</h3>
 
     <p>
       Packets that are configured to be SNATed get their source IP address
       changed based on the configuration in the OVN Northbound database.
     </p>
+
+    <p>Egress Table 1: SNAT on Gateway Routers</p>
+
     <ul>
       <li>
+        <p>
+          If the Gateway router in the OVN Northbound database has been
+          configured to force SNAT a packet (that has been previously DNATted)
+          to <var>B</var>, a priority-100 flow matches
+          <code>flags.force_snat_for_dnat == 1 &amp;&amp; ip</code> with an
+          action <code>ct_snat(<var>B</var>);</code>.
+        </p>
+        <p>
+          If the Gateway router in the OVN Northbound database has been
+          configured to force SNAT a packet (that has been previously
+          load-balanced) to <var>B</var>, a priority-100 flow matches
+          <code>flags.force_snat_for_lb == 1 &amp;&amp; ip</code> with an
+          action <code>ct_snat(<var>B</var>);</code>.
+        </p>
         <p>
           For each configuration in the OVN Northbound database, that asks
           to change the source IP address of a packet from an IP address of
@@ -1422,7 +1907,122 @@ arp {
       </li>
     </ul>
 
-    <h3>Egress Table 1: Delivery</h3>
+    <p>Egress Table 1: SNAT on Distributed Routers</p>
+
+    <ul>
+      <li>
+        <p>
+          For each configuration in the OVN Northbound database, that asks
+          to change the source IP address of a packet from an IP address of
+          <var>A</var> or to change the source IP address of a packet that
+          belongs to network <var>A</var> to <var>B</var>, a flow matches
+          <code>ip &amp;&amp; ip4.src == <var>A</var> &amp;&amp;
+          outport == <var>GW</var></code>, where <var>GW</var> is the
+          logical router gateway port, with an action
+          <code>ct_snat(<var>B</var>);</code>.  The priority of the flow
+          is calculated based on the mask of <var>A</var>, with matches
+          having larger masks getting higher priorities.
+        </p>
+
+        <p>
+          If the NAT rule cannot be handled in a distributed manner, then
+          the flow above is only programmed on the
+          <code>redirect-chassis</code>.
+        </p>
+
+        <p>
+          If the NAT rule can be handled in a distributed manner, then
+          there is an additional action
+          <code>eth.src = <var>EA</var>;</code>, where <var>EA</var>
+          is the ethernet address associated with the IP address
+          <var>A</var> in the NAT rule.  This allows upstream MAC
+          learning to point to the correct chassis.
+        </p>
+      </li>
+
+      <li>
+        A priority-0 logical flow with match <code>1</code> has actions
+        <code>next;</code>.
+      </li>
+    </ul>
+
+    <h3>Egress Table 2: Egress Loopback</h3>
+
+    <p>
+      For distributed logical routers where one of the logical router
+      ports specifies a <code>redirect-chassis</code>.
+    </p>
+
+    <p>
+      Earlier in the ingress pipeline, some east-west traffic was
+      redirected to the <code>chassisredirect</code> port, based on
+      flows in the <code>UNSNAT</code> and <code>DNAT</code> ingress
+      tables setting the <code>REGBIT_NAT_REDIRECT</code> flag, which
+      then triggered a match to a flow in the
+      <code>Gateway Redirect</code> ingress table.  The intention was
+      not to actually send traffic out the distributed gateway port
+      instance on the <code>redirect-chassis</code>.  This traffic was
+      sent to the distributed gateway port instance in order for DNAT
+      and/or SNAT processing to be applied.
+    </p>
+
+    <p>
+      While UNDNAT and SNAT processing have already occurred by this
+      point, this traffic needs to be forced through egress loopback on
+      this distributed gateway port instance, in order for UNSNAT and
+      DNAT processing to be applied, and also for IP routing and ARP
+      resolution after all of the NAT processing, so that the packet can
+      be forwarded to the destination.
+    </p>
+
+    <p>
+      This table has the following flows:
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          For each NAT rule in the OVN Northbound database on a
+          distributed router, a priority-100 logical flow with match
+          <code>ip4.dst == <var>E</var> &amp;&amp;
+          outport == <var>GW</var></code>, where <var>E</var> is the
+          external IP address specified in the NAT rule, and <var>GW</var>
+          is the logical router distributed gateway port, with the
+          following actions:
+        </p>
+
+        <pre>
+clone {
+    ct_clear;
+    inport = outport;
+    outport = "";
+    flags = 0;
+    flags.loopback = 1;
+    reg0 = 0;
+    reg1 = 0;
+    ...
+    reg9 = 0;
+    REGBIT_EGRESS_LOOPBACK = 1;
+    next(pipeline=ingress, table=0);
+};
+        </pre>
+
+        <p>
+          <code>flags.loopback</code> is set since in_port is unchanged
+          and the packet may return back to that port after NAT processing.
+          <code>REGBIT_EGRESS_LOOPBACK</code> is set to indicate that
+          egress loopback has occurred, in order to skip the source IP
+          address check against the router address.
+        </p>
+      </li>
+
+      <li>
+        A priority-0 logical flow with match <code>1</code> has actions
+        <code>next;</code>.
+      </li>
+    </ul>
+
+    <h3>Egress Table 3: Delivery</h3>
 
     <p>
       Packets that reach this table are ready for delivery.  It contains

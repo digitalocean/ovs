@@ -6,7 +6,7 @@
 # without warranty of any kind.
 
 EXTRA_DIST += \
-	rhel/README.RHEL \
+	rhel/README.RHEL.rst \
 	rhel/automake.mk \
 	rhel/etc_init.d_openvswitch \
 	rhel/etc_logrotate.d_openvswitch \
@@ -30,7 +30,10 @@ EXTRA_DIST += \
 	rhel/usr_lib_systemd_system_ovs-vswitchd.service \
 	rhel/usr_lib_systemd_system_ovn-controller.service \
 	rhel/usr_lib_systemd_system_ovn-controller-vtep.service \
-	rhel/usr_lib_systemd_system_ovn-northd.service
+	rhel/usr_lib_systemd_system_ovn-northd.service \
+	rhel/usr_lib_systemd_system_ovn-northd.service \
+	rhel/usr_lib_firewalld_services_ovn-central-firewall-service.xml \
+	rhel/usr_lib_firewalld_services_ovn-host-firewall-service.xml
 
 update_rhel_spec = \
   $(AM_V_GEN)($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
@@ -60,7 +63,7 @@ rpm-fedora: dist $(srcdir)/rhel/openvswitch-fedora.spec
 	cp ${DIST_ARCHIVES} ${RPMBUILD_TOP}/SOURCES
 	rpmbuild ${RPMBUILD_OPT} \
                  -D "_topdir ${RPMBUILD_TOP}" \
-                 -bb $(srcdir)/rhel/openvswitch-fedora.spec
+                 -ba $(srcdir)/rhel/openvswitch-fedora.spec
 
 # Build kernel datapath RPM
 rpm-fedora-kmod: dist $(srcdir)/rhel/openvswitch-kmod-fedora.spec
@@ -68,4 +71,4 @@ rpm-fedora-kmod: dist $(srcdir)/rhel/openvswitch-kmod-fedora.spec
 	cp ${DIST_ARCHIVES} ${RPMBUILD_TOP}/SOURCES
 	rpmbuild -D "kversion $(shell uname -r)" ${RPMBUILD_OPT} \
                  -D "_topdir ${RPMBUILD_TOP}" \
-                 -bb $(srcdir)/rhel/openvswitch-kmod-fedora.spec
+                 -ba $(srcdir)/rhel/openvswitch-kmod-fedora.spec

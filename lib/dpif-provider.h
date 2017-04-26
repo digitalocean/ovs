@@ -156,7 +156,7 @@ struct dpif_class {
     int (*get_stats)(const struct dpif *dpif, struct dpif_dp_stats *stats);
 
     /* Adds 'netdev' as a new port in 'dpif'.  If '*port_no' is not
-     * UINT32_MAX, attempts to use that as the port's port number.
+     * ODPP_NONE, attempts to use that as the port's port number.
      *
      * If port is successfully added, sets '*port_no' to the new port's
      * port number.  Returns EBUSY if caller attempted to choose a port
@@ -175,6 +175,10 @@ struct dpif_class {
     /* Queries 'dpif' for a port with the given 'port_no' or 'devname'.
      * If 'port' is not null, stores information about the port into
      * '*port' if successful.
+     *
+     * If the port doesn't exist, the provider must return ENODEV.  Other
+     * error numbers means that something wrong happened and will be
+     * treated differently by upper layers.
      *
      * If 'port' is not null, the caller takes ownership of data in
      * 'port' and must free it with dpif_port_destroy() when it is no
@@ -401,7 +405,7 @@ struct dpif_class {
     /* Conntrack entry dumping interface.
      *
      * These functions are used by ct-dpif.c to provide a datapath-agnostic
-     * dumping interface to the connection trackes provided by the
+     * dumping interface to the connection trackers provided by the
      * datapaths.
      *
      * ct_dump_start() should put in '*state' a pointer to a newly allocated
@@ -412,11 +416,11 @@ struct dpif_class {
      * ct_dump_next() should fill 'entry' with information from a connection
      * and prepare to dump the next one on a subsequest invocation.
      *
-     * ct_dump_done should perform any cleanup necessary (including
+     * ct_dump_done() should perform any cleanup necessary (including
      * deallocating the 'state' structure, if applicable). */
     int (*ct_dump_start)(struct dpif *, struct ct_dpif_dump_state **state,
                          const uint16_t *zone);
-    int (*ct_dump_next)(struct dpif *, struct ct_dpif_dump_state *,
+    int (*ct_dump_next)(struct dpif *, struct ct_dpif_dump_state *state,
                         struct ct_dpif_entry *entry);
     int (*ct_dump_done)(struct dpif *, struct ct_dpif_dump_state *state);
 

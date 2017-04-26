@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.6.1, bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.7.0, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -97,6 +97,7 @@ OVS_CHECK_LOGDIR
 OVS_CHECK_PYTHON
 OVS_CHECK_PYTHON3
 OVS_CHECK_FLAKE8
+OVS_CHECK_SPHINX
 OVS_CHECK_DOT
 OVS_CHECK_IF_PACKET
 OVS_CHECK_IF_DL
@@ -130,6 +131,7 @@ OVS_CHECK_ATOMIC_ALWAYS_LOCK_FREE(8)
 OVS_CHECK_POSIX_AIO
 OVS_CHECK_PTHREAD_SET_NAME
 OVS_CHECK_LINUX_HOST
+OVS_LIBTOOL_VERSIONS
 AX_FUNC_POSIX_MEMALIGN
 
 OVS_CHECK_INCLUDE_NEXT([stdio.h string.h])
@@ -147,7 +149,7 @@ OVS_ENABLE_OPTION([-Wall])
 OVS_ENABLE_OPTION([-Wextra])
 OVS_ENABLE_OPTION([-Wno-sign-compare])
 OVS_ENABLE_OPTION([-Wpointer-arith])
-OVS_ENABLE_OPTION([-Wformat-security])
+OVS_ENABLE_OPTION([-Wformat -Wformat-security])
 OVS_ENABLE_OPTION([-Wswitch-enum])
 OVS_ENABLE_OPTION([-Wunused-parameter])
 OVS_ENABLE_OPTION([-Wbad-function-cast])
@@ -158,6 +160,12 @@ OVS_ENABLE_OPTION([-Wmissing-prototypes])
 OVS_ENABLE_OPTION([-Wmissing-field-initializers])
 OVS_ENABLE_OPTION([-Wthread-safety])
 OVS_ENABLE_OPTION([-fno-strict-aliasing])
+OVS_ENABLE_OPTION([-Wswitch-bool])
+OVS_ENABLE_OPTION([-Wlogical-not-parentheses])
+OVS_ENABLE_OPTION([-Wsizeof-array-argument])
+OVS_ENABLE_OPTION([-Wbool-compare])
+OVS_ENABLE_OPTION([-Wshift-negative-value])
+OVS_ENABLE_OPTION([-Wduplicated-cond])
 OVS_ENABLE_OPTION([-Qunused-arguments])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused], [HAVE_WNO_UNUSED])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused-parameter], [HAVE_WNO_UNUSED_PARAMETER])

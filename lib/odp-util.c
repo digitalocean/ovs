@@ -313,12 +313,18 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
                               ",collector_set_id=%"PRIu32
                               ",obs_domain_id=%"PRIu32
                               ",obs_point_id=%"PRIu32
-                              ",output_port=%"PRIu32")",
+                              ",output_port=%"PRIu32,
                               cookie.flow_sample.probability,
                               cookie.flow_sample.collector_set_id,
                               cookie.flow_sample.obs_domain_id,
                               cookie.flow_sample.obs_point_id,
                               cookie.flow_sample.output_odp_port);
+                if (cookie.flow_sample.direction == NX_ACTION_SAMPLE_INGRESS) {
+                    ds_put_cstr(ds, ",ingress");
+                } else if (cookie.flow_sample.direction == NX_ACTION_SAMPLE_EGRESS) {
+                    ds_put_cstr(ds, ",egress");
+                }
+                ds_put_char(ds, ')');
             } else if (userdata_len >= sizeof cookie.ipfix
                        && cookie.type == USER_ACTION_COOKIE_IPFIX) {
                 ds_put_format(ds, ",ipfix(output_port=%"PRIu32")",
@@ -963,7 +969,7 @@ parse_odp_userspace_action(const char *s, struct ofpbuf *actions)
                             "collector_set_id=%"SCNi32","
                             "obs_domain_id=%"SCNi32","
                             "obs_point_id=%"SCNi32","
-                            "output_port=%"SCNi32")%n",
+                            "output_port=%"SCNi32"%n",
                             &probability, &collector_set_id,
                             &obs_domain_id, &obs_point_id,
                             &output, &n1)) {
@@ -977,6 +983,21 @@ parse_odp_userspace_action(const char *s, struct ofpbuf *actions)
             cookie.flow_sample.output_odp_port = u32_to_odp(output);
             user_data = &cookie;
             user_data_size = sizeof cookie.flow_sample;
+
+            if (ovs_scan(&s[n], ",ingress%n", &n1)) {
+                cookie.flow_sample.direction = NX_ACTION_SAMPLE_INGRESS;
+                n += n1;
+            } else if (ovs_scan(&s[n], ",egress%n", &n1)) {
+                cookie.flow_sample.direction = NX_ACTION_SAMPLE_EGRESS;
+                n += n1;
+            } else {
+                cookie.flow_sample.direction = NX_ACTION_SAMPLE_DEFAULT;
+            }
+            if (s[n] != ')') {
+                res = -EINVAL;
+                goto out;
+            }
+            n++;
         } else if (ovs_scan(&s[n], ",ipfix(output_port=%"SCNi32")%n",
                             &output, &n1) ) {
             n += n1;
@@ -1855,10 +1876,8 @@ ovs_frag_type_to_string(enum ovs_frag_type type)
 }
 
 static enum odp_key_fitness
-odp_tun_key_from_attr__(const struct nlattr *attr,
-                        const struct nlattr *flow_attrs, size_t flow_attr_len,
-                        const struct flow_tnl *src_tun, struct flow_tnl *tun,
-                        bool udpif)
+odp_tun_key_from_attr__(const struct nlattr *attr, bool is_mask,
+                        struct flow_tnl *tun)
 {
     unsigned int left;
     const struct nlattr *a;
@@ -1934,10 +1953,7 @@ odp_tun_key_from_attr__(const struct nlattr *attr,
             break;
         }
         case OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS:
-            if (tun_metadata_from_geneve_nlattr(a, flow_attrs, flow_attr_len,
-                                                src_tun, udpif, tun)) {
-                return ODP_FIT_ERROR;
-            }
+            tun_metadata_from_geneve_nlattr(a, is_mask, tun);
             break;
 
         default:
@@ -1958,11 +1974,10 @@ odp_tun_key_from_attr__(const struct nlattr *attr,
 }
 
 enum odp_key_fitness
-odp_tun_key_from_attr(const struct nlattr *attr, bool udpif,
-                      struct flow_tnl *tun)
+odp_tun_key_from_attr(const struct nlattr *attr, struct flow_tnl *tun)
 {
     memset(tun, 0, sizeof *tun);
-    return odp_tun_key_from_attr__(attr, NULL, 0, NULL, tun, udpif);
+    return odp_tun_key_from_attr__(attr, false, tun);
 }
 
 static void
@@ -2044,8 +2059,8 @@ odp_mask_is_exact(enum ovs_key_attr attr, const void *mask, size_t size)
             && ipv6_mask->ipv6_tclass == UINT8_MAX
             && ipv6_mask->ipv6_hlimit == UINT8_MAX
             && ipv6_mask->ipv6_frag == UINT8_MAX
-            && ipv6_mask_is_exact((const struct in6_addr *)ipv6_mask->ipv6_src)
-            && ipv6_mask_is_exact((const struct in6_addr *)ipv6_mask->ipv6_dst);
+            && ipv6_mask_is_exact(&ipv6_mask->ipv6_src)
+            && ipv6_mask_is_exact(&ipv6_mask->ipv6_dst);
     }
     if (attr == OVS_KEY_ATTR_TUNNEL) {
         return false;
@@ -2192,16 +2207,6 @@ format_in6_addr(struct ds *ds, const char *name,
         }
         ds_put_char(ds, ',');
     }
-}
-
-static void
-format_ipv6(struct ds *ds, const char *name, const ovs_be32 key_[4],
-            const ovs_be32 (*mask_)[4], bool verbose)
-{
-    format_in6_addr(ds, name,
-                    (const struct in6_addr *)key_,
-                    mask_ ? (const struct in6_addr *)*mask_ : NULL,
-                    verbose);
 }
 
 static void
@@ -2776,7 +2781,7 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
     case OVS_KEY_ATTR_IN_PORT:
         if (portno_names && verbose && is_exact) {
             char *name = odp_portno_names_get(portno_names,
-                            u32_to_odp(nl_attr_get_u32(a)));
+                                              nl_attr_get_odp_port(a));
             if (name) {
                 ds_put_format(ds, "%s", name);
             } else {
@@ -2851,16 +2856,18 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         const struct ovs_key_ipv6 *key = nl_attr_get(a);
         const struct ovs_key_ipv6 *mask = ma ? nl_attr_get(ma) : NULL;
 
-        format_ipv6(ds, "src", key->ipv6_src, MASK(mask, ipv6_src), verbose);
-        format_ipv6(ds, "dst", key->ipv6_dst, MASK(mask, ipv6_dst), verbose);
+        format_in6_addr(ds, "src", &key->ipv6_src, MASK(mask, ipv6_src),
+                        verbose);
+        format_in6_addr(ds, "dst", &key->ipv6_dst, MASK(mask, ipv6_dst),
+                        verbose);
         format_ipv6_label(ds, "label", key->ipv6_label, MASK(mask, ipv6_label),
                           verbose);
         format_u8u(ds, "proto", key->ipv6_proto, MASK(mask, ipv6_proto),
-                      verbose);
+                   verbose);
         format_u8x(ds, "tclass", key->ipv6_tclass, MASK(mask, ipv6_tclass),
-                      verbose);
+                   verbose);
         format_u8u(ds, "hlimit", key->ipv6_hlimit, MASK(mask, ipv6_hlimit),
-                      verbose);
+                   verbose);
         format_frag(ds, "frag", key->ipv6_frag, MASK(mask, ipv6_frag),
                     verbose);
         ds_chomp(ds, ',');
@@ -2926,8 +2933,8 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         const struct ovs_key_nd *mask = ma ? nl_attr_get(ma) : NULL;
         const struct ovs_key_nd *key = nl_attr_get(a);
 
-        format_ipv6(ds, "target", key->nd_target, MASK(mask, nd_target),
-                    verbose);
+        format_in6_addr(ds, "target", &key->nd_target, MASK(mask, nd_target),
+                        verbose);
         format_eth(ds, "sll", key->nd_sll, MASK(mask, nd_sll), verbose);
         format_eth(ds, "tll", key->nd_tll, MASK(mask, nd_tll), verbose);
 
@@ -3223,13 +3230,6 @@ scan_in6_addr(const char *s, struct in6_addr *key, struct in6_addr *mask)
         return len;
     }
     return 0;
-}
-
-static int
-scan_ipv6(const char *s, ovs_be32 (*key)[4], ovs_be32 (*mask)[4])
-{
-    return scan_in6_addr(s, key ? (struct in6_addr *) *key : NULL,
-                         mask ? (struct in6_addr *) *mask : NULL);
 }
 
 static int
@@ -4104,8 +4104,8 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
     } SCAN_END(OVS_KEY_ATTR_IPV4);
 
     SCAN_BEGIN("ipv6(", struct ovs_key_ipv6) {
-        SCAN_FIELD("src=", ipv6, ipv6_src);
-        SCAN_FIELD("dst=", ipv6, ipv6_dst);
+        SCAN_FIELD("src=", in6_addr, ipv6_src);
+        SCAN_FIELD("dst=", in6_addr, ipv6_dst);
         SCAN_FIELD("label=", ipv6_label, ipv6_label);
         SCAN_FIELD("proto=", u8, ipv6_proto);
         SCAN_FIELD("tclass=", u8, ipv6_tclass);
@@ -4149,7 +4149,7 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
     } SCAN_END(OVS_KEY_ATTR_ARP);
 
     SCAN_BEGIN("nd(", struct ovs_key_nd) {
-        SCAN_FIELD("target=", ipv6, nd_target);
+        SCAN_FIELD("target=", in6_addr, nd_target);
         SCAN_FIELD("sll=", eth, nd_sll);
         SCAN_FIELD("tll=", eth, nd_tll);
     } SCAN_END(OVS_KEY_ATTR_ND);
@@ -4440,8 +4440,7 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
 
                 nd_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ND,
                                                     sizeof *nd_key);
-                memcpy(nd_key->nd_target, &data->nd_target,
-                        sizeof nd_key->nd_target);
+                nd_key->nd_target = data->nd_target;
                 nd_key->nd_sll = data->arp_sha;
                 nd_key->nd_tll = data->arp_tha;
             }
@@ -4573,7 +4572,7 @@ odp_key_to_pkt_metadata(const struct nlattr *key, size_t key_len,
         case OVS_KEY_ATTR_TUNNEL: {
             enum odp_key_fitness res;
 
-            res = odp_tun_key_from_attr(nla, true, &md->tunnel);
+            res = odp_tun_key_from_attr(nla, &md->tunnel);
             if (res == ODP_FIT_ERROR) {
                 memset(&md->tunnel, 0, sizeof md->tunnel);
             } else if (res == ODP_FIT_PERFECT) {
@@ -4971,8 +4970,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                     const struct ovs_key_nd *nd_key;
 
                     nd_key = nl_attr_get(attrs[OVS_KEY_ATTR_ND]);
-                    memcpy(&flow->nd_target, nd_key->nd_target,
-                           sizeof flow->nd_target);
+                    flow->nd_target = nd_key->nd_target;
                     flow->arp_sha = nd_key->nd_sll;
                     flow->arp_tha = nd_key->nd_tll;
                     if (is_mask) {
@@ -5084,9 +5082,7 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
 
 static enum odp_key_fitness
 odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
-                       const struct nlattr *src_key, size_t src_key_len,
-                       struct flow *flow, const struct flow *src_flow,
-                       bool udpif)
+                       struct flow *flow, const struct flow *src_flow)
 {
     const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1];
     uint64_t expected_attrs;
@@ -5150,10 +5146,8 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TUNNEL)) {
         enum odp_key_fitness res;
 
-        res = odp_tun_key_from_attr__(attrs[OVS_KEY_ATTR_TUNNEL],
-                                      is_mask ? src_key : NULL,
-                                      src_key_len, &src_flow->tunnel,
-                                      &flow->tunnel, udpif);
+        res = odp_tun_key_from_attr__(attrs[OVS_KEY_ATTR_TUNNEL], is_mask,
+                                      &flow->tunnel);
         if (res == ODP_FIT_ERROR) {
             return ODP_FIT_ERROR;
         } else if (res == ODP_FIT_PERFECT) {
@@ -5226,20 +5220,21 @@ enum odp_key_fitness
 odp_flow_key_to_flow(const struct nlattr *key, size_t key_len,
                      struct flow *flow)
 {
-   return odp_flow_key_to_flow__(key, key_len, NULL, 0, flow, flow, false);
+   return odp_flow_key_to_flow__(key, key_len, flow, flow);
 }
 
-static enum odp_key_fitness
-odp_flow_key_to_mask__(const struct nlattr *mask_key, size_t mask_key_len,
-                       const struct nlattr *flow_key, size_t flow_key_len,
-                       struct flow_wildcards *mask,
-                       const struct flow *src_flow,
-                       bool udpif)
+/* Converts the 'mask_key_len' bytes of OVS_KEY_ATTR_* attributes in 'mask_key'
+ * to a mask structure in 'mask'.  'flow' must be a previously translated flow
+ * corresponding to 'mask' and similarly flow_key/flow_key_len must be the
+ * attributes from that flow.  Returns an ODP_FIT_* value that indicates how
+ * well 'key' fits our expectations for what a flow key should contain. */
+enum odp_key_fitness
+odp_flow_key_to_mask(const struct nlattr *mask_key, size_t mask_key_len,
+                     struct flow_wildcards *mask, const struct flow *src_flow)
 {
     if (mask_key_len) {
         return odp_flow_key_to_flow__(mask_key, mask_key_len,
-                                      flow_key, flow_key_len,
-                                      &mask->masks, src_flow, udpif);
+                                      &mask->masks, src_flow);
 
     } else {
         /* A missing mask means that the flow should be exact matched.
@@ -5248,47 +5243,6 @@ odp_flow_key_to_mask__(const struct nlattr *mask_key, size_t mask_key_len,
 
         return ODP_FIT_PERFECT;
     }
-}
-/* Converts the 'mask_key_len' bytes of OVS_KEY_ATTR_* attributes in 'mask_key'
- * to a mask structure in 'mask'.  'flow' must be a previously translated flow
- * corresponding to 'mask' and similarly flow_key/flow_key_len must be the
- * attributes from that flow.  Returns an ODP_FIT_* value that indicates how
- * well 'key' fits our expectations for what a flow key should contain. */
-enum odp_key_fitness
-odp_flow_key_to_mask(const struct nlattr *mask_key, size_t mask_key_len,
-                     const struct nlattr *flow_key, size_t flow_key_len,
-                     struct flow_wildcards *mask, const struct flow *flow)
-{
-    return odp_flow_key_to_mask__(mask_key, mask_key_len,
-                                  flow_key, flow_key_len,
-                                  mask, flow, false);
-}
-
-/* These functions are similar to their non-"_udpif" variants but output a
- * 'flow' that is suitable for fast-path packet processing.
- *
- * Some fields have different representation for flow setup and per-
- * packet processing (i.e. different between ofproto-dpif and userspace
- * datapath). In particular, with the non-"_udpif" functions, struct
- * tun_metadata is in the per-flow format (using 'present.map' and 'opts.u8');
- * with these functions, struct tun_metadata is in the per-packet format
- * (using 'present.len' and 'opts.gnv'). */
-enum odp_key_fitness
-odp_flow_key_to_flow_udpif(const struct nlattr *key, size_t key_len,
-                           struct flow *flow)
-{
-   return odp_flow_key_to_flow__(key, key_len, NULL, 0, flow, flow, true);
-}
-
-enum odp_key_fitness
-odp_flow_key_to_mask_udpif(const struct nlattr *mask_key, size_t mask_key_len,
-                           const struct nlattr *flow_key, size_t flow_key_len,
-                           struct flow_wildcards *mask,
-                           const struct flow *flow)
-{
-    return odp_flow_key_to_mask__(mask_key, mask_key_len,
-                                  flow_key, flow_key_len,
-                                  mask, flow, true);
 }
 
 /* Returns 'fitness' as a string, for use in debug messages. */
@@ -5582,7 +5536,10 @@ commit_mpls_action(const struct flow *flow, struct flow *base,
                                       sizeof *mpls);
         mpls->mpls_ethertype = flow->dl_type;
         mpls->mpls_lse = flow->mpls_lse[flow_n - base_n - 1];
-        flow_push_mpls(base, base_n, mpls->mpls_ethertype, NULL);
+        /* Update base flow's MPLS stack, but do not clear L3.  We need the L3
+         * headers if the flow is restored later due to returning from a patch
+         * port or group bucket. */
+        flow_push_mpls(base, base_n, mpls->mpls_ethertype, NULL, false);
         flow_set_mpls_lse(base, 0, mpls->mpls_lse);
         base_n++;
     }
@@ -5639,8 +5596,8 @@ commit_set_ipv4_action(const struct flow *flow, struct flow *base_flow,
 static void
 get_ipv6_key(const struct flow *flow, struct ovs_key_ipv6 *ipv6, bool is_mask)
 {
-    memcpy(ipv6->ipv6_src, &flow->ipv6_src, sizeof ipv6->ipv6_src);
-    memcpy(ipv6->ipv6_dst, &flow->ipv6_dst, sizeof ipv6->ipv6_dst);
+    ipv6->ipv6_src = flow->ipv6_src;
+    ipv6->ipv6_dst = flow->ipv6_dst;
     ipv6->ipv6_label = flow->ipv6_label;
     ipv6->ipv6_proto = flow->nw_proto;
     ipv6->ipv6_tclass = flow->nw_tos;
@@ -5651,8 +5608,8 @@ get_ipv6_key(const struct flow *flow, struct ovs_key_ipv6 *ipv6, bool is_mask)
 static void
 put_ipv6_key(const struct ovs_key_ipv6 *ipv6, struct flow *flow, bool is_mask)
 {
-    memcpy(&flow->ipv6_src, ipv6->ipv6_src, sizeof flow->ipv6_src);
-    memcpy(&flow->ipv6_dst, ipv6->ipv6_dst, sizeof flow->ipv6_dst);
+    flow->ipv6_src = ipv6->ipv6_src;
+    flow->ipv6_dst = ipv6->ipv6_dst;
     flow->ipv6_label = ipv6->ipv6_label;
     flow->nw_proto = ipv6->ipv6_proto;
     flow->nw_tos = ipv6->ipv6_tclass;
@@ -5774,7 +5731,7 @@ commit_set_icmp_action(const struct flow *flow, struct flow *base_flow,
 static void
 get_nd_key(const struct flow *flow, struct ovs_key_nd *nd)
 {
-    memcpy(nd->nd_target, &flow->nd_target, sizeof flow->nd_target);
+    nd->nd_target = flow->nd_target;
     /* nd_sll and nd_tll are stored in arp_sha and arp_tha, respectively */
     nd->nd_sll = flow->arp_sha;
     nd->nd_tll = flow->arp_tha;
@@ -5783,7 +5740,7 @@ get_nd_key(const struct flow *flow, struct ovs_key_nd *nd)
 static void
 put_nd_key(const struct ovs_key_nd *nd, struct flow *flow)
 {
-    memcpy(&flow->nd_target, nd->nd_target, sizeof flow->nd_target);
+    flow->nd_target = nd->nd_target;
     /* nd_sll and nd_tll are stored in arp_sha and arp_tha, respectively */
     flow->arp_sha = nd->nd_sll;
     flow->arp_tha = nd->nd_tll;
@@ -5945,12 +5902,21 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
                    bool use_masked)
 {
     enum slow_path_reason slow1, slow2;
+    bool mpls_done = false;
 
     commit_set_ether_addr_action(flow, base, odp_actions, wc, use_masked);
+    /* Make packet a non-MPLS packet before committing L3/4 actions,
+     * which would otherwise do nothing. */
+    if (eth_type_mpls(base->dl_type) && !eth_type_mpls(flow->dl_type)) {
+        commit_mpls_action(flow, base, odp_actions);
+        mpls_done = true;
+    }
     slow1 = commit_set_nw_action(flow, base, odp_actions, wc, use_masked);
     commit_set_port_action(flow, base, odp_actions, wc, use_masked);
     slow2 = commit_set_icmp_action(flow, base, odp_actions, wc);
-    commit_mpls_action(flow, base, odp_actions);
+    if (!mpls_done) {
+        commit_mpls_action(flow, base, odp_actions);
+    }
     commit_vlan_action(flow->vlan_tci, base, odp_actions, wc);
     commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
     commit_set_pkt_mark_action(flow, base, odp_actions, wc, use_masked);

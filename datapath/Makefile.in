@@ -250,6 +250,7 @@ OTOOL = @OTOOL@
 OTOOL64 = @OTOOL64@
 OVS_CFLAGS = @OVS_CFLAGS@
 OVS_LDFLAGS = @OVS_LDFLAGS@
+OVS_LTINFO = @OVS_LTINFO@
 PACKAGE = @PACKAGE@
 PACKAGE_BUGREPORT = @PACKAGE_BUGREPORT@
 PACKAGE_NAME = @PACKAGE_NAME@
@@ -391,6 +392,7 @@ openvswitch_headers = compat.h conntrack.h datapath.h flow.h \
 	vport-netdev.h linux/compat/gso.h \
 	linux/compat/include/linux/percpu.h \
 	linux/compat/include/linux/bug.h \
+	linux/compat/include/linux/cache.h \
 	linux/compat/include/linux/compiler.h \
 	linux/compat/include/linux/compiler-gcc.h \
 	linux/compat/include/linux/cpumask.h \
@@ -461,9 +463,6 @@ openvswitch_headers = compat.h conntrack.h datapath.h flow.h \
 	linux/compat/include/net/netfilter/nf_nat.h \
 	linux/compat/include/net/netfilter/ipv6/nf_defrag_ipv6.h \
 	linux/compat/include/net/sctp/checksum.h
-openvswitch_extras = \
-	README.md
-
 dist_sources = $(foreach module,$(dist_modules),$($(module)_sources))
 dist_headers = $(foreach module,$(dist_modules),$($(module)_headers))
 dist_extras = $(foreach module,$(dist_modules),$($(module)_extras))
@@ -492,9 +491,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --foreign datapath/Makefile
+	  $(AUTOMAKE) --gnu datapath/Makefile
 .PRECIOUS: Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \

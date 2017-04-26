@@ -35,22 +35,19 @@ ifneq (,$(filter i386 amd64 ppc64el, $(DEB_HOST_ARCH)))
 endif
 
 
-# Skip some known failing tests - review for each snapshot or release
-# https://bugs.launchpad.net/bugs/1622751
-# https://bugs.launchpad.net/bugs/1609846
-#
-# 15: bfd - bfd decay
-# 1154: ofproto-dpif - in place modification (vlan)
-# 1871: ovsdb-server/active-backup-role-switching
-# 2227: ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS vtep
-#
-SKIP_TEST = 1-14 16-1153 1155-1870 1872-2226 2228-
+# NOTE(jamespage); Don't skip any tests for the moment
+SKIP_TEST =
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on powerpc/s390x until
 # https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1483572
+#
 # is resolved
-ifeq (,$(filter powerpc s390x,$(DEB_HOST_ARCH)))
+# NOTE(jamespage): skip tests on armhf until
+# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1686406
+# is resolved
+#
+ifeq (,$(filter powerpc s390x armhf,$(DEB_HOST_ARCH)))
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
                 $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \

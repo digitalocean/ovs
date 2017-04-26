@@ -138,11 +138,11 @@ dp_to_netdev_ifi_flags(uint32_t dp_flags)
 {
     uint32_t nd_flags = 0;
 
-    if (dp_flags && OVS_WIN_NETDEV_IFF_UP) {
+    if (dp_flags & OVS_WIN_NETDEV_IFF_UP) {
         nd_flags |= NETDEV_UP;
     }
 
-    if (dp_flags && OVS_WIN_NETDEV_IFF_PROMISC) {
+    if (dp_flags & OVS_WIN_NETDEV_IFF_PROMISC) {
         nd_flags |= NETDEV_PROMISC;
     }
 
@@ -159,7 +159,10 @@ netdev_windows_system_construct(struct netdev *netdev_)
 
     /* Query the attributes and runtime status of the netdev. */
     ret = query_netdev(netdev_get_name(&netdev->up), &info, &buf);
-    if (ret) {
+    /* "Internal" netdevs do not exist in the kernel yet.  They need to be
+     * transformed into a netdev object and passed to dpif_port_add(), which
+     * will add them to the kernel.  */
+    if (strcmp(netdev_get_type(&netdev->up), "internal") && ret) {
         return ret;
     }
     ofpbuf_delete(buf);
@@ -226,7 +229,7 @@ netdev_windows_netdev_from_ofpbuf(struct netdev_windows_netdev_info *info,
 
     netdev_windows_info_init(info);
 
-    struct ofpbuf b = ofpbuf_const_initializer(&b, buf->data, buf->size);
+    struct ofpbuf b = ofpbuf_const_initializer(buf->data, buf->size);
     struct nlmsghdr *nlmsg = ofpbuf_try_pull(&b, sizeof *nlmsg);
     struct genlmsghdr *genl = ofpbuf_try_pull(&b, sizeof *genl);
     struct ovs_header *ovs_header = ofpbuf_try_pull(&b, sizeof *ovs_header);
@@ -295,7 +298,7 @@ query_netdev(const char *devname,
         }
     }
 
-    return 0;
+    return error;
 }
 
 static void
@@ -425,16 +428,16 @@ netdev_windows_get_next_hop(const struct in_addr *host,
 {
     uint32_t ret_val = 0;
     /* The buffer length of all addresses */
-    uint32_t buffer_length = 1000;
+    uint32_t buffer_length = 0;
     PIP_ADAPTER_ADDRESSES all_addr = NULL;
     PIP_ADAPTER_ADDRESSES cur_addr = NULL;
 
     ret_val = GetAdaptersAddresses(AF_INET,
                                    GAA_FLAG_INCLUDE_PREFIX |
                                    GAA_FLAG_INCLUDE_GATEWAYS,
-                                   NULL, all_addr, &buffer_length);
+                                   NULL, NULL, &buffer_length);
 
-    if (ret_val != ERROR_INSUFFICIENT_BUFFER ) {
+    if (ret_val != ERROR_BUFFER_OVERFLOW ) {
         VLOG_ERR("Call to GetAdaptersAddresses failed with error: %s",
                  ovs_format_message(ret_val));
         return ENXIO;

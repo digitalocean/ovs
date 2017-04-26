@@ -23,6 +23,7 @@ ovsdb\-server \- Open vSwitch database server
 .so lib/ssl-syn.man
 .so lib/ssl-bootstrap-syn.man
 .so lib/ssl-peer-ca-cert-syn.man
+.so lib/ssl-connect-syn.man
 .so lib/unixctl-syn.man
 .so lib/common-syn.man
 .
@@ -86,6 +87,8 @@ Maximum number of milliseconds to wait between connection attempts.
 .IP "\fBinactivity_probe\fR (integer)"
 Maximum number of milliseconds of idle time on connection to
 client before sending an inactivity probe message.
+.IP "\fBread_only\fR (boolean)"
+If true, only read-only transactions are allowed on this connection.
 .RE
 .IP
 It is an error for \fIcolumn\fR to have another type.
@@ -133,6 +136,8 @@ one row in \fItable\fR.)
 .so lib/ssl.man
 .so lib/ssl-bootstrap.man
 .so lib/ssl-peer-ca-cert.man
+.SS "SSL Connection Options"
+.so lib/ssl-connect.man
 .SS "Other Options"
 .so lib/unixctl.man
 .so lib/common.man
@@ -571,6 +576,36 @@ elements, <row> includes the value from the new column.
 Initial views of rows are not presented in update2 notifications,
 but in the response object to the monitor_cond request. The formatting
 of the <table-updates2> object, however, is the same in either case.
+.
+.IP "4.1.15. Get Server ID"
+A new RPC method added in Open vSwitch version 2.7. The request contains
+the following members:
+.
+.PP
+.RS
+.nf
+"method": "get_server_id"
+"params": null
+"id": <nonnull-json-value>
+.fi
+.RE
+.
+.IP
+The response object contains the following members:
+.
+.PP
+.RS
+.nf
+"result": "<server_id>"
+"error": null
+"id": same "id" as request
+.fi
+.RE
+.
+.IP
+<server_id> is JSON string that contains a UUID that uniquely identifies
+the running OVSDB server process. A fresh UUID is generated when the
+process restarts.
 .
 .IP "5.1. Notation"
 For <condition>, RFC 7047 only allows the use of \fB!=\fR, \fB==\fR,

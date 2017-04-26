@@ -6,11 +6,7 @@ EXTRA_DIST += \
 	debian/copyright.in \
 	debian/dirs \
 	debian/openvswitch-common.dirs \
-	debian/openvswitch-common.docs \
 	debian/openvswitch-common.install \
-	debian/openvswitch-ipsec.dirs \
-	debian/openvswitch-ipsec.init \
-	debian/openvswitch-ipsec.install \
 	debian/openvswitch-pki.dirs \
 	debian/openvswitch-pki.postinst \
 	debian/openvswitch-pki.postrm \
@@ -40,12 +36,13 @@ EXTRA_DIST += \
 	debian/ovn-central.postrm \
 	debian/ovn-central.default \
 	debian/ovn-common.install \
+	debian/ovn-common.postinst \
+	debian/ovn-common.postrm \
     debian/ovn-docker.install \
 	debian/ovn-host.init \
 	debian/ovn-host.install \
 	debian/ovn-host.postrm \
 	debian/ovn-host.default \
-	debian/ovs-monitor-ipsec \
 	debian/rules \
 	debian/ifupdown.sh \
 	debian/source/format
@@ -62,12 +59,12 @@ check-debian-changelog-version:
 ALL_LOCAL += check-debian-changelog-version
 DIST_HOOKS += check-debian-changelog-version
 
-$(srcdir)/debian/copyright: AUTHORS debian/copyright.in
+$(srcdir)/debian/copyright: AUTHORS.rst debian/copyright.in
 	$(AM_V_GEN) \
 	{ sed -n -e '/%AUTHORS%/q' -e p < $(srcdir)/debian/copyright.in;   \
-	  sed '1,/^$$/d' $(srcdir)/AUTHORS |				   \
+	  sed '34,/^$$/d' $(srcdir)/AUTHORS.rst  |				   \
 		sed -n -e '/^$$/q' -e 's/^/  /p';			   \
-	  sed -e '1,/%AUTHORS%/d' $(srcdir)/debian/copyright.in;	   \
+	  sed -e '34,/%AUTHORS%/d' $(srcdir)/debian/copyright.in;	   \
 	} > $@
 
 DISTCLEANFILES += debian/copyright

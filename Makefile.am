@@ -63,40 +63,11 @@ CLEAN_LOCAL =
 DISTCLEANFILES =
 PYCOV_CLEAN_FILES = build-aux/check-structs,cover
 
-# A list of Markdown-formatted documentation that will automatically be
-# included in the "make dist-docs" output.
-docs = \
-	CONTRIBUTING.md \
-	CodingStyle.md \
-	DESIGN.md \
-	FAQ.md \
-	INSTALL.md \
-	INSTALL.Debian.md \
-	INSTALL.Docker.md \
-	INSTALL.DPDK-ADVANCED.md \
-	INSTALL.DPDK.md \
-	INSTALL.Fedora.md \
-	INSTALL.KVM.md \
-	INSTALL.Libvirt.md \
-	INSTALL.NetBSD.md \
-	INSTALL.RHEL.md \
-	INSTALL.SELinux.md \
-	INSTALL.SSL.md \
-	INSTALL.XenServer.md \
-	INSTALL.userspace.md \
-	INSTALL.Windows.md \
-	IntegrationGuide.md \
-	MAINTAINERS.md \
-	OPENFLOW-1.1+.md \
-	PORTING.md \
-	README.md \
-	README-lisp.md \
-	README-native-tunneling.md \
-	REPORTING-BUGS.md \
-	SECURITY.md \
-	WHY-OVS.md
 EXTRA_DIST = \
-	$(docs) \
+	AUTHORS.rst \
+	CONTRIBUTING.rst \
+	MAINTAINERS.rst \
+	README.rst \
 	NOTICE \
 	.travis.yml \
 	.travis/linux-build.sh \
@@ -115,7 +86,8 @@ EXTRA_DIST = \
 	$(MAN_FRAGMENTS) \
 	$(MAN_ROOTS) \
 	Vagrantfile \
-	Vagrantfile-FreeBSD
+	Vagrantfile-FreeBSD \
+	.mailmap
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
@@ -165,50 +137,50 @@ ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-
 SUFFIXES += .in
 .in:
 	$(AM_V_GEN)$(PERL) $(srcdir)/build-aux/soexpand.pl -I$(srcdir) < $< | \
-	    sed \
-		-e 's,[@]PKIDIR[@],$(PKIDIR),g' \
-                -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
-                -e 's,[@]DBDIR[@],$(DBDIR),g' \
-                -e 's,[@]PERL[@],$(PERL),g' \
-                -e 's,[@]PYTHON[@],$(PYTHON),g' \
-                -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
-                -e 's,[@]VERSION[@],$(VERSION),g' \
-                -e 's,[@]localstatedir[@],$(localstatedir),g' \
-                -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
-                -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
-                -e 's,[@]bindir[@],$(bindir),g' \
-                -e 's,[@]sbindir[@],$(sbindir),g' \
-                -e 's,[@]abs_builddir[@],$(abs_builddir),g' \
-                -e 's,[@]abs_top_srcdir[@],$(abs_top_srcdir),g' \
-            > $@.tmp
+	  sed \
+	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
+	    -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
+	    -e 's,[@]DBDIR[@],$(DBDIR),g' \
+	    -e 's,[@]PERL[@],$(PERL),g' \
+	    -e 's,[@]PYTHON[@],$(PYTHON),g' \
+	    -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
+	    -e 's,[@]VERSION[@],$(VERSION),g' \
+	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
+	    -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
+	    -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
+	    -e 's,[@]bindir[@],$(bindir),g' \
+	    -e 's,[@]sbindir[@],$(sbindir),g' \
+	    -e 's,[@]abs_builddir[@],$(abs_builddir),g' \
+	    -e 's,[@]abs_top_srcdir[@],$(abs_top_srcdir),g' \
+	  > $@.tmp
 	@if head -n 1 $@.tmp | grep '#!' > /dev/null; then \
-	    chmod +x $@.tmp; \
+	  chmod +x $@.tmp; \
 	fi
 	$(AM_V_at) mv $@.tmp $@
 
 SUFFIXES += .xml
 %: %.xml
 	$(AM_V_GEN)$(run_python) $(srcdir)/build-aux/xml2nroff $< > $@.tmp \
-		-I $(srcdir) \
-		--version=$(VERSION) \
-		PKIDIR='$(PKIDIR)' \
-		LOGDIR='$(LOGDIR)' \
-		DBDIR='$(DBDIR)' \
-		PERL='$(PERL)' \
-		PYTHON='$(PYTHON)' \
-		RUNDIR='$(RUNDIR)' \
-		VERSION='$(VERSION)' \
-		localstatedir='$(localstatedir)' \
-		pkgdatadir='$(pkgdatadir)' \
-		sysconfdir='$(sysconfdir)' \
-		bindir='$(bindir)' \
-		sbindir='$(sbindir)'
+	  -I $(srcdir) \
+	  --version=$(VERSION) \
+	  PKIDIR='$(PKIDIR)' \
+	  LOGDIR='$(LOGDIR)' \
+	  DBDIR='$(DBDIR)' \
+	  PERL='$(PERL)' \
+	  PYTHON='$(PYTHON)' \
+	  RUNDIR='$(RUNDIR)' \
+	  VERSION='$(VERSION)' \
+	  localstatedir='$(localstatedir)' \
+	  pkgdatadir='$(pkgdatadir)' \
+	  sysconfdir='$(sysconfdir)' \
+	  bindir='$(bindir)' \
+	  sbindir='$(sbindir)'
 	$(AM_v_at)mv $@.tmp $@
 
-.PHONY: clean-pycov
 clean-pycov:
 	cd $(srcdir) && rm -f $(PYCOV_CLEAN_FILES)
 CLEAN_LOCAL += clean-pycov
+.PHONY: clean-pycov
 
 # If we're checked out from a Git repository, make sure that every
 # file that is in Git is distributed.
@@ -220,17 +192,17 @@ if GNU_MAKE
 ALL_LOCAL += dist-hook-git
 dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
-	  (cd datapath && $(MAKE) distfiles);				    \
-	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) |	    \
-	    LC_ALL=C sort -u > all-distfiles;				    \
-	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' |	    \
-	    LC_ALL=C sort -u > all-gitfiles;				    \
+	  (cd datapath && $(MAKE) distfiles); \
+	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) | \
+	    LC_ALL=C sort -u > all-distfiles; \
+	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' | \
+	    LC_ALL=C sort -u > all-gitfiles; \
 	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
-	  if test -s missing-distfiles; then				    \
+	  if test -s missing-distfiles; then \
 	    echo "The following files are in git but not the distribution:"; \
-	    cat missing-distfiles;					    \
-	    exit 1;							    \
-	  fi;								    \
+	    cat missing-distfiles; \
+	    exit 1; \
+	  fi; \
 	fi
 CLEANFILES += all-distfiles all-gitfiles missing-distfiles
 # The following is based on commands for the Automake "distdir" target.
@@ -241,7 +213,7 @@ distfiles: Makefile
 	for file in $$list; do echo $$file; done | \
 	  sed -e "s|^$$srcdirstrip/||;t" \
 	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | \
-          LC_ALL=C sort -u > $@
+	  LC_ALL=C sort -u > $@
 CLEANFILES += distfiles
 endif
 .PHONY: dist-hook-git
@@ -251,12 +223,19 @@ ALL_LOCAL += config-h-check
 config-h-check:
 	@cd $(srcdir); \
 	if test -e .git && (git --version) >/dev/null 2>&1 && \
-	   git --no-pager grep -L '#include <config\.h>' `git ls-files | grep '\.c$$' | \
-               grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows|^python'`; \
+	  git --no-pager grep -L '#include <config\.h>' `git ls-files | grep '\.c$$' | \
+	    grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows|^python'`; \
 	then \
-	    echo "See above for list of violations of the rule that"; \
-	    echo "every C source file must #include <config.h>."; \
-	    exit 1; \
+	  echo "See above for list of violations of the rule that"; \
+	  echo "every C source file must #include <config.h>."; \
+	  exit 1; \
+	fi; \
+	if grep '#include' include/openvswitch/*.h | \
+	    grep -vE '(<.*>)|("openvswitch)|("openflow)'; \
+	then \
+	  echo "See above for list of violations of the rule that"; \
+	  echo "public openvswitch header file should not include internal library."; \
+	  exit 1; \
 	fi
 .PHONY: config-h-check
 
@@ -265,13 +244,13 @@ ALL_LOCAL += printf-check
 printf-check:
 	@cd $(srcdir); \
 	if test -e .git && (git --version) >/dev/null 2>&1 && \
-	   git --no-pager grep -n -E -e '%[-+ #0-9.*]*([ztj]|hh)' --and --not -e 'ovs_scan' `git ls-files | grep '\.[ch]$$' | \
-               grep -vE '^datapath|^lib/sflow|^third-party'`; \
+	  git --no-pager grep -n -E -e '%[-+ #0-9.*]*([ztj]|hh)' --and --not -e 'ovs_scan' `git ls-files | grep '\.[ch]$$' | \
+	    grep -vE '^datapath|^lib/sflow|^third-party'`; \
 	then \
-	    echo "See above for list of violations of the rule that"; \
-	    echo "'z', 't', 'j', 'hh' printf() type modifiers are"; \
-	    echo "forbidden.  See CodingStyle.md for replacements."; \
-	    exit 1; \
+	  echo "See above for list of violations of the rule that"; \
+	  echo "'z', 't', 'j', 'hh' printf() type modifiers are"; \
+	  echo "forbidden.  See CodingStyle.rst for replacements."; \
+	  exit 1; \
 	fi
 .PHONY: printf-check
 
@@ -279,25 +258,25 @@ printf-check:
 ALL_LOCAL += static-check
 static-check:
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
-	    git --no-pager grep -n -E '^[ 	]+(struct vlog_rate_limit|pthread_once_t|struct ovsthread_once).*=' $(srcdir); \
-         then \
-	    echo "See above for list of violations of the rule that "; \
-	    echo "certain data structures must always be 'static'"; \
-	    exit 1; \
-	 fi
+	  git --no-pager grep -n -E '^[ 	]+(struct vlog_rate_limit|pthread_once_t|struct ovsthread_once).*=' $(srcdir); \
+	then \
+	  echo "See above for list of violations of the rule that "; \
+	  echo "certain data structures must always be 'static'"; \
+	  exit 1; \
+	fi
 .PHONY: static-check
 
 # Check that assert.h is not used outside a whitelist of files.
 ALL_LOCAL += check-assert-h-usage
 check-assert-h-usage:
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
-	    (cd $(srcdir) && git --no-pager grep -l -E '[<]assert.h[>]') | \
-	    $(EGREP) -v '^lib/(sflow_receiver|vlog).c$$|^tests/'; \
-         then \
-	    echo "Files listed above unexpectedly #include <""assert.h"">."; \
-	    echo "Please use ovs_assert (from util.h) instead of assert."; \
-	    exit 1; \
-	 fi
+	  (cd $(srcdir) && git --no-pager grep -l -E '[<]assert.h[>]') | \
+	  $(EGREP) -v '^lib/(sflow_receiver|vlog).c$$|^tests/'; \
+	then \
+	  echo "Files listed above unexpectedly #include <""assert.h"">."; \
+	  echo "Please use ovs_assert (from util.h) instead of assert."; \
+	  exit 1; \
+	fi
 .PHONY: check-assert-h-usage
 
 # Check that LITTLE_ENDIAN and BIG_ENDIAN are not used unless BYTE_ORDER is
@@ -307,28 +286,28 @@ check-assert-h-usage:
 ALL_LOCAL += check-endian
 check-endian:
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
-	    (cd $(srcdir) && git --no-pager grep -l -E \
-             -e 'BIG_ENDIAN|LITTLE_ENDIAN' --and --not -e 'BYTE_ORDER' | \
-	    $(EGREP) -v '^datapath/'); \
-         then \
-	    echo "See above for list of files that misuse LITTLE""_ENDIAN"; \
-	    echo "or BIG""_ENDIAN.  Please use WORDS_BIGENDIAN instead."; \
-	    exit 1; \
-	 fi
+	  (cd $(srcdir) && git --no-pager grep -l -E \
+	   -e 'BIG_ENDIAN|LITTLE_ENDIAN' --and --not -e 'BYTE_ORDER' | \
+	  $(EGREP) -v '^datapath/'); \
+	then \
+	  echo "See above for list of files that misuse LITTLE""_ENDIAN"; \
+	  echo "or BIG""_ENDIAN.  Please use WORDS_BIGENDIAN instead."; \
+	  exit 1; \
+	fi
 .PHONY: check-endian
 
 ALL_LOCAL += thread-safety-check
 thread-safety-check:
 	@cd $(srcdir); \
 	if test -e .git && (git --version) >/dev/null 2>&1 && \
-	   grep -n -f build-aux/thread-safety-blacklist \
-	       `git ls-files | grep '\.[ch]$$' \
-                | $(EGREP) -v '^datapath|^lib/sflow|^third-party'` /dev/null \
-	       | $(EGREP) -v ':[ 	]*/?\*'; \
+	  grep -n -f build-aux/thread-safety-blacklist \
+	    `git ls-files | grep '\.[ch]$$' \
+	      | $(EGREP) -v '^datapath|^lib/sflow|^third-party'` /dev/null \
+	      | $(EGREP) -v ':[ 	]*/?\*'; \
 	then \
-	    echo "See above for list of calls to functions that are"; \
-	    echo "blacklisted due to thread safety issues"; \
-	    exit 1; \
+	  echo "See above for list of calls to functions that are"; \
+	  echo "blacklisted due to thread safety issues"; \
+	  exit 1; \
 	fi
 EXTRA_DIST += build-aux/thread-safety-blacklist
 .PHONY: thread-safety-check
@@ -338,9 +317,9 @@ ALL_LOCAL += manpage-check
 manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
 	@error=false; \
 	for manpage in $?; do \
-		LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T utf8 -man -p -z $$manpage >$@.tmp 2>&1; \
-		if grep warning: $@.tmp; then error=:; fi; \
-		rm -f $@.tmp; \
+	  LANG=en_US.UTF-8 groff -w mac -w delim -w escape -w input -w missing -w tab -T utf8 -man -p -z $$manpage >$@.tmp 2>&1; \
+	  if grep warning: $@.tmp; then error=:; fi; \
+	  rm -f $@.tmp; \
 	done; \
 	if $$error; then exit 1; else touch $@; fi
 	$(AM_V_GEN) touch -c $@
@@ -370,10 +349,14 @@ ALL_LOCAL += flake8-check
 #   H232 Python 3.x incompatible octal 077 should be written as 0o77
 #   H233 Python 3.x incompatible use of print operator
 #   H238 old style class declaration, use new style (inherit from `object`)
+FLAKE8_SELECT = H231,H232,H233,H238
+FLAKE8_IGNORE = E121,E123,E125,E126,E127,E128,E129,E131,W503,F811,D,H
 flake8-check: $(FLAKE8_PYFILES)
-	$(AM_V_GEN) if flake8 $^ --select=H231,H232,H233,H238 ${FLAKE8_FLAGS} && \
-		flake8 $^ --ignore=E121,E123,E125,E126,E127,E128,E129,E131,W503,F811,D,H ${FLAKE8_FLAGS}; then \
-		touch $@; else exit 1; fi
+	$(AM_V_GEN) \
+	  src='$^' && \
+	  flake8 $$src --select=$(FLAKE8_SELECT) $(FLAKE8_FLAGS) && \
+	  flake8 $$src --ignore=$(FLAKE8_IGNORE) $(FLAKE8_FLAGS) && \
+	  touch $@
 endif
 CLEANFILES += flake8-check
 
@@ -381,29 +364,29 @@ include $(srcdir)/manpages.mk
 $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.pl
 	@$(PERL) $(srcdir)/build-aux/sodepends.pl -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
 	@if cmp -s $(@F).tmp $@; then \
-		touch $@; \
-		rm -f $(@F).tmp; \
+	  touch $@; \
+	  rm -f $(@F).tmp; \
 	else \
-		mv $(@F).tmp $@; \
+	  mv $(@F).tmp $@; \
 	fi
 CLEANFILES += manpage-dep-check
 
 if VSTUDIO_DDK
 ALL_LOCAL += ovsext
 ovsext: datapath-windows/ovsext.sln $(srcdir)/datapath-windows/include/OvsDpInterface.h
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)"
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
 
 CLEAN_LOCAL += ovsext_clean
 ovsext_clean: datapath-windows/ovsext.sln
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)"
-	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+	MSBuild.exe //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
 endif
 .PHONY: ovsext
 
 clang-analyze: clean
 	@which clang scan-build >/dev/null 2>&1 || \
-		(echo "Unable to find clang/scan-build, Install clang,clang-analyzer packages"; exit 1)
+	  (echo "Unable to find clang/scan-build, Install clang,clang-analyzer packages"; exit 1)
 	@$(MKDIR_P) "$(srcdir)/tests/clang-analyzer-results"
 	@scan-build -o $(srcdir)/tests/clang-analyzer-results --use-cc=$(CC) $(MAKE)
 .PHONY: clang-analyze
@@ -445,3 +428,4 @@ include datapath-windows/include/automake.mk
 include windows/automake.mk
 include ovn/automake.mk
 include selinux/automake.mk
+include build-aux/automake.mk

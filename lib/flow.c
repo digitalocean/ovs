@@ -1298,6 +1298,7 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
                 wc->masks.tunnel.metadata.present.map =
                                               flow->tunnel.metadata.present.map;
                 WC_MASK_FIELD(wc, tunnel.metadata.opts.u8);
+                WC_MASK_FIELD(wc, tunnel.metadata.tab);
             }
         } else {
             WC_MASK_FIELD(wc, tunnel.metadata.present.len);
@@ -2095,7 +2096,7 @@ flow_count_common_mpls_labels(const struct flow *a, int an,
  */
 void
 flow_push_mpls(struct flow *flow, int n, ovs_be16 mpls_eth_type,
-               struct flow_wildcards *wc)
+               struct flow_wildcards *wc, bool clear_flow_L3)
 {
     ovs_assert(eth_type_mpls(mpls_eth_type));
     ovs_assert(n < FLOW_MAX_MPLS_LABELS);
@@ -2133,11 +2134,13 @@ flow_push_mpls(struct flow *flow, int n, ovs_be16 mpls_eth_type,
 
         flow->mpls_lse[0] = set_mpls_lse_values(ttl, tc, 1, htonl(label));
 
-        /* Clear all L3 and L4 fields and dp_hash. */
-        BUILD_ASSERT(FLOW_WC_SEQ == 36);
-        memset((char *) flow + FLOW_SEGMENT_2_ENDS_AT, 0,
-               sizeof(struct flow) - FLOW_SEGMENT_2_ENDS_AT);
-        flow->dp_hash = 0;
+        if (clear_flow_L3) {
+            /* Clear all L3 and L4 fields and dp_hash. */
+            BUILD_ASSERT(FLOW_WC_SEQ == 36);
+            memset((char *) flow + FLOW_SEGMENT_2_ENDS_AT, 0,
+                   sizeof(struct flow) - FLOW_SEGMENT_2_ENDS_AT);
+            flow->dp_hash = 0;
+        }
     }
     flow->dl_type = mpls_eth_type;
 }
@@ -2344,7 +2347,7 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
     }
 }
 
-/* Puts into 'b' a packet that flow_extract() would parse as having the given
+/* Puts into 'p' a packet that flow_extract() would parse as having the given
  * 'flow'.
  *
  * (This is useful only for testing, obviously, and the packet isn't really

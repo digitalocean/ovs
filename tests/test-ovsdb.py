@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+# Copyright (c) 2009, 2010, 2011, 2012, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ from ovs.db import data
 import ovs.db.types
 import ovs.ovsuuid
 import ovs.poller
+import ovs.stream
 import ovs.util
 from ovs.fatal_signal import signal_alarm
 import six
@@ -530,30 +531,28 @@ def idl_set(idl, commands, step):
 
 
 def update_condition(idl, commands):
-    commands = commands.split(";")
+    commands = commands[len("condition "):].split(";")
     for command in commands:
-        command = command[len("condition "):]
-        if "add" in command:
-            add_cmd = True
-            command = command[len("add "):]
-        else:
-            add_cmd = False
-            command = command[len("remove "):]
-
         command = command.split(" ")
         if(len(command) != 2):
-            sys.stderr.write("Error parsong condition %s\n" % command)
+            sys.stderr.write("Error parsing condition %s\n" % command)
             sys.exit(1)
 
         table = command[0]
         cond = ovs.json.from_string(command[1])
 
-        idl.cond_change(table, add_cmd, cond)
+        idl.cond_change(table, cond)
 
 
 def do_idl(schema_file, remote, *commands):
     schema_helper = ovs.db.idl.SchemaHelper(schema_file)
     track_notify = False
+
+    if remote.startswith("ssl:"):
+        ovs.stream.Stream.ssl_set_private_key_file(commands[0])
+        ovs.stream.Stream.ssl_set_certificate_file(commands[1])
+        ovs.stream.Stream.ssl_set_ca_cert_file(commands[2])
+        commands = commands[3:]
 
     if commands and commands[0] == "track-notify":
         commands = commands[1:]

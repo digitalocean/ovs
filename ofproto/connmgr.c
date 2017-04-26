@@ -32,9 +32,9 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
+#include "ovs-atomic.h"
 #include "pinsched.h"
 #include "poll-loop.h"
-#include "pktbuf.h"
 #include "rconn.h"
 #include "openvswitch/shash.h"
 #include "simap.h"
@@ -66,6 +66,7 @@ struct ofconn {
     enum ofconn_type type;      /* Type. */
     enum ofproto_band band;     /* In-band or out-of-band? */
     bool enable_async_msgs;     /* Initially enable async messages? */
+    bool want_packet_in_on_miss;
 
 /* State that should be cleared from one connection to the next. */
 
@@ -78,7 +79,6 @@ struct ofconn {
     struct rconn_packet_counter *packet_in_counter; /* # queued on 'rconn'. */
 #define N_SCHEDULERS 2
     struct pinsched *schedulers[N_SCHEDULERS];
-    struct pktbuf *pktbuf;         /* OpenFlow packet buffers. */
     int miss_send_len;             /* Bytes to send of buffered packets. */
     uint16_t controller_id;     /* Connection controller ID. */
 
@@ -223,6 +223,8 @@ struct connmgr {
     struct sockaddr_in *extra_in_band_remotes;
     size_t n_extra_remotes;
     int in_band_queue;
+
+    ATOMIC(int) want_packet_in_on_miss;   /* Sum of ofconns' values. */
 };
 
 static void update_in_band_remotes(struct connmgr *);
@@ -262,7 +264,37 @@ connmgr_create(struct ofproto *ofproto,
     mgr->n_extra_remotes = 0;
     mgr->in_band_queue = -1;
 
+    atomic_init(&mgr->want_packet_in_on_miss, 0);
+
     return mgr;
+}
+
+/* The default "table-miss" behaviour for OpenFlow1.3+ is to drop the
+ * packet rather than to send the packet to the controller.
+ *
+ * This function maintains the count of pre-OpenFlow1.3 with controller_id 0,
+ * as we assume these are the controllers that should receive "table-miss"
+ * notifications. */
+static void
+update_want_packet_in_on_miss(struct ofconn *ofconn)
+{
+   /* We want a packet-in on miss when controller_id is zero and OpenFlow is
+    * lower than version 1.3. */
+   enum ofputil_protocol p = ofconn->protocol;
+   int new_want = (ofconn->controller_id == 0 &&
+                   (p == OFPUTIL_P_NONE ||
+                    ofputil_protocol_to_ofp_version(p) < OFP13_VERSION));
+
+   /* Update the setting and the count if necessary. */
+   int old_want = ofconn->want_packet_in_on_miss;
+   if (old_want != new_want) {
+       atomic_int *dst = &ofconn->connmgr->want_packet_in_on_miss;
+       int count;
+       atomic_read_relaxed(dst, &count);
+       atomic_store_relaxed(dst, count - old_want + new_want);
+
+       ofconn->want_packet_in_on_miss = new_want;
+   }
 }
 
 /* Frees 'mgr' and all of its resources. */
@@ -426,7 +458,6 @@ connmgr_get_memory_usage(const struct connmgr *mgr, struct simap *usage)
             pinsched_get_stats(ofconn->schedulers[i], &stats);
             packets += stats.n_queued;
         }
-        packets += pktbuf_count_packets(ofconn->pktbuf);
     }
     simap_increase(usage, "ofconns", ofconns);
     simap_increase(usage, "packets", packets);
@@ -704,7 +735,6 @@ add_controller(struct connmgr *mgr, const char *target, uint8_t dscp,
 
     ofconn = ofconn_create(mgr, rconn_create(5, 8, dscp, allowed_versions),
                            OFCONN_PRIMARY, true);
-    ofconn->pktbuf = pktbuf_create();
     rconn_connect(ofconn->rconn, target, name);
     hmap_insert(&mgr->controllers, &ofconn->hmap_node, hash_string(target, 0));
 
@@ -1007,6 +1037,7 @@ void
 ofconn_set_protocol(struct ofconn *ofconn, enum ofputil_protocol protocol)
 {
     ofconn->protocol = protocol;
+    update_want_packet_in_on_miss(ofconn);
 }
 
 /* Returns the currently configured packet in format for 'ofconn', one of
@@ -1036,6 +1067,7 @@ void
 ofconn_set_controller_id(struct ofconn *ofconn, uint16_t controller_id)
 {
     ofconn->controller_id = controller_id;
+    update_want_packet_in_on_miss(ofconn);
 }
 
 /* Returns the default miss send length for 'ofconn'. */
@@ -1123,14 +1155,6 @@ ofconn_send_error(const struct ofconn *ofconn,
                   type_name);
     }
     ofconn_send_reply(ofconn, reply);
-}
-
-/* Same as pktbuf_retrieve(), using the pktbuf owned by 'ofconn'. */
-enum ofperr
-ofconn_pktbuf_retrieve(struct ofconn *ofconn, uint32_t id,
-                       struct dp_packet **bufferp, ofp_port_t *in_port)
-{
-    return pktbuf_retrieve(ofconn->pktbuf, id, bufferp, in_port);
 }
 
 /* Reports that a flow_mod operation of the type specified by 'command' was
@@ -1287,10 +1311,6 @@ ofconn_flush(struct ofconn *ofconn)
             ofconn->schedulers[i] = pinsched_create(rate, burst);
         }
     }
-    if (ofconn->pktbuf) {
-        pktbuf_destroy(ofconn->pktbuf);
-        ofconn->pktbuf = pktbuf_create();
-    }
     ofconn->miss_send_len = (ofconn->type == OFCONN_PRIMARY
                              ? OFP_DEFAULT_MISS_SEND_LEN
                              : 0);
@@ -1322,6 +1342,11 @@ ofconn_destroy(struct ofconn *ofconn)
 {
     ofconn_flush(ofconn);
 
+    /* Force clearing of want_packet_in_on_miss to keep the global count
+     * accurate. */
+    ofconn->controller_id = 1;
+    update_want_packet_in_on_miss(ofconn);
+
     if (ofconn->type == OFCONN_PRIMARY) {
         hmap_remove(&ofconn->connmgr->controllers, &ofconn->hmap_node);
     }
@@ -1334,7 +1359,6 @@ ofconn_destroy(struct ofconn *ofconn)
     rconn_destroy(ofconn->rconn);
     rconn_packet_counter_destroy(ofconn->packet_in_counter);
     rconn_packet_counter_destroy(ofconn->reply_counter);
-    pktbuf_destroy(ofconn->pktbuf);
     rconn_packet_counter_destroy(ofconn->monitor_counter);
     free(ofconn);
 }
@@ -1496,7 +1520,7 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
     ovs_assert((unsigned int) type < OAM_N_TYPES);
 
     /* Keep the following code in sync with the documentation in the
-     * "Asynchronous Messages" section in DESIGN. */
+     * "Asynchronous Messages" section in 'topics/design' */
 
     if (ofconn->type == OFCONN_SERVICE && !ofconn->miss_send_len) {
         /* Service connections don't get asynchronous messages unless they have
@@ -1511,37 +1535,17 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
     return (masks[type] & (1u << reason)) != 0;
 }
 
-/* The default "table-miss" behaviour for OpenFlow1.3+ is to drop the
- * packet rather than to send the packet to the controller.
- *
- * This function returns true to indicate that a packet_in message
+/* This function returns true to indicate that a packet_in message
  * for a "table-miss" should be sent to at least one controller.
- * That is there is at least one controller with controller_id 0
- * which connected using an OpenFlow version earlier than OpenFlow1.3.
  *
- * False otherwise.
- *
- * This logic assumes that "table-miss" packet_in messages
- * are always sent to controller_id 0. */
+ * False otherwise. */
 bool
-connmgr_wants_packet_in_on_miss(struct connmgr *mgr) OVS_EXCLUDED(ofproto_mutex)
+connmgr_wants_packet_in_on_miss(struct connmgr *mgr)
 {
-    struct ofconn *ofconn;
+    int count;
 
-    ovs_mutex_lock(&ofproto_mutex);
-    LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
-        enum ofputil_protocol protocol = ofconn_get_protocol(ofconn);
-
-        if (ofconn->controller_id == 0 &&
-            (protocol == OFPUTIL_P_NONE ||
-             ofputil_protocol_to_ofp_version(protocol) < OFP13_VERSION)) {
-            ovs_mutex_unlock(&ofproto_mutex);
-            return true;
-        }
-    }
-    ovs_mutex_unlock(&ofproto_mutex);
-
-    return false;
+    atomic_read_relaxed(&mgr->want_packet_in_on_miss, &count);
+    return count > 0;
 }
 
 /* Returns a human-readable name for an OpenFlow connection between 'mgr' and
@@ -1731,9 +1735,7 @@ connmgr_send_async_msg(struct connmgr *mgr,
         }
 
         struct ofpbuf *msg = ofputil_encode_packet_in_private(
-            &am->pin.up, protocol, ofconn->packet_in_format,
-            am->pin.max_len >= 0 ? am->pin.max_len : ofconn->miss_send_len,
-            ofconn->pktbuf);
+            &am->pin.up, protocol, ofconn->packet_in_format);
 
         struct ovs_list txq;
         bool is_miss = (am->pin.up.public.reason == OFPR_NO_MATCH ||
@@ -2181,14 +2183,12 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
             if (flags & NXFMF_OWN || ofconn != abbrev_ofconn
                 || ofconn->monitor_paused) {
                 struct ofputil_flow_update fu;
-                struct match match;
 
                 fu.event = event;
                 fu.reason = event == NXFME_DELETED ? reason : 0;
                 fu.table_id = rule->table_id;
                 fu.cookie = rule->flow_cookie;
-                minimatch_expand(&rule->cr.match, &match);
-                fu.match = &match;
+                minimatch_expand(&rule->cr.match, &fu.match);
                 fu.priority = rule->cr.priority;
 
                 ovs_mutex_lock(&rule->mutex);
@@ -2204,13 +2204,15 @@ ofmonitor_report(struct connmgr *mgr, struct rule *rule,
                     fu.ofpacts = NULL;
                     fu.ofpacts_len = 0;
                 }
-                ofputil_append_flow_update(&fu, &ofconn->updates);
+                ofputil_append_flow_update(&fu, &ofconn->updates,
+                                           ofproto_get_tun_tab(rule->ofproto));
             } else if (!ofconn->sent_abbrev_update) {
                 struct ofputil_flow_update fu;
 
                 fu.event = NXFME_ABBREV;
                 fu.xid = abbrev_xid;
-                ofputil_append_flow_update(&fu, &ofconn->updates);
+                ofputil_append_flow_update(&fu, &ofconn->updates,
+                                           ofproto_get_tun_tab(rule->ofproto));
 
                 ofconn->sent_abbrev_update = true;
             }

@@ -451,7 +451,7 @@ lswitch_choose_destination(struct lswitch *sw, const struct flow *flow)
             if (get_mac_entry_ofp_port(sw->ml, mac)
                 != flow->in_port.ofp_port) {
                 VLOG_DBG_RL(&rl, "%016llx: learned that "ETH_ADDR_FMT" is on "
-                            "port %"PRIu16, sw->datapath_id,
+                            "port %"PRIu32, sw->datapath_id,
                             ETH_ADDR_ARGS(flow->dl_src),
                             flow->in_port.ofp_port);
 
@@ -523,7 +523,8 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
     struct dp_packet pkt;
     struct flow flow;
 
-    error = ofputil_decode_packet_in(oh, true, &pi, NULL, &buffer_id, NULL);
+    error = ofputil_decode_packet_in(oh, true, NULL, &pi, NULL,
+                                     &buffer_id, NULL);
     if (error) {
         VLOG_WARN_RL(&rl, "failed to decode packet-in: %s",
                      ofperr_to_string(error));

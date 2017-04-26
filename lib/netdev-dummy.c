@@ -827,8 +827,11 @@ netdev_dummy_set_in6(struct netdev *netdev_, struct in6_addr *in6,
     return 0;
 }
 
+#define DUMMY_MAX_QUEUES_PER_PORT 1024
+
 static int
-netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args)
+netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args,
+                        char **errp OVS_UNUSED)
 {
     struct netdev_dummy *netdev = netdev_dummy_cast(netdev_);
     const char *pcap;
@@ -868,8 +871,23 @@ netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args)
         goto exit;
     }
 
-    new_n_rxq = MAX(smap_get_int(args, "n_rxq", netdev->requested_n_rxq), 1);
-    new_n_txq = MAX(smap_get_int(args, "n_txq", netdev->requested_n_txq), 1);
+    new_n_rxq = MAX(smap_get_int(args, "n_rxq", NR_QUEUE), 1);
+    new_n_txq = MAX(smap_get_int(args, "n_txq", NR_QUEUE), 1);
+
+    if (new_n_rxq > DUMMY_MAX_QUEUES_PER_PORT ||
+        new_n_txq > DUMMY_MAX_QUEUES_PER_PORT) {
+        VLOG_WARN("The one or both of interface %s queues"
+                  "(rxq: %d, txq: %d) exceed %d. Sets it %d.\n",
+                  netdev_get_name(netdev_),
+                  new_n_rxq,
+                  new_n_txq,
+                  DUMMY_MAX_QUEUES_PER_PORT,
+                  DUMMY_MAX_QUEUES_PER_PORT);
+
+        new_n_rxq = MIN(DUMMY_MAX_QUEUES_PER_PORT, new_n_rxq);
+        new_n_txq = MIN(DUMMY_MAX_QUEUES_PER_PORT, new_n_txq);
+    }
+
     new_numa_id = smap_get_int(args, "numa_id", 0);
     if (new_n_rxq != netdev->requested_n_rxq
         || new_n_txq != netdev->requested_n_txq
@@ -1149,9 +1167,16 @@ netdev_dummy_get_mtu(const struct netdev *netdev, int *mtup)
     return 0;
 }
 
+#define DUMMY_MIN_MTU 68
+#define DUMMY_MAX_MTU 65535
+
 static int
 netdev_dummy_set_mtu(struct netdev *netdev, int mtu)
 {
+    if (mtu < DUMMY_MIN_MTU || mtu > DUMMY_MAX_MTU) {
+        return EINVAL;
+    }
+
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);

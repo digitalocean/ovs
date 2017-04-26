@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,6 +58,9 @@ static struct hmap *const all_bonds OVS_GUARDED_BY(rwlock) = &all_bonds__;
 /* Bit-mask for hashing a flow down to a bucket. */
 #define BOND_MASK 0xff
 #define BOND_BUCKETS (BOND_MASK + 1)
+
+/* Priority for internal rules created to handle recirculation */
+#define RECIRC_RULE_PRIORITY 20
 
 /* A hash bucket for mapping a flow to a slave.
  * "struct bond" has an array of BOND_BUCKETS of these. */
@@ -238,6 +241,9 @@ bond_create(const struct bond_settings *s, struct ofproto_dpif *ofproto)
     ovs_mutex_init(&bond->mutex);
     ovs_refcount_init(&bond->ref_cnt);
     hmap_init(&bond->pr_rule_ops);
+
+    bond->active_slave_mac = eth_addr_zero;
+    bond->active_slave_changed = false;
 
     bond_reconfigure(bond, s);
     return bond;
@@ -454,9 +460,6 @@ bond_reconfigure(struct bond *bond, const struct bond_settings *s)
         bond_entry_reset(bond);
     }
 
-    bond->active_slave_mac = s->active_slave_mac;
-    bond->active_slave_changed = false;
-
     ovs_rwlock_unlock(&rwlock);
     return revalidate;
 }
@@ -485,10 +488,13 @@ bond_find_slave_by_mac(const struct bond *bond, const struct eth_addr mac)
 static void
 bond_active_slave_changed(struct bond *bond)
 {
-    struct eth_addr mac;
-
-    netdev_get_etheraddr(bond->active_slave->netdev, &mac);
-    bond->active_slave_mac = mac;
+    if (bond->active_slave) {
+        struct eth_addr mac;
+        netdev_get_etheraddr(bond->active_slave->netdev, &mac);
+        bond->active_slave_mac = mac;
+    } else {
+        bond->active_slave_mac = eth_addr_zero;
+    }
     bond->active_slave_changed = true;
     seq_change(connectivity_seq_get());
 }
@@ -1131,7 +1137,7 @@ bond_rebalance(struct bond *bond)
     }
     bond->next_rebalance = time_msec() + bond->rebalance_interval;
 
-    use_recirc = ofproto_dpif_get_support(bond->ofproto)->odp.recirc &&
+    use_recirc = bond->ofproto->backer->support.odp.recirc &&
                  bond_may_recirc(bond, NULL, NULL);
 
     if (use_recirc) {
@@ -1856,6 +1862,7 @@ bond_choose_active_slave(struct bond *bond)
             bond_active_slave_changed(bond);
         }
     } else if (old_active_slave) {
+        bond_active_slave_changed(bond);
         VLOG_INFO_RL(&rl, "bond %s: all interfaces disabled", bond->name);
     }
 }

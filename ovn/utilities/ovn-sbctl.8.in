@@ -22,10 +22,6 @@ ovn\-sbctl \- utility for querying and configuring \fBOVN_Southbound\fR database
 \fR[\fIargs\fR] [\fB\-\-\fR [\fIoptions\fR] \fIcommand \fR[\fIargs\fR]]...
 .
 .SH DESCRIPTION
-The command should only be used for advanced debugging and troubleshooting
-of the \fBOVN_Southbound\fR database; and should never be used in normal
-operation.
-.PP
 The \fBovn\-sbctl\fR program configures the \fBOVN_Southbound\fR database
 by providing a high\-level interface to its configuration database.  See
 \fBovn\-sb\fR(5) for comprehensive documentation of the database schema.
@@ -97,10 +93,18 @@ to approximately \fIsecs\fR seconds.  If the timeout expires,
 would normally happen only if the database cannot be contacted, or if
 the system is overloaded.)
 .
+.so lib/vlog.man
+.so lib/common.man
+.
 .SS "Table Formatting Options"
 These options control the format of output from the \fBlist\fR and
 \fBfind\fR commands.
 .so lib/table.man
+.
+.SS "Public Key Infrastructure Options"
+.so lib/ssl.man
+.so lib/ssl-bootstrap.man
+.so lib/ssl-peer-ca-cert.man
 .
 .SH COMMANDS
 The commands implemented by \fBovn\-sbctl\fR are described in the
@@ -118,8 +122,8 @@ Prints a brief overview of the database contents.
 .SS "Chassis Commands"
 These commands manipulate \fBOVN_Southbound\fR chassis.
 .
-.IP "[\fB\-\-may\-exist\fR] \fBchassis\-add \fIchassis\fR \fIencap\-type\fR \fIencap-ip\fR"
-Creates a new chassis named \fIchassis\fR.  \fIencap\-type\fR is a
+.IP "[\fB\-\-may\-exist\fR] \fBchassis\-add \fIchassis\fR \fIencap-type\fR \fIencap-ip\fR"
+Creates a new chassis named \fIchassis\fR.  \fIencap-type\fR is a
 comma-separated list of tunnel types.  The chassis will have
 one encap entry for each specified tunnel type with \fIencap-ip\fR
 as the destination IP for each.
@@ -139,16 +143,16 @@ delete a chassis that does not exist has no effect.
 .
 These commands manipulate \fBOVN_Southbound\fR port bindings.
 .
-.IP "[\fB\-\-may\-exist\fR] \fBlsp\-bind \fIlogical\-port\fR \fIchassis\fR"
-Binds the logical port named \fIlogical\-port\fR to \fIchassis\fR.
+.IP "[\fB\-\-may\-exist\fR] \fBlsp\-bind \fIlogical-port\fR \fIchassis\fR"
+Binds the logical port named \fIlogical-port\fR to \fIchassis\fR.
 .IP
 Without \fB\-\-may\-exist\fR, attempting to bind a logical port that
 has already been bound is an error.  With \fB\-\-may\-exist\fR, this
-command does nothing if \fIlogical\-port\fR has already been bound to
+command does nothing if \fIlogical-port\fR has already been bound to
 a chassis.
 .
-.IP "[\fB\-\-if\-exists\fR] \fBlsp\-unbind\fR \fIlogical\-port\fR"
-Resets the binding of \fIlogical\-port\fR to \fINULL\fR.
+.IP "[\fB\-\-if\-exists\fR] \fBlsp\-unbind\fR \fIlogical-port\fR"
+Resets the binding of \fIlogical-port\fR to \fINULL\fR.
 .IP
 Without \fB\-\-if\-exists\fR, attempting to unbind a logical port
 that is not bound is an error.  With \fB\-\-if\-exists\fR, attempting
@@ -156,12 +160,102 @@ to unbind logical port that is not bound has no effect.
 .
 .SS "Logical Flow Commands"
 .
-.IP "\fBlflow\-list\fR [\fIlogical\-datapath\fR]"
-List logical flows. If \fIlogical\-datapath\fR is specified, only list flows for
-that logical datapath.
+.IP "[\fB\-\-uuid\fR] \fBlflow\-list\fR [\fIlogical-datapath\fR] [\fIlflow\fR...]"
+List logical flows.  If \fIlogical-datapath\fR is specified, only list
+flows for that logical datapath.  The \fIlogical-datapath\fR may be
+given as a UUID or as a datapath name (reporting an error if multiple
+datapaths have the same name).
+.IP
+If at least one \fIlflow\fR is given, only matching logical flows, if
+any, are listed.  Each \fIlflow\fR may be specified as a UUID or the
+first few characters of a UUID, optionally prefixed by \fB0x\fR.
+(Because \fBovn\-controller\fR sets OpenFlow flow cookies to the first
+32 bits of the corresponding logical flow's UUID, this makes it easy
+to look up the logical flow that generated a particular OpenFlow
+flow.)
+.IP
+If \fB\-\-uuid\fR is specified, the output includes the first 32 bits
+of each logical flow's UUID.  This makes it easier to find the
+OpenFlow flows that correspond to a given logical flow.
 .
-.IP "\fBdump\-flows\fR [\fIlogical\-datapath\fR]"
+.IP "[\fB\-\-uuid\fR] \fBdump\-flows\fR [\fIlogical-datapath\fR]"
 Alias for \fBlflow\-list\fB.
+.
+.SS "Remote Connectivity Commands"
+.
+These commands manipulate the \fBconnections\fR column in the \fBSB_Global\fR
+table and rows in the \fBConnection\fR table.  When \fBovsdb\-server\fR
+is configured to use the \fBconnections\fR column for OVSDB connections,
+this allows the administrator to use \fBovn\-sbctl\fR to configure database
+connections.
+.
+.IP "\fBget\-connection\fR"
+Prints the configured connection(s).
+.
+.IP "\fBdel\-connection\fR"
+Deletes the configured connection(s).
+.
+.IP "\fBset\-connection\fR [\fIaccess\-specifier\fR] \fItarget\fR\&..."
+Sets the configured manager target or targets.  Each \fItarget\fR may
+be preceded by an optional access-specifier (\fBread\-only\fR or
+\fBread\-write\fR) and may use any of the following forms:
+.
+.RS
+.so ovsdb/remote-active.man
+.so ovsdb/remote-passive.man
+.RE
+
+If provided, the effect of the access specifier persists for subsequent
+targets until changed by another access specifier.
+.
+.SS "SSL Configuration"
+When \fBovsdb\-server\fR is configured to connect using SSL, the
+following parameters are required:
+.TP
+\fIprivate-key\fR
+Specifies a PEM file containing the private key used for SSL connections.
+.TP
+\fIcertificate\fR
+Specifies a PEM file containing a certificate, signed by the
+certificate authority (CA) used by the connection peers, that
+certifies the private key, identifying a trustworthy peer.
+.TP
+\fIca-cert\fR
+Specifies a PEM file containing the CA certificate used to verify that
+the connection peers are trustworthy.
+.PP
+These SSL settings apply to all SSL connections made by the southbound
+database server.
+.
+.IP "\fBget\-ssl\fR"
+Prints the SSL configuration.
+.
+.IP "\fBdel\-ssl\fR"
+Deletes the current SSL configuration.
+.
+.IP "[\fB\-\-bootstrap\fR] \fBset\-ssl\fR \fIprivate-key\fR \fIcertificate\fR \fIca-cert\fR"
+Sets the SSL configuration.  The \fB\-\-bootstrap\fR option is described
+below.
+.
+.ST "CA Certificate Bootstrap"
+.PP
+Ordinarily, all of the files named in the SSL configuration must exist
+before SSL connectivity can be used.  However, if the \fIca-cert\fR file
+does not exist and the \fB\-\-bootstrap\fR
+option is given, then \fBovsdb\-server\fR will attempt to obtain the
+CA certificate from the target on its first SSL connection and
+save it to the named PEM file.  If it is successful, it will
+immediately drop the connection and reconnect, and from then on all
+SSL connections must be authenticated by a certificate signed by the
+CA certificate thus obtained.
+.PP
+\fBThis option exposes the SSL connection to a man-in-the-middle
+attack obtaining the initial CA certificate\fR, but it may be useful
+for bootstrapping.
+.PP
+This option is only useful if the SSL peer sends its CA certificate
+as part of the SSL certificate chain.  The SSL protocol does not
+require the controller to send the CA certificate.
 .
 .so lib/db-ctl-base.man
 .SH "EXIT STATUS"

@@ -81,7 +81,7 @@
         Adds the specified ACL to <var>switch</var>.
         <var>direction</var> must be either <code>from-lport</code> or
         <code>to-lport</code>.  <var>priority</var> must be between
-        <code>1</code> and <code>65534</code>, inclusive.  If
+        <code>0</code> and <code>32767</code>, inclusive.  If
         <code>--log</code> is specified, packet logging is enabled for the
         ACL.  A full description of the fields are in <code>ovn-nb</code>(5).
       </dd>
@@ -125,7 +125,9 @@
         <p>
           Creates on <var>switch</var> a logical switch port named
           <var>port</var> that is a child of <var>parent</var> that is
-          identified with VLAN ID <var>tag_request</var>.  If
+          identified with VLAN ID <var>tag_request</var>,
+          which must be between <code>0</code> and
+          <code>4095</code>, inclusive. If
           <var>tag_request</var> is <code>0</code>, <code>ovn-northd</code>
           generates a tag that is unique in the scope of <var>parent</var>.
           This is useful in cases such as virtualized container environments
@@ -169,14 +171,47 @@
 
       <dt><code>lsp-set-addresses</code> <var>port</var> [<var>address</var>]...</dt>
       <dd>
-        Sets the addresses associated with <var>port</var> to
-        <var>address</var>.  Each <var>address</var> should be either an
-        Ethernet address or an Ethernet address followed by IP addresses
-        (separated by space and quoted to form a single command-line
-        argument).  The special form <code>unknown</code> is also valid.
-        Multiple Ethernet addresses or Ethernet+IPs combinations may be set.
-        If no <var>address</var> argument is given, <var>port</var> will have
-        no addresses associated with it.
+        <p>
+          Sets the addresses associated with <var>port</var> to
+          <var>address</var>.  Each <var>address</var> should be one of the
+          following:
+        </p>
+
+        <dl>
+          <dt>an Ethernet address, optionally followed by a space and one or more IP addresses</dt>
+          <dd>
+            OVN delivers packets for the Ethernet address to this port.
+          </dd>
+
+          <dt><code>unknown</code></dt>
+          <dd>
+            OVN delivers unicast Ethernet packets whose destination MAC address
+            is not in any logical port's addresses column to ports with address
+            <code>unknown</code>.
+          </dd>
+
+          <dt><code>dynamic</code></dt>
+          <dd>
+            Use this keyword to make <code>ovn-northd</code> generate a
+            globally unique MAC address and choose an unused IPv4 address with
+            the logical port's subnet and store them in the port's
+            <code>dynamic_addresses</code> column.
+          </dd>
+
+          <dt><code>router</code></dt>
+          <dd>
+            Accepted only when the <code>type</code> of the logical switch
+            port is <code>router</code>.  This indicates that the Ethernet,
+            IPv4, and IPv6 addresses for this logical switch port should be
+            obtained from the connected logical router port, as specified by
+            <code>router-port</code> in <code>lsp-set-options</code>.
+          </dd>
+        </dl>
+
+        <p>
+          Multiple addresses may be set.  If no <var>address</var> argument is
+          given, <var>port</var> will have no addresses associated with it.
+        </p>
       </dd>
 
       <dt><code>lsp-get-addresses</code> <var>port</var></dt>
@@ -356,7 +391,7 @@
     <h1>Logical Router Static Route Commands</h1>
 
     <dl>
-      <dt>[<code>--may-exist</code>] <code>lr-route-add</code> <var>router</var> <var>prefix</var> <var>nexthop</var> [<var>port</var>]</dt>
+      <dt>[<code>--may-exist</code>] [<code>--policy</code>=<var>POLICY</var>] <code>lr-route-add</code> <var>router</var> <var>prefix</var> <var>nexthop</var> [<var>port</var>]</dt>
       <dd>
         <p>
           Adds the specified route to <var>router</var>.
@@ -369,6 +404,12 @@
           match this route will be sent out that port.  When
           <var>port</var> is omitted, OVN infers the output port based
           on <var>nexthop</var>.
+        </p>
+
+        <p>
+          <code>--policy</code> describes the policy used to make routing
+          decisions.  This should be one of "dst-ip" or "src-ip".  If not
+          specified, the default is "dst-ip".
         </p>
 
         <p>
@@ -388,7 +429,7 @@
         </p>
 
         <p>
-          It is an error if <code>prefix</code> is specified and there
+          It is an error if <var>prefix</var> is specified and there
           is no matching route entry, unless <code>--if-exists</code> is
           specified.
         </p>
@@ -399,6 +440,198 @@
         Lists the routes on <var>router</var>.
       </dd>
     </dl>
+
+    <h1>NAT Commands</h1>
+
+    <dl>
+      <dt>[<code>--may-exist</code>] <code>lr-nat-add</code> <var>router</var> <var>type</var> <var>external_ip</var> <var>logical_ip</var> [<var>logical_port</var> <var>external_mac</var>]</dt>
+      <dd>
+        <p>
+          Adds the specified NAT to <var>router</var>.
+          The <var>type</var> must be one of <code>snat</code>,
+          <code>dnat</code>, or <code>dnat_and_snat</code>.
+          The <var>external_ip</var> is an IPv4 address.
+          The <var>logical_ip</var> is an IPv4 network (e.g 192.168.1.0/24)
+          or an IPv4 address.
+          The <var>logical_port</var> and <var>external_mac</var> are only
+          accepted when <var>router</var> is a distributed router (rather
+          than a gateway router) and <var>type</var> is
+          <code>dnat_and_snat</code>.
+          The <var>logical_port</var> is the name of an existing logical
+          switch port where the <var>logical_ip</var> resides.
+          The <var>external_mac</var> is an Ethernet address.
+        </p>
+        <p>
+          When <var>type</var> is <code>dnat</code>, the externally
+          visible IP address <var>external_ip</var> is DNATted to the
+          IP address <var>logical_ip</var> in the logical space.
+        </p>
+        <p>
+          When <var>type</var> is <code>snat</code>, IP packets with their
+          source IP address that either matches the IP address in
+          <var>logical_ip</var> or is in the network provided by
+          <var>logical_ip</var> is SNATed into the IP address in
+          <var>external_ip</var>.
+        </p>
+        <p>
+          When <var>type</var> is <code>dnat_and_snat</code>,
+          the externally visible IP address <var>external_ip</var>
+          is DNATted to the IP address <var>logical_ip</var> in
+          the logical space.  In addition, IP packets with the source
+          IP address that matches <var>logical_ip</var> is SNATed into
+          the IP address in <var>external_ip</var>.
+        </p>
+        <p>
+          When the <var>logical_port</var> and <var>external_mac</var>
+          are specified, the NAT rule will be programmed on the chassis
+          where the <var>logical_port</var> resides.  This includes
+          ARP replies for the <var>external_ip</var>, which return the
+          value of <var>external_mac</var>.  All packets transmitted
+          with source IP address equal to <var>external_ip</var> will
+          be sent using the <var>external_mac</var>.
+        </p>
+        <p>
+          It is an error if a NAT already exists with the same values
+          of <var>router</var>, <var>type</var>, <var>external_ip</var>,
+          and <var>logical_ip</var>, unless <code>--may-exist</code> is
+          specified.  When <code>--may-exist</code>,
+          <var>logical_port</var>, and <var>external_mac</var> are all
+          specified, the existing values of <var>logical_port</var> and
+          <var>external_mac</var> are overwritten.
+        </p>
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>lr-nat-del</code> <var>router</var> [<var>type</var> [<var>ip</var>]]</dt>
+      <dd>
+        <p>
+          Deletes NATs from <var>router</var>.  If only <var>router</var>
+          is supplied, all the NATs from the logical router are
+          deleted.  If <var>type</var> is also specified, then all the
+          NATs that match the <var>type</var> will be deleted from the logical
+          router.  If all the fields are given, then a single NAT rule
+          that matches all the fields will be deleted.  When <var>type</var>
+          is <code>snat</code>, the <var>ip</var> should be logical_ip.
+          When <var>type</var> is <code>dnat</code> or
+          <code>dnat_and_snat</code>, the <var>ip</var> shoud be external_ip.
+        </p>
+
+        <p>
+          It is an error if <var>ip</var> is specified and there
+          is no matching NAT entry, unless <code>--if-exists</code> is
+          specified.
+        </p>
+      </dd>
+
+      <dt><code>lr-nat-list</code> <var>router</var></dt>
+      <dd>
+        Lists the NATs on <var>router</var>.
+      </dd>
+    </dl>
+
+    <h1>Load Balancer Commands</h1>
+    <dl>
+      <dt>[<code>--may-exist</code> | <code>--add-duplicate</code>] <code>lb-add</code> <var>lb</var> <var>vip</var> <var>ips</var> [<var>protocol</var>]</dt>
+      <dd>
+        <p>
+         Creates a new load balancer named <var>lb</var> with the provided
+         <var>vip</var> and <var>ips</var> or adds the <var>vip</var> to
+         an existing <var>lb</var>.  <var>vip</var> should be a
+         virtual IPv4 address (or an IPv4 address and a port number with
+         <code>:</code> as a separator).  Examples for <var>vip</var> are
+         <code>192.168.1.4</code> and <code>192.168.1.5:8080</code>.
+         <var>ips</var> should be comma separated IPv4 endpoints (or comma
+         separated IPv4 addresses and port numbers with <code>:</code> as a
+         separator).  Examples for <var>ips</var> are <code>10.0.0.1,10.0.0.2
+         </code>or <code>20.0.0.10:8800,20.0.0.11:8800</code>.
+        </p>
+
+        <p>
+         The optional argument <var>protocol</var> must be either
+         <code>tcp</code> or <code>udp</code>.  This argument is useful when
+         a port number is provided as part of the <var>vip</var>.  If the
+         <var>protocol</var> is unspecified and a port number is provided as
+         part of the <var>vip</var>, OVN assumes the <var>protocol</var> to
+         be <code>tcp</code>.
+        </p>
+
+        <p>
+         It is an error if the <var>vip</var> already exists in the load
+         balancer named <var>lb</var>, unless <code>--may-exist</code> is
+         specified.  With <code>--add-duplicate</code>, the command really
+         creates a new load balancer with a duplicate name.
+        </p>
+
+        <p>
+         The following example adds a load balancer.
+        </p>
+
+        <p>
+         <code>lb-add lb0 30.0.0.10:80
+         192.168.10.10:80,192.168.10.20:80,192.168.10.30:80 udp</code>
+        </p>
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>lb-del</code> <var>lb</var> [<var>vip</var>]</dt>
+      <dd>
+        Deletes <var>lb</var> or the <var>vip</var> from <var>lb</var>.
+        If <var>vip</var> is supplied, only the <var>vip</var> will be
+        deleted from the <var>lb</var>.  If only the <var>lb</var> is supplied,
+        the <var>lb</var> will be deleted.  It is an error if <var>vip</var>
+        does not already exist in <var>lb</var>, unless
+        <code>--if-exists</code> is specified.
+      </dd>
+
+      <dt><code>lb-list</code> [<var>lb</var>]</dt>
+      <dd>
+        Lists the LBs.  If <var>lb</var> is also specified, then only the
+        specified <var>lb</var> will be listed.
+      </dd>
+
+      <dt>[<code>--may-exist</code>] <code>ls-lb-add</code> <var>switch</var> <var>lb</var></dt>
+      <dd>
+        Adds the specified <var>lb</var> to <var>switch</var>.
+        It is an error if a load balancer named <var>lb</var> already exists
+        in the <var>switch</var>, unless <code>--may-exist</code> is specified.
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>ls-lb-del</code> <var>switch</var> [<var>lb</var>]</dt>
+      <dd>
+        Removes <var>lb</var> from <var>switch</var>.  If only
+        <var>switch</var> is supplied, all the LBs from the logical switch are
+        removed.  If <var>lb</var> is also specified, then only the
+        <var>lb</var> will be removed from the logical switch.
+        It is an error if <var>lb</var> does not exist in the
+        <var>switch</var>, unless <code>--if-exists</code> is specified.
+      </dd>
+
+      <dt><code>ls-lb-list</code> <var>switch</var></dt>
+      <dd>
+        Lists the LBs for the given <var>switch</var>.
+      </dd>
+
+      <dt>[<code>--may-exist</code>] <code>lr-lb-add</code> <var>router</var> <var>lb</var></dt>
+      <dd>
+        Adds the specified <var>lb</var> to <var>router</var>.
+        It is an error if a load balancer named <var>lb</var> already exists
+        in the <var>router</var>, unless <code>--may-exist</code> is specified.
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>lr-lb-del</code> <var>router</var> [<var>lb</var>]</dt>
+      <dd>
+        Removes <var>lb</var> from <var>router</var>.  If only
+        <var>router</var> is supplied, all the LBs from the logical router are
+        removed.  If <var>lb</var> is also specified, then only the
+        <var>lb</var> will be removed from the logical router.
+        It is an error if <var>lb</var> does not exist in the
+        <var>router</var>, unless <code>--if-exists</code> is specified.
+      </dd>
+
+      <dt><code>lr-lb-list</code> <var>router</var></dt>
+      <dd>
+        Lists the LBs for the given <var>router</var>.
+      </dd>
+    </dl>
+
 
     <h1>DHCP Options commands</h1>
 
@@ -519,6 +752,42 @@
       </dd>
     </dl>
 
+    <h1>Remote Connectivity Commands</h1>
+    <dl>
+      <dt><code>get-connection</code></dt>
+      <dd>
+      Prints the configured connection(s).
+      </dd>
+
+      <dt><code>del-connection</code></dt>
+      <dd>
+      Deletes the configured connection(s).
+      </dd>
+
+      <dt><code>set-connection</code> <var>target</var>...</dt>
+      <dd>
+      Sets the configured manager target or targets.
+      </dd>
+    </dl>
+
+    <h1>SSL Configuration Commands</h1>
+    <dl>
+      <dt><code>get-ssl</code></dt>
+      <dd>
+      Prints the SSL configuration.
+      </dd>
+
+      <dt><code>del-ssl</code></dt>
+      <dd>
+      Deletes the current SSL configuration.
+      </dd>
+
+      <dt>[<code>--bootstrap</code>] <code>set-ssl</code> <var>private-key</var> <var>certificate</var> <var>ca-cert</var></dt>
+      <dd>
+      Sets the SSL configuration.
+      </dd>
+    </dl>
+
     <h1>Options</h1>
 
     <dl>
@@ -581,6 +850,7 @@
       database.
     </p>
     <xi:include href="lib/ssl.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+    <xi:include href="lib/ssl-bootstrap.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h2>Other Options</h2>
 

@@ -46,8 +46,8 @@
  *
  * Second, the implementation has the ability to "lock" a MAC table entry
  * updated by a gratuitous ARP.  This is a simple feature but the rationale for
- * it is complicated.  Please refer to the description of SLB bonding in
- * vswitchd/INTERNALS for an explanation.
+ * it is complicated.  Refer to the description of SLB bonding in the
+ * 'ovs-vswitchd Internals' guide for an explanation.
  *
  * Third, the implementation expires entries that are idle for longer than a
  * configurable amount of time.  This is implemented by keeping all of the
@@ -207,6 +207,10 @@ struct mac_entry *mac_learning_insert(struct mac_learning *ml,
                                       const struct eth_addr src,
                                       uint16_t vlan)
     OVS_REQ_WRLOCK(ml->rwlock);
+bool mac_learning_update(struct mac_learning *ml, struct eth_addr src,
+                         int vlan, bool is_gratuitous_arp, bool is_bond,
+                         void *in_port)
+    OVS_EXCLUDED(ml->rwlock);
 
 /* Lookup. */
 struct mac_entry *mac_learning_lookup(const struct mac_learning *ml,

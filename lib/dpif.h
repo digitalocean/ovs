@@ -113,9 +113,8 @@
  *
  *      In Open vSwitch userspace, "struct flow" is the typical way to describe
  *      a flow, but the datapath interface uses a different data format to
- *      allow ABI forward- and backward-compatibility.  datapath/README.md
- *      describes the rationale and design.  Refer to OVS_KEY_ATTR_* and
- *      "struct ovs_key_*" in include/odp-netlink.h for details.
+ *      allow ABI forward- and backward-compatibility.  Refer to OVS_KEY_ATTR_*
+ *      and "struct ovs_key_*" in include/odp-netlink.h for details.
  *      lib/odp-util.h defines several functions for working with these flows.
  *
  *    - A "mask" that, for each bit in the flow, specifies whether the datapath
@@ -388,6 +387,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "dpdk.h"
 #include "netdev.h"
 #include "dp-packet.h"
 #include "openflow/openflow.h"
@@ -628,7 +629,8 @@ enum dpif_op_type {
  *
  *   - If the datapath implements multiple pmd thread with its own flow
  *     table, 'pmd_id' should be used to specify the particular polling
- *     thread for the operation.
+ *     thread for the operation. PMD_ID_NULL means that the flow should
+ *     be put on all the polling threads.
  */
 struct dpif_flow_put {
     /* Input. */
@@ -660,7 +662,8 @@ struct dpif_flow_put {
  *
  * If the datapath implements multiple polling thread with its own flow table,
  * 'pmd_id' should be used to specify the particular polling thread for the
- * operation.
+ * operation. PMD_ID_NULL means that the flow should be deleted from all the
+ * polling threads.
  *
  * If the operation succeeds, then 'stats', if nonnull, will be set to the
  * flow's statistics before its deletion. */
@@ -725,7 +728,8 @@ struct dpif_execute {
  *
  * If the datapath implements multiple polling thread with its own flow table,
  * 'pmd_id' should be used to specify the particular polling thread for the
- * operation.
+ * operation. PMD_ID_NULL means that the datapath will return the first
+ * matching flow from any poll thread.
  *
  * Succeeds with status 0 if the flow is fetched, or fails with ENOENT if no
  * such flow exists. Other failures are indicated with a positive errno value.
@@ -778,8 +782,11 @@ const char *dpif_upcall_type_to_string(enum dpif_upcall_type);
  */
 struct dpif_upcall {
     /* All types. */
+    struct dp_packet packet;    /* Packet data,'dp_packet' should be the first
+				   member to avoid a hole. This is because
+				   'rte_mbuf' in dp_packet is aligned atleast
+				   on a 64-byte boundary */
     enum dpif_upcall_type type;
-    struct dp_packet packet;       /* Packet data. */
     struct nlattr *key;         /* Flow key. */
     size_t key_len;             /* Length of 'key' in bytes. */
     ovs_u128 ufid;              /* Unique flow identifier for 'key'. */
@@ -856,6 +863,9 @@ void dpif_get_netflow_ids(const struct dpif *,
 
 int dpif_queue_to_priority(const struct dpif *, uint32_t queue_id,
                            uint32_t *priority);
+
+int dpif_get_pmds_for_port(const struct dpif * dpif, odp_port_t port_no,
+                           unsigned int **pmds, size_t *n);
 
 char *dpif_get_dp_version(const struct dpif *);
 bool dpif_supports_tnl_push_pop(const struct dpif *);

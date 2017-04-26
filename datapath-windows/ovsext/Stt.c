@@ -107,13 +107,14 @@ OvsEncapStt(POVS_VPORT_ENTRY vport,
             OvsIPv4TunnelKey *tunKey,
             POVS_SWITCH_CONTEXT switchContext,
             POVS_PACKET_HDR_INFO layers,
-            PNET_BUFFER_LIST *newNbl)
+            PNET_BUFFER_LIST *newNbl,
+            POVS_FWD_INFO switchFwdInfo)
 {
     OVS_FWD_INFO fwdInfo;
     NDIS_STATUS status;
 
     UNREFERENCED_PARAMETER(switchContext);
-    status = OvsLookupIPFwdInfo(tunKey->dst, &fwdInfo);
+    status = OvsLookupIPFwdInfo(tunKey->src, tunKey->dst, &fwdInfo);
     if (status != STATUS_SUCCESS) {
         OvsFwdIPHelperRequest(NULL, 0, tunKey, NULL, NULL, NULL);
         /*
@@ -122,6 +123,8 @@ OvsEncapStt(POVS_VPORT_ENTRY vport,
          */
         return NDIS_STATUS_FAILURE;
     }
+
+    RtlCopyMemory(switchFwdInfo->value, fwdInfo.value, sizeof fwdInfo.value);
 
     status = OvsDoEncapStt(vport, curNbl, tunKey, &fwdInfo, layers,
                            switchContext, newNbl);
@@ -278,10 +281,10 @@ OvsDoEncapStt(POVS_VPORT_ENTRY vport,
         sttHdr = (SttHdr *) (outerTcpHdr + 1);
 
         /* L2 header */
-        ASSERT(((PCHAR)&fwdInfo->dstMacAddr + sizeof fwdInfo->dstMacAddr) ==
-                (PCHAR)&fwdInfo->srcMacAddr);
         NdisMoveMemory(outerEthHdr->Destination, fwdInfo->dstMacAddr,
-                        sizeof outerEthHdr->Destination + sizeof outerEthHdr->Source);
+                       sizeof outerEthHdr->Destination);
+        NdisMoveMemory(outerEthHdr->Source, fwdInfo->srcMacAddr,
+                       sizeof outerEthHdr->Source);
         outerEthHdr->Type = htons(ETH_TYPE_IPV4);
 
         /* L3 header */
@@ -305,7 +308,8 @@ OvsDoEncapStt(POVS_VPORT_ENTRY vport,
         /* L4 header */
         RtlZeroMemory(outerTcpHdr, sizeof *outerTcpHdr);
         outerTcpHdr->source = htons(tunKey->flow_hash | 32768);
-        outerTcpHdr->dest = htons(vportStt->dstPort);
+        outerTcpHdr->dest = tunKey->dst_port ? tunKey->dst_port:
+                                               htons(vportStt->dstPort);
         outerTcpHdr->seq = htonl((STT_HDR_LEN + innerFrameLen) <<
                                  STT_SEQ_LEN_SHIFT);
         outerTcpHdr->ack_seq = htonl(atomic_inc64(&vportStt->ackNo));

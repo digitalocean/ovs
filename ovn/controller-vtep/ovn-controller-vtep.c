@@ -76,9 +76,6 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    vteprec_init();
-    sbrec_init();
-
     /* Connect to VTEP database. */
     struct ovsdb_idl_loop vtep_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(vtep_remote, &vteprec_idl_class, true, true));
@@ -169,7 +166,8 @@ parse_options(int argc, char *argv[])
         OPT_PEER_CA_CERT = UCHAR_MAX + 1,
         OPT_BOOTSTRAP_CA_CERT,
         VLOG_OPTION_ENUMS,
-        DAEMON_OPTION_ENUMS
+        DAEMON_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
 
     static struct option long_options[] = {

@@ -1,3 +1,17 @@
+openvswitch (2.7.0-0ubuntu1) artful; urgency=medium
+
+  * New upstream release:
+    - d/openvswitch-ipsec.*,control,ovs-monitor-ipsec: Drop GRE-over-ipsec
+      inline with upstream.
+    - d/control: Limit ovn-docker to linux-any.
+    - d/ovn-common.*: Add new ovndb-servers OCF resource and link into
+      install as required.
+    - d/openvswitch-common.docs: Drop, no docs to ship.
+    - d/automake.mk: Tweak for above changes.
+    - d/rules: Skip armhf testing until http://pad.lv/1686406 is resolved.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 26 Apr 2017 14:49:36 +0100
+
 openvswitch (2.6.1-0ubuntu5) zesty; urgency=medium
 
   * Enable openvswitch-switch-dpdk for ppc64el (LP: #1663206)

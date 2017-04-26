@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@
 struct ofpbuf;
 union ofp_action;
 struct ofpact_set_field;
-struct pktbuf;
+struct vl_mff_map;
 
 /* Port numbers. */
 enum ofperr ofputil_port_from_ofp11(ovs_be32 ofp11_port,
@@ -221,7 +221,8 @@ void ofputil_normalize_match_quiet(struct match *);
 void ofputil_match_to_ofp10_match(const struct match *, struct ofp10_match *);
 
 /* Work with ofp11_match. */
-enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, struct match *,
+enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, const struct tun_table *,
+                                     struct match *,
                                      uint16_t *padded_match_len);
 enum ofperr ofputil_pull_ofp11_mask(struct ofpbuf *, struct match *,
                                     struct mf_bitmap *bm);
@@ -282,7 +283,7 @@ enum ofputil_flow_mod_flags {
 /* Protocol-independent flow_mod.
  *
  * The handling of cookies across multiple versions of OpenFlow is a bit
- * confusing.  See DESIGN for the details. */
+ * confusing.  See the topics/design doc for the details. */
 struct ofputil_flow_mod {
     struct ovs_list list_node; /* For queuing flow_mods. */
 
@@ -330,6 +331,8 @@ struct ofputil_flow_mod {
 enum ofperr ofputil_decode_flow_mod(struct ofputil_flow_mod *,
                                     const struct ofp_header *,
                                     enum ofputil_protocol,
+                                    const struct tun_table *,
+                                    const struct vl_mff_map *,
                                     struct ofpbuf *ofpacts,
                                     ofp_port_t max_port,
                                     uint8_t max_table);
@@ -348,7 +351,8 @@ struct ofputil_flow_stats_request {
 };
 
 enum ofperr ofputil_decode_flow_stats_request(
-    struct ofputil_flow_stats_request *, const struct ofp_header *);
+    struct ofputil_flow_stats_request *, const struct ofp_header *,
+    const struct tun_table *);
 struct ofpbuf *ofputil_encode_flow_stats_request(
     const struct ofputil_flow_stats_request *, enum ofputil_protocol);
 
@@ -377,7 +381,8 @@ int ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *,
                                     bool flow_age_extension,
                                     struct ofpbuf *ofpacts);
 void ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *,
-                                     struct ovs_list *replies);
+                                     struct ovs_list *replies,
+                                     const struct tun_table *);
 
 /* Aggregate stats reply, independent of protocol. */
 struct ofputil_aggregate_stats {
@@ -451,6 +456,7 @@ struct ofputil_packet_in {
 void ofputil_packet_in_destroy(struct ofputil_packet_in *);
 
 enum ofperr ofputil_decode_packet_in(const struct ofp_header *, bool loose,
+                                     const struct tun_table *,
                                      struct ofputil_packet_in *,
                                      size_t *total_len, uint32_t *buffer_id,
                                      struct ofpbuf *continuation);
@@ -477,8 +483,8 @@ struct ofputil_packet_in_private {
     struct uuid bridge;
 
     /* NXCPT_STACK. */
-    union mf_subvalue *stack;
-    size_t n_stack;
+    uint8_t *stack;
+    size_t stack_size;
 
     /* NXCPT_MIRRORS. */
     uint32_t mirrors;
@@ -498,11 +504,11 @@ struct ofputil_packet_in_private {
 struct ofpbuf *ofputil_encode_packet_in_private(
     const struct ofputil_packet_in_private *,
     enum ofputil_protocol protocol,
-    enum nx_packet_in_format,
-    uint16_t max_len, struct pktbuf *);
+    enum nx_packet_in_format);
 
 enum ofperr ofputil_decode_packet_in_private(
     const struct ofp_header *, bool loose,
+    const struct tun_table *,
     struct ofputil_packet_in_private *,
     size_t *total_len, uint32_t *buffer_id);
 
@@ -609,7 +615,7 @@ struct ofputil_phy_port {
 };
 
 enum ofputil_capabilities {
-    /* OpenFlow 1.0, 1.1, 1.2, and 1.3 share these capability values. */
+    /* All OpenFlow versions share these capability values. */
     OFPUTIL_C_FLOW_STATS     = 1 << 0,  /* Flow statistics. */
     OFPUTIL_C_TABLE_STATS    = 1 << 1,  /* Table statistics. */
     OFPUTIL_C_PORT_STATS     = 1 << 2,  /* Port statistics. */
@@ -622,11 +628,16 @@ enum ofputil_capabilities {
     /* OpenFlow 1.0 only. */
     OFPUTIL_C_STP            = 1 << 3,  /* 802.1d spanning tree. */
 
-    /* OpenFlow 1.1, 1.2, and 1.3 share this capability. */
+    /* OpenFlow 1.1+ only.  Note that this bit value does not match the one
+     * in the OpenFlow message. */
     OFPUTIL_C_GROUP_STATS    = 1 << 4,  /* Group statistics. */
 
-    /* OpenFlow 1.2 and 1.3 share this capability */
+    /* OpenFlow 1.2+ only. */
     OFPUTIL_C_PORT_BLOCKED   = 1 << 8,  /* Switch will block looping ports */
+
+    /* OpenFlow 1.4+ only. */
+    OFPUTIL_C_BUNDLES         = 1 << 9,  /* Switch supports bundles. */
+    OFPUTIL_C_FLOW_MONITORING = 1 << 10, /* Switch supports flow monitoring. */
 };
 
 /* Abstract ofp_switch_features. */
@@ -809,7 +820,7 @@ struct ofputil_table_features {
      * supported, otherwise 0.  For other versions, they are decoded as -1 and
      * ignored for encoding.
      *
-     * See the section "OFPTC_* Table Configuration" in DESIGN.md for more
+     * Search for "OFPTC_* Table Configuration" in the documentation for more
      * details of how OpenFlow has changed in this area.
      */
     enum ofputil_table_miss miss_config; /* OF1.1 and 1.2 only. */
@@ -1074,7 +1085,7 @@ struct ofputil_flow_update {
     uint8_t table_id;
     uint16_t priority;
     ovs_be64 cookie;
-    struct match *match;
+    struct match match;
     const struct ofpact *ofpacts;
     size_t ofpacts_len;
 
@@ -1086,7 +1097,8 @@ int ofputil_decode_flow_update(struct ofputil_flow_update *,
                                struct ofpbuf *msg, struct ofpbuf *ofpacts);
 void ofputil_start_flow_update(struct ovs_list *replies);
 void ofputil_append_flow_update(const struct ofputil_flow_update *,
-                                struct ovs_list *replies);
+                                struct ovs_list *replies,
+                                const struct tun_table *);
 
 /* Abstract nx_flow_monitor_cancel. */
 uint32_t ofputil_decode_flow_monitor_cancel(const struct ofp_header *);
@@ -1340,18 +1352,20 @@ enum ofperr ofputil_decode_bundle_add(const struct ofp_header *,
                                       struct ofputil_bundle_add_msg *,
                                       enum ofptype *type);
 
+/* Bundle message as produced by ofp-parse. */
 struct ofputil_bundle_msg {
     enum ofptype type;
     union {
         struct ofputil_flow_mod fm;
         struct ofputil_group_mod gm;
+        struct ofputil_packet_out po;
     };
 };
 
-/* Destroys 'bms'. */
-void ofputil_encode_bundle_msgs(struct ofputil_bundle_msg *bms, size_t n_bms,
-                                struct ovs_list *requests,
+void ofputil_encode_bundle_msgs(const struct ofputil_bundle_msg *bms,
+                                size_t n_bms, struct ovs_list *requests,
                                 enum ofputil_protocol);
+void ofputil_free_bundle_msgs(struct ofputil_bundle_msg *bms, size_t n_bms);
 
 struct ofputil_tlv_map {
     struct ovs_list list_node;

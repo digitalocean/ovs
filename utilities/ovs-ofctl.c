@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -129,10 +129,6 @@ static const struct ovs_cmdl_command *get_all_commands(void);
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[]);
 
-static bool recv_flow_stats_reply(struct vconn *, ovs_be32 send_xid,
-                                  struct ofpbuf **replyp,
-                                  struct ofputil_flow_stats *,
-                                  struct ofpbuf *ofpacts);
 int
 main(int argc, char *argv[])
 {
@@ -190,7 +186,8 @@ parse_options(int argc, char *argv[])
         OPT_READ_ONLY,
         DAEMON_OPTION_ENUMS,
         OFP_VERSION_OPTION_ENUMS,
-        VLOG_OPTION_ENUMS
+        VLOG_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
         {"timeout", required_argument, NULL, 't'},
@@ -713,6 +710,7 @@ bundle_print_errors(struct ovs_list *errors, struct ovs_list *requests)
             fprintf(stderr, "Error %s for: ", ofperr_get_name(ofperr));
             ofp_print(stderr, ofp_msg, msg_len, verbosity + 1);
         }
+        ofpbuf_uninit(&payload);
         free(error);
     }
     fflush(stderr);
@@ -1164,14 +1162,14 @@ set_protocol_for_flow_dump(struct vconn *vconn,
 
 static struct vconn *
 prepare_dump_flows(int argc, char *argv[], bool aggregate,
-                   struct ofpbuf **requestp)
+                   struct ofputil_flow_stats_request *fsr,
+                   enum ofputil_protocol *protocolp)
 {
     enum ofputil_protocol usable_protocols, protocol;
-    struct ofputil_flow_stats_request fsr;
     struct vconn *vconn;
     char *error;
 
-    error = parse_ofp_flow_stats_request_str(&fsr, aggregate,
+    error = parse_ofp_flow_stats_request_str(fsr, aggregate,
                                              argc > 2 ? argv[2] : "",
                                              &usable_protocols);
     if (error) {
@@ -1179,19 +1177,19 @@ prepare_dump_flows(int argc, char *argv[], bool aggregate,
     }
 
     protocol = open_vconn(argv[1], &vconn);
-    protocol = set_protocol_for_flow_dump(vconn, protocol, usable_protocols);
-    *requestp = ofputil_encode_flow_stats_request(&fsr, protocol);
+    *protocolp = set_protocol_for_flow_dump(vconn, protocol, usable_protocols);
     return vconn;
 }
 
 static void
 ofctl_dump_flows__(int argc, char *argv[], bool aggregate)
 {
-    struct ofpbuf *request;
+    struct ofputil_flow_stats_request fsr;
+    enum ofputil_protocol protocol;
     struct vconn *vconn;
 
-    vconn = prepare_dump_flows(argc, argv, aggregate, &request);
-    dump_transaction(vconn, request);
+    vconn = prepare_dump_flows(argc, argv, aggregate, &fsr, &protocol);
+    dump_transaction(vconn, ofputil_encode_flow_stats_request(&fsr, protocol));
     vconn_close(vconn);
 }
 
@@ -1268,52 +1266,29 @@ ofctl_dump_flows(struct ovs_cmdl_context *ctx)
         ofctl_dump_flows__(ctx->argc, ctx->argv, false);
         return;
     } else {
-        struct ofputil_flow_stats *fses;
-        size_t n_fses, allocated_fses;
-        struct ofpbuf *request;
-        struct ofpbuf ofpacts;
-        struct ofpbuf *reply;
+        struct ofputil_flow_stats_request fsr;
+        enum ofputil_protocol protocol;
         struct vconn *vconn;
-        ovs_be32 send_xid;
-        struct ds s;
-        size_t i;
 
-        vconn = prepare_dump_flows(ctx->argc, ctx->argv, false, &request);
-        send_xid = ((struct ofp_header *) request->data)->xid;
-        send_openflow_buffer(vconn, request);
+        vconn = prepare_dump_flows(ctx->argc, ctx->argv, false,
+                                   &fsr, &protocol);
 
-        fses = NULL;
-        n_fses = allocated_fses = 0;
-        reply = NULL;
-        ofpbuf_init(&ofpacts, 0);
-        for (;;) {
-            struct ofputil_flow_stats *fs;
-
-            if (n_fses >= allocated_fses) {
-                fses = x2nrealloc(fses, &allocated_fses, sizeof *fses);
-            }
-
-            fs = &fses[n_fses];
-            if (!recv_flow_stats_reply(vconn, send_xid, &reply, fs,
-                                       &ofpacts)) {
-                break;
-            }
-            fs->ofpacts = xmemdup(fs->ofpacts, fs->ofpacts_len);
-            n_fses++;
-        }
-        ofpbuf_uninit(&ofpacts);
+        struct ofputil_flow_stats *fses;
+        size_t n_fses;
+        run(vconn_dump_flows(vconn, &fsr, protocol, &fses, &n_fses),
+            "dump flows");
 
         qsort(fses, n_fses, sizeof *fses, compare_flows);
 
-        ds_init(&s);
-        for (i = 0; i < n_fses; i++) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        for (size_t i = 0; i < n_fses; i++) {
             ds_clear(&s);
             ofp_print_flow_stats(&s, &fses[i]);
             puts(ds_cstr(&s));
         }
         ds_destroy(&s);
 
-        for (i = 0; i < n_fses; i++) {
+        for (size_t i = 0; i < n_fses; i++) {
             free(CONST_CAST(struct ofpact *, fses[i].ofpacts));
         }
         free(fses);
@@ -1683,6 +1658,58 @@ ofctl_send(struct unixctl_conn *conn, int argc,
     ds_destroy(&reply);
 }
 
+static void
+unixctl_packet_out(struct unixctl_conn *conn, int OVS_UNUSED argc,
+                   const char *argv[], void *vconn_)
+{
+    struct vconn *vconn = vconn_;
+    enum ofputil_protocol protocol
+        = ofputil_protocol_from_ofp_version(vconn_get_version(vconn));
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    bool ok = true;
+
+    enum ofputil_protocol usable_protocols;
+    struct ofputil_packet_out po;
+    char *error_msg;
+
+    error_msg = parse_ofp_packet_out_str(&po, argv[1], &usable_protocols);
+    if (error_msg) {
+        ds_put_format(&reply, "%s\n", error_msg);
+        free(error_msg);
+        ok = false;
+    }
+
+    if (ok && !(usable_protocols & protocol)) {
+        ds_put_format(&reply, "PACKET_OUT actions are incompatible with the OpenFlow connection.\n");
+        ok = false;
+    }
+
+    if (ok) {
+        struct ofpbuf *msg = ofputil_encode_packet_out(&po, protocol);
+
+        ofp_print(stderr, msg->data, msg->size, verbosity);
+
+        int error = vconn_send_block(vconn, msg);
+        if (error) {
+            ofpbuf_delete(msg);
+            ds_put_format(&reply, "%s\n", ovs_strerror(error));
+            ok = false;
+        }
+    }
+
+    if (ok) {
+        unixctl_command_reply(conn, ds_cstr(&reply));
+    } else {
+        unixctl_command_reply_error(conn, ds_cstr(&reply));
+    }
+    ds_destroy(&reply);
+
+    if (!error_msg) {
+        free(CONST_CAST(void *, po.packet));
+        free(po.ofpacts);
+    }
+}
+
 struct barrier_aux {
     struct vconn *vconn;        /* OpenFlow connection for sending barrier. */
     struct unixctl_conn *conn;  /* Connection waiting for barrier response. */
@@ -1757,7 +1784,7 @@ ofctl_unblock(struct unixctl_conn *conn, int argc OVS_UNUSED,
     }
 }
 
-/* Prints to stdout all of the messages received on 'vconn'.
+/* Prints to stderr all of the messages received on 'vconn'.
  *
  * Iff 'reply_to_echo_requests' is true, sends a reply to any echo request
  * received on 'vconn'.
@@ -1783,6 +1810,8 @@ monitor_vconn(struct vconn *vconn, bool reply_to_echo_requests,
     unixctl_command_register("exit", "", 0, 0, ofctl_exit, &exiting);
     unixctl_command_register("ofctl/send", "OFMSG...", 1, INT_MAX,
                              ofctl_send, vconn);
+    unixctl_command_register("ofctl/packet-out", "\"in_port=<port> packet=<hex data> actions=...\"", 1, 1,
+                             unixctl_packet_out, vconn);
     unixctl_command_register("ofctl/barrier", "", 0, 0,
                              ofctl_barrier, &barrier_aux);
     unixctl_command_register("ofctl/set-output-file", "FILE", 1, 1,
@@ -1849,7 +1878,7 @@ monitor_vconn(struct vconn *vconn, bool reply_to_echo_requests,
                     struct ofputil_packet_in pin;
                     struct ofpbuf continuation;
 
-                    error = ofputil_decode_packet_in(b->data, true, &pin,
+                    error = ofputil_decode_packet_in(b->data, true, NULL, &pin,
                                                      NULL, NULL,
                                                      &continuation);
                     if (error) {
@@ -2042,44 +2071,64 @@ ofctl_probe(struct ovs_cmdl_context *ctx)
 static void
 ofctl_packet_out(struct ovs_cmdl_context *ctx)
 {
+    enum ofputil_protocol usable_protocols;
     enum ofputil_protocol protocol;
     struct ofputil_packet_out po;
-    struct ofpbuf ofpacts;
     struct vconn *vconn;
+    struct ofpbuf *opo;
     char *error;
-    int i;
-    enum ofputil_protocol usable_protocols; /* XXX: Use in proto selection */
 
-    ofpbuf_init(&ofpacts, 64);
-    error = ofpacts_parse_actions(ctx->argv[3], &ofpacts, &usable_protocols);
-    if (error) {
-        ovs_fatal(0, "%s", error);
-    }
+    /* Use the old syntax when more than 4 arguments are given. */
+    if (ctx->argc > 4) {
+        struct ofpbuf ofpacts;
+        int i;
 
-    po.buffer_id = UINT32_MAX;
-    po.in_port = str_to_port_no(ctx->argv[1], ctx->argv[2]);
-    po.ofpacts = ofpacts.data;
-    po.ofpacts_len = ofpacts.size;
-
-    protocol = open_vconn(ctx->argv[1], &vconn);
-    for (i = 4; i < ctx->argc; i++) {
-        struct dp_packet *packet;
-        struct ofpbuf *opo;
-        const char *error_msg;
-
-        error_msg = eth_from_hex(ctx->argv[i], &packet);
-        if (error_msg) {
-            ovs_fatal(0, "%s", error_msg);
+        ofpbuf_init(&ofpacts, 64);
+        error = ofpacts_parse_actions(ctx->argv[3], &ofpacts,
+                                      &usable_protocols);
+        if (error) {
+            ovs_fatal(0, "%s", error);
         }
 
-        po.packet = dp_packet_data(packet);
-        po.packet_len = dp_packet_size(packet);
+        po.buffer_id = UINT32_MAX;
+        po.in_port = str_to_port_no(ctx->argv[1], ctx->argv[2]);
+        po.ofpacts = ofpacts.data;
+        po.ofpacts_len = ofpacts.size;
+
+        protocol = open_vconn_for_flow_mod(ctx->argv[1], &vconn,
+                                           usable_protocols);
+        for (i = 4; i < ctx->argc; i++) {
+            struct dp_packet *packet;
+            const char *error_msg;
+
+            error_msg = eth_from_hex(ctx->argv[i], &packet);
+            if (error_msg) {
+                ovs_fatal(0, "%s", error_msg);
+            }
+
+            po.packet = dp_packet_data(packet);
+            po.packet_len = dp_packet_size(packet);
+            opo = ofputil_encode_packet_out(&po, protocol);
+            transact_noreply(vconn, opo);
+            dp_packet_delete(packet);
+        }
+        vconn_close(vconn);
+        ofpbuf_uninit(&ofpacts);
+    } else if (ctx->argc == 3) {
+        error = parse_ofp_packet_out_str(&po, ctx->argv[2], &usable_protocols);
+        if (error) {
+            ovs_fatal(0, "%s", error);
+        }
+        protocol = open_vconn_for_flow_mod(ctx->argv[1], &vconn,
+                                           usable_protocols);
         opo = ofputil_encode_packet_out(&po, protocol);
         transact_noreply(vconn, opo);
-        dp_packet_delete(packet);
+        vconn_close(vconn);
+        free(CONST_CAST(void *, po.packet));
+        free(po.ofpacts);
+    } else {
+        ovs_fatal(0, "Too many arguments (%d)", ctx->argc);
     }
-    vconn_close(vconn);
-    ofpbuf_uninit(&ofpacts);
 }
 
 static void
@@ -2803,6 +2852,7 @@ ofctl_bundle(struct ovs_cmdl_context *ctx)
 
     ovs_list_init(&requests);
     ofputil_encode_bundle_msgs(bms, n_bms, &requests, protocol);
+    ofputil_free_bundle_msgs(bms, n_bms);
     bundle_transact(vconn, &requests, OFPBF_ORDERED | OFPBF_ATOMIC);
     ofpbuf_list_delete(&requests);
 
@@ -2928,6 +2978,28 @@ struct fte_version {
     uint8_t table_id;
 };
 
+/* A FTE entry that has been queued for later insertion after all
+ * flows have been scanned to correctly allocation tunnel metadata. */
+struct fte_pending {
+    struct match *match;
+    int priority;
+    struct fte_version *version;
+    int index;
+
+    struct ovs_list list_node;
+};
+
+/* Processing state during two stage processing of flow table entries.
+ * Tracks the maximum size seen for each tunnel metadata entry as well
+ * as a list of the pending FTE entries. */
+struct fte_state {
+    int tun_metadata_size[TUN_METADATA_NUM_OPTS];
+    struct ovs_list fte_pending_list;
+
+    /* The final metadata table that we have constructed. */
+    struct tun_table *tun_tab;
+};
+
 /* Frees 'version' and the data that it owns. */
 static void
 fte_version_free(struct fte_version *version)
@@ -2957,7 +3029,8 @@ fte_version_equals(const struct fte_version *a, const struct fte_version *b)
 /* Clears 's', then if 's' has a version 'index', formats 'fte' and version
  * 'index' into 's', followed by a new-line. */
 static void
-fte_version_format(const struct fte *fte, int index, struct ds *s)
+fte_version_format(const struct fte_state *fte_state, const struct fte *fte,
+                   int index, struct ds *s)
 {
     const struct fte_version *version = fte->versions[index];
 
@@ -2969,7 +3042,7 @@ fte_version_format(const struct fte *fte, int index, struct ds *s)
     if (version->table_id) {
         ds_put_format(s, "table=%"PRIu8" ", version->table_id);
     }
-    cls_rule_format(&fte->rule, s);
+    cls_rule_format(&fte->rule, fte_state->tun_tab, s);
     if (version->cookie != htonll(0)) {
         ds_put_format(s, " cookie=0x%"PRIx64, ntohll(version->cookie));
     }
@@ -3051,25 +3124,6 @@ fte_insert(struct flow_tables *tables, const struct match *match,
     }
 }
 
-/* A FTE entry that has been queued for later insertion after all
- * flows have been scanned to correctly allocation tunnel metadata. */
-struct fte_pending {
-    struct match *match;
-    int priority;
-    struct fte_version *version;
-    int index;
-
-    struct ovs_list list_node;
-};
-
-/* Processing state during two stage processing of flow table entries.
- * Tracks the maximum size seen for each tunnel metadata entry as well
- * as a list of the pending FTE entries. */
-struct fte_state {
-    int tun_metadata_size[TUN_METADATA_NUM_OPTS];
-    struct ovs_list fte_pending_list;
-};
-
 /* Given a list of the field sizes for each tunnel metadata entry, install
  * a mapping table for later operations. */
 static void
@@ -3096,7 +3150,7 @@ generate_tun_metadata(struct fte_state *state)
         }
     }
 
-    tun_metadata_table_mod(&ttm);
+    tun_metadata_table_mod(&ttm, NULL, &state->tun_tab);
     ofputil_uninit_tlv_table(&ttm.mappings);
 }
 
@@ -3106,7 +3160,7 @@ generate_tun_metadata(struct fte_state *state)
  * can just read the data from the match and rewrite it. On rewrite, it
  * will use the new table. */
 static void
-remap_match(struct match *match)
+remap_match(struct fte_state *state, struct match *match)
 {
     int i;
 
@@ -3120,6 +3174,9 @@ remap_match(struct match *match)
     memset(&match->wc.masks.tunnel.metadata, 0,
            sizeof match->wc.masks.tunnel.metadata);
     match->tun_md.valid = false;
+
+    match->flow.tunnel.metadata.tab = state->tun_tab;
+    match->wc.masks.tunnel.metadata.tab = match->flow.tunnel.metadata.tab;
 
     ULLONG_FOR_EACH_1 (i, flow_mask.present.map) {
         const struct mf_field *field = mf_from_id(MFF_TUN_METADATA0 + i);
@@ -3168,6 +3225,13 @@ fte_state_init(struct fte_state *state)
     }
 
     ovs_list_init(&state->fte_pending_list);
+    state->tun_tab = NULL;
+}
+
+static void
+fte_state_destroy(struct fte_state *state)
+{
+    tun_metadata_free(state->tun_tab);
 }
 
 /* The first pass of the processing described in the comment about
@@ -3211,7 +3275,7 @@ fte_fill(struct fte_state *state, struct flow_tables *tables)
     flow_tables_defer(tables);
 
     LIST_FOR_EACH_POP(pending, list_node, &state->fte_pending_list) {
-        remap_match(pending->match);
+        remap_match(state, pending->match);
         fte_insert(tables, pending->match, pending->priority, pending->version,
                    pending->index);
         free(pending->match);
@@ -3274,59 +3338,6 @@ read_flows_from_file(const char *filename, struct fte_state *state, int index)
     return usable_protocols;
 }
 
-static bool
-recv_flow_stats_reply(struct vconn *vconn, ovs_be32 send_xid,
-                      struct ofpbuf **replyp,
-                      struct ofputil_flow_stats *fs, struct ofpbuf *ofpacts)
-{
-    struct ofpbuf *reply = *replyp;
-
-    for (;;) {
-        int retval;
-        bool more;
-
-        /* Get a flow stats reply message, if we don't already have one. */
-        if (!reply) {
-            enum ofptype type;
-            enum ofperr error;
-
-            do {
-                run(vconn_recv_block(vconn, &reply),
-                    "OpenFlow packet receive failed");
-            } while (((struct ofp_header *) reply->data)->xid != send_xid);
-
-            error = ofptype_decode(&type, reply->data);
-            if (error || type != OFPTYPE_FLOW_STATS_REPLY) {
-                ovs_fatal(0, "received bad reply: %s",
-                          ofp_to_string(reply->data, reply->size,
-                                        verbosity + 1));
-            }
-        }
-
-        /* Pull an individual flow stats reply out of the message. */
-        retval = ofputil_decode_flow_stats_reply(fs, reply, false, ofpacts);
-        switch (retval) {
-        case 0:
-            *replyp = reply;
-            return true;
-
-        case EOF:
-            more = ofpmp_more(reply->header);
-            ofpbuf_delete(reply);
-            reply = NULL;
-            if (!more) {
-                *replyp = NULL;
-                return false;
-            }
-            break;
-
-        default:
-            ovs_fatal(0, "parse error in reply (%s)",
-                      ofperr_to_string(retval));
-        }
-    }
-}
-
 /* Reads the OpenFlow flow table from 'vconn', which has currently active flow
  * format 'protocol', and adds them as flow table entries in 'tables' for the
  * version with the specified 'index'. */
@@ -3336,11 +3347,6 @@ read_flows_from_switch(struct vconn *vconn,
                        struct fte_state *state, int index)
 {
     struct ofputil_flow_stats_request fsr;
-    struct ofputil_flow_stats fs;
-    struct ofpbuf *request;
-    struct ofpbuf ofpacts;
-    struct ofpbuf *reply;
-    ovs_be32 send_xid;
 
     fsr.aggregate = false;
     match_init_catchall(&fsr.match);
@@ -3348,28 +3354,32 @@ read_flows_from_switch(struct vconn *vconn,
     fsr.out_group = OFPG_ANY;
     fsr.table_id = 0xff;
     fsr.cookie = fsr.cookie_mask = htonll(0);
-    request = ofputil_encode_flow_stats_request(&fsr, protocol);
-    send_xid = ((struct ofp_header *) request->data)->xid;
-    send_openflow_buffer(vconn, request);
 
-    reply = NULL;
-    ofpbuf_init(&ofpacts, 0);
-    while (recv_flow_stats_reply(vconn, send_xid, &reply, &fs, &ofpacts)) {
+    struct ofputil_flow_stats *fses;
+    size_t n_fses;
+    run(vconn_dump_flows(vconn, &fsr, protocol, &fses, &n_fses),
+        "dump flows");
+    for (size_t i = 0; i < n_fses; i++) {
+        const struct ofputil_flow_stats *fs = &fses[i];
         struct fte_version *version;
 
         version = xmalloc(sizeof *version);
-        version->cookie = fs.cookie;
-        version->idle_timeout = fs.idle_timeout;
-        version->hard_timeout = fs.hard_timeout;
-        version->importance = fs.importance;
+        version->cookie = fs->cookie;
+        version->idle_timeout = fs->idle_timeout;
+        version->hard_timeout = fs->hard_timeout;
+        version->importance = fs->importance;
         version->flags = 0;
-        version->ofpacts_len = fs.ofpacts_len;
-        version->ofpacts = xmemdup(fs.ofpacts, fs.ofpacts_len);
-        version->table_id = fs.table_id;
+        version->ofpacts_len = fs->ofpacts_len;
+        version->ofpacts = xmemdup(fs->ofpacts, fs->ofpacts_len);
+        version->table_id = fs->table_id;
 
-        fte_queue(state, &fs.match, fs.priority, version, index);
+        fte_queue(state, &fs->match, fs->priority, version, index);
     }
-    ofpbuf_uninit(&ofpacts);
+
+    for (size_t i = 0; i < n_fses; i++) {
+        free(CONST_CAST(struct ofpact *, fses[i].ofpacts));
+    }
+    free(fses);
 }
 
 static void
@@ -3466,6 +3476,7 @@ ofctl_replace_flows(struct ovs_cmdl_context *ctx)
     vconn_close(vconn);
 
     fte_free_all(&tables);
+    fte_state_destroy(&fte_state);
 }
 
 static void
@@ -3511,8 +3522,8 @@ ofctl_diff_flows(struct ovs_cmdl_context *ctx)
             struct fte_version *b = fte->versions[1];
 
             if (!a || !b || !fte_version_equals(a, b)) {
-                fte_version_format(fte, 0, &a_s);
-                fte_version_format(fte, 1, &b_s);
+                fte_version_format(&fte_state, fte, 0, &a_s);
+                fte_version_format(&fte_state, fte, 1, &b_s);
                 if (strcmp(ds_cstr(&a_s), ds_cstr(&b_s))) {
                     if (a_s.length) {
                         printf("-%s", ds_cstr(&a_s));
@@ -3530,6 +3541,7 @@ ofctl_diff_flows(struct ovs_cmdl_context *ctx)
     ds_destroy(&b_s);
 
     fte_free_all(&tables);
+    fte_state_destroy(&fte_state);
 
     if (differences) {
         exit(2);
@@ -3729,17 +3741,17 @@ ofctl_parse_nxm__(bool oxm, enum ofp_version version)
         /* Convert nx_match to match. */
         if (strict) {
             if (oxm) {
-                error = oxm_pull_match(&nx_match, &match);
+                error = oxm_pull_match(&nx_match, NULL, &match);
             } else {
                 error = nx_pull_match(&nx_match, match_len, &match,
-                                      &cookie, &cookie_mask);
+                                      &cookie, &cookie_mask, NULL);
             }
         } else {
             if (oxm) {
-                error = oxm_pull_match_loose(&nx_match, &match);
+                error = oxm_pull_match_loose(&nx_match, NULL, &match);
             } else {
                 error = nx_pull_match_loose(&nx_match, match_len, &match,
-                                            &cookie, &cookie_mask);
+                                            &cookie, &cookie_mask, NULL);
             }
         }
 
@@ -3864,7 +3876,7 @@ ofctl_parse_actions__(const char *version_s, bool instructions)
         error = (instructions
                  ? ofpacts_pull_openflow_instructions
                  : ofpacts_pull_openflow_actions)(
-                     &of_in, of_in.size, version, &ofpacts);
+                     &of_in, of_in.size, version, NULL, &ofpacts);
         if (!error && instructions) {
             /* Verify actions, enforce consistency. */
             enum ofputil_protocol protocol;
@@ -4149,7 +4161,7 @@ ofctl_check_vlan(struct ovs_cmdl_context *ctx)
     ofpbuf_init(&nxm, 0);
     nxm_match_len = nx_put_match(&nxm, &match, htonll(0), htonll(0));
     nxm_s = nx_match_to_string(nxm.data, nxm_match_len);
-    error = nx_pull_match(&nxm, nxm_match_len, &nxm_match, NULL, NULL);
+    error = nx_pull_match(&nxm, nxm_match_len, &nxm_match, NULL, NULL, NULL);
     printf("NXM: %s -> ", nxm_s);
     if (error) {
         printf("%s\n", ofperr_to_string(error));
@@ -4165,7 +4177,7 @@ ofctl_check_vlan(struct ovs_cmdl_context *ctx)
     ofpbuf_init(&nxm, 0);
     nxm_match_len = oxm_put_match(&nxm, &match, OFP12_VERSION);
     nxm_s = oxm_match_to_string(&nxm, nxm_match_len);
-    error = oxm_pull_match(&nxm, &nxm_match);
+    error = oxm_pull_match(&nxm, NULL, &nxm_match);
     printf("OXM: %s -> ", nxm_s);
     if (error) {
         printf("%s\n", ofperr_to_string(error));
@@ -4394,8 +4406,8 @@ static const struct ovs_cmdl_command all_commands[] = {
       1, 2, ofctl_meter_stats, OVS_RO },
     { "meter-features", "switch",
       1, 1, ofctl_meter_features, OVS_RO },
-    { "packet-out", "switch in_port actions packet...",
-      4, INT_MAX, ofctl_packet_out, OVS_RW },
+    { "packet-out", "switch \"in_port=<port> packet=<hex data> actions=...\"",
+      2, INT_MAX, ofctl_packet_out, OVS_RW },
     { "dump-ports", "switch [port]",
       1, 2, ofctl_dump_ports, OVS_RO },
     { "dump-ports-desc", "switch [port]",
