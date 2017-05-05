@@ -197,6 +197,7 @@ dist-hook-git: distfiles
 	    LC_ALL=C sort -u > all-distfiles;				    \
 	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' |	    \
 	    grep -v 'digitalocean/script' |                                 \
+	    grep -v 'debian/patches' |                                      \
 	    LC_ALL=C sort -u > all-gitfiles;				    \
 	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
 	  if test -s missing-distfiles; then \
