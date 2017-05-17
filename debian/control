@@ -14,7 +14,7 @@ Build-Depends: autoconf (>= 2.64),
                dh-systemd (>= 1.5),
                graphviz,
                libcap-ng-dev,
-               libdpdk-dev (>= 16.07) [amd64 i386 ppc64el],
+               libdpdk-dev (>= 16.11) [amd64 i386 ppc64el arm64],
                libnuma-dev [amd64 i386],
                libpcap-dev [amd64 i386],
                libssl-dev,
@@ -81,7 +81,7 @@ Description: Open vSwitch switch implementations
  the Open vSwitch kernel-based switch.
 
 Package: openvswitch-switch-dpdk
-Architecture: amd64 i386 ppc64el
+Architecture: amd64 i386 ppc64el arm64
 Depends: dpdk,
          openvswitch-switch (= ${binary:Version}),
          ${misc:Depends},

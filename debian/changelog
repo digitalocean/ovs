@@ -1,3 +1,14 @@
+openvswitch (2.7.0-0ubuntu2) artful; urgency=medium
+
+  * d/control, d/rules: Enable DPDK support on Arm (LP: #1691659)
+  * d/rules: Fix FTBFS if multiple python interpreters are
+    installed (LP: #1691658)
+  * d/p/ovs-dev-v3-netdev-dpdk-round-up-mbuf_size-to-cache_line_size.patch:
+    round up mbuf_size to cache_line_size to fix some DPDK PMDs e.g. vNIC
+    thunderx PMD (LP: #1694221)
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Wed, 17 May 2017 15:45:13 +0200
+
 openvswitch (2.7.0-0ubuntu1) artful; urgency=medium
 
   * New upstream release:

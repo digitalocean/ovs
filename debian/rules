@@ -25,7 +25,7 @@ override_dh_auto_configure:
 		test -e Makefile || \
 		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
 				     --sysconfdir=/etc $(DATAPATH_CONFIGURE_OPTS))
-ifneq (,$(filter i386 amd64 ppc64el, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 	test -d _dpdk || mkdir _dpdk
 	cd _dpdk && ( \
 		test -e Makefile || \
@@ -55,7 +55,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
-ifneq (,$(filter i386 amd64 ppc64el, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
 				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
@@ -68,7 +68,7 @@ endif # powerpc/s390x
 
 override_dh_auto_build:
 	$(MAKE) -C _debian dist distdir=openvswitch
-ifneq (,$(filter i386 amd64 ppc64el, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 	$(MAKE) -C _dpdk dist distdir=openvswitch
 endif
 
@@ -88,13 +88,13 @@ override_dh_install:
 		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
 	set -e && for pyvers in $(PYTHONS); do \
 		cd python && python$$pyvers setup.py install --install-layout=deb \
-			--root $(CURDIR)/debian/python-openvswitch; \
+			--root $(CURDIR)/debian/python-openvswitch; cd ..; \
 	done
 	set -e && for pyvers in $(PYTHON3S); do \
         cd python && python$$pyvers setup.py install --install-layout=deb \
-            --root $(CURDIR)/debian/python3-openvswitch; \
+            --root $(CURDIR)/debian/python3-openvswitch; cd ..; \
     done
-ifneq (,$(filter i386 amd64 ppc64el, $(DEB_HOST_ARCH)))
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 	install -D _dpdk/vswitchd/ovs-vswitchd \
         $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
 endif
