@@ -14,6 +14,9 @@ pgrep ovs-vswitchd
 pgrep ovsdb-server
 echo "OK"
 
+echo "stop conflicting openvswitch testcontroller"
+systemctl stop openvswitch-testcontroller || true
+
 echo -n "running openflow tests using mininet"
 python `dirname $0`/openflow.py 2>&1
 echo "OK"

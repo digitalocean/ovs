@@ -1,3 +1,10 @@
+openvswitch (2.7.0-0ubuntu3) artful; urgency=medium
+
+  * debian/test/vanilla, debian/test/dpdk: stop openvswitch-testcontroller
+    as it conflicts with tests for mininet >=2.2.2-1 (LP: #1698808).
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Mon, 19 Jun 2017 14:59:32 +0200
+
 openvswitch (2.7.0-0ubuntu2) artful; urgency=medium
 
   * d/control, d/rules: Enable DPDK support on Arm (LP: #1691659)
