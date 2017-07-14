@@ -18,8 +18,8 @@
 #ifndef OPENVSWITCH_VERSION_H
 #define OPENVSWITCH_VERSION_H 1
 
-#define OVS_PACKAGE_STRING  "openvswitch 2.7.0"
-#define OVS_PACKAGE_VERSION "2.7.0"
+#define OVS_PACKAGE_STRING  "openvswitch 2.7.1"
+#define OVS_PACKAGE_VERSION "2.7.1"
 
 #define OVS_LIB_VERSION     1
 #define OVS_LIB_REVISION    0

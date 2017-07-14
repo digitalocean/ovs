@@ -183,6 +183,7 @@ Kyle Upton                      kupton@baymicrosystems.com
 Lance Richardson                lrichard@redhat.com
 Lars Kellogg-Stedman            lars@redhat.com
 Lei Huang                       huang.f.lei@gmail.com
+Leif Madsen                     lmadsen@redhat.com
 Leo Alterman                    lalterman@nicira.com
 Lilijun                         jerry.lilijun@huawei.com
 Linda Sun                       lsun@vmware.com
@@ -211,6 +212,7 @@ Michael Arnaldi                 arnaldimichael@gmail.com
 Michal Weglicki                 michalx.weglicki@intel.com
 Mickey Spiegel                  mickeys.dev@gmail.com
 Mijo Safradin                   mijo@linux.vnet.ibm.com
+Mika Vaisanen                   mika.vaisanen@gmail.com
 Minoru TAKAHASHI                takahashi.minoru7@gmail.com
 Murphy McCauley                 murphy.mccauley@gmail.com
 Natasha Gude                    natasha@nicira.com
@@ -240,6 +242,7 @@ Rami Rosen                      ramirose@gmail.com
 Ramu Ramamurthy                 ramu.ramamurthy@us.ibm.com
 Randall Sharo                   andall.sharo@navy.mil
 Ravi Kerur                      Ravi.Kerur@telekom.com
+Raymond Burkholder              ray@oneunified.net
 Reid Price                      reid@nicira.com
 Remko Tronçon                   git@el-tramo.be
 Rich Lane                       rlane@bigswitch.com
@@ -422,6 +425,7 @@ John Darrington                 john@darrington.wattle.id.au
 John Galgay                     john@galgay.net
 John Hurley                     john.hurley@netronome.com
 John Reumann                    nofutznetworks@gmail.com
+Karthik Sundaravel              ksundara@redhat.com
 Kashyap Thimmaraju              kashyap.thimmaraju@sec.t-labs.tu-berlin.de
 Keith Holleman                  hollemanietf@gmail.com
 Kevin Lin                       kevinlin@berkeley.edu
@@ -451,6 +455,7 @@ Michael Hu                      mhu@nicira.com
 Michael J. Smalley              michaeljsmalley@gmail.com
 Michael Mao                     mmao@nicira.com
 Michael Shigorin                mike@osdn.org.ua
+Michael Stapelberg              stapelberg@debian.org
 Mihir Gangar                    gangarm@vmware.com
 Mike Bursell                    mike.bursell@citrix.com
 Mike Kruze                      mkruze@nicira.com

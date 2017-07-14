@@ -496,14 +496,14 @@ bridge_init(const char *remote)
 }
 
 void
-bridge_exit(void)
+bridge_exit(bool delete_datapath)
 {
     struct bridge *br, *next_br;
 
     if_notifier_destroy(ifnotifier);
     seq_destroy(ifaces_changed);
     HMAP_FOR_EACH_SAFE (br, next_br, node, &all_bridges) {
-        bridge_destroy(br, false);
+        bridge_destroy(br, delete_datapath);
     }
     ovsdb_idl_destroy(idl);
 }
@@ -1452,6 +1452,10 @@ port_configure_rstp(const struct ofproto *ofproto, struct port *port,
         port_s->port_num = 0;
     }
 
+    /* Increment the port num counter, because we only support
+     * RSTP_MAX_PORTS rstp ports. */
+    (*port_num_counter)++;
+
     config_str = smap_get(&port->cfg->other_config, "rstp-path-cost");
     if (config_str) {
         port_s->path_cost = strtoul(config_str, NULL, 10);
@@ -1521,7 +1525,7 @@ bridge_configure_stp(struct bridge *br, bool enable_stp)
                                           STP_DEFAULT_HELLO_TIME);
 
         br_s.max_age = smap_get_ullong(&br->cfg->other_config, "stp-max-age",
-                                       STP_DEFAULT_HELLO_TIME / 1000) * 1000;
+                                       STP_DEFAULT_MAX_AGE / 1000) * 1000;
         br_s.fwd_delay = smap_get_ullong(&br->cfg->other_config,
                                          "stp-forward-delay",
                                          STP_DEFAULT_FWD_DELAY / 1000) * 1000;
@@ -3963,6 +3967,8 @@ bridge_aa_update_trunks(struct port *port, struct bridge_aa_vlan *m)
         /* Force reconfigure of the port. */
         port_configure(port);
     }
+
+    free(trunks);
 }
 
 static void
@@ -4284,6 +4290,9 @@ iface_destroy__(struct iface *iface)
     if (iface) {
         struct port *port = iface->port;
         struct bridge *br = port->bridge;
+
+        VLOG_INFO("bridge %s: deleted interface %s on port %d",
+                  br->name, iface->name, iface->ofp_port);
 
         if (br->ofproto && iface->ofp_port != OFPP_NONE) {
             ofproto_port_unregister(br->ofproto, iface->ofp_port);

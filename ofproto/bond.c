@@ -190,6 +190,7 @@ static struct bond_slave *choose_output_slave(const struct bond *,
                                               struct flow_wildcards *,
                                               uint16_t vlan)
     OVS_REQ_RDLOCK(rwlock);
+static void update_recirc_rules__(struct bond *bond);
 
 /* Attempts to parse 's' as the name of a bond balancing mode.  If successful,
  * stores the mode in '*balance' and returns true.  Otherwise returns false
@@ -264,7 +265,6 @@ bond_ref(const struct bond *bond_)
 void
 bond_unref(struct bond *bond)
 {
-    struct bond_pr_rule_op *pr_op;
     struct bond_slave *slave;
 
     if (!bond || ovs_refcount_unref_relaxed(&bond->ref_cnt) != 1) {
@@ -283,18 +283,18 @@ bond_unref(struct bond *bond)
     hmap_destroy(&bond->slaves);
 
     ovs_mutex_destroy(&bond->mutex);
-    free(bond->hash);
-    free(bond->name);
 
-    HMAP_FOR_EACH_POP (pr_op, hmap_node, &bond->pr_rule_ops) {
-        free(pr_op);
-    }
-    hmap_destroy(&bond->pr_rule_ops);
-
+    /* Free bond resources. Remove existing post recirc rules. */
     if (bond->recirc_id) {
         recirc_free_id(bond->recirc_id);
+        bond->recirc_id = 0;
     }
+    free(bond->hash);
+    bond->hash = NULL;
+    update_recirc_rules__(bond);
 
+    hmap_destroy(&bond->pr_rule_ops);
+    free(bond->name);
     free(bond);
 }
 
@@ -322,9 +322,17 @@ add_pr_rule(struct bond *bond, const struct match *match,
     hmap_insert(&bond->pr_rule_ops, &pr_op->hmap_node, hash);
 }
 
+/* This function should almost never be called directly.
+ * 'update_recirc_rules()' should be called instead.  Since
+ * this function modifies 'bond->pr_rule_ops', it is only
+ * safe when 'rwlock' is held.
+ *
+ * However, when the 'bond' is the only reference in the system,
+ * calling this function avoid acquiring lock only to satisfy
+ * lock annotation. Currently, only 'bond_unref()' calls
+ * this function directly.  */
 static void
-update_recirc_rules(struct bond *bond)
-    OVS_REQ_WRLOCK(rwlock)
+update_recirc_rules__(struct bond *bond)
 {
     struct match match;
     struct bond_pr_rule_op *pr_op, *next_op;
@@ -394,6 +402,12 @@ update_recirc_rules(struct bond *bond)
     ofpbuf_uninit(&ofpacts);
 }
 
+static void
+update_recirc_rules(struct bond *bond)
+    OVS_REQ_RDLOCK(rwlock)
+{
+    update_recirc_rules__(bond);
+}
 
 /* Updates 'bond''s overall configuration to 's'.
  *
@@ -912,17 +926,16 @@ bool
 bond_may_recirc(const struct bond *bond, uint32_t *recirc_id,
                 uint32_t *hash_bias)
 {
-    if (bond->balance == BM_TCP && bond->recirc_id) {
-        if (recirc_id) {
-            *recirc_id = bond->recirc_id;
-        }
-        if (hash_bias) {
-            *hash_bias = bond->basis;
-        }
-        return true;
-    } else {
-        return false;
+    bool may_recirc = bond->balance == BM_TCP && bond->recirc_id;
+
+    if (recirc_id) {
+        *recirc_id = may_recirc ? bond->recirc_id : 0;
     }
+    if (hash_bias) {
+        *hash_bias = may_recirc ? bond->basis : 0;
+    }
+
+    return may_recirc;
 }
 
 static void
@@ -950,12 +963,16 @@ bond_update_post_recirc_rules__(struct bond* bond, const bool force)
 }
 
 void
-bond_update_post_recirc_rules(struct bond* bond, const bool force)
+bond_update_post_recirc_rules(struct bond *bond, uint32_t *recirc_id,
+                              uint32_t *hash_basis)
 {
     ovs_rwlock_wrlock(&rwlock);
-    bond_update_post_recirc_rules__(bond, force);
+    if (bond_may_recirc(bond, recirc_id, hash_basis)) {
+        bond_update_post_recirc_rules__(bond, false);
+    }
     ovs_rwlock_unlock(&rwlock);
 }
+
 
 /* Rebalancing. */
 
@@ -1630,6 +1647,8 @@ bond_entry_reset(struct bond *bond)
     } else {
         free(bond->hash);
         bond->hash = NULL;
+        /* Remove existing post recirc rules. */
+        update_recirc_rules(bond);
     }
 }
 

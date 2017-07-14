@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
+#include "vl-mff-map.h"
 #include "unaligned.h"
 
 
@@ -107,6 +108,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
     fm->importance = 0;
     fm->buffer_id = UINT32_MAX;
     fm->out_port = OFPP_NONE;
+    fm->ofpacts_tlv_bitmap = 0;
     fm->flags = 0;
     if (learn->flags & NX_LEARN_F_SEND_FLOW_REM) {
         fm->flags |= OFPUTIL_FF_SEND_FLOW_REM;
@@ -136,6 +138,8 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
             mf_write_subfield(&spec->dst, &value, &fm->match);
+            mf_vl_mff_set_tlv_bitmap(
+                spec->dst.field, &fm->match.flow.tunnel.metadata.present.map);
             break;
 
         case NX_LEARN_DST_LOAD:
@@ -145,6 +149,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
                          spec->n_bits);
             bitwise_one(ofpact_set_field_mask(sf), spec->dst.field->n_bytes,
                         spec->dst.ofs, spec->n_bits);
+            mf_vl_mff_set_tlv_bitmap(spec->dst.field, &fm->ofpacts_tlv_bitmap);
             break;
 
         case NX_LEARN_DST_OUTPUT:
@@ -231,10 +236,12 @@ learn_parse_spec(const char *orig, char *name, char *value,
 {
     /* Parse destination and check prerequisites. */
     struct mf_subfield dst;
-    char *error;
 
-    error = mf_parse_subfield(&dst, name);
-    if (!error) {
+    char *error = mf_parse_subfield(&dst, name);
+    bool parse_error = error != NULL;
+    free(error);
+
+    if (!parse_error) {
         if (!mf_nxm_header(dst.field->id)) {
             return xasprintf("%s: experimenter OXM field '%s' not supported",
                              orig, name);

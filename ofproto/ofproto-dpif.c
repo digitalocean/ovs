@@ -645,7 +645,7 @@ dealloc(struct ofproto *ofproto_)
 }
 
 static void
-close_dpif_backer(struct dpif_backer *backer)
+close_dpif_backer(struct dpif_backer *backer, bool del)
 {
     ovs_assert(backer->refcount > 0);
 
@@ -661,6 +661,9 @@ close_dpif_backer(struct dpif_backer *backer)
     shash_find_and_delete(&all_dpif_backers, backer->type);
     free(backer->type);
     free(backer->dp_version_string);
+    if (del) {
+        dpif_delete(backer->dpif);
+    }
     dpif_close(backer->dpif);
     free(backer);
 }
@@ -772,7 +775,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     if (error) {
         VLOG_ERR("failed to listen on datapath of type %s: %s",
                  type, ovs_strerror(error));
-        close_dpif_backer(backer);
+        close_dpif_backer(backer, false);
         return error;
     }
 
@@ -1301,7 +1304,7 @@ add_internal_flows(struct ofproto_dpif *ofproto)
 }
 
 static void
-destruct(struct ofproto *ofproto_)
+destruct(struct ofproto *ofproto_, bool del)
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
     struct ofproto_async_msg *am;
@@ -1343,6 +1346,8 @@ destruct(struct ofproto *ofproto_)
     hmap_destroy(&ofproto->bundles);
     mac_learning_unref(ofproto->ml);
     mcast_snooping_unref(ofproto->ms);
+    stp_unref(ofproto->stp);
+    rstp_unref(ofproto->rstp);
 
     sset_destroy(&ofproto->ports);
     sset_destroy(&ofproto->ghost_ports);
@@ -1352,7 +1357,7 @@ destruct(struct ofproto *ofproto_)
 
     seq_destroy(ofproto->ams_seq);
 
-    close_dpif_backer(ofproto->backer);
+    close_dpif_backer(ofproto->backer, del);
 }
 
 static int
@@ -2704,6 +2709,7 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     bundle_flush_macs(bundle, true);
+    mcast_snooping_flush_bundle(ofproto->ms, bundle);
     hmap_remove(&ofproto->bundles, &bundle->hmap_node);
     free(bundle->name);
     free(bundle->trunks);
@@ -2896,6 +2902,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
      * everything on this port and force flow revalidation. */
     if (need_flush) {
         bundle_flush_macs(bundle, false);
+        mcast_snooping_flush_bundle(ofproto->ms, bundle);
     }
 
     return 0;
@@ -5093,6 +5100,8 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
         .match = *match,
         .priority = priority,
         .table_id = TBL_INTERNAL,
+        .out_port = OFPP_ANY,
+        .out_group = OFPG_ANY,
         .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
         .command = OFPFC_DELETE_STRICT,
     };

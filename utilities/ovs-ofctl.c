@@ -676,16 +676,18 @@ transact_multiple_noreply(struct vconn *vconn, struct ovs_list *requests)
 static void
 bundle_print_errors(struct ovs_list *errors, struct ovs_list *requests)
 {
-    struct vconn_bundle_error *error, *next;
+    struct ofpbuf *error, *next;
     struct ofpbuf *bmsg;
 
     INIT_CONTAINER(bmsg, requests, list_node);
 
     LIST_FOR_EACH_SAFE (error, next, list_node, errors) {
+        const struct ofp_header *error_oh = error->data;
+        ovs_be32 error_xid = error_oh->xid;
         enum ofperr ofperr;
         struct ofpbuf payload;
 
-        ofperr = ofperr_decode_msg(&error->ofp_msg, &payload);
+        ofperr = ofperr_decode_msg(error_oh, &payload);
         if (!ofperr) {
             fprintf(stderr, "***decode error***");
         } else {
@@ -701,7 +703,7 @@ bundle_print_errors(struct ovs_list *errors, struct ovs_list *requests)
             LIST_FOR_EACH_CONTINUE (bmsg, list_node, requests) {
                 const struct ofp_header *oh = bmsg->data;
 
-                if (oh->xid == error->ofp_msg.xid) {
+                if (oh->xid == error_xid) {
                     ofp_msg = oh;
                     msg_len = bmsg->size;
                     break;
@@ -711,7 +713,7 @@ bundle_print_errors(struct ovs_list *errors, struct ovs_list *requests)
             ofp_print(stderr, ofp_msg, msg_len, verbosity + 1);
         }
         ofpbuf_uninit(&payload);
-        free(error);
+        ofpbuf_delete(error);
     }
     fflush(stderr);
 }
@@ -1878,8 +1880,8 @@ monitor_vconn(struct vconn *vconn, bool reply_to_echo_requests,
                     struct ofputil_packet_in pin;
                     struct ofpbuf continuation;
 
-                    error = ofputil_decode_packet_in(b->data, true, NULL, &pin,
-                                                     NULL, NULL,
+                    error = ofputil_decode_packet_in(b->data, true, NULL, NULL,
+                                                     &pin, NULL, NULL,
                                                      &continuation);
                     if (error) {
                         fprintf(stderr, "decoding packet-in failed: %s",
@@ -3741,10 +3743,10 @@ ofctl_parse_nxm__(bool oxm, enum ofp_version version)
         /* Convert nx_match to match. */
         if (strict) {
             if (oxm) {
-                error = oxm_pull_match(&nx_match, NULL, &match);
+                error = oxm_pull_match(&nx_match, NULL, NULL, &match);
             } else {
                 error = nx_pull_match(&nx_match, match_len, &match,
-                                      &cookie, &cookie_mask, NULL);
+                                      &cookie, &cookie_mask, NULL, NULL);
             }
         } else {
             if (oxm) {
@@ -3876,7 +3878,7 @@ ofctl_parse_actions__(const char *version_s, bool instructions)
         error = (instructions
                  ? ofpacts_pull_openflow_instructions
                  : ofpacts_pull_openflow_actions)(
-                     &of_in, of_in.size, version, NULL, &ofpacts);
+                     &of_in, of_in.size, version, NULL, NULL, &ofpacts);
         if (!error && instructions) {
             /* Verify actions, enforce consistency. */
             enum ofputil_protocol protocol;
@@ -4161,7 +4163,8 @@ ofctl_check_vlan(struct ovs_cmdl_context *ctx)
     ofpbuf_init(&nxm, 0);
     nxm_match_len = nx_put_match(&nxm, &match, htonll(0), htonll(0));
     nxm_s = nx_match_to_string(nxm.data, nxm_match_len);
-    error = nx_pull_match(&nxm, nxm_match_len, &nxm_match, NULL, NULL, NULL);
+    error = nx_pull_match(&nxm, nxm_match_len, &nxm_match, NULL, NULL, NULL,
+                          NULL);
     printf("NXM: %s -> ", nxm_s);
     if (error) {
         printf("%s\n", ofperr_to_string(error));
@@ -4177,7 +4180,7 @@ ofctl_check_vlan(struct ovs_cmdl_context *ctx)
     ofpbuf_init(&nxm, 0);
     nxm_match_len = oxm_put_match(&nxm, &match, OFP12_VERSION);
     nxm_s = oxm_match_to_string(&nxm, nxm_match_len);
-    error = oxm_pull_match(&nxm, NULL, &nxm_match);
+    error = oxm_pull_match(&nxm, NULL, NULL, &nxm_match);
     printf("OXM: %s -> ", nxm_s);
     if (error) {
         printf("%s\n", ofperr_to_string(error));

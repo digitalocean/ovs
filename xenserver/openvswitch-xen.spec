@@ -32,7 +32,7 @@
 # rpmbuild -bb --without check xenserver/openvswitch-xen.spec
 
 %if %{?openvswitch_version:0}%{!?openvswitch_version:1}
-%define openvswitch_version 2.7.0
+%define openvswitch_version 2.7.1
 %endif
 
 %if %{?kernel_uname:1}%{!?kernel_uname:0}
@@ -457,6 +457,7 @@ exit 0
 /usr/share/openvswitch/scripts/ovs-ctl
 /usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-vtep
+/usr/share/openvswitch/scripts/ovndb-servers.ocf
 /usr/share/openvswitch/vswitch.ovsschema
 /usr/share/openvswitch/vtep.ovsschema
 /usr/sbin/ovs-bugtool
@@ -476,12 +477,14 @@ exit 0
 /usr/bin/ovsdb-client
 /usr/bin/ovsdb-tool
 /usr/bin/vtep-ctl
+/usr/bin/ovs-tcpdump
 /usr/lib/xsconsole/plugins-base/XSFeatureVSwitch.py
 /usr/share/man/man1/ovsdb-client.1.gz
 /usr/share/man/man1/ovsdb-server.1.gz
 /usr/share/man/man1/ovsdb-tool.1.gz
 /usr/share/man/man5/ovs-vswitchd.conf.db.5.gz
 /usr/share/man/man5/vtep.5.gz
+/usr/share/man/man7/ovs-fields.7.gz
 /usr/share/man/man8/ovs-appctl.8.gz
 /usr/share/man/man8/ovs-bugtool.8.gz
 /usr/share/man/man8/ovs-ctl.8.gz
@@ -496,6 +499,7 @@ exit 0
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
 /usr/share/man/man8/vtep-ctl.8.gz
+/usr/share/man/man8/ovs-tcpdump.8.gz
 /var/lib/openvswitch
 /var/log/openvswitch
 %exclude /usr/lib/xsconsole/plugins-base/*.py[co]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -953,13 +953,18 @@ dpif_netlink_port_del__(struct dpif_netlink *dpif, odp_port_t port_no)
     vport.port_no = port_no;
 #ifdef _WIN32
     struct dpif_port temp_dpif_port;
-    dpif_netlink_port_query__(dpif, port_no, NULL, &temp_dpif_port);
+
+    error = dpif_netlink_port_query__(dpif, port_no, NULL, &temp_dpif_port);
+    if (error) {
+        return error;
+    }
     if (!strcmp(temp_dpif_port.type, "internal")) {
         if (!delete_wmi_port(temp_dpif_port.name)){
             VLOG_ERR("Could not delete wmi port with name: %s",
                      temp_dpif_port.name);
         };
     }
+    dpif_port_destroy(&temp_dpif_port);
 #endif
     error = dpif_netlink_vport_transact(&vport, NULL, NULL);
 
@@ -1809,10 +1814,9 @@ dpif_netlink_refresh_channels(struct dpif_netlink *dpif, uint32_t n_handlers)
             error = dpif_netlink_handler_init(handler);
             if (error) {
                 size_t j;
-                struct dpif_handler *tmp = &dpif->handlers[i];
-
 
                 for (j = 0; j < i; j++) {
+                    struct dpif_handler *tmp = &dpif->handlers[j];
                     dpif_netlink_handler_uninit(tmp);
                 }
                 free(dpif->handlers);
@@ -2787,8 +2791,7 @@ dpif_netlink_flow_from_ofpbuf(struct dpif_netlink_flow *flow,
                                   .optional = true },
         [OVS_FLOW_ATTR_TCP_FLAGS] = { .type = NL_A_U8, .optional = true },
         [OVS_FLOW_ATTR_USED] = { .type = NL_A_U64, .optional = true },
-        [OVS_FLOW_ATTR_UFID] = { .type = NL_A_UNSPEC, .optional = true,
-                                 .min_len = sizeof(ovs_u128) },
+        [OVS_FLOW_ATTR_UFID] = { .type = NL_A_U128, .optional = true },
         /* The kernel never uses OVS_FLOW_ATTR_CLEAR. */
         /* The kernel never uses OVS_FLOW_ATTR_PROBE. */
         /* The kernel never uses OVS_FLOW_ATTR_UFID_FLAGS. */
@@ -2820,11 +2823,7 @@ dpif_netlink_flow_from_ofpbuf(struct dpif_netlink_flow *flow,
     }
 
     if (a[OVS_FLOW_ATTR_UFID]) {
-        const ovs_u128 *ufid;
-
-        ufid = nl_attr_get_unspec(a[OVS_FLOW_ATTR_UFID],
-                                  nl_attr_get_size(a[OVS_FLOW_ATTR_UFID]));
-        flow->ufid = *ufid;
+        flow->ufid = nl_attr_get_u128(a[OVS_FLOW_ATTR_UFID]);
         flow->ufid_present = true;
     }
     if (a[OVS_FLOW_ATTR_MASK]) {
@@ -2863,8 +2862,7 @@ dpif_netlink_flow_to_ofpbuf(const struct dpif_netlink_flow *flow,
     ovs_header->dp_ifindex = flow->dp_ifindex;
 
     if (flow->ufid_present) {
-        nl_msg_put_unspec(buf, OVS_FLOW_ATTR_UFID, &flow->ufid,
-                          sizeof flow->ufid);
+        nl_msg_put_u128(buf, OVS_FLOW_ATTR_UFID, flow->ufid);
     }
     if (flow->ufid_terse) {
         nl_msg_put_u32(buf, OVS_FLOW_ATTR_UFID_FLAGS,

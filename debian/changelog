@@ -1,3 +1,9 @@
+openvswitch (2.7.1-0ubuntu1) artful; urgency=medium
+
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 14 Jul 2017 10:27:11 +0100
+
 openvswitch (2.7.0-0ubuntu3) artful; urgency=medium
 
   * debian/test/vanilla, debian/test/dpdk: stop openvswitch-testcontroller

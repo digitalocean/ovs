@@ -168,7 +168,8 @@ pinctrl_handle_arp(const struct flow *ip_flow, const struct match *md,
 
     reload_metadata(&ofpacts, md);
     enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, &ofpacts);
+                                                      version, NULL, NULL,
+                                                      &ofpacts);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "failed to parse arp actions (%s)",
@@ -523,6 +524,11 @@ pinctrl_handle_put_dhcpv6_opts(
 
     struct udp_header *in_udp = dp_packet_l4(pkt_in);
     const uint8_t *in_dhcpv6_data = dp_packet_get_udp_payload(pkt_in);
+    if (!in_udp || !in_dhcpv6_data) {
+        VLOG_WARN_RL(&rl, "truncated dhcpv6 packet");
+        goto exit;
+    }
+
     uint8_t out_dhcpv6_msg_type;
     switch(*in_dhcpv6_data) {
     case DHCPV6_MSG_TYPE_SOLICIT:
@@ -665,7 +671,7 @@ process_packet_in(const struct ofp_header *msg)
 
     struct ofputil_packet_in pin;
     struct ofpbuf continuation;
-    enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, &pin,
+    enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, NULL, &pin,
                                                  NULL, NULL, &continuation);
 
     if (error) {
@@ -1398,7 +1404,8 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
     reload_metadata(&ofpacts, md);
 
     enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, &ofpacts);
+                                                      version, NULL, NULL,
+                                                      &ofpacts);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "failed to parse actions for 'na' (%s)",

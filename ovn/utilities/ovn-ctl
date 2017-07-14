@@ -188,15 +188,15 @@ start_northd () {
     if [ ! -e $ovn_northd_db_conf_file ]; then
         if test X"$OVN_MANAGE_OVSDB" = Xyes; then
             start_ovsdb
-        fi
 
-        if ! pidfile_is_running $DB_NB_PID; then
-            log_failure_msg "OVN Northbound DB is not running"
-            exit
-        fi
-        if ! pidfile_is_running $DB_SB_PID; then
-            log_failure_msg "OVN Southbound DB is not running"
-            exit
+            if ! pidfile_is_running $DB_NB_PID; then
+                log_failure_msg "OVN Northbound DB is not running"
+                exit
+            fi
+            if ! pidfile_is_running $DB_SB_PID; then
+                log_failure_msg "OVN Southbound DB is not running"
+                exit
+            fi
         fi
         ovn_northd_params="--ovnnb-db=unix:$DB_NB_SOCK --ovnsb-db=unix:$DB_SB_SOCK"
     else
@@ -394,7 +394,7 @@ Commands:
 Options:
   --ovn-northd-priority=NICE     set ovn-northd's niceness (default: $OVN_NORTHD_PRIORITY)
   --ovn-northd-wrapper=WRAPPER   run with a wrapper like valgrind for debugging
-  --ovn-controller-priority=NICE     set ovn-northd's niceness (default: $OVN_CONTROLLER_PRIORITY)
+  --ovn-controller-priority=NICE     set ovn-controller's niceness (default: $OVN_CONTROLLER_PRIORITY)
   --ovn-controller-wrapper=WRAPPER   run with a wrapper like valgrind for debugging
   --ovn-controller-ssl-key=KEY OVN Southbound SSL private key file
   --ovn-controller-ssl-cert=CERT OVN Southbound SSL certificate file

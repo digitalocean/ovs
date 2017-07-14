@@ -1113,6 +1113,7 @@ xlate_xbridge_remove(struct xlate_cfg *xcfg, struct xbridge *xbridge)
     mbridge_unref(xbridge->mbridge);
     dpif_sflow_unref(xbridge->sflow);
     dpif_ipfix_unref(xbridge->ipfix);
+    netflow_unref(xbridge->netflow);
     stp_unref(xbridge->stp);
     rstp_unref(xbridge->rstp);
     hmap_destroy(&xbridge->xports);
@@ -1987,15 +1988,23 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
         struct flow_wildcards *wc = ctx->wc;
         struct ofport_dpif *ofport;
 
-        if (ctx->xbridge->support.odp.recirc) {
-            use_recirc = bond_may_recirc(
-                out_xbundle->bond, &xr.recirc_id, &xr.hash_basis);
-
-            if (use_recirc) {
-                /* Only TCP mode uses recirculation. */
+        if (ctx->xbridge->support.odp.recirc
+            && bond_may_recirc(out_xbundle->bond, NULL, NULL)) {
+            /* To avoid unnecessary locking, bond_may_recirc() is first
+             * called outside of the 'rwlock'. After acquiring the lock,
+             * bond_update_post_recirc_rules() will check again to make
+             * sure bond configuration has not been changed.
+             *
+             * In case recirculation is not actually in use, 'xr.recirc_id'
+             * will be set to '0', Since a valid 'recirc_id' can
+             * not be zero.  */
+            bond_update_post_recirc_rules(out_xbundle->bond,
+                                          &xr.recirc_id,
+                                          &xr.hash_basis);
+            if (xr.recirc_id) {
+                /* Use recirculation instead of output. */
+                use_recirc = true;
                 xr.hash_alg = OVS_HASH_ALG_L4;
-                bond_update_post_recirc_rules(out_xbundle->bond, false);
-
                 /* Recirculation does not require unmasking hash fields. */
                 wc = NULL;
             }
@@ -3119,6 +3128,10 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                 }
                 return;
             }
+        } else if ((xport->cfm && cfm_should_process_flow(xport->cfm, flow, wc))
+                   || (xport->bfd && bfd_should_process_flow(xport->bfd, flow,
+                                                             wc))) {
+            /* Pass; STP should not block link health detection. */
         } else if (!xport_stp_forward_state(xport) ||
                    !xport_rstp_forward_state(xport)) {
             if (ctx->xbridge->stp != NULL) {
@@ -4763,13 +4776,12 @@ put_ct_label(const struct flow *flow, struct ofpbuf *odp_actions,
         struct {
             ovs_u128 key;
             ovs_u128 mask;
-        } *odp_ct_label;
+        } odp_ct_label;
 
-        odp_ct_label = nl_msg_put_unspec_uninit(odp_actions,
-                                                OVS_CT_ATTR_LABELS,
-                                                sizeof(*odp_ct_label));
-        odp_ct_label->key = ovs_u128_and(flow->ct_label, wc->masks.ct_label);
-        odp_ct_label->mask = wc->masks.ct_label;
+        odp_ct_label.key = ovs_u128_and(flow->ct_label, wc->masks.ct_label);
+        odp_ct_label.mask = wc->masks.ct_label;
+        nl_msg_put_unspec(odp_actions, OVS_CT_ATTR_LABELS,
+                          &odp_ct_label, sizeof odp_ct_label);
     }
 }
 

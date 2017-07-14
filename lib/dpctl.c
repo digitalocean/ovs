@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -555,7 +555,9 @@ show_dpif(struct dpif *dpif, struct dpctl_params *dpctl_p)
         n_port_nos++;
     }
 
-    qsort(port_nos, n_port_nos, sizeof *port_nos, compare_port_nos);
+    if (port_nos) {
+        qsort(port_nos, n_port_nos, sizeof *port_nos, compare_port_nos);
+    }
 
     for (int i = 0; i < n_port_nos; i++) {
         if (dpif_port_query_by_number(dpif, port_nos[i], &dpif_port)) {
@@ -806,6 +808,7 @@ dpctl_dump_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
                                          &names_portno);
         if (err) {
             dpctl_error(dpctl_p, 0, "Failed to parse filter (%s)", err);
+            free(err);
             error = EINVAL;
             goto out_dpifclose;
         }
