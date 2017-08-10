@@ -909,6 +909,12 @@ OvsFindVportByPortIdAndNicIndex(POVS_SWITCH_CONTEXT switchContext,
     }
 }
 
+BOOLEAN OvsIsExternalVportByPortId(POVS_SWITCH_CONTEXT switchContext,
+                                   NDIS_SWITCH_PORT_ID portId)
+{
+    return (portId == switchContext->virtualExternalPortId);
+}
+
 POVS_VPORT_ENTRY
 OvsAllocateVport(VOID)
 {
@@ -1612,7 +1618,6 @@ OvsGetExtInfoIoctl(POVS_VPORT_GET vportGet,
                    POVS_VPORT_EXT_INFO extInfo)
 {
     POVS_VPORT_ENTRY vport;
-    size_t len;
     LOCK_STATE_EX lockState;
     NTSTATUS status = STATUS_SUCCESS;
     BOOLEAN doConvert = FALSE;
@@ -1620,7 +1625,6 @@ OvsGetExtInfoIoctl(POVS_VPORT_GET vportGet,
     RtlZeroMemory(extInfo, sizeof (POVS_VPORT_EXT_INFO));
     NdisAcquireRWLockRead(gOvsSwitchContext->dispatchLock, &lockState, 0);
     if (vportGet->portNo == 0) {
-        StringCbLengthA(vportGet->name, OVS_MAX_PORT_NAME_LENGTH - 1, &len);
         vport = OvsFindVportByHvNameA(gOvsSwitchContext, vportGet->name);
         if (vport == NULL) {
             /* If the port is not a Hyper-V port and it has been added earlier,

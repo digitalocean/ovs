@@ -9,6 +9,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 #pragma code_page(1252)
 
 #define STR(x)                          #x
+#define VER_TO_STR(v)                   STR(v)
 /////////////////////////////////////////////////////////////////////////////
 //
 // Version
@@ -31,14 +32,14 @@ BEGIN
     BEGIN
         BLOCK "000004b0"
         BEGIN
-            VALUE "CompanyName", "Open vSwitch"
+            VALUE "CompanyName", "The Linux Foundation (R)"
             VALUE "FileDescription", "Open vSwitch Extension"
-            VALUE "FileVersion", STR(Version)
+            VALUE "FileVersion", VER_TO_STR(VersionWithDots)
             VALUE "InternalName", "OVSExt.SYS"
             VALUE "LegalCopyright", "Licensed under the Apache License, Version 2.0 (the ""License"")"
             VALUE "OriginalFilename", "OVSExt.SYS"
             VALUE "ProductName", "Open vSwitch"
-            VALUE "ProductVersion", STR(Version)
+            VALUE "ProductVersion", VER_TO_STR(VersionWithDots)
         END
     END
     BLOCK "VarFileInfo"

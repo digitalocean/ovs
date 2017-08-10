@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2013, 2014, 2016 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2013, 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,10 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include "openvswitch/compiler.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifdef __CHECKER__
 #define OVS_BITWISE __attribute__((bitwise))
@@ -163,5 +167,17 @@ struct eth_addr {
         ovs_be16 be16[3];
     };
 };
+
+/* Similar to struct eth_addr, for EUI-64 addresses. */
+struct eth_addr64 {
+    union {
+        uint8_t ea64[8];
+        ovs_be16 be16[4];
+    };
+};
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* openvswitch/types.h */

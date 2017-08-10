@@ -548,7 +548,7 @@ udpif_start_threads(struct udpif *udpif, size_t n_handlers,
                 "handler", udpif_upcall_handler, handler);
         }
 
-        enable_ufid = udpif->backer->support.ufid;
+        enable_ufid = udpif->backer->rt_support.ufid;
         atomic_init(&udpif->enable_ufid, enable_ufid);
         dpif_enable_upcall(udpif->dpif);
 
@@ -707,7 +707,7 @@ udpif_use_ufid(struct udpif *udpif)
     bool enable;
 
     atomic_read_relaxed(&enable_ufid, &enable);
-    return enable && udpif->backer->support.ufid;
+    return enable && udpif->backer->rt_support.ufid;
 }
 
 
@@ -892,7 +892,8 @@ udpif_revalidator(void *arg)
                 bool terse_dump;
 
                 terse_dump = udpif_use_ufid(udpif);
-                udpif->dump = dpif_flow_dump_create(udpif->dpif, terse_dump);
+                udpif->dump = dpif_flow_dump_create(udpif->dpif, terse_dump,
+                                                    NULL);
             }
         }
 
@@ -1025,7 +1026,8 @@ classify_upcall(enum dpif_upcall_type type, const struct nlattr *userdata)
 static void
 compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
                   const struct flow *flow, odp_port_t odp_in_port,
-                  struct ofpbuf *buf)
+                  struct ofpbuf *buf, uint32_t slowpath_meter_id,
+                  uint32_t controller_meter_id)
 {
     union user_action_cookie cookie;
     odp_port_t port;
@@ -1039,8 +1041,28 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
         ? ODPP_NONE
         : odp_in_port;
     pid = dpif_port_get_pid(udpif->dpif, port, flow_hash_5tuple(flow, 0));
+
+    size_t offset;
+    size_t ac_offset;
+    uint32_t meter_id = xout->slow & SLOW_CONTROLLER ? controller_meter_id
+                                                     : slowpath_meter_id;
+
+    if (meter_id != UINT32_MAX) {
+        /* If slowpath meter is configured, generate clone(meter, userspace)
+         * action. */
+        offset = nl_msg_start_nested(buf, OVS_ACTION_ATTR_SAMPLE);
+        nl_msg_put_u32(buf, OVS_SAMPLE_ATTR_PROBABILITY, UINT32_MAX);
+        ac_offset = nl_msg_start_nested(buf, OVS_SAMPLE_ATTR_ACTIONS);
+        nl_msg_put_u32(buf, OVS_ACTION_ATTR_METER, meter_id);
+    }
+
     odp_put_userspace_action(pid, &cookie, sizeof cookie.slow_path,
                              ODPP_NONE, false, buf);
+
+    if (meter_id != UINT32_MAX) {
+        nl_msg_end_nested(buf, ac_offset);
+        nl_msg_end_nested(buf, offset);
+    }
 }
 
 /* If there is no error, the upcall must be destroyed with upcall_uninit()
@@ -1143,10 +1165,12 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
         ofpbuf_use_const(&upcall->put_actions,
                          odp_actions->data, odp_actions->size);
     } else {
+        uint32_t smid = upcall->ofproto->up.slowpath_meter_id;
+        uint32_t cmid = upcall->ofproto->up.controller_meter_id;
         /* upcall->put_actions already initialized by upcall_receive(). */
         compose_slow_path(udpif, &upcall->xout, upcall->flow,
                           upcall->flow->in_port.odp_port,
-                          &upcall->put_actions);
+                          &upcall->put_actions, smid, cmid);
     }
 
     /* This function is also called for slow-pathed flows.  As we are only
@@ -1255,6 +1279,59 @@ out:
     return error;
 }
 
+static size_t
+dpif_get_actions(struct udpif *udpif, struct upcall *upcall,
+                 const struct nlattr **actions)
+{
+    size_t actions_len = 0;
+
+    if (upcall->actions) {
+        /* Actions were passed up from datapath. */
+        *actions = nl_attr_get(upcall->actions);
+        actions_len = nl_attr_get_size(upcall->actions);
+    }
+
+    if (actions_len == 0) {
+        /* Lookup actions in userspace cache. */
+        struct udpif_key *ukey = ukey_lookup(udpif, upcall->ufid,
+                                             upcall->pmd_id);
+        if (ukey) {
+            ukey_get_actions(ukey, actions, &actions_len);
+        }
+    }
+
+    return actions_len;
+}
+
+static size_t
+dpif_read_actions(struct udpif *udpif, struct upcall *upcall,
+                  const struct flow *flow, enum upcall_type type,
+                  void *upcall_data)
+{
+    const struct nlattr *actions = NULL;
+    size_t actions_len = dpif_get_actions(udpif, upcall, &actions);
+
+    if (!actions || !actions_len) {
+        return 0;
+    }
+
+    switch (type) {
+    case SFLOW_UPCALL:
+        dpif_sflow_read_actions(flow, actions, actions_len, upcall_data);
+        break;
+    case FLOW_SAMPLE_UPCALL:
+    case IPFIX_UPCALL:
+        dpif_ipfix_read_actions(flow, actions, actions_len, upcall_data);
+        break;
+    case BAD_UPCALL:
+    case MISS_UPCALL:
+    default:
+        break;
+    }
+
+    return actions_len;
+}
+
 static int
 process_upcall(struct udpif *udpif, struct upcall *upcall,
                struct ofpbuf *odp_actions, struct flow_wildcards *wc)
@@ -1262,8 +1339,10 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
     const struct nlattr *userdata = upcall->userdata;
     const struct dp_packet *packet = upcall->packet;
     const struct flow *flow = upcall->flow;
+    size_t actions_len = 0;
+    enum upcall_type upcall_type = classify_upcall(upcall->type, userdata);
 
-    switch (classify_upcall(upcall->type, userdata)) {
+    switch (upcall_type) {
     case MISS_UPCALL:
         upcall_xlate(udpif, upcall, odp_actions, wc);
         return 0;
@@ -1271,31 +1350,14 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
     case SFLOW_UPCALL:
         if (upcall->sflow) {
             union user_action_cookie cookie;
-            const struct nlattr *actions;
-            size_t actions_len = 0;
             struct dpif_sflow_actions sflow_actions;
+
             memset(&sflow_actions, 0, sizeof sflow_actions);
             memset(&cookie, 0, sizeof cookie);
             memcpy(&cookie, nl_attr_get(userdata), sizeof cookie.sflow);
-            if (upcall->actions) {
-                /* Actions were passed up from datapath. */
-                actions = nl_attr_get(upcall->actions);
-                actions_len = nl_attr_get_size(upcall->actions);
-                if (actions && actions_len) {
-                    dpif_sflow_read_actions(flow, actions, actions_len,
+
+            actions_len = dpif_read_actions(udpif, upcall, flow, upcall_type,
                                             &sflow_actions);
-                }
-            }
-            if (actions_len == 0) {
-                /* Lookup actions in userspace cache. */
-                struct udpif_key *ukey = ukey_lookup(udpif, upcall->ufid,
-                                                     upcall->pmd_id);
-                if (ukey) {
-                    ukey_get_actions(ukey, &actions, &actions_len);
-                    dpif_sflow_read_actions(flow, actions, actions_len,
-                                            &sflow_actions);
-                }
-            }
             dpif_sflow_received(upcall->sflow, packet, flow,
                                 flow->in_port.odp_port, &cookie,
                                 actions_len > 0 ? &sflow_actions : NULL);
@@ -1306,18 +1368,24 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
         if (upcall->ipfix) {
             union user_action_cookie cookie;
             struct flow_tnl output_tunnel_key;
+            struct dpif_ipfix_actions ipfix_actions;
 
             memset(&cookie, 0, sizeof cookie);
             memcpy(&cookie, nl_attr_get(userdata), sizeof cookie.ipfix);
+            memset(&ipfix_actions, 0, sizeof ipfix_actions);
 
             if (upcall->out_tun_key) {
                 odp_tun_key_from_attr(upcall->out_tun_key, &output_tunnel_key);
             }
+
+            actions_len = dpif_read_actions(udpif, upcall, flow, upcall_type,
+                                            &ipfix_actions);
             dpif_ipfix_bridge_sample(upcall->ipfix, packet, flow,
                                      flow->in_port.odp_port,
                                      cookie.ipfix.output_odp_port,
                                      upcall->out_tun_key ?
-                                         &output_tunnel_key : NULL);
+                                         &output_tunnel_key : NULL,
+                                     actions_len > 0 ? &ipfix_actions: NULL);
         }
         break;
 
@@ -1325,20 +1393,25 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
         if (upcall->ipfix) {
             union user_action_cookie cookie;
             struct flow_tnl output_tunnel_key;
+            struct dpif_ipfix_actions ipfix_actions;
 
             memset(&cookie, 0, sizeof cookie);
             memcpy(&cookie, nl_attr_get(userdata), sizeof cookie.flow_sample);
+            memset(&ipfix_actions, 0, sizeof ipfix_actions);
 
             if (upcall->out_tun_key) {
                 odp_tun_key_from_attr(upcall->out_tun_key, &output_tunnel_key);
             }
 
+            actions_len = dpif_read_actions(udpif, upcall, flow, upcall_type,
+                                            &ipfix_actions);
             /* The flow reflects exactly the contents of the packet.
              * Sample the packet using it. */
             dpif_ipfix_flow_sample(upcall->ipfix, packet, flow,
                                    &cookie, flow->in_port.odp_port,
                                    upcall->out_tun_key ?
-                                       &output_tunnel_key : NULL);
+                                       &output_tunnel_key : NULL,
+                                   actions_len > 0 ? &ipfix_actions: NULL);
         }
         break;
 
@@ -1359,11 +1432,14 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
 
     /* Handle the packets individually in order of arrival.
      *
-     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, and SLOW_BFD, translation is what
-     *     processes received packets for these protocols.
+     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, SLOW_BFD, and SLOW_LLDP,
+     *     translation is what processes received packets for these
+     *     protocols.
      *
      *   - For SLOW_CONTROLLER, translation sends the packet to the OpenFlow
      *     controller.
+     *
+     *   - For SLOW_ACTION, translation executes the actions directly.
      *
      * The loop fills 'ops' with an array of operations to execute in the
      * datapath. */
@@ -1388,8 +1464,8 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
             op->dop.type = DPIF_OP_EXECUTE;
             op->dop.u.execute.packet = CONST_CAST(struct dp_packet *, packet);
             op->dop.u.execute.flow = upcall->flow;
-            odp_key_to_pkt_metadata(upcall->key, upcall->key_len,
-                                    &op->dop.u.execute.packet->md);
+            odp_key_to_dp_packet(upcall->key, upcall->key_len,
+                                 op->dop.u.execute.packet);
             op->dop.u.execute.actions = upcall->odp_actions.data;
             op->dop.u.execute.actions_len = upcall->odp_actions.size;
             op->dop.u.execute.needs_help = (upcall->xout.slow & SLOW_ACTION) != 0;
@@ -1516,7 +1592,7 @@ ukey_create_from_upcall(struct upcall *upcall, struct flow_wildcards *wc)
         .mask = wc ? &wc->masks : NULL,
     };
 
-    odp_parms.support = upcall->ofproto->backer->support.odp;
+    odp_parms.support = upcall->ofproto->backer->rt_support.odp;
     if (upcall->key_len) {
         ofpbuf_use_const(&keybuf, upcall->key, upcall->key_len);
     } else {
@@ -1573,13 +1649,13 @@ ukey_create_from_dpif_flow(const struct udpif *udpif,
      * relies on OVS userspace internal state, we need to delete all old
      * datapath flows with either a non-zero recirc_id in the key, or any
      * recirculation actions upon OVS restart. */
-    NL_ATTR_FOR_EACH_UNSAFE (a, left, flow->key, flow->key_len) {
+    NL_ATTR_FOR_EACH (a, left, flow->key, flow->key_len) {
         if (nl_attr_type(a) == OVS_KEY_ATTR_RECIRC_ID
             && nl_attr_get_u32(a) != 0) {
             return EINVAL;
         }
     }
-    NL_ATTR_FOR_EACH_UNSAFE (a, left, flow->actions, flow->actions_len) {
+    NL_ATTR_FOR_EACH (a, left, flow->actions, flow->actions_len) {
         if (nl_attr_type(a) == OVS_ACTION_ATTR_RECIRC) {
             return EINVAL;
         }
@@ -1964,10 +2040,19 @@ revalidate_ukey__(struct udpif *udpif, const struct udpif_key *ukey,
     }
     xoutp = &ctx.xout;
 
+    if (xoutp->avoid_caching) {
+        goto exit;
+    }
+
     if (xoutp->slow) {
+        struct ofproto_dpif *ofproto;
+        ofproto = xlate_lookup_ofproto(udpif->backer, &ctx.flow, NULL);
+        uint32_t smid = ofproto->up.slowpath_meter_id;
+        uint32_t cmid = ofproto->up.controller_meter_id;
+
         ofpbuf_clear(odp_actions);
         compose_slow_path(udpif, xoutp, &ctx.flow, ctx.flow.in_port.odp_port,
-                          odp_actions);
+                          odp_actions, smid, cmid);
     }
 
     if (odp_flow_key_to_mask(ukey->mask, ukey->mask_len, &dp_mask, &ctx.flow)

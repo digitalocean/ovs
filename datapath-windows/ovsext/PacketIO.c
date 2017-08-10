@@ -49,7 +49,7 @@ static VOID OvsCompleteNBLIngress(POVS_SWITCH_CONTEXT switchContext,
 static NTSTATUS OvsCreateNewNBLsFromMultipleNBs(
                     POVS_SWITCH_CONTEXT switchContext,
                     PNET_BUFFER_LIST *curNbl,
-                    PNET_BUFFER_LIST *nextNbl);
+                    PNET_BUFFER_LIST *lastNbl);
 
 VOID
 OvsInitCompletionList(OvsCompletionList *completionList,
@@ -212,7 +212,7 @@ OvsStartNBLIngress(POVS_SWITCH_CONTEXT switchContext,
     NDIS_SWITCH_PORT_ID sourcePort = 0;
     NDIS_SWITCH_NIC_INDEX sourceIndex = 0;
     PNDIS_SWITCH_FORWARDING_DETAIL_NET_BUFFER_LIST_INFO fwdDetail;
-    PNET_BUFFER_LIST curNbl = NULL, nextNbl = NULL;
+    PNET_BUFFER_LIST curNbl = NULL, nextNbl = NULL, lastNbl = NULL;
     ULONG sendCompleteFlags;
     UCHAR dispatch;
     LOCK_STATE_EX lockState, dpLockState;
@@ -259,13 +259,13 @@ OvsStartNBLIngress(POVS_SWITCH_CONTEXT switchContext,
                 curNbl,
                 nextNativeForwardedNbl,
                 sendCompleteFlags,
-                sourcePort == switchContext->virtualExternalPortId);
+                OvsIsExternalVportByPortId(switchContext, sourcePort));
             continue;
         }
 #endif /* NDIS_SUPPORT_NDIS640 */
 
         ctx = OvsInitExternalNBLContext(switchContext, curNbl,
-                  sourcePort == switchContext->virtualExternalPortId);
+                  OvsIsExternalVportByPortId(switchContext, sourcePort));
         if (ctx == NULL) {
             RtlInitUnicodeString(&filterReason,
                 L"Cannot allocate external NBL context.");
@@ -282,7 +282,7 @@ OvsStartNBLIngress(POVS_SWITCH_CONTEXT switchContext,
             /* Create a NET_BUFFER_LIST for each NET_BUFFER. */
             status = OvsCreateNewNBLsFromMultipleNBs(switchContext,
                                                      &curNbl,
-                                                     &nextNbl);
+                                                     &lastNbl);
             if (!NT_SUCCESS(status)) {
                 RtlInitUnicodeString(&filterReason,
                                      L"Cannot allocate NBLs with single NB.");
@@ -292,6 +292,10 @@ OvsStartNBLIngress(POVS_SWITCH_CONTEXT switchContext,
                                         NDIS_STATUS_RESOURCES);
                 continue;
             }
+
+            lastNbl->Next = nextNbl;
+            nextNbl = curNbl->Next;
+            curNbl->Next = NULL;
         }
         {
             OvsFlow *flow;
@@ -345,7 +349,7 @@ OvsStartNBLIngress(POVS_SWITCH_CONTEXT switchContext,
                 datapath->misses++;
                 status = OvsCreateAndAddPackets(NULL, 0, OVS_PACKET_CMD_MISS,
                              vport, &key, curNbl,
-                             sourcePort == switchContext->virtualExternalPortId,
+                             OvsIsExternalVportByPortId(switchContext, sourcePort),
                              &layers, switchContext, &missedPackets, &num);
                 if (status == NDIS_STATUS_SUCCESS) {
                     /* Complete the packet since it was copied to user
@@ -500,11 +504,10 @@ OvsExtCancelSendNBL(NDIS_HANDLE filterModuleContext,
 static NTSTATUS
 OvsCreateNewNBLsFromMultipleNBs(POVS_SWITCH_CONTEXT switchContext,
                                 PNET_BUFFER_LIST *curNbl,
-                                PNET_BUFFER_LIST *nextNbl)
+                                PNET_BUFFER_LIST *lastNbl)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PNET_BUFFER_LIST newNbls = NULL;
-    PNET_BUFFER_LIST lastNbl = NULL;
     PNET_BUFFER_LIST nbl = NULL;
     BOOLEAN error = TRUE;
 
@@ -520,16 +523,15 @@ OvsCreateNewNBLsFromMultipleNBs(POVS_SWITCH_CONTEXT switchContext,
 
         nbl = newNbls;
         while (nbl) {
-            lastNbl = nbl;
+            *lastNbl = nbl;
             nbl = NET_BUFFER_LIST_NEXT_NBL(nbl);
         }
-        lastNbl->Next = *nextNbl;
-        *nextNbl = newNbls->Next;
+
+        (*curNbl)->Next = NULL;
 
         OvsCompleteNBL(switchContext, *curNbl, TRUE);
 
         *curNbl = newNbls;
-        (*curNbl)->Next = NULL;
 
         error = FALSE;
     } while (error);

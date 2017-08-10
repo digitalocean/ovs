@@ -262,7 +262,7 @@ vHost ports:
    and CRC lengths (i.e. 18B) from the max supported frame size.  So, to set
    the MTU for a 9018B Jumbo Frame::
 
-       $ ifconfig eth1 mtu 9000
+       $ ip link set eth1 mtu 9000
 
 When Jumbo Frames are enabled, the size of a DPDK port's mbuf segments are
 increased, such that a full Jumbo Frame of a specific size may be accommodated
@@ -276,27 +276,39 @@ common for use cases involving East-West traffic only.
 Rx Checksum Offload
 -------------------
 
-By default, DPDK physical ports are enabled with Rx checksum offload. Rx
-checksum offload can be configured on a DPDK physical port either when adding
-or at run time.
-
-To disable Rx checksum offload when adding a DPDK port dpdk-p0::
-
-    $ ovs-vsctl add-port br0 dpdk-p0 -- set Interface dpdk-p0 type=dpdk \
-      options:dpdk-devargs=0000:01:00.0 options:rx-checksum-offload=false
-
-Similarly to disable the Rx checksum offloading on a existing DPDK port dpdk-p0::
-
-    $ ovs-vsctl set Interface dpdk-p0 options:rx-checksum-offload=false
+By default, DPDK physical ports are enabled with Rx checksum offload.
 
 Rx checksum offload can offer performance improvement only for tunneling
 traffic in OVS-DPDK because the checksum validation of tunnel packets is
 offloaded to the NIC. Also enabling Rx checksum may slightly reduce the
 performance of non-tunnel traffic, specifically for smaller size packet.
-DPDK vectorization is disabled when checksum offloading is configured on DPDK
-physical ports which in turn effects the non-tunnel traffic performance.
-So it is advised to turn off the Rx checksum offload for non-tunnel traffic use
-cases to achieve the best performance.
+
+.. _extended-statistics:
+
+Extended Statistics
+-------------------
+
+DPDK Extended Statistics API allows PMD to expose unique set of statistics.
+The Extended statistics are implemented and supported only for DPDK physical
+and vHost ports.
+
+To enable statistics, you have to enable OpenFlow 1.4 support for OVS.
+Configure bridge br0 to support OpenFlow version 1.4::
+
+    $ ovs-vsctl set bridge br0 datapath_type=netdev \
+      protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14
+
+Check the OVSDB protocols column in the bridge table if OpenFlow 1.4 support
+is enabled for OVS::
+
+    $ ovsdb-client dump Bridge protocols
+
+Query the port statistics by explicitly specifying -O OpenFlow14 option::
+
+    $ ovs-ofctl -O OpenFlow14 dump-ports br0
+
+Note: vHost ports supports only partial statistics. RX packet size based
+counter are only supported and doesn't include TX packet size counters.
 
 .. _port-hotplug:
 
@@ -315,12 +327,32 @@ Then it can be attached to OVS::
     $ ovs-vsctl add-port br0 dpdkx -- set Interface dpdkx type=dpdk \
         options:dpdk-devargs=0000:01:00.0
 
-It is also possible to detach a port from ovs, the user has to remove the
-port using the del-port command, then it can be detached using::
+Detaching will be performed while processing del-port command::
 
-    $ ovs-appctl netdev-dpdk/detach 0000:01:00.0
+    $ ovs-vsctl del-port dpdkx
 
-This feature is not supported with VFIO and does not work with some NICs.
+Sometimes, the del-port command may not detach the device.
+Detaching can be confirmed by the appearance of an INFO log.
+For example::
+
+    INFO|Device '0000:04:00.1' has been detached
+
+If the log is not seen, then the port can be detached using::
+
+$ ovs-appctl netdev-dpdk/detach 0000:01:00.0
+
+Detaching can be confirmed by console output::
+
+    Device '0000:04:00.1' has been detached
+
+.. warning::
+    Detaching should not be done if a device is known to be non-detachable, as
+    this may cause the device to behave improperly when added back with
+    add-port. The Chelsio Terminator adapters which use the cxgbe driver seem
+    to be an example of this behavior; check the driver documentation if this
+    is suspected.
+
+This feature does not work with some NICs.
 For more information please refer to the `DPDK Port Hotplug Framework
 <http://dpdk.org/doc/guides/prog_guide/port_hotplug_framework.html#hotplug>`__.
 
@@ -335,7 +367,7 @@ Virtual DPDK devices which do not have PCI addresses can be added using a
 different format for 'dpdk-devargs'.
 
 Typically, the format expected is 'eth_<driver_name><x>' where 'x' is a
-number between 0 and RTE_MAX_ETHPORTS -1 (31).
+unique identifier of your choice for the given port.
 
 For example to add a dpdk port that uses the 'null' DPDK PMD driver::
 
@@ -352,6 +384,34 @@ the `DPDK documentation
 <http://dpdk.org/doc/guides/nics/overview.html>`__.
 
 Note: Not all DPDK virtual PMD drivers have been tested and verified to work.
+
+EMC Insertion Probability
+-------------------------
+By default 1 in every 100 flows are inserted into the Exact Match Cache (EMC).
+It is possible to change this insertion probability by setting the
+``emc-insert-inv-prob`` option::
+
+    $ ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=N
+
+where:
+
+``N``
+  is a positive integer representing the inverse probability of insertion ie.
+  on average 1 in every N packets with a unique flow will generate an EMC
+  insertion.
+
+If ``N`` is set to 1, an insertion will be performed for every flow. If set to
+0, no insertions will be performed and the EMC will effectively be disabled.
+
+With default ``N`` set to 100, higher megaflow hits will occur initially
+as observed with pmd stats::
+
+    $ ovs-appctl dpif-netdev/pmd-stats-show
+
+For certain traffic profiles with many parallel flows, it's recommended to set
+``N`` to '0' to achieve higher forwarding performance.
+
+For more information on the EMC refer to :doc:`/intro/install/dpdk` .
 
 .. _dpdk-ovs-in-guest:
 
@@ -489,15 +549,15 @@ described in :ref:`dpdk-testpmd`. Once compiled, run the application::
 
 When you finish testing, bind the vNICs back to kernel::
 
-    $ $DPDK_DIR/tools/dpdk-devbind.py --bind=virtio-pci 0000:00:03.0
-    $ $DPDK_DIR/tools/dpdk-devbind.py --bind=virtio-pci 0000:00:04.0
+    $ $DPDK_DIR/usertools/dpdk-devbind.py --bind=virtio-pci 0000:00:03.0
+    $ $DPDK_DIR/usertools/dpdk-devbind.py --bind=virtio-pci 0000:00:04.0
 
 .. note::
 
   Valid PCI IDs must be passed in above example. The PCI IDs can be retrieved
   like so::
 
-      $ $DPDK_DIR/tools/dpdk-devbind.py --status
+      $ $DPDK_DIR/usertools/dpdk-devbind.py --status
 
 More information on the dpdkvhostuser ports can be found in
 :doc:`/topics/dpdk/vhost-user`.
@@ -510,8 +570,10 @@ testcase and packet forwarding using DPDK testpmd application in the Guest VM.
 For users wishing to do packet forwarding using kernel stack below, you need to
 run the below commands on the guest::
 
-    $ ifconfig eth1 1.1.1.2/24
-    $ ifconfig eth2 1.1.2.2/24
+    $ ip addr add 1.1.1.2/24 dev eth1
+    $ ip addr add 1.1.2.2/24 dev eth2
+    $ ip link set eth1 up
+    $ ip link set eth2 up
     $ systemctl stop firewalld.service
     $ systemctl stop iptables.service
     $ sysctl -w net.ipv4.ip_forward=1
@@ -601,8 +663,10 @@ devices to bridge ``br0``. Once complete, follow the below steps:
 
    Configure IP and enable interfaces::
 
-       $ ifconfig eth0 5.5.5.1/24 up
-       $ ifconfig eth1 90.90.90.1/24 up
+       $ ip addr add 5.5.5.1/24 dev eth0
+       $ ip addr add 90.90.90.1/24 dev eth1
+       $ ip link set eth0 up
+       $ ip link set eth1 up
 
    Configure IP forwarding and add route entries::
 

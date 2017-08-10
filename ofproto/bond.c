@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -175,10 +175,6 @@ static void bond_link_status_update(struct bond_slave *)
     OVS_REQ_WRLOCK(rwlock);
 static void bond_choose_active_slave(struct bond *)
     OVS_REQ_WRLOCK(rwlock);
-static unsigned int bond_hash_src(const struct eth_addr mac,
-                                  uint16_t vlan, uint32_t basis);
-static unsigned int bond_hash_tcp(const struct flow *, uint16_t vlan,
-                                  uint32_t basis);
 static struct bond_entry *lookup_bond_entry(const struct bond *,
                                             const struct flow *,
                                             uint16_t vlan)
@@ -372,7 +368,7 @@ update_recirc_rules__(struct bond *bond)
                                                    RECIRC_RULE_PRIORITY, 0,
                                                    &ofpacts, pr_op->pr_rule);
             if (error) {
-                char *err_s = match_to_string(&pr_op->match,
+                char *err_s = match_to_string(&pr_op->match, NULL,
                                               RECIRC_RULE_PRIORITY);
 
                 VLOG_ERR("failed to add post recirculation flow %s", err_s);
@@ -385,7 +381,7 @@ update_recirc_rules__(struct bond *bond)
                                                       &pr_op->match,
                                                       RECIRC_RULE_PRIORITY);
             if (error) {
-                char *err_s = match_to_string(&pr_op->match,
+                char *err_s = match_to_string(&pr_op->match, NULL,
                                               RECIRC_RULE_PRIORITY);
 
                 VLOG_ERR("failed to remove post recirculation flow %s", err_s);
@@ -803,7 +799,11 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
         if (!bond->lacp_fallback_ab) {
             goto out;
         }
+        break;
     case LACP_DISABLED:
+        if (bond->balance == BM_TCP) {
+            goto out;
+        }
         break;
     }
 
@@ -823,6 +823,7 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
         if (!bond->lacp_fallback_ab) {
             goto out;
         }
+        /* fall through */
 
     case BM_AB:
         /* Drop all packets which arrive on backup slaves.  This is similar to
@@ -922,20 +923,10 @@ bond_recirculation_account(struct bond *bond)
     }
 }
 
-bool
-bond_may_recirc(const struct bond *bond, uint32_t *recirc_id,
-                uint32_t *hash_bias)
+static bool
+bond_may_recirc(const struct bond *bond)
 {
-    bool may_recirc = bond->balance == BM_TCP && bond->recirc_id;
-
-    if (recirc_id) {
-        *recirc_id = may_recirc ? bond->recirc_id : 0;
-    }
-    if (hash_bias) {
-        *hash_bias = may_recirc ? bond->basis : 0;
-    }
-
-    return may_recirc;
+    return bond->balance == BM_TCP && bond->recirc_id;
 }
 
 static void
@@ -966,11 +957,25 @@ void
 bond_update_post_recirc_rules(struct bond *bond, uint32_t *recirc_id,
                               uint32_t *hash_basis)
 {
-    ovs_rwlock_wrlock(&rwlock);
-    if (bond_may_recirc(bond, recirc_id, hash_basis)) {
-        bond_update_post_recirc_rules__(bond, false);
+    bool may_recirc = bond_may_recirc(bond);
+
+    if (may_recirc) {
+        /* To avoid unnecessary locking, bond_may_recirc() is first
+         * called outside of the 'rwlock'. After acquiring the lock,
+         * check again to make sure bond configuration has not been changed. */
+        ovs_rwlock_wrlock(&rwlock);
+        may_recirc = bond_may_recirc(bond);
+        if (may_recirc) {
+            *recirc_id = bond->recirc_id;
+            *hash_basis = bond->basis;
+            bond_update_post_recirc_rules__(bond, false);
+        }
+        ovs_rwlock_unlock(&rwlock);
     }
-    ovs_rwlock_unlock(&rwlock);
+
+    if (!may_recirc) {
+        *recirc_id = *hash_basis = 0;
+    }
 }
 
 
@@ -1154,8 +1159,8 @@ bond_rebalance(struct bond *bond)
     }
     bond->next_rebalance = time_msec() + bond->rebalance_interval;
 
-    use_recirc = bond->ofproto->backer->support.odp.recirc &&
-                 bond_may_recirc(bond, NULL, NULL);
+    use_recirc = bond->ofproto->backer->rt_support.odp.recirc &&
+                 bond_may_recirc(bond);
 
     if (use_recirc) {
         bond_recirculation_account(bond);
@@ -1315,7 +1320,8 @@ bond_print_details(struct ds *ds, const struct bond *bond)
     ds_put_format(ds, "bond_mode: %s\n",
                   bond_mode_to_string(bond->balance));
 
-    may_recirc = bond_may_recirc(bond, &recirc_id, NULL);
+    may_recirc = bond_may_recirc(bond);
+    recirc_id = bond->recirc_id;
     ds_put_format(ds, "bond may use recirculation: %s, Recirc-ID : %d\n",
                   may_recirc ? "yes" : "no", may_recirc ? recirc_id: -1);
 
@@ -1344,6 +1350,9 @@ bond_print_details(struct ds *ds, const struct bond *bond)
         ds_put_cstr(ds, "<unknown>\n");
         break;
     }
+
+    ds_put_format(ds, "lacp_fallback_ab: %s\n",
+                  bond->lacp_fallback_ab ? "true" : "false");
 
     ds_put_cstr(ds, "active slave mac: ");
     ds_put_format(ds, ETH_ADDR_FMT, ETH_ADDR_ARGS(bond->active_slave_mac));
@@ -1604,7 +1613,7 @@ bond_unixctl_hash(struct unixctl_conn *conn, int argc, const char *argv[],
     }
 
     if (ovs_scan(mac_s, ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(mac))) {
-        hash = bond_hash_src(mac, vlan, basis) & BOND_MASK;
+        hash = hash_mac(mac, vlan, basis) & BOND_MASK;
 
         hash_cstr = xasprintf("%u", hash);
         unixctl_command_reply(conn, hash_cstr);
@@ -1724,31 +1733,13 @@ bond_link_status_update(struct bond_slave *slave)
 }
 
 static unsigned int
-bond_hash_src(const struct eth_addr mac, uint16_t vlan, uint32_t basis)
-{
-    return hash_mac(mac, vlan, basis);
-}
-
-static unsigned int
-bond_hash_tcp(const struct flow *flow, uint16_t vlan, uint32_t basis)
-{
-    struct flow hash_flow = *flow;
-    hash_flow.vlan_tci = htons(vlan);
-
-    /* The symmetric quality of this hash function is not required, but
-     * flow_hash_symmetric_l4 already exists, and is sufficient for our
-     * purposes, so we use it out of convenience. */
-    return flow_hash_symmetric_l4(&hash_flow, basis);
-}
-
-static unsigned int
 bond_hash(const struct bond *bond, const struct flow *flow, uint16_t vlan)
 {
     ovs_assert(bond->balance == BM_TCP || bond->balance == BM_SLB);
 
     return (bond->balance == BM_TCP
-            ? bond_hash_tcp(flow, vlan, bond->basis)
-            : bond_hash_src(flow->dl_src, vlan, bond->basis));
+            ? flow_hash_5tuple(flow, bond->basis)
+            : hash_mac(flow->dl_src, vlan, bond->basis));
 }
 
 static struct bond_entry *
@@ -1807,11 +1798,11 @@ choose_output_slave(const struct bond *bond, const struct flow *flow,
             return NULL;
         }
         if (wc) {
-            flow_mask_hash_fields(flow, wc, NX_HASH_FIELDS_SYMMETRIC_L4);
+            flow_mask_hash_fields(flow, wc, NX_HASH_FIELDS_SYMMETRIC_L3L4_UDP);
         }
         /* Fall Through. */
     case BM_SLB:
-        if (wc) {
+        if (wc && balance == BM_SLB) {
             flow_mask_hash_fields(flow, wc, NX_HASH_FIELDS_ETH_SRC);
         }
         e = lookup_bond_entry(bond, flow, vlan);

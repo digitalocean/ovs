@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "openvswitch/flow.h"
+#include "openvswitch/hmap.h"
 #include "openvswitch/list.h"
 #include "openvswitch/match.h"
 #include "openvswitch/meta-flow.h"
@@ -33,20 +34,45 @@
 #include "openvswitch/type-props.h"
 #include "openvswitch/uuid.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ofpbuf;
 union ofp_action;
 struct ofpact_set_field;
 struct vl_mff_map;
+
+/* Mapping between port numbers and names. */
+struct ofputil_port_map {
+    struct hmap by_name;
+    struct hmap by_number;
+};
+
+#define OFPUTIL_PORT_MAP_INITIALIZER(MAP)  \
+    { HMAP_INITIALIZER(&(MAP)->by_name), HMAP_INITIALIZER(&(MAP)->by_number) }
+
+void ofputil_port_map_init(struct ofputil_port_map *);
+const char *ofputil_port_map_get_name(const struct ofputil_port_map *,
+                                      ofp_port_t);
+ofp_port_t ofputil_port_map_get_number(const struct ofputil_port_map *,
+                                      const char *name);
+void ofputil_port_map_put(struct ofputil_port_map *,
+                          ofp_port_t, const char *name);
+void ofputil_port_map_destroy(struct ofputil_port_map *);
 
 /* Port numbers. */
 enum ofperr ofputil_port_from_ofp11(ovs_be32 ofp11_port,
                                     ofp_port_t *ofp10_port);
 ovs_be32 ofputil_port_to_ofp11(ofp_port_t ofp10_port);
 
-bool ofputil_port_from_string(const char *, ofp_port_t *portp);
-void ofputil_format_port(ofp_port_t port, struct ds *);
-void ofputil_port_to_string(ofp_port_t, char namebuf[OFP_MAX_PORT_NAME_LEN],
-                            size_t bufsize);
+bool ofputil_port_from_string(const char *, const struct ofputil_port_map *,
+                              ofp_port_t *portp);
+const char *ofputil_port_get_reserved_name(ofp_port_t);
+void ofputil_format_port(ofp_port_t port, const struct ofputil_port_map *,
+                         struct ds *);
+void ofputil_port_to_string(ofp_port_t, const struct ofputil_port_map *,
+                            char *namebuf, size_t bufsize);
 
 /* Group numbers. */
 enum { MAX_GROUP_NAME_LEN = INT_STRLEN(uint32_t) };
@@ -189,7 +215,8 @@ enum ofputil_protocol ofputil_protocols_from_version_bitmap(uint32_t bitmap);
 #define OFPUTIL_SUPPORTED_VERSIONS ((1u << OFP10_VERSION) | \
                                     (1u << OFP11_VERSION) | \
                                     (1u << OFP12_VERSION) | \
-                                    (1u << OFP13_VERSION))
+                                    (1u << OFP13_VERSION) | \
+                                    (1u << OFP14_VERSION))
 #define OFPUTIL_DEFAULT_VERSIONS OFPUTIL_SUPPORTED_VERSIONS
 
 enum ofputil_protocol ofputil_protocols_from_string(const char *s);
@@ -224,8 +251,6 @@ void ofputil_match_to_ofp10_match(const struct match *, struct ofp10_match *);
 enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, const struct tun_table *,
                                      const struct vl_mff_map *, struct match *,
                                      uint16_t *padded_match_len);
-enum ofperr ofputil_pull_ofp11_mask(struct ofpbuf *, struct match *,
-                                    struct mf_bitmap *bm);
 enum ofperr ofputil_match_from_ofp11_match(const struct ofp11_match *,
                                            struct match *);
 int ofputil_put_ofp11_match(struct ofpbuf *, const struct match *,
@@ -479,7 +504,7 @@ bool ofputil_packet_in_reason_from_string(const char *,
  * to any process other than ovs-vswitchd.  Therefore, only ovs-vswitchd should
  * use ofputil_packet_in_private and the functions that operate on it. */
 struct ofputil_packet_in_private {
-    struct ofputil_packet_in public;
+    struct ofputil_packet_in base;
 
     /* NXCPT_BRIDGE. */
     struct uuid bridge;
@@ -525,13 +550,14 @@ struct ofputil_packet_out {
     const void *packet;         /* Packet data, if buffer_id == UINT32_MAX. */
     size_t packet_len;          /* Length of packet data in bytes. */
     uint32_t buffer_id;         /* Buffer id or UINT32_MAX if no buffer. */
-    ofp_port_t in_port;         /* Packet's input port. */
+    struct match flow_metadata; /* Packet's input port and other metadata. */
     struct ofpact *ofpacts;     /* Actions. */
     size_t ofpacts_len;         /* Size of ofpacts in bytes. */
 };
 
 enum ofperr ofputil_decode_packet_out(struct ofputil_packet_out *,
                                       const struct ofp_header *,
+                                      const struct tun_table *,
                                       struct ofpbuf *ofpacts);
 struct ofpbuf *ofputil_encode_packet_out(const struct ofputil_packet_out *,
                                          enum ofputil_protocol protocol);
@@ -598,11 +624,19 @@ enum ofputil_port_state {
     OFPUTIL_PS_STP_MASK    = 3 << 8  /* Bit mask for OFPPS10_STP_* values. */
 };
 
-/* Abstract ofp10_phy_port or ofp11_port. */
+/* Abstract ofp10_phy_port, ofp11_port, ofp14_port, or ofp16_port. */
 struct ofputil_phy_port {
     ofp_port_t port_no;
+
+    /* Hardware addresses.
+     *
+     * Most hardware has a normal 48-bit Ethernet address, in hw_addr.
+     * Some hardware might have a 64-bit address in hw_addr64.
+     * All-bits-0 indicates that a given address is not present. */
     struct eth_addr hw_addr;
-    char name[OFP_MAX_PORT_NAME_LEN];
+    struct eth_addr64 hw_addr64;
+
+    char name[OFP16_MAX_PORT_NAME_LEN]; /* 64 bytes in OF1.6+, 16 otherwise. */
     enum ofputil_port_config config;
     enum ofputil_port_state state;
 
@@ -682,6 +716,7 @@ struct ofpbuf *ofputil_encode_port_status(const struct ofputil_port_status *,
 struct ofputil_port_mod {
     ofp_port_t port_no;
     struct eth_addr hw_addr;
+    struct eth_addr64 hw_addr64;
     enum ofputil_port_config config;
     enum ofputil_port_config mask;
     enum netdev_features advertise;
@@ -1467,4 +1502,9 @@ enum ofperr ofputil_decode_table_status(const struct ofp_header *oh,
 struct ofpbuf *
 ofputil_encode_table_status(const struct ofputil_table_status *ts,
                             enum ofputil_protocol protocol);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* ofp-util.h */

@@ -104,7 +104,7 @@ Q: Are all features available with all datapaths?
     ===================== ============== ============== ========= =======
     Feature               Linux upstream Linux OVS tree Userspace Hyper-V
     ===================== ============== ============== ========= =======
-    NAT                   4.6            YES            NO        NO
+    NAT                   4.6            YES            Yes       NO
     Connection tracking   4.3            YES            PARTIAL   PARTIAL
     Tunnel - LISP         NO             YES            NO        NO
     Tunnel - STT          NO             YES            NO        YES
@@ -161,15 +161,16 @@ Q: What DPDK version does each Open vSwitch release work with?
     2.5.x        2.2
     2.6.x        16.07.2
     2.7.x        16.11.2
+    2.8.x        17.05.1
     ============ =======
 
-Q: I get an error like this when I configure Open vSwitch::
+Q: I get an error like this when I configure Open vSwitch:
 
-    configure: error: Linux kernel in <dir> is version <x>, but
-    version newer than <y> is not supported (please refer to the
-    FAQ for advice)
+        configure: error: Linux kernel in <dir> is version <x>, but
+        version newer than <y> is not supported (please refer to the
+        FAQ for advice)
 
-What should I do?
+    What should I do?
 
     A: You have the following options:
 

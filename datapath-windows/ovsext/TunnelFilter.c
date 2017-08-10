@@ -50,7 +50,7 @@
 
 /* The provider name should always match the provider string from the install
  * file. */
-#define OVS_TUNNEL_PROVIDER_NAME        L"Open vSwitch"
+#define OVS_TUNNEL_PROVIDER_NAME        L"The Linux Foundation (R)"
 
 /* The provider description should always contain the OVS service description
  * string from the install file. */
@@ -172,8 +172,7 @@ static NTSTATUS OvsTunnelFilterThreadInit(POVS_TUNFLT_THREAD_CONTEXT threadCtx);
 static VOID     OvsTunnelFilterThreadUninit(POVS_TUNFLT_THREAD_CONTEXT threadCtx);
 static VOID     OvsTunnelFilterSetIrpContext(POVS_TUNFLT_REQUEST_LIST listRequests,
                                              POVS_TUNFLT_REQUEST request);
-static VOID     OvsTunnelFilterCancelIrp(PDEVICE_OBJECT DeviceObject,
-                                         PIRP Irp);
+DRIVER_CANCEL   OvsTunnelFilterCancelIrp;
 
 /*
  * Callout driver global variables
@@ -1619,7 +1618,7 @@ OvsTunnelFilterSetIrpContext(POVS_TUNFLT_REQUEST_LIST listRequests,
 /*
  * --------------------------------------------------------------------------
  * This function is the Cancel routine to be called by the I/O Manager in the
- * case when the IRP is cancelled.
+ * case the IRP is canceled.
  * --------------------------------------------------------------------------
  */
 VOID

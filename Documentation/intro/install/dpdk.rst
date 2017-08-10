@@ -29,13 +29,18 @@ This document describes how to build and install Open vSwitch using a DPDK
 datapath. Open vSwitch can use the DPDK library to operate entirely in
 userspace.
 
+.. seealso::
+
+    The :doc:`releases FAQ </faq/releases>` lists support for the required
+    versions of DPDK for each version of Open vSwitch.
+
 Build requirements
 ------------------
 
 In addition to the requirements described in :doc:`general`, building Open
 vSwitch with DPDK will require the following:
 
-- DPDK 16.11
+- DPDK 17.05.1
 
 - A `DPDK supported NIC`_
 
@@ -64,9 +69,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-16.11.2.tar.xz
-       $ tar xf dpdk-16.11.2.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-stable-16.11.2
+       $ wget http://fast.dpdk.org/rel/dpdk-17.05.1.tar.xz
+       $ tar xf dpdk-17.05.1.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-stable-17.05.1
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library
@@ -119,7 +124,11 @@ has to be configured with DPDK support (``--with-dpdk``).
        $ ./configure --with-dpdk=$DPDK_BUILD
 
    where ``DPDK_BUILD`` is the path to the built DPDK library. This can be
-   skipped if DPDK library is installed in its default location
+   skipped if DPDK library is installed in its default location.
+
+   If no path is provided to ``--with-dpdk``, but a pkg-config configuration
+   for libdpdk is available the include paths will be generated via an
+   equivalent ``pkg-config --cflags libdpdk``.
 
    .. note::
      While ``--with-dpdk`` is required, you can pass any other configuration
@@ -128,6 +137,13 @@ has to be configured with DPDK support (``--with-dpdk``).
 #. Build and install OVS, as described in :ref:`general-building`
 
 Additional information can be found in :doc:`general`.
+
+.. note::
+  If you are running using the Fedora or Red Hat package, the Open vSwitch
+  daemon will run as a non-root user.  This implies that you must have a
+  working IOMMU.  Visit the `RHEL README`__ for additional information.
+
+__ https://github.com/openvswitch/ovs/blob/master/rhel/README.RHEL.rst
 
 Setup
 -----
@@ -182,8 +198,8 @@ to the VFIO driver::
     $ modprobe vfio-pci
     $ /usr/bin/chmod a+x /dev/vfio
     $ /usr/bin/chmod 0666 /dev/vfio/*
-    $ $DPDK_DIR/tools/dpdk-devbind.py --bind=vfio-pci eth1
-    $ $DPDK_DIR/tools/dpdk-devbind.py --status
+    $ $DPDK_DIR/usertools/dpdk-devbind.py --bind=vfio-pci eth1
+    $ $DPDK_DIR/usertools/dpdk-devbind.py --status
 
 Setup OVS
 ~~~~~~~~~
@@ -194,9 +210,10 @@ DPDK functionality. DPDK configuration arguments can be passed to ovs-vswitchd
 via the ``other_config`` column of the ``Open_vSwitch`` table. At a minimum,
 the ``dpdk-init`` option must be set to ``true``. For example::
 
+    $ export PATH=$PATH:/usr/local/share/openvswitch/scripts
     $ export DB_SOCK=/usr/local/var/run/openvswitch/db.sock
     $ ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true
-    $ ovs-vswitchd unix:$DB_SOCK --pidfile --detach
+    $ ovs-ctl --no-ovsdb-server --db-sock="$DB_SOCK" start
 
 There are many other configuration options, the most important of which are
 listed below. Defaults will be provided for all values not explicitly set.
@@ -443,7 +460,7 @@ affinitized accordingly.
 
   A poll mode driver (pmd) thread handles the I/O of all DPDK interfaces
   assigned to it. A pmd thread shall poll the ports for incoming packets,
-  switch the packets and send to tx port.  pmd thread is CPU bound, and needs
+  switch the packets and send to tx port.  A pmd thread is CPU bound, and needs
   to be affinitized to isolated cores for optimum performance.
 
   By setting a bit in the mask, a pmd thread is created and pinned to the
@@ -452,8 +469,23 @@ affinitized accordingly.
       $ ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0x4
 
   .. note::
-    pmd thread on a NUMA node is only created if there is at least one DPDK
-    interface from that NUMA node added to OVS.
+    A pmd thread on a NUMA node is only created if there is at least one DPDK
+    interface from that NUMA node added to OVS.  A pmd thread is created by
+    default on a core of a NUMA node or when a specified pmd-cpu-mask has
+    indicated so.  Even though a PMD thread may exist, the thread only starts
+    consuming CPU cycles if there is least one receive queue assigned to
+    the pmd.
+
+  .. note::
+    On NUMA systems PCI devices are also local to a NUMA node.  Unbound rx
+    queues for a PCI device will be assigned to a pmd on it's local NUMA node
+    if a non-isolated PMD exists on that NUMA node.  If not, the queue will be
+    assigned to a non-isolated pmd on a remote NUMA node.  This will result in
+    reduced maximum throughput on that device and possibly on other devices
+    assigned to that pmd thread. If such a queue assignment is made a warning
+    message will be logged: "There's no available (non-isolated) pmd thread on
+    numa node N. Queue Q on port P will be assigned to the pmd on core C
+    (numa node N'). Expect reduced performance."
 
 - QEMU vCPU thread Affinity
 
@@ -563,7 +595,7 @@ Limitations
   The latest list of validated firmware versions can be found in the `DPDK
   release notes`_.
 
-.. _DPDK release notes: http://dpdk.org/doc/guides/rel_notes/release_16_11.html
+.. _DPDK release notes: http://dpdk.org/doc/guides/rel_notes/release_17_05.html
 
 Reporting Bugs
 --------------

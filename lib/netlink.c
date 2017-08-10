@@ -235,13 +235,15 @@ nl_msg_put_unspec_zero(struct ofpbuf *msg, uint16_t type, size_t size)
 
 /* Appends a Netlink attribute of the given 'type' and the 'size' bytes of
  * 'data' as its payload, to the tail end of 'msg', reallocating and copying
- * its data if necessary.  Returns a pointer to the first byte of data in the
- * attribute, which is left uninitialized. */
+ * its data if necessary. */
 void
 nl_msg_put_unspec(struct ofpbuf *msg, uint16_t type,
                   const void *data, size_t size)
 {
-    memcpy(nl_msg_put_unspec_uninit(msg, type, size), data, size);
+    void *ptr;
+
+    ptr = nl_msg_put_unspec_uninit(msg, type, size);
+    nullable_memcpy(ptr, data, size);
 }
 
 /* Appends a Netlink attribute of the given 'type' and no payload to 'msg'.
@@ -486,7 +488,7 @@ size_t
 nl_msg_start_nested(struct ofpbuf *msg, uint16_t type)
 {
     size_t offset = msg->size;
-    nl_msg_put_unspec(msg, type, NULL, 0);
+    nl_msg_put_unspec_uninit(msg, type, 0);
     return offset;
 }
 
@@ -497,6 +499,32 @@ nl_msg_end_nested(struct ofpbuf *msg, size_t offset)
 {
     struct nlattr *attr = ofpbuf_at_assert(msg, offset, sizeof *attr);
     attr->nla_len = msg->size - offset;
+}
+
+/* Cancel a nested Netlink attribute in 'msg'.  'offset' should be the value
+ * returned by nl_msg_start_nested(). */
+void
+nl_msg_cancel_nested(struct ofpbuf *msg, size_t offset)
+{
+    msg->size = offset;
+}
+
+/* Same as nls_msg_end_nested() when the nested Netlink contains non empty
+ * message. Otherwise, drop the nested message header from 'msg'.
+ *
+ * Return true if the nested message has been dropped.  */
+bool
+nl_msg_end_non_empty_nested(struct ofpbuf *msg, size_t offset)
+{
+    nl_msg_end_nested(msg, offset);
+
+    struct nlattr *attr = ofpbuf_at_assert(msg, offset, sizeof *attr);
+    if (!nl_attr_get_size(attr)) {
+        nl_msg_cancel_nested(msg, offset);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 /* Appends a nested Netlink attribute of the given 'type', with the 'size'

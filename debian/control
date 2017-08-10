@@ -14,13 +14,14 @@ Build-Depends: autoconf (>= 2.64),
                dh-systemd (>= 1.5),
                graphviz,
                libcap-ng-dev,
-               libdpdk-dev (>= 16.11) [amd64 i386 ppc64el arm64],
+               libdpdk-dev (>= 17.05.1) [amd64 i386 ppc64el arm64],
                libnuma-dev [amd64 i386],
                libpcap-dev [amd64 i386],
                libssl-dev,
                libtool,
                libxen-dev [amd64 i386],
                openssl,
+               pkg-config,
                procps,
                python-all (>= 2.6.6-3~),
                python-setuptools,
@@ -81,7 +82,7 @@ Description: Open vSwitch switch implementations
  the Open vSwitch kernel-based switch.
 
 Package: openvswitch-switch-dpdk
-Architecture: amd64 i386 ppc64el arm64
+Architecture: amd64 arm64 i386 ppc64el
 Depends: dpdk,
          openvswitch-switch (= ${binary:Version}),
          ${misc:Depends},

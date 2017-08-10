@@ -1,3 +1,16 @@
+openvswitch (2.8.0~git20170809.7aa47a19d-0ubuntu1) artful; urgency=medium
+
+  * New snapshot from branch-2.8.
+  * d/p/*: Drop, no longer required.
+  * d/openvswitch-switch.logrotate: Use sharedscripts, ignore return code
+    from ovs-appctl.
+  * d/control: Bump minimum dpdk version to 17.05.1.
+  * d/control: Add pkg-config to BD's.
+  * d/rules: Skip failing tests for DPDK builds.
+  * d/rules: Re-enable testing on s390x.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 10 Aug 2017 15:31:03 +0100
+
 openvswitch (2.7.1-0ubuntu1) artful; urgency=medium
 
   * New upstream release.

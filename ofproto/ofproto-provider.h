@@ -60,6 +60,7 @@ struct bfd_cfg;
 struct meter;
 struct ofoperation;
 struct ofproto_packet_out;
+struct smap;
 
 extern struct ovs_mutex ofproto_mutex;
 
@@ -108,12 +109,13 @@ struct ofproto {
     /* List of expirable flows, in all flow tables. */
     struct ovs_list expirable OVS_GUARDED_BY(ofproto_mutex);
 
-    /* Meter table.
-     * OpenFlow meters start at 1.  To avoid confusion we leave the first
-     * pointer in the array un-used, and index directly with the OpenFlow
-     * meter_id. */
+    /* Meter table.  */
     struct ofputil_meter_features meter_features;
-    struct meter **meters; /* 'meter_features.max_meter' + 1 pointers. */
+    struct hmap meters;             /* uint32_t indexed 'struct meter *'.  */
+    uint32_t slowpath_meter_id;     /* Datapath slowpath meter.  UINT32_MAX
+                                       if not defined.  */
+    uint32_t controller_meter_id;   /* Datapath controller meter. UINT32_MAX
+                                       if not defined.  */
 
     /* OpenFlow connections. */
     struct connmgr *connmgr;
@@ -516,9 +518,6 @@ extern unsigned ofproto_max_idle;
 /* Number of upcall handler and revalidator threads. Only affects the
  * ofproto-dpif implementation. */
 extern size_t n_handlers, n_revalidators;
-
-/* Cpu mask for pmd threads. */
-extern char *pmd_cpu_mask;
 
 static inline struct rule *rule_from_cls_rule(const struct cls_rule *);
 
@@ -1778,16 +1777,17 @@ struct ofproto_class {
      * leaving '*id' unchanged.  On failure, the existing meter configuration
      * is left intact. */
     enum ofperr (*meter_set)(struct ofproto *ofproto, ofproto_meter_id *id,
-                             const struct ofputil_meter_config *config);
+                             struct ofputil_meter_config *config);
 
     /* Gets the meter and meter band packet and byte counts for maximum of
-     * 'stats->n_bands' bands for the meter with provider ID 'id' within
-     * 'ofproto'.  The caller fills in the other stats values.  The band stats
-     * are copied to memory at 'stats->bands' provided by the caller.  The
-     * number of returned band stats is returned in 'stats->n_bands'. */
+     * 'n_bands' bands for the meter with provider ID 'id' within 'ofproto'.
+     * The caller fills in the other stats values.  The band stats are copied
+     * to memory at 'stats->bands' provided by the caller.  The number of
+     * returned band stats is returned in 'stats->n_bands'. */
     enum ofperr (*meter_get)(const struct ofproto *ofproto,
                              ofproto_meter_id id,
-                             struct ofputil_meter_stats *stats);
+                             struct ofputil_meter_stats *stats,
+                             uint16_t n_bands);
 
     /* Deletes a meter, making the 'ofproto_meter_id' invalid for any
      * further calls. */
@@ -1820,6 +1820,13 @@ struct ofproto_class {
      * This function should be NULL if an implementation does not support it.
      */
     const char *(*get_datapath_version)(const struct ofproto *);
+
+    /* Pass custom configuration options to the 'type' datapath.
+     *
+     * This function should be NULL if an implementation does not support it.
+     */
+    void (*type_set_config)(const char *type,
+                            const struct smap *other_config);
 
 /* ## ------------------- ## */
 /* ## Connection tracking ## */
@@ -1928,7 +1935,8 @@ enum ofperr ofproto_flow_mod_init_for_learn(struct ofproto *,
                                             const struct ofputil_flow_mod *,
                                             struct ofproto_flow_mod *)
     OVS_EXCLUDED(ofproto_mutex);
-enum ofperr ofproto_flow_mod_learn(struct ofproto_flow_mod *, bool keep_ref)
+enum ofperr ofproto_flow_mod_learn(struct ofproto_flow_mod *, bool keep_ref,
+                                   unsigned limit, bool *below_limit)
     OVS_EXCLUDED(ofproto_mutex);
 enum ofperr ofproto_flow_mod_learn_refresh(struct ofproto_flow_mod *ofm);
 enum ofperr ofproto_flow_mod_learn_start(struct ofproto_flow_mod *ofm)
@@ -1947,7 +1955,8 @@ void ofproto_flush_flows(struct ofproto *);
 
 enum ofperr ofproto_check_ofpacts(struct ofproto *,
                                   const struct ofpact ofpacts[],
-                                  size_t ofpacts_len);
+                                  size_t ofpacts_len)
+    OVS_REQUIRES(ofproto_mutex);
 
 static inline const struct rule_actions *
 rule_get_actions(const struct rule *rule)
