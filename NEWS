@@ -1,4 +1,4 @@
-v2.8.0 - xx xxx xxxx
+v2.8.0 - 31 Aug 2017
 ---------------------
    - ovs-ofctl:
      * ovs-ofctl can now accept and display port names in place of numbers.  By
@@ -33,7 +33,7 @@ v2.8.0 - xx xxx xxxx
    - Userspace Datapath:
      * Added NAT support for userspace datapath.
      * Added FTP and TFTP support with NAT for userspace datapath.
-     * Added NSH (Network Service Header) support for userspace datapath.
+     * Experimental NSH (Network Service Header) support in userspace datapath.
    - OVN:
      * New built-in DNS support.
      * IPAM for IPv4 can now exclude user-defined addresses from assignment.
@@ -74,10 +74,6 @@ v2.8.0 - xx xxx xxxx
        Used generic encap and decap actions to implement encapsulation and
        decapsulation of NSH header.
        IETF NSH draft - https://datatracker.ietf.org/doc/draft-ietf-sfc-nsh/
-     * Conntrack state is only available to the processing path that
-       follows the "recirc_table" argument of the ct() action.  Starting
-       in OVS 2.8, this state is now cleared for the current processing
-       path whenever ct() is called.
    - Fedora Packaging:
      * OVN services are no longer restarted automatically after upgrade.
      * ovs-vswitchd and ovsdb-server run as non-root users by default.
@@ -94,6 +90,11 @@ v2.8.0 - xx xxx xxxx
      * HW offloading is done through the TC interface.
    - IPv6 link local addresses are now supported on Linux.  Use % to designate
      the scope device.
+   - The next major version of OVS will introduce a change in the
+     conntrack API.  Conntrack state is only available to the processing
+     path that follows the "recirc_table" argument of the ct() action.
+     Starting in OVS 2.9, this state will be cleared for the current
+     processing path whenever ct() is called.
 
 v2.7.0 - 21 Feb 2017
 ---------------------

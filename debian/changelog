@@ -1,3 +1,9 @@
+openvswitch (2.8.0-0ubuntu1) artful; urgency=medium
+
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 04 Sep 2017 15:17:49 +0100
+
 openvswitch (2.8.0~git20170829.c6711707d-0ubuntu1) artful; urgency=medium
 
   * New snapshot from branch-2.8.
