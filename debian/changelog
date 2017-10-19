@@ -1,3 +1,17 @@
+openvswitch (2.8.0-0ubuntu2) artful; urgency=medium
+
+  [ James Page ]
+  * d/p/s390x-stp-timeout.patch: Increase STP sync wait time for
+    'STP - flush the fdb and mdb when topology changed' test as this
+    reliable takes longer than 36 seconds on s390x (LP: #1722799).
+
+  [ Frode Nordahl ]
+  * d/openvswitch-switch.postinst: Do not modify
+    /etc/default/openvswitch-switch as this file is now managed
+    as a configuration file by dpkg (LP: #1723480).
+
+ -- James Page <james.page@ubuntu.com>  Thu, 19 Oct 2017 11:04:37 +0100
+
 openvswitch (2.8.0-0ubuntu1) artful; urgency=medium
 
   * New upstream release.

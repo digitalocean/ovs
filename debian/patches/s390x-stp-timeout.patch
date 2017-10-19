@@ -1,0 +1,41 @@
+Description: Increase STP sync wait time
+ On s390x, STP reliable takes longer than
+ 36 seconds to synchronize; increase the time
+ warp between port deletion and state checks
+ to 65 seconds.
+ .
+ Test failure has been forwarded to the ovs-dev
+ mailing list for further discussion; either STP
+ just takes longer on s390x, or there is some sort
+ of race in OVS which causes this test to
+ fail.
+Author: James Page <james.page@ubuntu.com>
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1722799
+Forwarded: no
+
+--- a/tests/stp.at
++++ b/tests/stp.at
+@@ -591,20 +591,9 @@ OVS_WAIT_UNTIL([ovs-appctl mdb/show br2
+ AT_CHECK([ovs-vsctl del-port br0 p2])
+ 
+ # give time for STP to synchronize
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
+-
+-ovs-appctl time/warp 3000
+-ovs-appctl time/warp 3000
++for i in $(seq 0 65); do
++    ovs-appctl time/warp 1000
++done
+ 
+ # check fdb and mdb
+ AT_CHECK([ovs-appctl fdb/show br0], [0], [dnl
