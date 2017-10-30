@@ -96,6 +96,11 @@ nat_conn_keys_lookup(struct hmap *nat_conn_keys,
                      const struct conn_key *key,
                      uint32_t basis);
 
+static bool
+nat_conn_keys_insert(struct hmap *nat_conn_keys,
+                     const struct conn *nat_conn,
+                     uint32_t hash_basis);
+
 static void
 nat_conn_keys_remove(struct hmap *nat_conn_keys,
                      const struct conn_key *key,
@@ -216,6 +221,61 @@ conn_key_cmp(const struct conn_key *key1, const struct conn_key *key2)
         return 0;
     }
     return 1;
+}
+
+static void
+ct_print_conn_info(struct conn *c, char *log_msg, enum vlog_level vll,
+                   bool force, bool rl_on)
+{
+#define CT_VLOG(RL_ON, LEVEL, ...)                                          \
+    do {                                                                    \
+        if (RL_ON) {                                                        \
+            static struct vlog_rate_limit rl_ = VLOG_RATE_LIMIT_INIT(5, 5); \
+            vlog_rate_limit(&this_module, LEVEL, &rl_, __VA_ARGS__);        \
+        } else {                                                            \
+            vlog(&this_module, LEVEL, __VA_ARGS__);                         \
+        }                                                                   \
+    } while (0)
+
+    if (OVS_UNLIKELY(force || vlog_is_enabled(&this_module, vll))) {
+        if (c->key.dl_type == htons(ETH_TYPE_IP)) {
+            CT_VLOG(rl_on, vll, "%s: src ip "IP_FMT" dst ip "IP_FMT" rev src "
+                    "ip "IP_FMT" rev dst ip "IP_FMT" src/dst ports "
+                    "%"PRIu16"/%"PRIu16" rev src/dst ports "
+                    "%"PRIu16"/%"PRIu16" zone/rev zone "
+                    "%"PRIu16"/%"PRIu16" nw_proto/rev nw_proto "
+                    "%"PRIu8"/%"PRIu8, log_msg,
+                    IP_ARGS(c->key.src.addr.ipv4_aligned),
+                    IP_ARGS(c->key.dst.addr.ipv4_aligned),
+                    IP_ARGS(c->rev_key.src.addr.ipv4_aligned),
+                    IP_ARGS(c->rev_key.dst.addr.ipv4_aligned),
+                    ntohs(c->key.src.port), ntohs(c->key.dst.port),
+                    ntohs(c->rev_key.src.port), ntohs(c->rev_key.dst.port),
+                    c->key.zone, c->rev_key.zone, c->key.nw_proto,
+                    c->rev_key.nw_proto);
+        } else {
+            char ip6_s[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &c->key.src.addr.ipv6, ip6_s, sizeof ip6_s);
+            char ip6_d[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &c->key.dst.addr.ipv6, ip6_d, sizeof ip6_d);
+            char ip6_rs[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &c->rev_key.src.addr.ipv6, ip6_rs,
+                      sizeof ip6_rs);
+            char ip6_rd[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &c->rev_key.dst.addr.ipv6, ip6_rd,
+                      sizeof ip6_rd);
+
+            CT_VLOG(rl_on, vll, "%s: src ip %s dst ip %s rev src ip %s"
+                    " rev dst ip %s src/dst ports %"PRIu16"/%"PRIu16
+                    " rev src/dst ports %"PRIu16"/%"PRIu16" zone/rev zone "
+                    "%"PRIu16"/%"PRIu16" nw_proto/rev nw_proto "
+                    "%"PRIu8"/%"PRIu8, log_msg, ip6_s, ip6_d, ip6_rs,
+                    ip6_rd, ntohs(c->key.src.port), ntohs(c->key.dst.port),
+                    ntohs(c->rev_key.src.port), ntohs(c->rev_key.dst.port),
+                    c->key.zone, c->rev_key.zone, c->key.nw_proto,
+                    c->rev_key.nw_proto);
+        }
+    }
 }
 
 /* Initializes the connection tracker 'ct'.  The caller is responsible for
@@ -772,6 +832,18 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                     nc->nat_info->nat_action = NAT_ACTION_DST;
                 }
                 *conn_for_un_nat_copy = *nc;
+                ct_rwlock_wrlock(&ct->resources_lock);
+                bool new_insert = nat_conn_keys_insert(&ct->nat_conn_keys,
+                                                       conn_for_un_nat_copy,
+                                                       ct->hash_basis);
+                ct_rwlock_unlock(&ct->resources_lock);
+                if (!new_insert) {
+                    char *log_msg = xasprintf("Pre-existing alg "
+                                              "nat_conn_key");
+                    ct_print_conn_info(conn_for_un_nat_copy, log_msg, VLL_INFO,
+                                       true, false);
+                    free(log_msg);
+                }
             } else {
                 *conn_for_un_nat_copy = *nc;
                 ct_rwlock_wrlock(&ct->resources_lock);
@@ -873,8 +945,16 @@ create_un_nat_conn(struct conntrack *ct, struct conn *conn_for_un_nat_copy,
     struct conn *rev_conn = conn_lookup(ct, &nc->key, now);
 
     if (alg_un_nat) {
-        hmap_insert(&ct->buckets[un_nat_conn_bucket].connections,
-                    &nc->node, un_nat_hash);
+        if (!rev_conn) {
+            hmap_insert(&ct->buckets[un_nat_conn_bucket].connections,
+                        &nc->node, un_nat_hash);
+        } else {
+            char *log_msg = xasprintf("Unusual condition for un_nat conn "
+                                      "create for alg: rev_conn %p", rev_conn);
+            ct_print_conn_info(nc, log_msg, VLL_INFO, true, false);
+            free(log_msg);
+            free(nc);
+        }
     } else {
         ct_rwlock_rdlock(&ct->resources_lock);
 
@@ -886,6 +966,11 @@ create_un_nat_conn(struct conntrack *ct, struct conn *conn_for_un_nat_copy,
             hmap_insert(&ct->buckets[un_nat_conn_bucket].connections,
                         &nc->node, un_nat_hash);
         } else {
+            char *log_msg = xasprintf("Unusual condition for un_nat conn "
+                                      "create: nat_conn_key_node/rev_conn "
+                                      "%p/%p", nat_conn_key_node, rev_conn);
+            ct_print_conn_info(nc, log_msg, VLL_INFO, true, false);
+            free(log_msg);
             free(nc);
         }
         ct_rwlock_unlock(&ct->resources_lock);
@@ -2065,19 +2150,9 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
             nat_conn->rev_key.src.port = htons(port);
         }
 
-        struct nat_conn_key_node *nat_conn_key_node =
-            nat_conn_keys_lookup(&ct->nat_conn_keys, &nat_conn->rev_key,
-                                 ct->hash_basis);
-
-        if (!nat_conn_key_node) {
-            struct nat_conn_key_node *nat_conn_key =
-                xzalloc(sizeof *nat_conn_key);
-            nat_conn_key->key = nat_conn->rev_key;
-            nat_conn_key->value = nat_conn->key;
-            uint32_t nat_conn_key_hash = conn_key_hash(&nat_conn_key->key,
-                                                       ct->hash_basis);
-            hmap_insert(&ct->nat_conn_keys, &nat_conn_key->node,
-                        nat_conn_key_hash);
+        bool new_insert = nat_conn_keys_insert(&ct->nat_conn_keys, nat_conn,
+                                               ct->hash_basis);
+        if (new_insert) {
             return true;
         } else if (!all_ports_tried) {
             if (min_port == max_port) {
@@ -2135,6 +2210,26 @@ nat_conn_keys_lookup(struct hmap *nat_conn_keys,
         }
     }
     return NULL;
+}
+
+/* This function must be called with the ct->resources lock taken. */
+static bool
+nat_conn_keys_insert(struct hmap *nat_conn_keys, const struct conn *nat_conn,
+                     uint32_t basis)
+{
+    struct nat_conn_key_node *nat_conn_key_node =
+        nat_conn_keys_lookup(nat_conn_keys, &nat_conn->rev_key, basis);
+
+    if (!nat_conn_key_node) {
+        struct nat_conn_key_node *nat_conn_key = xzalloc(sizeof *nat_conn_key);
+        nat_conn_key->key = nat_conn->rev_key;
+        nat_conn_key->value = nat_conn->key;
+        uint32_t nat_conn_key_hash = conn_key_hash(&nat_conn_key->key,
+                                                   basis);
+        hmap_insert(nat_conn_keys, &nat_conn_key->node, nat_conn_key_hash);
+        return true;
+    }
+    return false;
 }
 
 /* This function must be called with the ct->resources write lock taken. */

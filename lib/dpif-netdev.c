@@ -755,7 +755,7 @@ pmd_info_show_stats(struct ds *reply,
                     unsigned long long stats[DP_N_STATS],
                     uint64_t cycles[PMD_N_CYCLES])
 {
-    unsigned long long total_packets = 0;
+    unsigned long long total_packets;
     uint64_t total_cycles = 0;
     int i;
 
@@ -771,12 +771,11 @@ pmd_info_show_stats(struct ds *reply,
         } else {
             stats[i] = 0;
         }
-
-        if (i != DP_STAT_LOST) {
-            /* Lost packets are already included in DP_STAT_MISS */
-            total_packets += stats[i];
-        }
     }
+
+    /* Sum of all the matched and not matched packets gives the total.  */
+    total_packets = stats[DP_STAT_EXACT_HIT] + stats[DP_STAT_MASKED_HIT]
+                    + stats[DP_STAT_MISS];
 
     for (i = 0; i < PMD_N_CYCLES; i++) {
         if (cycles[i] > pmd->cycles_zero[i]) {
@@ -4078,10 +4077,19 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
         !(config->flags & (OFPMF13_KBPS | OFPMF13_PKTPS))) {
         return EBADF; /* Unsupported flags set */
     }
+
     /* Validate bands */
     if (config->n_bands == 0 || config->n_bands > MAX_BANDS) {
         return EINVAL; /* Too many bands */
     }
+
+    /* Validate rates */
+    for (i = 0; i < config->n_bands; i++) {
+        if (config->bands[i].rate == 0) {
+            return EBADRQC; /* rate must be non-zero */
+        }
+    }
+
     for (i = 0; i < config->n_bands; ++i) {
         switch (config->bands[i].type) {
         case OFPMBT13_DROP:

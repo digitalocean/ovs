@@ -195,9 +195,8 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @HAVE_SPHINX_TRUE@am__append_11 = docs-check
 @HAVE_SPHINX_TRUE@am__append_12 = docs-check
 @HAVE_SPHINX_TRUE@am__append_13 = clean-docs
-@HAVE_SPHINX_TRUE@am__append_14 = install-man-rst
-@WIN32_TRUE@am__append_15 = ${PTHREAD_LIBS}
-@WIN32_TRUE@am__append_16 = \
+@WIN32_TRUE@am__append_14 = ${PTHREAD_LIBS}
+@WIN32_TRUE@am__append_15 = \
 @WIN32_TRUE@	lib/daemon-windows.c \
 @WIN32_TRUE@	lib/getopt_long.c \
 @WIN32_TRUE@	lib/getrusage-windows.c \
@@ -207,7 +206,7 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @WIN32_TRUE@	lib/stream-windows.c \
 @WIN32_TRUE@	lib/strsep.c
 
-@WIN32_FALSE@am__append_17 = \
+@WIN32_FALSE@am__append_16 = \
 @WIN32_FALSE@	lib/daemon-unix.c \
 @WIN32_FALSE@	lib/latch-unix.c \
 @WIN32_FALSE@	lib/signals.c \
@@ -215,9 +214,9 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @WIN32_FALSE@	lib/socket-util-unix.c \
 @WIN32_FALSE@	lib/stream-unix.c
 
-@HAVE_WNO_UNUSED_TRUE@am__append_18 = -Wno-unused
-@HAVE_WNO_UNUSED_PARAMETER_TRUE@am__append_19 = -Wno-unused-parameter
-@LINUX_TRUE@am__append_20 = \
+@HAVE_WNO_UNUSED_TRUE@am__append_17 = -Wno-unused
+@HAVE_WNO_UNUSED_PARAMETER_TRUE@am__append_18 = -Wno-unused-parameter
+@LINUX_TRUE@am__append_19 = \
 @LINUX_TRUE@	lib/dpif-netlink.c \
 @LINUX_TRUE@	lib/dpif-netlink.h \
 @LINUX_TRUE@	lib/dpif-netlink-rtnl.c \
@@ -242,14 +241,14 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @LINUX_TRUE@	lib/tc.c \
 @LINUX_TRUE@	lib/tc.h
 
-@DPDK_NETDEV_TRUE@am__append_21 = \
+@DPDK_NETDEV_TRUE@am__append_20 = \
 @DPDK_NETDEV_TRUE@	lib/dpdk.c \
 @DPDK_NETDEV_TRUE@	lib/netdev-dpdk.c
 
-@DPDK_NETDEV_FALSE@am__append_22 = \
+@DPDK_NETDEV_FALSE@am__append_21 = \
 @DPDK_NETDEV_FALSE@	lib/dpdk-stub.c
 
-@WIN32_TRUE@am__append_23 = \
+@WIN32_TRUE@am__append_22 = \
 @WIN32_TRUE@	lib/dpif-netlink.c \
 @WIN32_TRUE@	lib/dpif-netlink.h \
 @WIN32_TRUE@	lib/dpif-netlink-rtnl.h \
@@ -264,24 +263,24 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @WIN32_TRUE@	lib/wmi.c \
 @WIN32_TRUE@	lib/wmi.h
 
-@HAVE_POSIX_AIO_TRUE@am__append_24 = lib/async-append-aio.c
-@HAVE_POSIX_AIO_FALSE@am__append_25 = lib/async-append-null.c
-@ESX_TRUE@am__append_26 = \
+@HAVE_POSIX_AIO_TRUE@am__append_23 = lib/async-append-aio.c
+@HAVE_POSIX_AIO_FALSE@am__append_24 = lib/async-append-null.c
+@ESX_TRUE@am__append_25 = \
 @ESX_TRUE@	lib/route-table-stub.c \
 @ESX_TRUE@	lib/if-notifier-stub.c
 
-@HAVE_IF_DL_TRUE@am__append_27 = \
+@HAVE_IF_DL_TRUE@am__append_26 = \
 @HAVE_IF_DL_TRUE@	lib/if-notifier-bsd.c \
 @HAVE_IF_DL_TRUE@	lib/netdev-bsd.c \
 @HAVE_IF_DL_TRUE@	lib/rtbsd.c \
 @HAVE_IF_DL_TRUE@	lib/rtbsd.h \
 @HAVE_IF_DL_TRUE@	lib/route-table-bsd.c
 
-@HAVE_OPENSSL_TRUE@am__append_28 = lib/stream-ssl.c
-@HAVE_OPENSSL_TRUE@am__append_29 = lib/dhparams.c
-@HAVE_OPENSSL_FALSE@am__append_30 = lib/stream-nossl.c
-@WIN32_TRUE@am__append_31 = ${PTHREAD_LIBS}
-@HAVE_PYTHON_TRUE@am__append_32 = \
+@HAVE_OPENSSL_TRUE@am__append_27 = lib/stream-ssl.c
+@HAVE_OPENSSL_TRUE@am__append_28 = lib/dhparams.c
+@HAVE_OPENSSL_FALSE@am__append_29 = lib/stream-nossl.c
+@WIN32_TRUE@am__append_30 = ${PTHREAD_LIBS}
+@HAVE_PYTHON_TRUE@am__append_31 = \
 @HAVE_PYTHON_TRUE@	utilities/ovs-dpctl-top \
 @HAVE_PYTHON_TRUE@	utilities/ovs-l3ping \
 @HAVE_PYTHON_TRUE@	utilities/ovs-parse-backtrace \
@@ -291,42 +290,42 @@ noinst_PROGRAMS = $(am__EXEEXT_1) tests/test-ovsdb$(EXEEXT) \
 @HAVE_PYTHON_TRUE@	utilities/ovs-test \
 @HAVE_PYTHON_TRUE@	utilities/ovs-vlan-test
 
-@LINUX_TRUE@am__append_33 = utilities/ovs-vlan-bug-workaround
-@LINUX_TRUE@am__append_34 = utilities/nlmon
-@HAVE_PYTHON_TRUE@am__append_35 = utilities/bugtool/ovs-bugtool
-@HAVE_PYTHON_TRUE@am__append_36 = utilities/bugtool/ovs-bugtool \
+@LINUX_TRUE@am__append_32 = utilities/ovs-vlan-bug-workaround
+@LINUX_TRUE@am__append_33 = utilities/nlmon
+@HAVE_PYTHON_TRUE@am__append_34 = utilities/bugtool/ovs-bugtool
+@HAVE_PYTHON_TRUE@am__append_35 = utilities/bugtool/ovs-bugtool \
 @HAVE_PYTHON_TRUE@	utilities/bugtool/ovs-bugtool.8
-@HAVE_PYTHON_TRUE@am__append_37 = utilities/bugtool/ovs-bugtool.8
-@HAVE_PYTHON_TRUE@am__append_38 = utilities/bugtool/ovs-bugtool.8.in
-@HAVE_PYTHON_TRUE@am__append_39 = $(bugtool_scripts)
-@HAVE_PYTHON_TRUE@am__append_40 = utilities/bugtool/ovs-bugtool.in
-@HAVE_PYTHON_TRUE@am__append_41 = bugtool-install-data-local
-@HAVE_PYTHON_TRUE@am__append_42 = bugtool-uninstall-local
-@DPDK_NETDEV_TRUE@am__append_43 = tests/test-dpdkr
-@WIN32_FALSE@am__append_44 = \
+@HAVE_PYTHON_TRUE@am__append_36 = utilities/bugtool/ovs-bugtool.8
+@HAVE_PYTHON_TRUE@am__append_37 = utilities/bugtool/ovs-bugtool.8.in
+@HAVE_PYTHON_TRUE@am__append_38 = $(bugtool_scripts)
+@HAVE_PYTHON_TRUE@am__append_39 = utilities/bugtool/ovs-bugtool.in
+@HAVE_PYTHON_TRUE@am__append_40 = bugtool-install-data-local
+@HAVE_PYTHON_TRUE@am__append_41 = bugtool-uninstall-local
+@DPDK_NETDEV_TRUE@am__append_42 = tests/test-dpdkr
+@WIN32_FALSE@am__append_43 = \
 @WIN32_FALSE@	tests/test-unix-socket.c
 
-@LINUX_TRUE@am__append_45 = \
+@LINUX_TRUE@am__append_44 = \
 @LINUX_TRUE@	tests/test-netlink-conntrack.c
 
-@HAVE_OPENSSL_TRUE@am__append_46 = $(TESTPKI_FILES)
-@HAVE_OPENSSL_TRUE@am__append_47 = $(TESTPKI_FILES) tests/ovs-pki.log
-@HAVE_OPENSSL_TRUE@am__append_48 = clean-pki
-@HAVE_PYTHON_TRUE@am__append_49 = .h .hstamp
+@HAVE_OPENSSL_TRUE@am__append_45 = $(TESTPKI_FILES)
+@HAVE_OPENSSL_TRUE@am__append_46 = $(TESTPKI_FILES) tests/ovs-pki.log
+@HAVE_OPENSSL_TRUE@am__append_47 = clean-pki
+@HAVE_PYTHON_TRUE@am__append_48 = .h .hstamp
+@HAVE_PYTHON_TRUE@am__append_49 = $(HSTAMP_FILES)
 @HAVE_PYTHON_TRUE@am__append_50 = $(HSTAMP_FILES)
-@HAVE_PYTHON_TRUE@am__append_51 = $(HSTAMP_FILES)
 
 # OVS does not use C++ itself, but it provides public header files
 # that a C++ compiler should accept, so when --enable-Werror is in
 # effect and a C++ compiler is available, we build a C++ source file
 # that #includes all the public headers, as a way to ensure that they
 # are acceptable as C++.
-@HAVE_CXX_TRUE@am__append_52 = include/openvswitch/libcxxtest.la
-@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_53 = vswitchd/vswitch.gv vswitchd/vswitch.pic
-@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_54 = vtep/vtep.gv vtep/vtep.pic
-@WIN32_TRUE@am__append_55 = $(srcdir)/datapath-windows/include/OvsDpInterface.h
-@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_56 = ovn/ovn-sb.gv ovn/ovn-sb.pic
-@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_57 = ovn/ovn-nb.gv ovn/ovn-nb.pic
+@HAVE_CXX_TRUE@am__append_51 = include/openvswitch/libcxxtest.la
+@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_52 = vswitchd/vswitch.gv vswitchd/vswitch.pic
+@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_53 = vtep/vtep.gv vtep/vtep.pic
+@WIN32_TRUE@am__append_54 = $(srcdir)/datapath-windows/include/OvsDpInterface.h
+@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_55 = ovn/ovn-sb.gv ovn/ovn-sb.pic
+@HAVE_DOT_TRUE@@HAVE_PYTHON_TRUE@am__append_56 = ovn/ovn-nb.gv ovn/ovn-nb.pic
 subdir = .
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/absolute-header.m4 \
@@ -1795,14 +1794,14 @@ run_python = \
 ALL_LOCAL = dist-hook-git config-h-check printf-check static-check \
 	check-assert-h-usage check-endian thread-safety-check \
 	check-ifconfig $(am__append_6) $(am__append_8) $(am__append_9) \
-	$(am__append_11) $(am__append_51) cxx-check \
+	$(am__append_11) $(am__append_50) cxx-check \
 	check-debian-changelog-version \
 	vswitchd/vswitch.ovsschema.stamp \
 	$(srcdir)/python/ovs/version.py $(srcdir)/python/ovs/dirs.py \
 	vtep/vtep.ovsschema.stamp ovn/ovn-nb.ovsschema.stamp \
 	ovn/ovn-sb.ovsschema.stamp
 BUILT_SOURCES = ofproto/ipfix-entities.def include/odp-netlink.h \
-	$(OVSIDL_BUILT) $(am__append_55)
+	$(OVSIDL_BUILT) $(am__append_54)
 
 # Clean up generated files from older OVS versions.  (This is important so that
 # #include "vswitch-idl.h" doesn't get the wrong copy.)
@@ -1823,17 +1822,17 @@ CLEANFILES = all-distfiles all-gitfiles missing-distfiles distfiles \
 	utilities/ovs-tcpdump.8 utilities/ovs-tcpundump \
 	utilities/ovs-tcpundump.1 utilities/ovs-test \
 	utilities/ovs-vlan-test utilities/ovs-vlan-bug-workaround.8 \
-	utilities/ovs-vsctl.8 $(am__append_36) $(valgrind_wrappers) \
-	$(am__append_47) include/odp-netlink.h $(am__append_50) \
+	utilities/ovs-vsctl.8 $(am__append_35) $(valgrind_wrappers) \
+	$(am__append_46) include/odp-netlink.h $(am__append_49) \
 	cxx-check debian/copyright vswitchd/ovs-vswitchd.8 \
-	$(am__append_53) vswitchd/ovs-vswitchd.conf.db.5 \
+	$(am__append_52) vswitchd/ovs-vswitchd.conf.db.5 \
 	vswitchd/vswitch.ovsschema.stamp vswitchd/vswitch-idl.c \
 	vswitchd/vswitch-idl.h ovsdb/ovsdb-tool.1 ovsdb/ovsdb-client.1 \
 	ovsdb/ovsdb-server.1 ovsdb/ovsdb-idlc $(OVSIDL_BUILT) \
-	ovsdb/ovsdb-dot vtep/vtep-ctl.8 vtep/ovs-vtep $(am__append_54) \
+	ovsdb/ovsdb-dot vtep/vtep-ctl.8 vtep/ovs-vtep $(am__append_53) \
 	vtep/vtep.5 vtep/vtep.ovsschema.stamp \
 	$(srcdir)/datapath-windows/include/OvsDpInterface.h \
-	$(am__append_56) ovn/ovn-sb.5 $(am__append_57) ovn/ovn-nb.5 \
+	$(am__append_55) ovn/ovn-sb.5 $(am__append_56) ovn/ovn-nb.5 \
 	ovn/ovn-architecture.7 ovn/ovn-nb.ovsschema.stamp \
 	ovn/ovn-sb.ovsschema.stamp ovn/controller/ovn-controller.8 \
 	ovn/controller-vtep/ovn-controller-vtep.8 \
@@ -1847,7 +1846,7 @@ CLEANFILES = all-distfiles all-gitfiles missing-distfiles distfiles \
 # lcov support
 # Requires build with --enable-coverage and lcov/genhtml in $PATH
 CLEAN_LOCAL = clean-pycov $(am__append_10) $(am__append_13) clean-lcov \
-	$(am__append_48)
+	$(am__append_47)
 DISTCLEANFILES = tests/atconfig tests/atlocal \
 	rhel/usr_lib_systemd_system_ovs-vswitchd.service
 PYCOV_CLEAN_FILES = build-aux/check-structs,cover \
@@ -2131,7 +2130,7 @@ EXTRA_DIST = AUTHORS.rst CONTRIBUTING.rst MAINTAINERS.rst README.rst \
 	selinux/openvswitch-custom.te.in
 
 # Docker drivers
-bin_SCRIPTS = utilities/ovs-docker utilities/ovs-pki $(am__append_32) \
+bin_SCRIPTS = utilities/ovs-docker utilities/ovs-pki $(am__append_31) \
 	ovn/utilities/ovn-docker-overlay-driver \
 	ovn/utilities/ovn-docker-underlay-driver \
 	ovn/utilities/ovn-detrace
@@ -2142,9 +2141,9 @@ dist_pkgdata_SCRIPTS =
 dist_sbin_SCRIPTS = 
 dist_scripts_SCRIPTS = 
 dist_scripts_DATA = 
-INSTALL_DATA_LOCAL = $(am__append_14) lib-install-data-local \
-	$(am__append_41)
-UNINSTALL_LOCAL = uninstall-man-rst $(am__append_42) \
+INSTALL_DATA_LOCAL = install-man-rst lib-install-data-local \
+	$(am__append_40)
+UNINSTALL_LOCAL = uninstall-man-rst $(am__append_41) \
 	ovs-uninstall-local
 # ovsdb-tool.1
 # ovsdb-client.1
@@ -2156,7 +2155,7 @@ man_MANS = lib/ovs-fields.7 utilities/ovs-appctl.8 utilities/ovs-ctl.8 \
 	utilities/ovs-pcap.1 utilities/ovs-pki.8 \
 	utilities/ovs-tcpdump.8 utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-bug-workaround.8 utilities/ovs-vsctl.8 \
-	$(am__append_37) vswitchd/ovs-vswitchd.8 \
+	$(am__append_36) vswitchd/ovs-vswitchd.8 \
 	vswitchd/ovs-vswitchd.conf.db.5 ovsdb/ovsdb-tool.1 \
 	ovsdb/ovsdb-client.1 ovsdb/ovsdb-server.1 vtep/vtep-ctl.8 \
 	vtep/vtep.5 ovn/ovn-sb.5 ovn/ovn-nb.5 ovn/ovn-architecture.7 \
@@ -2188,7 +2187,7 @@ MAN_ROOTS = utilities/ovs-appctl.8.in \
 	utilities/ovs-pki.8.in utilities/ovs-tcpdump.8.in \
 	utilities/ovs-tcpundump.1.in \
 	utilities/ovs-vlan-bug-workaround.8.in \
-	utilities/ovs-vsctl.8.in $(am__append_38) \
+	utilities/ovs-vsctl.8.in $(am__append_37) \
 	vswitchd/ovs-vswitchd.8.in ovsdb/ovsdb-tool.1.in \
 	ovsdb/ovsdb-client.1.in ovsdb/ovsdb-server.1.in \
 	ovsdb/ovsdb-idlc.1 vtep/vtep-ctl.8.in \
@@ -2237,7 +2236,7 @@ noinst_HEADERS = $(EXTRA_DIST) include/sparse/arpa/inet.h \
 lib_LTLIBRARIES = lib/libopenvswitch.la lib/libsflow.la \
 	ofproto/libofproto.la ovsdb/libovsdb.la vtep/libvtep.la \
 	ovn/lib/libovn.la
-noinst_LTLIBRARIES = $(am__append_52)
+noinst_LTLIBRARIES = $(am__append_51)
 noinst_man_MANS = utilities/ovs-sim.1
 
 # ovsdb-idlc
@@ -2260,17 +2259,17 @@ OVSIDL_BUILT = lib/vswitch-idl.c lib/vswitch-idl.h \
 	ovn/lib/ovn-nb-idl.h ovn/lib/ovn-nb-idl.ovsidl
 pkgdata_DATA = vswitchd/vswitch.ovsschema vtep/vtep.ovsschema \
 	ovn/ovn-sb.ovsschema ovn/ovn-nb.ovsschema
-sbin_SCRIPTS = $(am__append_35)
+sbin_SCRIPTS = $(am__append_34)
 
 # ovs-vtep
 scripts_SCRIPTS = utilities/ovs-check-dead-ifs utilities/ovs-ctl \
-	utilities/ovs-save $(am__append_39) vtep/ovs-vtep \
+	utilities/ovs-save $(am__append_38) vtep/ovs-vtep \
 	ovn/utilities/ovn-ctl ovn/utilities/ovndb-servers.ocf
 completion_SCRIPTS = utilities/ovs-appctl-bashcomp.bash \
 	utilities/ovs-vsctl-bashcomp.bash
 scripts_DATA = utilities/ovs-lib
-SUFFIXES = .in .xml $(am__append_49) .ovsidl .ovsschema
-check_DATA = $(am__append_46)
+SUFFIXES = .in .xml $(am__append_48) .ovsidl .ovsschema
+check_DATA = $(am__append_45)
 check_SCRIPTS = utilities/ovs-appctl-bashcomp.bash \
 	utilities/ovs-vsctl-bashcomp.bash tests/atlocal
 pkgconfig_DATA = lib/libopenvswitch.pc lib/libsflow.pc \
@@ -2279,7 +2278,7 @@ pkgconfig_DATA = lib/libopenvswitch.pc lib/libsflow.pc \
 # This file is purely used for checking the style of the python build tools.
 FLAKE8_PYFILES = Documentation/conf.py ofproto/ipfix-gen-entities \
 	utilities/ovs-pcap.in utilities/checkpatch.py \
-	utilities/ovs-dev.py utilities/ovs-tcpdump.in $(am__append_40) \
+	utilities/ovs-dev.py utilities/ovs-tcpdump.in $(am__append_39) \
 	$(CHECK_PYFILES) \
 	xenserver/usr_share_openvswitch_scripts_ovs-xapi-sync \
 	$(filter-out python/ovs/dirs.py,$(PYFILES)) python/setup.py \
@@ -2477,7 +2476,7 @@ extract_stem_and_section = \
 	test -n "$$mandir" || { echo "unknown directory for manpage section $$section"; continue; }
 
 lib_libopenvswitch_la_LIBADD = $(SSL_LIBS) $(CAPNG_LDADD) \
-	$(am__append_15)
+	$(am__append_14)
 lib_libopenvswitch_la_LDFLAGS = \
         $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/lib/libopenvswitch.sym \
@@ -2564,12 +2563,12 @@ lib_libopenvswitch_la_SOURCES = lib/aes128.c lib/aes128.h \
 	lib/lldp/aa-structs.h lib/lldp/lldp.c lib/lldp/lldp-const.h \
 	lib/lldp/lldp-tlv.h lib/lldp/lldpd.c lib/lldp/lldpd.h \
 	lib/lldp/lldpd-structs.c lib/lldp/lldpd-structs.h \
-	$(am__append_16) $(am__append_17) $(am__append_20) \
-	$(am__append_21) $(am__append_22) $(am__append_23) \
-	$(am__append_24) $(am__append_25) $(am__append_26) \
-	$(am__append_27) $(am__append_28) $(am__append_30)
+	$(am__append_15) $(am__append_16) $(am__append_19) \
+	$(am__append_20) $(am__append_21) $(am__append_22) \
+	$(am__append_23) $(am__append_24) $(am__append_25) \
+	$(am__append_26) $(am__append_27) $(am__append_29)
 nodist_lib_libopenvswitch_la_SOURCES = lib/dirs.c lib/vswitch-idl.c \
-	lib/vswitch-idl.h $(am__append_29)
+	lib/vswitch-idl.h $(am__append_28)
 lib_libsflow_la_LDFLAGS = \
         $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/lib/libsflow.sym \
@@ -2584,8 +2583,8 @@ lib_libsflow_la_SOURCES = \
 	lib/sflow_receiver.c
 
 lib_libsflow_la_CPPFLAGS = $(AM_CPPFLAGS)
-lib_libsflow_la_CFLAGS = $(AM_CFLAGS) $(am__append_18) \
-	$(am__append_19)
+lib_libsflow_la_CFLAGS = $(AM_CFLAGS) $(am__append_17) \
+	$(am__append_18)
 ofproto_libofproto_la_LDFLAGS = \
         $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/ofproto/libofproto.sym \
@@ -2615,7 +2614,7 @@ ofproto_libofproto_la_SOURCES = ofproto/bond.c ofproto/bond.h \
 	ofproto/bundles.c ofproto/bundles.h ofproto/ipfix-entities.def
 ofproto_libofproto_la_CPPFLAGS = $(AM_CPPFLAGS)
 ofproto_libofproto_la_CFLAGS = $(AM_CFLAGS)
-ofproto_libofproto_la_LIBADD = lib/libsflow.la $(am__append_31)
+ofproto_libofproto_la_LIBADD = lib/libsflow.la $(am__append_30)
 dist_noinst_SCRIPTS = ofproto/ipfix-gen-entities
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
@@ -2840,7 +2839,7 @@ tests_ovstest_SOURCES = tests/ovstest.c tests/ovstest.h \
 	tests/test-sflow.c tests/test-sha1.c tests/test-skiplist.c \
 	tests/test-stp.c tests/test-unixctl.c tests/test-util.c \
 	tests/test-uuid.c tests/test-bitmap.c tests/test-vconn.c \
-	tests/test-aa.c $(am__append_44) $(am__append_45)
+	tests/test-aa.c $(am__append_43) $(am__append_44)
 tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
 dist_check_SCRIPTS = tests/flowgen.pl
 tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
@@ -6483,6 +6482,8 @@ dist-docs:
 @HAVE_SPHINX_TRUE@	    echo " $(INSTALL_DATA) $(SPHINXBUILDDIR)/man/$$stem.$$section '$(DESTDIR)'\"$$mandir/$$stem.$$section\""; \
 @HAVE_SPHINX_TRUE@	    $(INSTALL_DATA) $(SPHINXBUILDDIR)/man/$$stem.$$section '$(DESTDIR)'"$$mandir/$$stem.$$section"; \
 @HAVE_SPHINX_TRUE@	done
+@HAVE_SPHINX_FALSE@install-man-rst:
+@HAVE_SPHINX_FALSE@	@:
 uninstall-man-rst:
 	@$(set_mandirs); \
 	for rst in $(RST_MANPAGES); do \

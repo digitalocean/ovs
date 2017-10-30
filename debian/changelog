@@ -1,3 +1,9 @@
+openvswitch (2.8.1-0ubuntu1) bionic; urgency=medium
+
+  * New upstream point release (LP: #1724622).
+
+ -- James Page <james.page@ubuntu.com>  Mon, 30 Oct 2017 10:01:32 +0000
+
 openvswitch (2.8.0-0ubuntu2) artful; urgency=medium
 
   [ James Page ]
