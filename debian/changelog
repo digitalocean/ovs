@@ -1,3 +1,13 @@
+openvswitch (2.8.1-0ubuntu2) bionic; urgency=medium
+
+  * Adapt changes in DPDK 17.11 (LP: #1733325)
+    - d/p/ovs-netdev-dpdk-17.11-upgrade.patch
+    - d/rules: non x86 openvswitch-dpdk builds now need libnuma and pcap as
+      build depends as well.
+    - d/rules: dpdk dropped xen support, drop build dependency
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Mon, 20 Nov 2017 11:10:41 +0100
+
 openvswitch (2.8.1-0ubuntu1) bionic; urgency=medium
 
   * New upstream point release (LP: #1724622).
