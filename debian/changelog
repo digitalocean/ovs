@@ -1,3 +1,18 @@
+openvswitch (2.8.1-0ubuntu3) bionic; urgency=medium
+
+  * Updates to systemd configuration:
+    - Move to distinct units for ovsdb-server and ovs-vswitchd.
+  * Drop obsolete upstart configuration file.
+  * Bump nofiles to 1048576 for ovs daemons (LP: #1737866).
+  * d/control: Bump minimum debhelper version to 10, drop BD on
+    dh-systemd.
+  * d/p/dpif-kernel-gre-mtu-workaround.patch,
+    d/p/dpif-netlink-rtnl-Use-65000-instead-of-65535-as-tunnel-MTU.patch:
+    Cherry pick in-flight fixes for workaround to correctly set MTU
+    of GRE devices via netlink (LP: #1742505).
+
+ -- James Page <james.page@ubuntu.com>  Thu, 18 Jan 2018 15:26:41 +0200
+
 openvswitch (2.8.1-0ubuntu2) bionic; urgency=medium
 
   * Adapt changes in DPDK 17.11 (LP: #1733325)

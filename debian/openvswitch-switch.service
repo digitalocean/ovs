@@ -1,11 +1,15 @@
 [Unit]
 Description=Open vSwitch
-After=network.target openvswitch-nonetwork.service
-Requires=openvswitch-nonetwork.service
+Before=network.target
+After=network-pre.target ovsdb-server.service ovs-vswitchd.service
+PartOf=network.target
+Requires=ovsdb-server.service
+Requires=ovs-vswitchd.service
 
 [Service]
 Type=oneshot
 ExecStart=/bin/true
+ExecReload=/bin/true
 ExecStop=/bin/true
 RemainAfterExit=yes
 

@@ -1,0 +1,20 @@
+[Unit]
+Description=Open vSwitch Database Unit
+After=syslog.target network-pre.target
+Before=network.target network.service
+ReloadPropagatedFrom=openvswitch-switch.service
+PartOf=openvswitch-switch.service
+
+[Service]
+LimitNOFILE=1048576
+Type=forking
+Restart=on-failure
+EnvironmentFile=-/etc/default/openvswitch
+ExecStart=/usr/share/openvswitch/scripts/ovs-ctl \
+          --no-ovs-vswitchd --no-monitor --system-id=random \
+          start $OPTIONS
+ExecStop=/usr/share/openvswitch/scripts/ovs-ctl --no-ovs-vswitchd stop
+ExecReload=/usr/share/openvswitch/scripts/ovs-ctl --no-ovs-vswitchd \
+           --no-monitor restart $OPTIONS
+RuntimeDirectory=openvswitch
+RuntimeDirectoryMode=0755

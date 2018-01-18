@@ -99,9 +99,14 @@ ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 endif
 
 override_dh_installinit:
-	dh_installinit -R
-	dh_installinit -popenvswitch-switch --name=openvswitch-nonetwork --no-start
-	dh_installinit -popenvswitch-switch --name=openvswitch-force-reload-kmod --no-start
+	dh_installinit --restart-after-upgrade
+	dh_installinit -popenvswitch-switch --name=ovsdb-server --no-start
+	dh_installinit -popenvswitch-switch --name=ovs-vswitchd --no-start
+
+override_dh_systemd_start:
+	dh_systemd_start --restart-after-upgrade
+	dh_systemd_start -popenvswitch-switch --name=ovsdb-server --no-start
+	dh_systemd_start -popenvswitch-switch --name=ovs-vswitchd --no-start
 
 override_dh_strip:
 	dh_strip --dbg-package=openvswitch-dbg

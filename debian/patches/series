@@ -1,2 +1,4 @@
 s390x-stp-timeout.patch
 ovs-netdev-dpdk-17.11-upgrade.patch
+dpif-kernel-gre-mtu-workaround.patch
+dpif-netlink-rtnl-Use-65000-instead-of-65535-as-tunnel-MTU.patch
