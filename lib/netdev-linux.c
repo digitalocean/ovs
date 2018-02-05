@@ -20,6 +20,8 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <linux/filter.h>
@@ -31,7 +33,6 @@
 #include <linux/mii.h>
 #include <linux/rtnetlink.h>
 #include <linux/sockios.h>
-#include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/utsname.h>
@@ -40,7 +41,6 @@
 #include <net/if_arp.h>
 #include <net/if_packet.h>
 #include <net/route.h>
-#include <netinet/in.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +64,7 @@
 #include "openflow/openflow.h"
 #include "ovs-atomic.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "rtnetlink.h"
 #include "openvswitch/shash.h"
 #include "socket-util.h"
@@ -144,7 +144,7 @@ struct tpacket_auxdata {
  *
  * To avoid revisiting problems reported with using configure to detect
  * compatibility (see report at
- * http://openvswitch.org/pipermail/dev/2014-October/047978.html)
+ * https://mail.openvswitch.org/pipermail/ovs-dev/2014-October/291521.html)
  * unconditionally replace ethtool_cmd_speed. */
 #define ethtool_cmd_speed rpl_ethtool_cmd_speed
 static inline uint32_t rpl_ethtool_cmd_speed(const struct ethtool_cmd *ep)
@@ -182,8 +182,8 @@ static inline uint32_t rpl_ethtool_cmd_speed(const struct ethtool_cmd *ep)
  *
  * Tests for rtnl_link_stats64 don't seem to consistently work, e.g. on
  * 2.6.32-431.29.2.el6.x86_64 (see report at
- * http://openvswitch.org/pipermail/dev/2014-October/047978.html).  Maybe
- * if_link.h is not self-contained on those kernels.  It is easiest to
+ * https://mail.openvswitch.org/pipermail/ovs-dev/2014-October/291521.html).
+ * Maybe if_link.h is not self-contained on those kernels.  It is easiest to
  * unconditionally define a replacement. */
 #ifndef IFLA_STATS64
 #define IFLA_STATS64 23
@@ -502,6 +502,8 @@ struct netdev_linux {
 
     /* For devices of class netdev_tap_class only. */
     int tap_fd;
+    bool present;               /* If the device is present in the namespace */
+    uint64_t tx_dropped;        /* tap device can drop if the iface is down */
 };
 
 struct netdev_rxq_linux {
@@ -750,8 +752,10 @@ netdev_linux_update(struct netdev_linux *dev,
             dev->ifindex = change->if_index;
             dev->cache_valid |= VALID_IFINDEX;
             dev->get_ifindex_error = 0;
+            dev->present = true;
         } else {
             netdev_linux_changed(dev, change->ifi_flags, 0);
+            dev->present = false;
         }
     } else if (rtnetlink_type_is_rtnlgrp_addr(change->nlmsg_type)) {
         /* Invalidates in4, in6. */
@@ -1186,18 +1190,19 @@ static int
 netdev_linux_sock_batch_send(int sock, int ifindex,
                              struct dp_packet_batch *batch)
 {
+    const size_t size = dp_packet_batch_size(batch);
     /* We don't bother setting most fields in sockaddr_ll because the
      * kernel ignores them for SOCK_RAW. */
     struct sockaddr_ll sll = { .sll_family = AF_PACKET,
                                .sll_ifindex = ifindex };
 
-    struct mmsghdr *mmsg = xmalloc(sizeof(*mmsg) * batch->count);
-    struct iovec *iov = xmalloc(sizeof(*iov) * batch->count);
+    struct mmsghdr *mmsg = xmalloc(sizeof(*mmsg) * size);
+    struct iovec *iov = xmalloc(sizeof(*iov) * size);
 
-    for (int i = 0; i < batch->count; i++) {
-        struct dp_packet *packet = batch->packets[i];
+    struct dp_packet *packet;
+    DP_PACKET_BATCH_FOR_EACH (packet, batch) {
         iov[i].iov_base = dp_packet_data(packet);
-        iov[i].iov_len = dp_packet_get_send_len(packet);
+        iov[i].iov_len = dp_packet_size(packet);
         mmsg[i].msg_hdr = (struct msghdr) { .msg_name = &sll,
                                             .msg_namelen = sizeof sll,
                                             .msg_iov = &iov[i],
@@ -1205,10 +1210,10 @@ netdev_linux_sock_batch_send(int sock, int ifindex,
     }
 
     int error = 0;
-    for (uint32_t ofs = 0; ofs < batch->count; ) {
+    for (uint32_t ofs = 0; ofs < size; ) {
         ssize_t retval;
         do {
-            retval = sendmmsg(sock, mmsg + ofs, batch->count - ofs, 0);
+            retval = sendmmsg(sock, mmsg + ofs, size - ofs, 0);
             error = retval < 0 ? errno : 0;
         } while (error == EINTR);
         if (error) {
@@ -1232,9 +1237,20 @@ netdev_linux_tap_batch_send(struct netdev *netdev_,
                             struct dp_packet_batch *batch)
 {
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
-    for (int i = 0; i < batch->count; i++) {
-        struct dp_packet *packet = batch->packets[i];
-        size_t size = dp_packet_get_send_len(packet);
+    struct dp_packet *packet;
+
+    /* The Linux tap driver returns EIO if the device is not up,
+     * so if the device is not up, don't waste time sending it.
+     * However, if the device is in another network namespace
+     * then OVS can't retrieve the state. In that case, send the
+     * packets anyway. */
+    if (netdev->present && !(netdev->ifi_flags & IFF_UP)) {
+        netdev->tx_dropped += dp_packet_batch_size(batch);
+        return 0;
+    }
+
+    DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+        size_t size = dp_packet_size(packet);
         ssize_t retval;
         int error;
 
@@ -1269,7 +1285,7 @@ netdev_linux_tap_batch_send(struct netdev *netdev_,
  * expected to do additional queuing of packets. */
 static int
 netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
-                  struct dp_packet_batch *batch, bool may_steal,
+                  struct dp_packet_batch *batch,
                   bool concurrent_txq OVS_UNUSED)
 {
     int error = 0;
@@ -1305,7 +1321,7 @@ netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
     }
 
 free_batch:
-    dp_packet_delete_batch(batch, may_steal);
+    dp_packet_delete_batch(batch, true);
     return error;
 }
 
@@ -1824,6 +1840,7 @@ netdev_tap_get_stats(const struct netdev *netdev_, struct netdev_stats *stats)
         stats->multicast           += dev_stats.multicast;
         stats->collisions          += dev_stats.collisions;
     }
+    stats->tx_dropped += netdev->tx_dropped;
     ovs_mutex_unlock(&netdev->mutex);
 
     return error;
@@ -2852,6 +2869,7 @@ netdev_linux_update_flags(struct netdev *netdev_, enum netdev_flags off,
     netdev_linux_get_carrier_resets,                            \
     netdev_linux_set_miimon_interval,                           \
     GET_STATS,                                                  \
+    NULL,														\
                                                                 \
     GET_FEATURES,                                               \
     netdev_linux_set_advertisements,                            \
@@ -3762,6 +3780,7 @@ htb_parse_class_details__(struct netdev *netdev,
 {
     const struct htb *htb = htb_get__(netdev);
     int mtu, error;
+    unsigned long long int max_rate_bit;
 
     error = netdev_linux_get_mtu__(netdev_linux_cast(netdev), &mtu);
     if (error) {
@@ -3777,10 +3796,8 @@ htb_parse_class_details__(struct netdev *netdev,
     hc->min_rate = MIN(hc->min_rate, htb->max_rate);
 
     /* max-rate */
-    hc->max_rate = smap_get_ullong(details, "max-rate", 0) / 8;
-    if (!hc->max_rate) {
-        hc->max_rate = htb->max_rate;
-    }
+    max_rate_bit = smap_get_ullong(details, "max-rate", 0);
+    hc->max_rate = max_rate_bit ? max_rate_bit / 8 : htb->max_rate;
     hc->max_rate = MAX(hc->max_rate, hc->min_rate);
     hc->max_rate = MIN(hc->max_rate, htb->max_rate);
 

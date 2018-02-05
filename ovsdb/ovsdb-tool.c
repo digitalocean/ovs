@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -135,8 +135,10 @@ usage(void)
            "  create [DB [SCHEMA]]    create DB with the given SCHEMA\n"
            "  compact [DB [DST]]      compact DB in-place (or to DST)\n"
            "  convert [DB [SCHEMA [DST]]]   convert DB to SCHEMA (to DST)\n"
+           "  db-name [DB]            report name of schema used by DB\n"
            "  db-version [DB]         report version of schema used by DB\n"
            "  db-cksum [DB]           report checksum of schema used by DB\n"
+           "  schema-name [SCHEMA]    report SCHEMA's name\n"
            "  schema-version [SCHEMA] report SCHEMA's schema version\n"
            "  schema-cksum [SCHEMA]   report SCHEMA's checksum\n"
            "  query [DB] TRNS         execute read-only transaction on DB\n"
@@ -217,8 +219,8 @@ do_create(struct ovs_cmdl_context *ctx)
     ovsdb_schema_destroy(schema);
 
     /* Create database file. */
-    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_LOG_CREATE,
-                                     -1, &log));
+    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC,
+                                     OVSDB_LOG_CREATE_EXCL, -1, &log));
     check_ovsdb_error(ovsdb_log_write(log, json));
     check_ovsdb_error(ovsdb_log_commit(log));
     ovsdb_log_close(log);
@@ -325,6 +327,17 @@ do_needs_conversion(struct ovs_cmdl_context *ctx)
 }
 
 static void
+do_db_name(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    puts(schema->name);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
 do_db_version(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
@@ -365,6 +378,18 @@ do_schema_cksum(struct ovs_cmdl_context *ctx)
 
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
     puts(schema->cksum);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
+do_schema_name(struct ovs_cmdl_context *ctx)
+{
+    const char *schema_file_name
+        = ctx->argc >= 2 ? ctx->argv[1] : default_schema();
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    puts(schema->name);
     ovsdb_schema_destroy(schema);
 }
 
@@ -519,8 +544,8 @@ do_show_log(struct ovs_cmdl_context *ctx)
     struct ovsdb_schema *schema;
     unsigned int i;
 
-    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_LOG_READ_ONLY,
-                                     -1, &log));
+    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC,
+                                     OVSDB_LOG_READ_ONLY, -1, &log));
     shash_init(&names);
     schema = NULL;
     for (i = 0; ; i++) {
@@ -590,8 +615,10 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "compact", "[db [dst]]", 0, 2, do_compact, OVS_RW },
     { "convert", "[db [schema [dst]]]", 0, 3, do_convert, OVS_RW },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion, OVS_RO },
+    { "db-name", "[db]",  0, 1, do_db_name, OVS_RO },
     { "db-version", "[db]",  0, 1, do_db_version, OVS_RO },
     { "db-cksum", "[db]", 0, 1, do_db_cksum, OVS_RO },
+    { "schema-name", "[schema]", 0, 1, do_schema_name, OVS_RO },
     { "schema-version", "[schema]", 0, 1, do_schema_version, OVS_RO },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
     { "query", "[db] trns", 1, 2, do_query, OVS_RO },

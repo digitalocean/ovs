@@ -29,7 +29,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb.h"
 #include "condition.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "reconnect.h"
 #include "row.h"
 #include "server.h"
@@ -730,8 +730,8 @@ ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
     return db;
 
 error:
-    *replyp = jsonrpc_create_error(ovsdb_error_to_json(error), request->id);
-    ovsdb_error_destroy(error);
+    *replyp = jsonrpc_create_error(ovsdb_error_to_json_free(error),
+                                   request->id);
     return NULL;
 }
 
@@ -781,7 +781,6 @@ ovsdb_jsonrpc_session_lock(struct ovsdb_jsonrpc_session *s,
                            enum ovsdb_lock_mode mode)
 {
     struct ovsdb_lock_waiter *waiter;
-    struct jsonrpc_msg *reply;
     struct ovsdb_error *error;
     struct ovsdb_session *victim;
     const char *lock_name;
@@ -820,9 +819,7 @@ ovsdb_jsonrpc_session_lock(struct ovsdb_jsonrpc_session *s,
     return jsonrpc_create_reply(result, request->id);
 
 error:
-    reply = jsonrpc_create_error(ovsdb_error_to_json(error), request->id);
-    ovsdb_error_destroy(error);
-    return reply;
+    return jsonrpc_create_error(ovsdb_error_to_json_free(error), request->id);
 }
 
 static void
@@ -857,7 +854,6 @@ ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
                              struct jsonrpc_msg *request)
 {
     struct ovsdb_lock_waiter *waiter;
-    struct jsonrpc_msg *reply;
     struct ovsdb_error *error;
     const char *lock_name;
 
@@ -884,9 +880,7 @@ ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
     return jsonrpc_create_reply(json_object_create(), request->id);
 
 error:
-    reply = jsonrpc_create_error(ovsdb_error_to_json(error), request->id);
-    ovsdb_error_destroy(error);
-    return reply;
+    return jsonrpc_create_error(ovsdb_error_to_json_free(error), request->id);
 }
 
 static struct jsonrpc_msg *
@@ -1361,9 +1355,7 @@ error:
         ovsdb_jsonrpc_monitor_destroy(m);
     }
 
-    json = ovsdb_error_to_json(error);
-    ovsdb_error_destroy(error);
-    return jsonrpc_create_error(json, request_id);
+    return jsonrpc_create_error(ovsdb_error_to_json_free(error), request_id);
 }
 
 static struct ovsdb_error *
@@ -1406,7 +1398,6 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
     struct ovsdb_jsonrpc_monitor *m;
     struct json *monitor_cond_change_reqs;
     struct shash_node *node;
-    struct json *json;
 
     if (json_array(params)->n != 3) {
         error = ovsdb_syntax_error(params, NULL, "invalid parameters");
@@ -1415,8 +1406,16 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
 
     m = ovsdb_jsonrpc_monitor_find(s, params->u.array.elems[0]);
     if (!m) {
-        error = ovsdb_syntax_error(request_id, NULL,
+        error = ovsdb_syntax_error(params->u.array.elems[0], NULL,
                                    "unknown monitor session");
+        goto error;
+    }
+
+    const struct json *new_monitor_id = params->u.array.elems[1];
+    bool changing_id = !json_equal(m->monitor_id, new_monitor_id);
+    if (changing_id && ovsdb_jsonrpc_monitor_find(s, new_monitor_id)) {
+        error = ovsdb_syntax_error(new_monitor_id, NULL,
+                                   "duplicate monitor ID");
         goto error;
     }
 
@@ -1466,11 +1465,12 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
         }
     }
 
-    /* Change monitor id */
-    hmap_remove(&s->monitors, &m->node);
-    json_destroy(m->monitor_id);
-    m->monitor_id = json_clone(params->u.array.elems[1]);
-    hmap_insert(&s->monitors, &m->node, json_hash(m->monitor_id, 0));
+    if (changing_id) {
+        hmap_remove(&s->monitors, &m->node);
+        json_destroy(m->monitor_id);
+        m->monitor_id = json_clone(new_monitor_id);
+        hmap_insert(&s->monitors, &m->node, json_hash(m->monitor_id, 0));
+    }
 
     /* Send the new update, if any,  represents the difference from the old
      * condition and the new one. */
@@ -1490,10 +1490,7 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
     return jsonrpc_create_reply(json_object_create(), request_id);
 
 error:
-
-    json = ovsdb_error_to_json(error);
-    ovsdb_error_destroy(error);
-    return jsonrpc_create_error(json, request_id);
+    return jsonrpc_create_error(ovsdb_error_to_json_free(error), request_id);
 }
 
 static struct jsonrpc_msg *

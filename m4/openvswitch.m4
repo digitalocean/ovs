@@ -79,11 +79,14 @@ AC_DEFUN([OVS_CHECK_WIN64],
      if (cl) 2>&1 | grep 'x64' >/dev/null 2>&1; then
        cl_cv_x64=yes
        MSVC64_LDFLAGS=" /MACHINE:X64 "
+       MSVC_PLATFORM="x64"
      else
        cl_cv_x64=no
        MSVC64_LDFLAGS=""
+       MSVC_PLATFORM="x86"
      fi])
      AC_SUBST([MSVC64_LDFLAGS])
+     AC_SUBST([MSVC_PLATFORM])
 ])
 
 dnl Checks for WINDOWS.
@@ -143,6 +146,7 @@ AC_DEFUN([OVS_CHECK_WIN32],
       )
 
       AC_DEFINE([WIN32], [1], [Define to 1 if building on WIN32.])
+      AC_CHECK_TYPES([struct timespec], [], [], [[#include <time.h>]])
       AH_BOTTOM([#ifdef WIN32
 #include "include/windows/windefs.h"
 #endif])
@@ -632,6 +636,9 @@ AC_DEFUN([OVS_CHECK_CXX],
    AX_CXX_COMPILE_STDCXX([11], [], [optional])
    if test $enable_Werror = yes && test $HAVE_CXX11 = 1; then
      enable_cxx=:
+     AC_LANG_PUSH([C++])
+     AC_CHECK_HEADERS([atomic])
+     AC_LANG_POP([C++])
    else
      enable_cxx=false
    fi

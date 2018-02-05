@@ -120,9 +120,7 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
                                        "as first parameter");
         }
 
-        results = ovsdb_error_to_json(error);
-        ovsdb_error_destroy(error);
-        return results;
+        return ovsdb_error_to_json_free(error);
     }
 
     x.db = db;
@@ -175,11 +173,18 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
             error = parse_error;
         }
         /* Create read-only violation error if there is one. */
-        if (!error && read_only && !ro) {
-            error = ovsdb_error("not allowed",
-                                "%s operation not allowed when "
-                                "database server is in read only mode",
-                                op_name);
+        if (!ro && !error) {
+            if (read_only) {
+                error = ovsdb_error("not allowed",
+                                    "%s operation not allowed when "
+                                    "database server is in read only mode",
+                                    op_name);
+            } else if (db->schema->name[0] == '_') {
+                error = ovsdb_error("not allowed",
+                                    "%s operation not allowed on "
+                                    "table in reserved database %s",
+                                    op_name, db->schema->name);
+            }
         }
         if (error) {
             json_destroy(result);
@@ -348,7 +353,6 @@ ovsdb_execute_insert(struct ovsdb_execution *x, struct ovsdb_parser *parser,
             if (datum->n == 1) {
                 error = ovsdb_datum_check_constraints(datum, &column->type);
                 if (error) {
-                    ovsdb_row_destroy(row);
                     break;
                 }
             }
@@ -367,6 +371,8 @@ ovsdb_execute_insert(struct ovsdb_execution *x, struct ovsdb_parser *parser,
         json_object_put(result, "uuid",
                         ovsdb_datum_to_json(&row->fields[OVSDB_COL_UUID],
                                             &ovsdb_type_uuid));
+    } else {
+        ovsdb_row_destroy(row);
     }
     return error;
 }

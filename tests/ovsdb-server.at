@@ -33,7 +33,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
@@ -81,7 +81,7 @@ AT_DATA([txnfile], [[ovsdb-client transact unix:socket \
 ]])
 AT_CHECK([ovsdb-server --remote=punix:socket db --run="sh txnfile"], [0], [stdout], [])
 cat stdout >> output
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0],
+AT_CHECK([uuidfilt output], [0],
   [[[{"uuid":["uuid","<0>"]}]
 [{"uuid":["uuid","<1>"]}]
 [{"rows":[{"_uuid":["uuid","<0>"],"_version":["uuid","<2>"],"name":"zero","number":0},{"_uuid":["uuid","<1>"],"_version":["uuid","<3>"],"name":"one","number":1}]}]
@@ -129,22 +129,12 @@ AT_DATA([txnfile], [[ovsdb-client transact unix:socket \
 ]])
 AT_CHECK([ovsdb-server --remote=punix:socket db --run="sh txnfile"], [0], [stdout], [])
 cat stdout >> output
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0],
+AT_CHECK([uuidfilt output], [0],
   [[[{"uuid":["uuid","<0>"]}]
 [{"uuid":["uuid","<1>"]}]
 [{"rows":[{"_uuid":["uuid","<0>"],"_version":["uuid","<2>"],"name":"zero","number":0},{"_uuid":["uuid","<1>"],"_version":["uuid","<3>"],"name":"one","number":1}]}]
 ]], [],
          [test ! -e pid || kill `cat pid`])
-AT_CLEANUP
-
-AT_SETUP([ovsdb-client get-schema-version])
-AT_KEYWORDS([ovsdb server positive])
-ordinal_schema > schema
-AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
-AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --remote=punix:socket db], [0], [ignore], [ignore])
-AT_CHECK([ovsdb-client get-schema-version unix:socket ordinals], [0], [5.1.3
-])
-OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
 
 AT_SETUP([database multiplexing implementation])
@@ -370,7 +360,7 @@ AT_CHECK(
         "columns": ["target", "is_connected"]}]']],
   [0], [stdout], [ignore])
 AT_CHECK(
-  [${PERL} $srcdir/uuidfilt.pl stdout], 
+  [uuidfilt stdout],
   [0], 
   [[[{"rows":[{"managers":"punix:socket1"}]},{"rows":[{"is_connected":false,"target":"punix:socket2"}]}]
 ]], 
@@ -661,7 +651,7 @@ AT_CHECK(
     done]],
   [0], [stdout], [ignore], [test ! -e pid || kill `cat pid`])
 dnl Check that all the crap is in fact in the database log.
-AT_CHECK([[${PERL} $srcdir/uuidfilt.pl db | grep -v ^OVSDB | sed 's/"_date":[0-9]*/"_date":0/' | ovstest test-json --multiple -]], [0],
+AT_CHECK([[uuidfilt db | grep -v ^OVSDB | sed 's/"_date":[0-9]*/"_date":0/' | ovstest test-json --multiple -]], [0],
   [[{"cksum":"12345678 9","name":"ordinals","tables":{"ordinals":{"columns":{"name":{"type":"string"},"number":{"type":"integer"}},"indexes":[["number"]]}},"version":"5.1.3"}
 {"_comment":"add row for zero 0","_date":0,"ordinals":{"<0>":{"name":"zero"}}}
 {"_comment":"delete row for 0","_date":0,"ordinals":{"<0>":null}}
@@ -685,20 +675,25 @@ AT_CHECK([[${PERL} $srcdir/uuidfilt.pl db | grep -v ^OVSDB | sed 's/"_date":[0-9
 dnl Dump out and check the actual database contents.
 AT_CHECK([[ovsdb-client dump unix:socket ordinals]],
   [0], [stdout], [ignore])
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0], [dnl
+AT_CHECK([uuidfilt stdout], [0], [dnl
 ordinals table
 _uuid                                name  number
 ------------------------------------ ----- ------
-<0> five  5     @&t@
-<1> four  4     @&t@
-<2> one   1     @&t@
-<3> three 3     @&t@
-<4> two   2     @&t@
-<5> zero  0     @&t@
+<0> five  5
+<1> four  4
+<2> one   1
+<3> three 3
+<4> two   2
+<5> zero  0
 ], [], [test ! -e pid || kill `cat pid`])
 dnl Now compact the database in-place.
 AT_CHECK([[ovs-appctl -t ovsdb-server ovsdb-server/compact]],
   [0], [], [ignore], [test ! -e pid || kill `cat pid`])
+dnl Negative test.
+AT_CHECK([[ovs-appctl -t ovsdb-server ovsdb-server/compact _Server]],
+  [2], [], [cannot compact built-in databases
+ovs-appctl: ovsdb-server: server returned an error
+])
 dnl Make sure that "db" is still a symlink to dir/db instead of getting
 dnl replaced by a regular file, ditto for .db.~lock~.
 if test "$IS_WIN32" = "no"; then
@@ -716,16 +711,16 @@ AT_CHECK([test `wc -l < db` -eq 4], [0], [], [],
 dnl And check that the dumped data is the same too:
 AT_CHECK([ovsdb-client dump unix:socket ordinals], [0], [stdout], [ignore],
   [test ! -e pid || kill `cat pid`])
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0], [dnl
+AT_CHECK([uuidfilt stdout], [0], [dnl
 ordinals table
 _uuid                                name  number
 ------------------------------------ ----- ------
-<0> five  5     @&t@
-<1> four  4     @&t@
-<2> one   1     @&t@
-<3> three 3     @&t@
-<4> two   2     @&t@
-<5> zero  0     @&t@
+<0> five  5
+<1> four  4
+<2> one   1
+<3> three 3
+<4> two   2
+<5> zero  0
 ], [], [test ! -e pid || kill `cat pid`])
 dnl Now do some more transactions.
 AT_CHECK(
@@ -746,13 +741,13 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --remote=punix:socket --log-file="`pwd`"/ovsdb-server.log db], [0], [ignore], [ignore])
 AT_CHECK([ovsdb-client dump unix:socket ordinals], [0], [stdout], [ignore],
   [test ! -e pid || kill `cat pid`])
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0], [dnl
+AT_CHECK([uuidfilt stdout], [0], [dnl
 ordinals table
 _uuid                                name  number
 ------------------------------------ ----- ------
-<0> five  5     @&t@
-<1> four  4     @&t@
-<2> three 3     @&t@
+<0> five  5
+<1> four  4
+<2> three 3
 ], [], [test ! -e pid || kill `cat pid`])
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
@@ -885,7 +880,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
@@ -923,7 +918,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
@@ -931,17 +926,6 @@ cat stdout >> output
 ONE_EXECUTION_EXAMPLE
 
 AT_BANNER([OVSDB -- ovsdb-server transactions (TCP IPv4 sockets)])
-
-AT_SETUP([ovsdb-client get-schema-version - tcp socket])
-AT_KEYWORDS([ovsdb server positive tcp])
-ordinal_schema > schema
-AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
-AT_CHECK([ovsdb-server --log-file --detach --no-chdir --pidfile --remote=ptcp:0:127.0.0.1 db], [0], [ignore], [ignore])
-PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
-AT_CHECK([ovsdb-client get-schema-version tcp:127.0.0.1:$TCP_PORT ordinals], [0], [5.1.3
-])
-OVSDB_SERVER_SHUTDOWN
-AT_CLEANUP])
 
 # OVSDB_CHECK_EXECUTION(TITLE, SCHEMA, TRANSACTIONS, OUTPUT, [KEYWORDS])
 #
@@ -970,7 +954,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
@@ -1007,7 +991,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
@@ -1045,7 +1029,7 @@ m4_define([OVSDB_CHECK_EXECUTION],
       AT_CHECK([ovsdb-server --remote=punix:socket db --run="sh txnfile"], [0], [stdout], [ignore])
       cat stdout >> output
 ])
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore])
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore])
    AT_CLEANUP])
 
 EXECUTION_EXAMPLES
@@ -1135,7 +1119,7 @@ m4_define([OVSDB_CHECK_REPLICATION],
    AT_CHECK([diff dump1 dump2], [1], [stdout], [ignore])
    cat stdout > output
 
-   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore])
+   AT_CHECK([uuidfilt output], [0], [$4], [ignore])
 
    OVSDB_SERVER_SHUTDOWN
    OVSDB_SERVER_SHUTDOWN2
@@ -1220,10 +1204,10 @@ cat stdout > dump2
 AT_CHECK([diff dump1 dump2], [1], [stdout], [ignore])
 cat stdout > output
 
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [7,9c7,8
+AT_CHECK([uuidfilt output], [0], [7,9c7,8
 < _uuid                                name number
 < ------------------------------------ ---- ------
-< <0> one  1     @&t@
+< <0> one  1
 ---
 > _uuid name number
 > ----- ---- ------
@@ -1322,10 +1306,10 @@ cat stdout > dump2
 AT_CHECK([diff dump1 dump2], [1], [stdout], [ignore])
 cat stdout > output
 
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [7,9c7,8
+AT_CHECK([uuidfilt output], [0], [7,9c7,8
 < _uuid                                name number
 < ------------------------------------ ---- ------
-< <0> one  1     @&t@
+< <0> one  1
 ---
 > _uuid name number
 > ----- ---- ------
@@ -1341,15 +1325,15 @@ AT_CHECK([ovsdb-client transact unix:db2.sock \
 AT_CHECK([ovsdb-client dump unix:db2.sock], [0], [stdout])
 cat stdout > output
 
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [a table
+AT_CHECK([uuidfilt output], [0], [a table
 _uuid                                name number
 ------------------------------------ ---- ------
-<0> zero 0     @&t@
+<0> zero 0
 
 b table
 _uuid                                name number
 ------------------------------------ ---- ------
-<1> one  1     @&t@
+<1> one  1
 ])
 
 OVSDB_SERVER_SHUTDOWN
@@ -1534,7 +1518,7 @@ AT_CHECK([ovsdb-client transact tcp:127.0.0.1:$TCP_PORT \
           "row": {"name": "two", "number": '2'}}
          ]']], [0], [stdout], [ignore])
 cat stdout >> output
-AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [[[{"details":"insert operation not allowed when database server is in read only mode","error":"not allowed"}]]
+AT_CHECK([uuidfilt output], [0], [[[{"details":"insert operation not allowed when database server is in read only mode","error":"not allowed"}]]
 ], [ignore])
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP

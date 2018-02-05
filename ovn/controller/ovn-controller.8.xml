@@ -55,10 +55,9 @@
       information from the local Open vSwitch's ovsdb-server instance.
       The default location is <code>db.sock</code> in the local Open
       vSwitch's "run" directory.  It may be overridden by specifying the
-      <var>ovs-database</var> argument in one of the following forms:
+      <var>ovs-database</var> argument as an OVSDB active or passive
+      connection method, as described in <code>ovsdb</code>(7).
     </p>
-    <xi:include href="ovsdb/remote-active.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
-    <xi:include href="ovsdb/remote-passive.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <p>
       <code>ovn-controller</code> assumes it gets configuration
@@ -150,6 +149,13 @@
         or <code>false</code> to disable. Depending on the capabilities of the
         network interface card, enabling encapsulation checksum may incur
         performance loss. In such cases, encapsulation checksums can be disabled.
+      </dd>
+
+      <dt><code>external_ids:ovn-cms-options</code></dt>
+      <dd>
+        A list of options that will be consumed by the CMS Plugin and which
+        specific to this particular chassis. An example would be:
+        <code>cms_option1,cms_option2:foo</code>.
       </dd>
     </dl>
 

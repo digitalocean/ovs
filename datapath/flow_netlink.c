@@ -77,6 +77,7 @@ static bool actions_may_change_flow(const struct nlattr *actions)
 			break;
 
 		case OVS_ACTION_ATTR_CT:
+		case OVS_ACTION_ATTR_CT_CLEAR:
 		case OVS_ACTION_ATTR_HASH:
 		case OVS_ACTION_ATTR_POP_ETH:
 		case OVS_ACTION_ATTR_POP_MPLS:
@@ -1257,7 +1258,7 @@ static int ovs_key_from_nlattrs(struct net *net, struct sw_flow_match *match,
 		}
 
 		if (!is_mask && ipv6_key->ipv6_label & htonl(0xFFF00000)) {
-			OVS_NLERR(log, "IPv6 flow label %x is out of range (max=%x).\n",
+			OVS_NLERR(log, "IPv6 flow label %x is out of range (max=%x)",
 				  ntohl(ipv6_key->ipv6_label), (1 << 20) - 1);
 			return -EINVAL;
 		}
@@ -1902,7 +1903,11 @@ int ovs_nla_put_mask(const struct sw_flow *flow, struct sk_buff *skb)
 				OVS_FLOW_ATTR_MASK, true, skb);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0)
+#define MAX_ACTIONS_BUFSIZE	(16 * 1024)
+#else
 #define MAX_ACTIONS_BUFSIZE	(32 * 1024)
+#endif
 
 static struct sw_flow_actions *nla_alloc_flow_actions(int size, bool log)
 {
@@ -2483,6 +2488,7 @@ static int __ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 			[OVS_ACTION_ATTR_SAMPLE] = (u32)-1,
 			[OVS_ACTION_ATTR_HASH] = sizeof(struct ovs_action_hash),
 			[OVS_ACTION_ATTR_CT] = (u32)-1,
+			[OVS_ACTION_ATTR_CT_CLEAR] = 0,
 			[OVS_ACTION_ATTR_TRUNC] = sizeof(struct ovs_action_trunc),
 			[OVS_ACTION_ATTR_PUSH_ETH] = sizeof(struct ovs_action_push_eth),
 			[OVS_ACTION_ATTR_POP_ETH] = 0,
@@ -2622,6 +2628,9 @@ static int __ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 			if (err)
 				return err;
 			skip_copy = true;
+			break;
+
+		case OVS_ACTION_ATTR_CT_CLEAR:
 			break;
 
 		case OVS_ACTION_ATTR_PUSH_ETH:

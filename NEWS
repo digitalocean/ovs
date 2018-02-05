@@ -1,12 +1,67 @@
-v2.8.1 - 26 Sep 2017
----------------------
+v2.9.0 - xx xxx xxxx
+--------------------
+   - NSH implementation now conforms to latest draft (draft-ietf-sfc-nsh-28).
+     * Add ttl field.
+     * Add a new action dec_nsh_ttl.
+   - OVSDB:
+     * New high-level documentation in ovsdb(7).
+     * New file format documentation for developers in ovsdb(5).
+     * Protocol documentation moved from ovsdb-server(1) to ovsdb-server(7).
+     * ovsdb-client: New "get-schema-cksum" and "query" commands.
+     * ovsdb-client: New "backup" and "restore" commands.
+     * ovsdb-tool: New "db-name" and "schema-name" commands.
+   - ovs-vsctl and other commands that display data in tables now support a
+     --max-column-width option to limit column width.
+   - No longer slow-path traffic that sends to a controller.  Applications,
+     such as OVN ACL logging, want to send a copy of a packet to a
+     controller while leaving the actual packet forwarding in the datapath.
    - OVN:
      * The "requested-chassis" option for a logical switch port now accepts a
        chassis "hostname" in addition to a chassis "name".
-   - Bug fixes
+     * IPv6
+       - Added support to send IPv6 Router Advertisement packets in response to
+         the IPv6 Router Solicitation packets from  the VIF ports.
+       - Added support to generate Neighbor Solicitation packets using the OVN
+         action 'nd_ns' to resolve unknown next hop MAC addresses for the
+         IPv6 packets.
+     * ovn-ctl: New commands run_nb_ovsdb and run_sb_ovsdb.
+   - OpenFlow:
+     * ct_clear action is now backed by kernel datapath. Support is probed for
+       when OVS starts.
+   - Linux kernel 4.13
+     * Add support for compiling OVS with the latest Linux 4.13 kernel
+   - ovs-dpctl and related ovs-appctl commands:
+     * "flush-conntrack" now accept a 5-tuple to delete a specific
+       connection tracking entry.
+     * New "ct-set-maxconns", "ct-get-maxconns", and "ct-get-nconns" commands
+       for userspace datapath.
+   - No longer send packets to the Linux TAP device if it's DOWN unless it is
+     in another networking namespace.
+   - DPDK:
+     * Add support for DPDK v17.11
+     * Add support for vHost IOMMU
+     * New debug appctl command 'netdev-dpdk/get-mempool-info'.
+     * All the netdev-dpdk appctl commands described in ovs-vswitchd man page.
+     * Custom statistics:
+        - DPDK physical ports now return custom set of "dropped", "error" and
+          "management" statistics.
+        - ovs-ofctl dump-ports command now prints new of set custom statistics
+          if available (for OpenFlow 1.4+).
+     * New appctl command 'dpif-netdev/pmd-rxq-rebalance' to rebalance rxq to
+       pmd assignments.
+     * Add rxq utilization of pmd to appctl 'dpif-netdev/pmd-rxq-show'.
+     * Add support for vHost dequeue zero copy (experimental)
+   - Userspace datapath:
+     * Output packet batching support.
+   - vswitchd:
+     * Datapath IDs may now be specified as 0x1 (etc.) instead of 16 digits.
+     * Configuring a controller, or unconfiguring all controllers, now deletes
+       all groups and meters (as well as all flows).
+   - New --enable-sparse configure option enables "sparse" checking by default.
+   - Added additional information to vhost-user status.
 
 v2.8.0 - 31 Aug 2017
----------------------
+--------------------
    - ovs-ofctl:
      * ovs-ofctl can now accept and display port names in place of numbers.  By
        default it always accepts names and in interactive use it displays them;
@@ -60,6 +115,7 @@ v2.8.0 - 31 Aug 2017
        gateway.
      * Add support for ACL logging.
      * ovn-northd now has native support for active-standby high availability.
+     * Add support for QoS bandwidth limt with DPDK.
    - Tracing with ofproto/trace now traces through recirculation.
    - OVSDB:
      * New support for role-based access control (see ovsdb-server(1)).
@@ -81,6 +137,10 @@ v2.8.0 - 31 Aug 2017
        Used generic encap and decap actions to implement encapsulation and
        decapsulation of NSH header.
        IETF NSH draft - https://datatracker.ietf.org/doc/draft-ietf-sfc-nsh/
+     * Conntrack state is only available to the processing path that
+       follows the "recirc_table" argument of the ct() action.  Starting
+       in OVS 2.8, this state is now cleared for the current processing
+       path whenever ct() is called.
    - Fedora Packaging:
      * OVN services are no longer restarted automatically after upgrade.
      * ovs-vswitchd and ovsdb-server run as non-root users by default.
@@ -97,11 +157,6 @@ v2.8.0 - 31 Aug 2017
      * HW offloading is done through the TC interface.
    - IPv6 link local addresses are now supported on Linux.  Use % to designate
      the scope device.
-   - The next major version of OVS will introduce a change in the
-     conntrack API.  Conntrack state is only available to the processing
-     path that follows the "recirc_table" argument of the ct() action.
-     Starting in OVS 2.9, this state will be cleared for the current
-     processing path whenever ct() is called.
 
 v2.7.0 - 21 Feb 2017
 ---------------------

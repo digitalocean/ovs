@@ -3,7 +3,6 @@ HAVE_OPENSSL='@HAVE_OPENSSL@'
 HAVE_PYTHON='@HAVE_PYTHON@'
 HAVE_PYTHON3='@HAVE_PYTHON3@'
 EGREP='@EGREP@'
-PERL='@PERL@'
 
 if test x"$PYTHON" = x; then
     PYTHON='@PYTHON@'
@@ -108,12 +107,17 @@ FreeBSD|NetBSD)
 esac
 
 # Check whether to run IPv6 tests.
-if perl -e 'use Socket; socket(FH, PF_INET6, SOCK_STREAM, 0) || exit 1;'; then
+if $PYTHON -c '
+import socket
+socket.socket(family=socket.AF_INET6).bind(("::1", 0, 0, 0))
+'; then
     HAVE_IPV6=yes
 else
     HAVE_IPV6=no
 fi
 
+# Look for a python L7 library 'LIB' in the system. If it is found, defines
+# HAVE_LIB="yes", otherwise HAVE_LIB="no"
 find_l7_lib()
 {
     set +x
@@ -130,7 +134,9 @@ find_l7_lib()
     fi
 }
 
+# HAVE_FTP
 find_l7_lib ftp
+# HAVE_TFTP
 find_l7_lib tftp
 
 # Look for a commnand in the system. If it is found, defines
@@ -152,9 +158,11 @@ find_command nc
 
 # Determine correct netcat option to quit on stdin EOF
 if nc --version 2>&1 | grep -q nmap.org; then
-    NC_EOF_OPT="--send-only"
+    # Nmap netcat
+    NC_EOF_OPT="--send-only -w 5"
 else
-    NC_EOF_OPT="-q 1"
+    # BSD netcat
+    NC_EOF_OPT="-q 1 -w 5"
 fi
 
 # Set HAVE_TCPDUMP

@@ -25,8 +25,9 @@
 #include "ovn-controller.h"
 #include "ovn/actions.h"
 #include "ovn/expr.h"
-#include "ovn/lib/ovn-dhcp.h"
+#include "ovn/lib/ovn-l7.h"
 #include "ovn/lib/ovn-sb-idl.h"
+#include "ovn/lib/extend-table.h"
 #include "packets.h"
 #include "physical.h"
 #include "simap.h"
@@ -61,10 +62,12 @@ static void consider_logical_flow(struct controller_ctx *ctx,
                                   const struct chassis_index *chassis_index,
                                   const struct sbrec_logical_flow *lflow,
                                   const struct hmap *local_datapaths,
-                                  struct group_table *group_table,
+                                  struct ovn_extend_table *group_table,
+                                  struct ovn_extend_table *meter_table,
                                   const struct sbrec_chassis *chassis,
                                   struct hmap *dhcp_opts,
                                   struct hmap *dhcpv6_opts,
+                                  struct hmap *nd_ra_opts,
                                   uint32_t *conj_id_ofs,
                                   const struct shash *addr_sets,
                                   struct hmap *flow_table,
@@ -142,7 +145,8 @@ static void
 add_logical_flows(struct controller_ctx *ctx,
                   const struct chassis_index *chassis_index,
                   const struct hmap *local_datapaths,
-                  struct group_table *group_table,
+                  struct ovn_extend_table *group_table,
+                  struct ovn_extend_table *meter_table,
                   const struct sbrec_chassis *chassis,
                   const struct shash *addr_sets,
                   struct hmap *flow_table,
@@ -167,17 +171,21 @@ add_logical_flows(struct controller_ctx *ctx,
                     dhcpv6_opt_row->type);
     }
 
+    struct hmap nd_ra_opts = HMAP_INITIALIZER(&nd_ra_opts);
+    nd_ra_opts_init(&nd_ra_opts);
+
     SBREC_LOGICAL_FLOW_FOR_EACH (lflow, ctx->ovnsb_idl) {
         consider_logical_flow(ctx, chassis_index,
                               lflow, local_datapaths,
-                              group_table, chassis,
-                              &dhcp_opts, &dhcpv6_opts, &conj_id_ofs,
-                              addr_sets, flow_table, active_tunnels,
-                              local_lport_ids);
+                              group_table, meter_table, chassis,
+                              &dhcp_opts, &dhcpv6_opts, &nd_ra_opts,
+                              &conj_id_ofs, addr_sets, flow_table,
+                              active_tunnels, local_lport_ids);
     }
 
     dhcp_opts_destroy(&dhcp_opts);
     dhcp_opts_destroy(&dhcpv6_opts);
+    nd_ra_opts_destroy(&nd_ra_opts);
 }
 
 static void
@@ -185,10 +193,12 @@ consider_logical_flow(struct controller_ctx *ctx,
                       const struct chassis_index *chassis_index,
                       const struct sbrec_logical_flow *lflow,
                       const struct hmap *local_datapaths,
-                      struct group_table *group_table,
+                      struct ovn_extend_table *group_table,
+                      struct ovn_extend_table *meter_table,
                       const struct sbrec_chassis *chassis,
                       struct hmap *dhcp_opts,
                       struct hmap *dhcpv6_opts,
+                      struct hmap *nd_ra_opts,
                       uint32_t *conj_id_ofs,
                       const struct shash *addr_sets,
                       struct hmap *flow_table,
@@ -224,6 +234,7 @@ consider_logical_flow(struct controller_ctx *ctx,
         .symtab = &symtab,
         .dhcp_opts = dhcp_opts,
         .dhcpv6_opts = dhcpv6_opts,
+        .nd_ra_opts = nd_ra_opts,
 
         .pipeline = ingress ? OVNACT_P_INGRESS : OVNACT_P_EGRESS,
         .n_tables = LOG_PIPELINE_LEN,
@@ -256,6 +267,7 @@ consider_logical_flow(struct controller_ctx *ctx,
         .is_switch = is_switch(ldp),
         .is_gateway_router = is_gateway_router(ldp, local_datapaths),
         .group_table = group_table,
+        .meter_table = meter_table,
 
         .pipeline = ingress ? OVNACT_P_INGRESS : OVNACT_P_EGRESS,
         .ingress_ptable = OFTABLE_LOG_INGRESS_PIPELINE,
@@ -427,14 +439,15 @@ lflow_run(struct controller_ctx *ctx,
           const struct sbrec_chassis *chassis,
           const struct chassis_index *chassis_index,
           const struct hmap *local_datapaths,
-          struct group_table *group_table,
+          struct ovn_extend_table *group_table,
+          struct ovn_extend_table *meter_table,
           const struct shash *addr_sets,
           struct hmap *flow_table,
           struct sset *active_tunnels,
           struct sset *local_lport_ids)
 {
     add_logical_flows(ctx, chassis_index, local_datapaths,
-                      group_table, chassis, addr_sets, flow_table,
+                      group_table, meter_table, chassis, addr_sets, flow_table,
                       active_tunnels, local_lport_ids);
     add_neighbor_flows(ctx, flow_table);
 }

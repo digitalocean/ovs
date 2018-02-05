@@ -60,7 +60,9 @@ struct ofpbuf;
  *     type, and sometimes a code for each protocol that supports the error:
  *
  *         # The vendor is OF for standard OpenFlow error codes.  Otherwise it
- *           is one of the *_VENDOR_ID codes defined in openflow-common.h.
+ *           is one of the *_VENDOR_ID codes defined in openflow-common.h.  (To
+ *           add support for a new vendor, add a VENDOR_ID code to that
+ *           header.)
  *
  *         # The version can specify a specific OpenFlow version, a version
  *           range delimited by "-", or an open-ended range with "+".
@@ -285,6 +287,12 @@ enum ofperr {
     /* NX1.3+(41).  Error in encap or decap property. */
     OFPERR_NXBAC_BAD_ED_PROP,
 
+    /* NX1.0-1.1(1,265), NX1.2+(42).  Action requires connection tracking or a
+     * particular connection-tracking based feature that the datapath in use
+     * does not support.  If a kernel-based datapath is in use, the kernel
+     * module may need to be upgraded. */
+    OFPERR_NXBAC_CT_DATAPATH_SUPPORT,
+
 /* ## --------------------- ## */
 /* ## OFPET_BAD_INSTRUCTION ## */
 /* ## --------------------- ## */
@@ -364,6 +372,12 @@ enum ofperr {
 
     /* OF1.2+(4,11).  Permissions error. */
     OFPERR_OFPBMC_EPERM,
+
+    /* NX1.0-1.1(1,264), NX1.2+(43).  Flow match requires connection tracking
+     * or a particular connection-tracking based feature that the datapath in
+     * use does not support.  If a kernel-based datapath is in use, the kernel
+     * module may need to be upgraded. */
+    OFPERR_NXBMC_CT_DATAPATH_SUPPORT,
 
 /* ## --------------------- ## */
 /* ## OFPET_FLOW_MOD_FAILED ## */

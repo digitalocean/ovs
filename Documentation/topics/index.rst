@@ -57,6 +57,8 @@ OVN
    :maxdepth: 2
 
    high-availability
+   role-based-access-control
+   ovn-news-2.8
 
 .. list-table::
 

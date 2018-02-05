@@ -129,7 +129,7 @@ bool flow_compose(struct dp_packet *, const struct flow *, size_t);
 bool parse_ipv6_ext_hdrs(const void **datap, size_t *sizep, uint8_t *nw_proto,
                          uint8_t *nw_frag);
 ovs_be16 parse_dl_type(const struct eth_header *data_, size_t size);
-bool parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key);
+bool parse_nsh(const void **datap, size_t *sizep, struct ovs_key_nsh *key);
 
 static inline uint64_t
 flow_get_xreg(const struct flow *flow, int idx)
@@ -929,7 +929,7 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
     md->ct_label = flow->ct_label;
 
     md->ct_orig_tuple_ipv6 = false;
-    if (is_ct_valid(flow, NULL, NULL)) {
+    if (flow->dl_type && is_ct_valid(flow, NULL, NULL)) {
         if (flow->dl_type == htons(ETH_TYPE_IP)) {
             md->ct_orig_tuple.ipv4 = (struct ovs_key_ct_tuple_ipv4) {
                 flow->ct_nw_src,
@@ -947,6 +947,9 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
                 flow->ct_tp_dst,
                 flow->ct_nw_proto,
             };
+        } else {
+            /* Reset ct_orig_tuple for other types. */
+            memset(&md->ct_orig_tuple, 0, sizeof md->ct_orig_tuple);
         }
     } else {
         memset(&md->ct_orig_tuple, 0, sizeof md->ct_orig_tuple);

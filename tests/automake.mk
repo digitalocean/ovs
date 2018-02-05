@@ -81,6 +81,7 @@ TESTSUITE_AT = \
 	tests/ovsdb-tool.at \
 	tests/ovsdb-replication.at \
 	tests/ovsdb-server.at \
+	tests/ovsdb-client.at \
 	tests/ovsdb-monitor.at \
 	tests/ovsdb-idl.at \
 	tests/ovsdb-lock.at \
@@ -118,7 +119,8 @@ SYSTEM_TESTSUITE_AT = \
 	tests/system-common-macros.at \
 	tests/system-ovn.at \
 	tests/system-layer3-tunnels.at \
-	tests/system-traffic.at
+	tests/system-traffic.at \
+	tests/system-interface.at
 
 SYSTEM_OFFLOADS_TESTSUITE_AT = \
 	tests/system-common-macros.at \
@@ -167,7 +169,7 @@ check-lcov: all $(check_DATA) clean-lcov
 	find . -name '*.gcda' | xargs -n1 rm -f
 	-set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
-	mkdir -p tests/lcov
+	$(MKDIR_P) tests/lcov
 	lcov $(LCOV_OPTS) -o tests/lcov/coverage.info
 	genhtml $(GENHTML_OPTS) -o tests/lcov tests/lcov/coverage.info
 	@echo "coverage report generated at tests/lcov/index.html"
@@ -193,7 +195,7 @@ valgrind_wrappers = \
 	tests/valgrind/test-type-props
 
 $(valgrind_wrappers): tests/valgrind-wrapper.in
-	@test -d tests/valgrind || mkdir tests/valgrind
+	@$(MKDIR_P) tests/valgrind
 	$(AM_V_GEN) sed -e 's,[@]wrap_program[@],$@,' \
 		$(top_srcdir)/tests/valgrind-wrapper.in > $@.tmp && \
 	chmod +x $@.tmp && \
@@ -213,6 +215,13 @@ check-valgrind: all $(valgrind_wrappers) $(check_DATA)
 	@echo
 	@echo '----------------------------------------------------------------------'
 	@echo 'Valgrind output can be found in tests/testsuite.dir/*/valgrind.*'
+	@echo '----------------------------------------------------------------------'
+check-kernel-valgrind: all $(valgrind_wrappers) $(check_DATA)
+	set $(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests VALGRIND='$(VALGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS) -j1; \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	@echo
+	@echo '----------------------------------------------------------------------'
+	@echo 'Valgrind output can be found in tests/system-kmod-testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
 check-helgrind: all $(valgrind_wrappers) $(check_DATA)
 	-$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(HELGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
@@ -290,7 +299,6 @@ $(srcdir)/package.m4: $(top_srcdir)/configure.ac
 noinst_PROGRAMS += tests/test-ovsdb
 tests_test_ovsdb_SOURCES = tests/test-ovsdb.c
 nodist_tests_test_ovsdb_SOURCES = tests/idltest.c tests/idltest.h
-EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
 tests_test_ovsdb_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/test-lib
@@ -369,7 +377,6 @@ tests_ovstest_SOURCES += \
 endif
 
 tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
-dist_check_SCRIPTS = tests/flowgen.pl
 
 noinst_PROGRAMS += tests/test-strtok_r
 tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
@@ -380,6 +387,8 @@ tests_test_type_props_SOURCES = tests/test-type-props.c
 # Python tests.
 CHECK_PYFILES = \
 	tests/appctl.py \
+	tests/flowgen.py \
+	tests/ovsdb-monitor-sort.py \
 	tests/test-daemon.py \
 	tests/test-json.py \
 	tests/test-jsonrpc.py \
@@ -389,7 +398,8 @@ CHECK_PYFILES = \
 	tests/MockXenAPI.py \
 	tests/test-unix-socket.py \
 	tests/test-unixctl.py \
-	tests/test-vlog.py
+	tests/test-vlog.py \
+	tests/uuidfilt.py
 EXTRA_DIST += $(CHECK_PYFILES)
 PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
 

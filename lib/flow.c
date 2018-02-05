@@ -530,55 +530,53 @@ parse_ipv6_ext_hdrs(const void **datap, size_t *sizep, uint8_t *nw_proto,
 }
 
 bool
-parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key)
+parse_nsh(const void **datap, size_t *sizep, struct ovs_key_nsh *key)
 {
     const struct nsh_hdr *nsh = (const struct nsh_hdr *) *datap;
-    uint16_t ver_flags_len;
-    uint8_t version, length, flags;
-    uint32_t path_hdr;
+    uint8_t version, length, flags, ttl;
 
     /* Check if it is long enough for NSH header, doesn't support
      * MD type 2 yet
      */
-    if (OVS_UNLIKELY(*sizep < NSH_M_TYPE1_LEN)) {
+    if (OVS_UNLIKELY(*sizep < NSH_BASE_HDR_LEN)) {
         return false;
     }
 
-    memset(key, 0, sizeof(struct flow_nsh));
+    version = nsh_get_ver(nsh);
+    flags = nsh_get_flags(nsh);
+    length = nsh_hdr_len(nsh);
+    ttl = nsh_get_ttl(nsh);
 
-    ver_flags_len = ntohs(nsh->ver_flags_len);
-    version = (ver_flags_len & NSH_VER_MASK) >> NSH_VER_SHIFT;
-    flags = (ver_flags_len & NSH_FLAGS_MASK) >> NSH_FLAGS_SHIFT;
-
-    /* NSH header length is in 4 byte words. */
-    length = ((ver_flags_len & NSH_LEN_MASK) >> NSH_LEN_SHIFT) << 2;
-
-    if (version != 0) {
-        return false;
-    }
-
-    if (length != NSH_M_TYPE1_LEN) {
+    if (OVS_UNLIKELY(length > *sizep || version != 0)) {
         return false;
     }
 
     key->flags = flags;
+    key->ttl = ttl;
     key->mdtype = nsh->md_type;
     key->np = nsh->next_proto;
-
-    path_hdr = ntohl(get_16aligned_be32(&nsh->path_hdr));
-    key->si = (path_hdr & NSH_SI_MASK) >> NSH_SI_SHIFT;
-    key->spi = htonl((path_hdr & NSH_SPI_MASK) >> NSH_SPI_SHIFT);
+    key->path_hdr = nsh_get_path_hdr(nsh);
 
     switch (key->mdtype) {
         case NSH_M_TYPE1:
+            if (length != NSH_M_TYPE1_LEN) {
+                return false;
+            }
             for (size_t i = 0; i < 4; i++) {
-                key->c[i] = get_16aligned_be32(&nsh->md1.c[i]);
+                key->context[i] = get_16aligned_be32(&nsh->md1.context[i]);
             }
             break;
         case NSH_M_TYPE2:
-            /* Don't support MD type 2 yet, so return false */
+            /* Don't support MD type 2 metedata parsing yet */
+            if (length < NSH_BASE_HDR_LEN) {
+                return false;
+            }
+
+            memset(key->context, 0, sizeof(key->context));
+            break;
         default:
-            return false;
+            /* We don't parse other context headers yet. */
+            break;
     }
 
     data_pull(datap, sizep, length);
@@ -876,19 +874,12 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 miniflow_pad_to_64(mf, arp_tha);
             }
         } else if (dl_type == htons(ETH_TYPE_NSH)) {
-            struct flow_nsh nsh;
+            struct ovs_key_nsh nsh;
 
             if (OVS_LIKELY(parse_nsh(&data, &size, &nsh))) {
-                if (nsh.mdtype == NSH_M_TYPE1) {
-                    miniflow_push_words(mf, nsh, &nsh,
-                                        sizeof(struct flow_nsh) /
-                                        sizeof(uint64_t));
-                }
-                else if (nsh.mdtype == NSH_M_TYPE2) {
-                    /* parse_nsh has stopped it from arriving here for
-                     * MD type 2, will add MD type 2 support code here later
-                     */
-                }
+                miniflow_push_words(mf, nsh, &nsh,
+                                    sizeof(struct ovs_key_nsh) /
+                                    sizeof(uint64_t));
             }
         }
         goto out;
@@ -1073,6 +1064,9 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
 
     if (flow->ct_state != 0) {
         match_set_ct_state(flow_metadata, flow->ct_state);
+        /* Match dl_type since it is required for the later interpretation of
+         * the conntrack metadata. */
+        match_set_dl_type(flow_metadata, flow->dl_type);
         if (is_ct_valid(flow, NULL, NULL) && flow->ct_nw_proto != 0) {
             if (flow->dl_type == htons(ETH_TYPE_IP)) {
                 match_set_ct_nw_src(flow_metadata, flow->ct_nw_src);
@@ -1688,11 +1682,11 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
         return;
     } else if (flow->dl_type == htons(ETH_TYPE_NSH)) {
         WC_MASK_FIELD(wc, nsh.flags);
+        WC_MASK_FIELD(wc, nsh.ttl);
         WC_MASK_FIELD(wc, nsh.mdtype);
         WC_MASK_FIELD(wc, nsh.np);
-        WC_MASK_FIELD(wc, nsh.spi);
-        WC_MASK_FIELD(wc, nsh.si);
-        WC_MASK_FIELD(wc, nsh.c);
+        WC_MASK_FIELD(wc, nsh.path_hdr);
+        WC_MASK_FIELD(wc, nsh.context);
     } else {
         return; /* Unknown ethertype. */
     }
@@ -1824,9 +1818,8 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
         FLOWMAP_SET(map, nsh.flags);
         FLOWMAP_SET(map, nsh.mdtype);
         FLOWMAP_SET(map, nsh.np);
-        FLOWMAP_SET(map, nsh.spi);
-        FLOWMAP_SET(map, nsh.si);
-        FLOWMAP_SET(map, nsh.c);
+        FLOWMAP_SET(map, nsh.path_hdr);
+        FLOWMAP_SET(map, nsh.context);
     }
 }
 

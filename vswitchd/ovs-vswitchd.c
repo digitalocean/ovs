@@ -37,7 +37,7 @@
 #include "netdev.h"
 #include "openflow/openflow.h"
 #include "ovsdb-idl.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
@@ -187,6 +187,7 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
 
         case 'V':
             ovs_print_version(0, 0);
+            print_dpdk_version();
             exit(EXIT_SUCCESS);
 
         case OPT_MLOCKALL:

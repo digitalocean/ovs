@@ -21,6 +21,10 @@
 #include "ovsdb-types.h"
 #include "openvswitch/shash.h"
 
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
 #define MAX_OVSDB_ATOM_RANGE_SIZE 4096
 
 struct ds;
@@ -169,6 +173,11 @@ struct ovsdb_error *ovsdb_transient_datum_from_json(
                                           const struct ovsdb_type *,
                                           const struct json *)
     OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *
+ovsdb_unconstrained_datum_from_json(struct ovsdb_datum *,
+                                    const struct ovsdb_type *,
+                                    const struct json *)
+    OVS_WARN_UNUSED_RESULT;
 struct json *ovsdb_datum_to_json(const struct ovsdb_datum *,
                                  const struct ovsdb_type *);
 
@@ -221,12 +230,12 @@ void ovsdb_datum_subtract(struct ovsdb_datum *a,
 
 /* Generate and apply diffs */
 void ovsdb_datum_diff(struct ovsdb_datum *diff,
-                      const struct ovsdb_datum *old,
-                      const struct ovsdb_datum *new,
+                      const struct ovsdb_datum *old_datum,
+                      const struct ovsdb_datum *new_datum,
                       const struct ovsdb_type *type);
 
-struct ovsdb_error *ovsdb_datum_apply_diff(struct ovsdb_datum *new,
-                                           const struct ovsdb_datum *old,
+struct ovsdb_error *ovsdb_datum_apply_diff(struct ovsdb_datum *new_datum,
+                                           const struct ovsdb_datum *old_datum,
                                            const struct ovsdb_datum *diff,
                                            const struct ovsdb_type *type)
 OVS_WARN_UNUSED_RESULT;
@@ -239,6 +248,11 @@ void ovsdb_datum_add_unsafe(struct ovsdb_datum *,
                             const union ovsdb_atom *value,
                             const struct ovsdb_type *,
                             const union ovsdb_atom *range_end_atom);
+
+/* Transactions with named-uuid row names. */
+struct json *ovsdb_datum_to_json_with_row_names(const struct ovsdb_datum *,
+                                                const struct ovsdb_type *);
+char *ovsdb_data_row_name(const struct uuid *);
 
 /* Type checking. */
 static inline bool
@@ -281,5 +295,9 @@ bool ovsdb_token_is_delim(unsigned char);
 
 struct ovsdb_error *ovsdb_atom_range_check_size(int64_t range_start,
                                                 int64_t range_end);
+
+#ifdef  __cplusplus
+}
+#endif
 
 #endif /* ovsdb-data.h */

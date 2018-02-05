@@ -1214,6 +1214,10 @@ static int do_execute_actions(struct datapath *dp, struct sk_buff *skb,
 				return err == -EINPROGRESS ? 0 : err;
 			break;
 
+		case OVS_ACTION_ATTR_CT_CLEAR:
+			err = ovs_ct_clear(skb, key);
+			break;
+
 		case OVS_ACTION_ATTR_PUSH_ETH:
 			err = push_eth(skb, key, nla_data(a));
 			break;
@@ -1348,6 +1352,7 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb,
 		goto out;
 	}
 
+	OVS_CB(skb)->acts_origlen = acts->orig_len;
 	err = do_execute_actions(dp, skb, key,
 				 acts->actions, acts->actions_len);
 

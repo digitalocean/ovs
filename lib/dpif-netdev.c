@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <net/if.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -31,10 +32,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifdef DPDK_NETDEV
-#include <rte_cycles.h>
-#endif
-
 #include "bitmap.h"
 #include "cmap.h"
 #include "conntrack.h"
@@ -43,6 +40,7 @@
 #include "csum.h"
 #include "dp-packet.h"
 #include "dpif.h"
+#include "dpif-netdev-perf.h"
 #include "dpif-provider.h"
 #include "dummy.h"
 #include "fat-rwlock.h"
@@ -66,7 +64,7 @@
 #include "ovs-numa.h"
 #include "ovs-rcu.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "pvector.h"
 #include "random.h"
 #include "seq.h"
@@ -82,8 +80,11 @@ VLOG_DEFINE_THIS_MODULE(dpif_netdev);
 
 #define FLOW_DUMP_MAX_BATCH 50
 /* Use per thread recirc_depth to prevent recirculation loop. */
-#define MAX_RECIRC_DEPTH 5
+#define MAX_RECIRC_DEPTH 6
 DEFINE_STATIC_PER_THREAD_DATA(uint32_t, recirc_depth, 0)
+
+/* Use instant packet send by default. */
+#define DEFAULT_TX_FLUSH_INTERVAL 0
 
 /* Configuration parameters. */
 enum { MAX_FLOWS = 65536 };     /* Maximum number of flows in flow table. */
@@ -178,8 +179,17 @@ struct emc_cache {
 
 /* Simple non-wildcarding single-priority classifier. */
 
-/* Time in ms between successive optimizations of the dpcls subtable vector */
-#define DPCLS_OPTIMIZATION_INTERVAL 1000
+/* Time in microseconds between successive optimizations of the dpcls
+ * subtable vector */
+#define DPCLS_OPTIMIZATION_INTERVAL 1000000LL
+
+/* Time in microseconds of the interval in which rxq processing cycles used
+ * in rxq to pmd assignments is measured and stored. */
+#define PMD_RXQ_INTERVAL_LEN 10000000LL
+
+/* Number of intervals for which cycles are stored
+ * and used during rxq to pmd assignment. */
+#define PMD_RXQ_INTERVAL_MAX 6
 
 struct dpcls {
     struct cmap_node node;      /* Within dp_netdev_pmd_thread.classifiers */
@@ -262,6 +272,9 @@ struct dp_netdev {
     struct hmap ports;
     struct seq *port_seq;       /* Incremented whenever a port changes. */
 
+    /* The time that a packet can wait in output batch for sending. */
+    atomic_uint32_t tx_flush_interval;
+
     /* Meters. */
     struct ovs_mutex meter_locks[N_METER_LOCKS];
     struct dp_meter *meters[MAX_METERS]; /* Meter bands. */
@@ -322,24 +335,16 @@ static struct dp_netdev_port *dp_netdev_lookup_port(const struct dp_netdev *dp,
                                                     odp_port_t)
     OVS_REQUIRES(dp->port_mutex);
 
-enum dp_stat_type {
-    DP_STAT_EXACT_HIT,          /* Packets that had an exact match (emc). */
-    DP_STAT_MASKED_HIT,         /* Packets that matched in the flow table. */
-    DP_STAT_MISS,               /* Packets that did not match. */
-    DP_STAT_LOST,               /* Packets not passed up to the client. */
-    DP_STAT_LOOKUP_HIT,         /* Number of subtable lookups for flow table
-                                   hits */
-    DP_N_STATS
+enum rxq_cycles_counter_type {
+    RXQ_CYCLES_PROC_CURR,       /* Cycles spent successfully polling and
+                                   processing packets during the current
+                                   interval. */
+    RXQ_CYCLES_PROC_HIST,       /* Total cycles of all intervals that are used
+                                   during rxq to pmd assignment. */
+    RXQ_N_CYCLES
 };
 
-enum pmd_cycles_counter_type {
-    PMD_CYCLES_IDLE,            /* Cycles spent idle or unsuccessful polling */
-    PMD_CYCLES_PROCESSING,      /* Cycles spent successfully polling and
-                                 * processing polled packets */
-    PMD_N_CYCLES
-};
-
-#define XPS_TIMEOUT_MS 500LL
+#define XPS_TIMEOUT 500000LL    /* In microseconds. */
 
 /* Contained by struct dp_netdev_port's 'rxqs' member.  */
 struct dp_netdev_rxq {
@@ -349,7 +354,14 @@ struct dp_netdev_rxq {
                                           pinned. OVS_CORE_UNSPEC if the
                                           queue doesn't need to be pinned to a
                                           particular core. */
+    unsigned intrvl_idx;               /* Write index for 'cycles_intrvl'. */
     struct dp_netdev_pmd_thread *pmd;  /* pmd thread that polls this queue. */
+
+    /* Counters of cycles spent successfully polling and processing pkts. */
+    atomic_ullong cycles[RXQ_N_CYCLES];
+    /* We store PMD_RXQ_INTERVAL_MAX intervals of data for an rxq and then
+       sum them to yield the cycles used for an rxq. */
+    atomic_ullong cycles_intrvl[PMD_RXQ_INTERVAL_MAX];
 };
 
 /* A port in a netdev-based datapath. */
@@ -472,20 +484,8 @@ struct dp_netdev_actions *dp_netdev_flow_get_actions(
     const struct dp_netdev_flow *);
 static void dp_netdev_actions_free(struct dp_netdev_actions *);
 
-/* Contained by struct dp_netdev_pmd_thread's 'stats' member.  */
-struct dp_netdev_pmd_stats {
-    /* Indexed by DP_STAT_*. */
-    atomic_ullong n[DP_N_STATS];
-};
-
-/* Contained by struct dp_netdev_pmd_thread's 'cycle' member.  */
-struct dp_netdev_pmd_cycles {
-    /* Indexed by PMD_CYCLES_*. */
-    atomic_ullong n[PMD_N_CYCLES];
-};
-
 struct polled_queue {
-    struct netdev_rxq *rx;
+    struct dp_netdev_rxq *rxq;
     odp_port_t port_no;
 };
 
@@ -502,6 +502,20 @@ struct tx_port {
     int qid;
     long long last_used;
     struct hmap_node node;
+    long long flush_time;
+    struct dp_packet_batch output_pkts;
+    struct dp_netdev_rxq *output_pkts_rxqs[NETDEV_MAX_BURST];
+};
+
+/* A set of properties for the current processing loop that is not directly
+ * associated with the pmd thread itself, but with the packets being
+ * processed or the short-term system configuration (for example, time).
+ * Contained by struct dp_netdev_pmd_thread's 'ctx' member. */
+struct dp_netdev_pmd_thread_ctx {
+    /* Latest measured time. See 'pmd_thread_ctx_time_update()'. */
+    long long now;
+    /* RX queue from which last packet was received. */
+    struct dp_netdev_rxq *last_rxq;
 };
 
 /* PMD: Poll modes drivers.  PMD accesses devices via polling to eliminate
@@ -549,15 +563,17 @@ struct dp_netdev_pmd_thread {
     struct cmap classifiers;
     /* Periodically sort subtable vectors according to hit frequencies */
     long long int next_optimization;
+    /* End of the next time interval for which processing cycles
+       are stored for each polled rxq. */
+    long long int rxq_next_cycle_store;
 
-    /* Statistics. */
-    struct dp_netdev_pmd_stats stats;
+    /* Last interval timestamp. */
+    uint64_t intrvl_tsc_prev;
+    /* Last interval cycles. */
+    atomic_ullong intrvl_cycles;
 
-    /* Cycles counters */
-    struct dp_netdev_pmd_cycles cycles;
-
-    /* Used to count cicles. See 'cycles_counter_end()' */
-    unsigned long long last_cycles;
+    /* Current context of the PMD thread. */
+    struct dp_netdev_pmd_thread_ctx ctx;
 
     struct latch exit_latch;        /* For terminating the pmd thread. */
     struct seq *reload_seq;
@@ -572,6 +588,9 @@ struct dp_netdev_pmd_thread {
      * XPS disabled for this netdev. All static_tx_qid's are unique and less
      * than 'cmap_count(dp->poll_threads)'. */
     uint32_t static_tx_qid;
+
+    /* Number of filled output batches. */
+    int n_output_batches;
 
     struct ovs_mutex port_mutex;    /* Mutex for 'poll_list' and 'tx_ports'. */
     /* List of rx queues to poll. */
@@ -593,12 +612,8 @@ struct dp_netdev_pmd_thread {
     struct hmap tnl_port_cache;
     struct hmap send_port_cache;
 
-    /* Only a pmd thread can write on its own 'cycles' and 'stats'.
-     * The main thread keeps 'stats_zero' and 'cycles_zero' as base
-     * values and subtracts them from 'stats' and 'cycles' before
-     * reporting to the user */
-    unsigned long long stats_zero[DP_N_STATS];
-    uint64_t cycles_zero[PMD_N_CYCLES];
+    /* Keep track of detailed PMD performance statistics. */
+    struct pmd_perf_stats perf_stats;
 
     /* Set to true if the pmd thread needs to be reloaded. */
     bool need_reload;
@@ -630,8 +645,7 @@ static void dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                                       struct dp_packet_batch *,
                                       bool may_steal, const struct flow *flow,
                                       const struct nlattr *actions,
-                                      size_t actions_len,
-                                      long long now);
+                                      size_t actions_len);
 static void dp_netdev_input(struct dp_netdev_pmd_thread *,
                             struct dp_packet_batch *, odp_port_t port_no);
 static void dp_netdev_recirculate(struct dp_netdev_pmd_thread *,
@@ -667,6 +681,10 @@ static void dp_netdev_add_rxq_to_pmd(struct dp_netdev_pmd_thread *pmd,
 static void dp_netdev_del_rxq_from_pmd(struct dp_netdev_pmd_thread *pmd,
                                        struct rxq_poll *poll)
     OVS_REQUIRES(pmd->port_mutex);
+static int
+dp_netdev_pmd_flush_output_packets(struct dp_netdev_pmd_thread *pmd,
+                                   bool force);
+
 static void reconfigure_datapath(struct dp_netdev *dp)
     OVS_REQUIRES(dp->port_mutex);
 static bool dp_netdev_pmd_try_ref(struct dp_netdev_pmd_thread *pmd);
@@ -675,16 +693,30 @@ static void dp_netdev_pmd_flow_flush(struct dp_netdev_pmd_thread *pmd);
 static void pmd_load_cached_ports(struct dp_netdev_pmd_thread *pmd)
     OVS_REQUIRES(pmd->port_mutex);
 static inline void
-dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd);
-
+dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd,
+                           struct polled_queue *poll_list, int poll_cnt);
+static void
+dp_netdev_rxq_set_cycles(struct dp_netdev_rxq *rx,
+                         enum rxq_cycles_counter_type type,
+                         unsigned long long cycles);
+static uint64_t
+dp_netdev_rxq_get_cycles(struct dp_netdev_rxq *rx,
+                         enum rxq_cycles_counter_type type);
+static void
+dp_netdev_rxq_set_intrvl_cycles(struct dp_netdev_rxq *rx,
+                           unsigned long long cycles);
+static uint64_t
+dp_netdev_rxq_get_intrvl_cycles(struct dp_netdev_rxq *rx, unsigned idx);
 static void
 dpif_netdev_xps_revalidate_pmd(const struct dp_netdev_pmd_thread *pmd,
-                               long long now, bool purge);
+                               bool purge);
 static int dpif_netdev_xps_get_tx_qid(const struct dp_netdev_pmd_thread *pmd,
-                                      struct tx_port *tx, long long now);
+                                      struct tx_port *tx);
 
 static inline bool emc_entry_alive(struct emc_entry *ce);
 static void emc_clear_entry(struct emc_entry *ce);
+
+static void dp_netdev_request_reconfigure(struct dp_netdev *dp);
 
 static void
 emc_cache_init(struct emc_cache *flow_cache)
@@ -723,6 +755,28 @@ emc_cache_slow_sweep(struct emc_cache *flow_cache)
     flow_cache->sweep_idx = (flow_cache->sweep_idx + 1) & EM_FLOW_HASH_MASK;
 }
 
+/* Updates the time in PMD threads context and should be called in three cases:
+ *
+ *     1. PMD structure initialization:
+ *         - dp_netdev_configure_pmd()
+ *
+ *     2. Before processing of the new packet batch:
+ *         - dpif_netdev_execute()
+ *         - dp_netdev_process_rxq_port()
+ *
+ *     3. At least once per polling iteration in main polling threads if no
+ *        packets received on current iteration:
+ *         - dpif_netdev_run()
+ *         - pmd_thread_main()
+ *
+ * 'pmd->ctx.now' should be used without update in all other cases if possible.
+ */
+static inline void
+pmd_thread_ctx_time_update(struct dp_netdev_pmd_thread *pmd)
+{
+    pmd->ctx.now = time_usec();
+}
+
 /* Returns true if 'dpif' is a netdev or dummy dpif, false otherwise. */
 bool
 dpif_is_netdev(const struct dpif *dpif)
@@ -750,46 +804,10 @@ enum pmd_info_type {
 };
 
 static void
-pmd_info_show_stats(struct ds *reply,
-                    struct dp_netdev_pmd_thread *pmd,
-                    unsigned long long stats[DP_N_STATS],
-                    uint64_t cycles[PMD_N_CYCLES])
+format_pmd_thread(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
 {
-    unsigned long long total_packets;
-    uint64_t total_cycles = 0;
-    int i;
-
-    /* These loops subtracts reference values ('*_zero') from the counters.
-     * Since loads and stores are relaxed, it might be possible for a '*_zero'
-     * value to be more recent than the current value we're reading from the
-     * counter.  This is not a big problem, since these numbers are not
-     * supposed to be too accurate, but we should at least make sure that
-     * the result is not negative. */
-    for (i = 0; i < DP_N_STATS; i++) {
-        if (stats[i] > pmd->stats_zero[i]) {
-            stats[i] -= pmd->stats_zero[i];
-        } else {
-            stats[i] = 0;
-        }
-    }
-
-    /* Sum of all the matched and not matched packets gives the total.  */
-    total_packets = stats[DP_STAT_EXACT_HIT] + stats[DP_STAT_MASKED_HIT]
-                    + stats[DP_STAT_MISS];
-
-    for (i = 0; i < PMD_N_CYCLES; i++) {
-        if (cycles[i] > pmd->cycles_zero[i]) {
-           cycles[i] -= pmd->cycles_zero[i];
-        } else {
-            cycles[i] = 0;
-        }
-
-        total_cycles += cycles[i];
-    }
-
     ds_put_cstr(reply, (pmd->core_id == NON_PMD_CORE_ID)
                         ? "main thread" : "pmd thread");
-
     if (pmd->numa_id != OVS_NUMA_UNSPEC) {
         ds_put_format(reply, " numa_id %d", pmd->numa_id);
     }
@@ -797,64 +815,80 @@ pmd_info_show_stats(struct ds *reply,
         ds_put_format(reply, " core_id %u", pmd->core_id);
     }
     ds_put_cstr(reply, ":\n");
+}
+
+static void
+pmd_info_show_stats(struct ds *reply,
+                    struct dp_netdev_pmd_thread *pmd)
+{
+    uint64_t stats[PMD_N_STATS];
+    uint64_t total_cycles, total_packets;
+    double passes_per_pkt = 0;
+    double lookups_per_hit = 0;
+    double packets_per_batch = 0;
+
+    pmd_perf_read_counters(&pmd->perf_stats, stats);
+    total_cycles = stats[PMD_CYCLES_ITER_IDLE]
+                         + stats[PMD_CYCLES_ITER_BUSY];
+    total_packets = stats[PMD_STAT_RECV];
+
+    format_pmd_thread(reply, pmd);
+
+    if (total_packets > 0) {
+        passes_per_pkt = (total_packets + stats[PMD_STAT_RECIRC])
+                            / (double) total_packets;
+    }
+    if (stats[PMD_STAT_MASKED_HIT] > 0) {
+        lookups_per_hit = stats[PMD_STAT_MASKED_LOOKUP]
+                            / (double) stats[PMD_STAT_MASKED_HIT];
+    }
+    if (stats[PMD_STAT_SENT_BATCHES] > 0) {
+        packets_per_batch = stats[PMD_STAT_SENT_PKTS]
+                            / (double) stats[PMD_STAT_SENT_BATCHES];
+    }
 
     ds_put_format(reply,
-                  "\temc hits:%llu\n\tmegaflow hits:%llu\n"
-                  "\tavg. subtable lookups per hit:%.2f\n"
-                  "\tmiss:%llu\n\tlost:%llu\n",
-                  stats[DP_STAT_EXACT_HIT], stats[DP_STAT_MASKED_HIT],
-                  stats[DP_STAT_MASKED_HIT] > 0
-                  ? (1.0*stats[DP_STAT_LOOKUP_HIT])/stats[DP_STAT_MASKED_HIT]
-                  : 0,
-                  stats[DP_STAT_MISS], stats[DP_STAT_LOST]);
+                  "\tpackets received: %"PRIu64"\n"
+                  "\tpacket recirculations: %"PRIu64"\n"
+                  "\tavg. datapath passes per packet: %.02f\n"
+                  "\temc hits: %"PRIu64"\n"
+                  "\tmegaflow hits: %"PRIu64"\n"
+                  "\tavg. subtable lookups per megaflow hit: %.02f\n"
+                  "\tmiss with success upcall: %"PRIu64"\n"
+                  "\tmiss with failed upcall: %"PRIu64"\n"
+                  "\tavg. packets per output batch: %.02f\n",
+                  total_packets, stats[PMD_STAT_RECIRC],
+                  passes_per_pkt, stats[PMD_STAT_EXACT_HIT],
+                  stats[PMD_STAT_MASKED_HIT], lookups_per_hit,
+                  stats[PMD_STAT_MISS], stats[PMD_STAT_LOST],
+                  packets_per_batch);
 
     if (total_cycles == 0) {
         return;
     }
 
     ds_put_format(reply,
-                  "\tidle cycles:%"PRIu64" (%.02f%%)\n"
-                  "\tprocessing cycles:%"PRIu64" (%.02f%%)\n",
-                  cycles[PMD_CYCLES_IDLE],
-                  cycles[PMD_CYCLES_IDLE] / (double)total_cycles * 100,
-                  cycles[PMD_CYCLES_PROCESSING],
-                  cycles[PMD_CYCLES_PROCESSING] / (double)total_cycles * 100);
+                  "\tidle cycles: %"PRIu64" (%.02f%%)\n"
+                  "\tprocessing cycles: %"PRIu64" (%.02f%%)\n",
+                  stats[PMD_CYCLES_ITER_IDLE],
+                  stats[PMD_CYCLES_ITER_IDLE] / (double) total_cycles * 100,
+                  stats[PMD_CYCLES_ITER_BUSY],
+                  stats[PMD_CYCLES_ITER_BUSY] / (double) total_cycles * 100);
 
     if (total_packets == 0) {
         return;
     }
 
     ds_put_format(reply,
-                  "\tavg cycles per packet: %.02f (%"PRIu64"/%llu)\n",
-                  total_cycles / (double)total_packets,
+                  "\tavg cycles per packet: %.02f (%"PRIu64"/%"PRIu64")\n",
+                  total_cycles / (double) total_packets,
                   total_cycles, total_packets);
 
     ds_put_format(reply,
                   "\tavg processing cycles per packet: "
-                  "%.02f (%"PRIu64"/%llu)\n",
-                  cycles[PMD_CYCLES_PROCESSING] / (double)total_packets,
-                  cycles[PMD_CYCLES_PROCESSING], total_packets);
-}
-
-static void
-pmd_info_clear_stats(struct ds *reply OVS_UNUSED,
-                    struct dp_netdev_pmd_thread *pmd,
-                    unsigned long long stats[DP_N_STATS],
-                    uint64_t cycles[PMD_N_CYCLES])
-{
-    int i;
-
-    /* We cannot write 'stats' and 'cycles' (because they're written by other
-     * threads) and we shouldn't change 'stats' (because they're used to count
-     * datapath stats, which must not be cleared here).  Instead, we save the
-     * current values and subtract them from the values to be displayed in the
-     * future */
-    for (i = 0; i < DP_N_STATS; i++) {
-        pmd->stats_zero[i] = stats[i];
-    }
-    for (i = 0; i < PMD_N_CYCLES; i++) {
-        pmd->cycles_zero[i] = cycles[i];
-    }
+                  "%.02f (%"PRIu64"/%"PRIu64")\n",
+                  stats[PMD_CYCLES_ITER_BUSY] / (double) total_packets,
+                  stats[PMD_CYCLES_ITER_BUSY], total_packets);
 }
 
 static int
@@ -903,9 +937,9 @@ static void
 pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
 {
     if (pmd->core_id != NON_PMD_CORE_ID) {
-        const char *prev_name = NULL;
         struct rxq_poll *list;
-        size_t i, n;
+        size_t n_rxq;
+        uint64_t total_cycles = 0;
 
         ds_put_format(reply,
                       "pmd thread numa_id %d core_id %u:\n\tisolated : %s\n",
@@ -913,22 +947,34 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
                                                   ? "true" : "false");
 
         ovs_mutex_lock(&pmd->port_mutex);
-        sorted_poll_list(pmd, &list, &n);
-        for (i = 0; i < n; i++) {
-            const char *name = netdev_rxq_get_name(list[i].rxq->rx);
+        sorted_poll_list(pmd, &list, &n_rxq);
 
-            if (!prev_name || strcmp(name, prev_name)) {
-                if (prev_name) {
-                    ds_put_cstr(reply, "\n");
-                }
-                ds_put_format(reply, "\tport: %s\tqueue-id:", name);
+        /* Get the total pmd cycles for an interval. */
+        atomic_read_relaxed(&pmd->intrvl_cycles, &total_cycles);
+        /* Estimate the cycles to cover all intervals. */
+        total_cycles *= PMD_RXQ_INTERVAL_MAX;
+
+        for (int i = 0; i < n_rxq; i++) {
+            struct dp_netdev_rxq *rxq = list[i].rxq;
+            const char *name = netdev_rxq_get_name(rxq->rx);
+            uint64_t proc_cycles = 0;
+
+            for (int j = 0; j < PMD_RXQ_INTERVAL_MAX; j++) {
+                proc_cycles += dp_netdev_rxq_get_intrvl_cycles(rxq, j);
             }
-            ds_put_format(reply, " %d",
+            ds_put_format(reply, "\tport: %-16s\tqueue-id: %2d", name,
                           netdev_rxq_get_queue_id(list[i].rxq->rx));
-            prev_name = name;
+            ds_put_format(reply, "\tpmd usage: ");
+            if (total_cycles) {
+                ds_put_format(reply, "%2"PRIu64"",
+                              proc_cycles * 100 / total_cycles);
+                ds_put_cstr(reply, " %");
+            } else {
+                ds_put_format(reply, "%s", "NOT AVAIL");
+            }
+            ds_put_cstr(reply, "\n");
         }
         ovs_mutex_unlock(&pmd->port_mutex);
-        ds_put_cstr(reply, "\n");
         free(list);
     }
 }
@@ -978,14 +1024,11 @@ sorted_poll_thread_list(struct dp_netdev *dp,
 }
 
 static void
-dpif_netdev_pmd_info(struct unixctl_conn *conn, int argc, const char *argv[],
-                     void *aux)
+dpif_netdev_pmd_rebalance(struct unixctl_conn *conn, int argc,
+                          const char *argv[], void *aux OVS_UNUSED)
 {
     struct ds reply = DS_EMPTY_INITIALIZER;
-    struct dp_netdev_pmd_thread **pmd_list;
     struct dp_netdev *dp = NULL;
-    size_t n;
-    enum pmd_info_type type = *(enum pmd_info_type *) aux;
 
     ovs_mutex_lock(&dp_netdev_mutex);
 
@@ -1003,32 +1046,68 @@ dpif_netdev_pmd_info(struct unixctl_conn *conn, int argc, const char *argv[],
         return;
     }
 
+    dp_netdev_request_reconfigure(dp);
+    ovs_mutex_unlock(&dp_netdev_mutex);
+    ds_put_cstr(&reply, "pmd rxq rebalance requested.\n");
+    unixctl_command_reply(conn, ds_cstr(&reply));
+    ds_destroy(&reply);
+}
+
+static void
+dpif_netdev_pmd_info(struct unixctl_conn *conn, int argc, const char *argv[],
+                     void *aux)
+{
+    struct ds reply = DS_EMPTY_INITIALIZER;
+    struct dp_netdev_pmd_thread **pmd_list;
+    struct dp_netdev *dp = NULL;
+    enum pmd_info_type type = *(enum pmd_info_type *) aux;
+    unsigned int core_id;
+    bool filter_on_pmd = false;
+    size_t n;
+
+    ovs_mutex_lock(&dp_netdev_mutex);
+
+    while (argc > 1) {
+        if (!strcmp(argv[1], "-pmd") && argc >= 3) {
+            if (str_to_uint(argv[2], 10, &core_id)) {
+                filter_on_pmd = true;
+            }
+            argc -= 2;
+            argv += 2;
+        } else {
+            dp = shash_find_data(&dp_netdevs, argv[1]);
+            argc -= 1;
+            argv += 1;
+        }
+    }
+
+    if (!dp) {
+        if (shash_count(&dp_netdevs) == 1) {
+            /* There's only one datapath */
+            dp = shash_first(&dp_netdevs)->data;
+        } else {
+            ovs_mutex_unlock(&dp_netdev_mutex);
+            unixctl_command_reply_error(conn,
+                                        "please specify an existing datapath");
+            return;
+        }
+    }
+
     sorted_poll_thread_list(dp, &pmd_list, &n);
     for (size_t i = 0; i < n; i++) {
         struct dp_netdev_pmd_thread *pmd = pmd_list[i];
         if (!pmd) {
             break;
         }
-
+        if (filter_on_pmd && pmd->core_id != core_id) {
+            continue;
+        }
         if (type == PMD_INFO_SHOW_RXQ) {
             pmd_info_show_rxq(&reply, pmd);
-        } else {
-            unsigned long long stats[DP_N_STATS];
-            uint64_t cycles[PMD_N_CYCLES];
-
-            /* Read current stats and cycle counters */
-            for (size_t j = 0; j < ARRAY_SIZE(stats); j++) {
-                atomic_read_relaxed(&pmd->stats.n[j], &stats[j]);
-            }
-            for (size_t j = 0; j < ARRAY_SIZE(cycles); j++) {
-                atomic_read_relaxed(&pmd->cycles.n[j], &cycles[j]);
-            }
-
-            if (type == PMD_INFO_CLEAR_STATS) {
-                pmd_info_clear_stats(&reply, pmd, stats, cycles);
-            } else if (type == PMD_INFO_SHOW_STATS) {
-                pmd_info_show_stats(&reply, pmd, stats, cycles);
-            }
+        } else if (type == PMD_INFO_CLEAR_STATS) {
+            pmd_perf_stats_clear(&pmd->perf_stats);
+        } else if (type == PMD_INFO_SHOW_STATS) {
+            pmd_info_show_stats(&reply, pmd);
         }
     }
     free(pmd_list);
@@ -1046,15 +1125,18 @@ dpif_netdev_init(void)
                               clear_aux = PMD_INFO_CLEAR_STATS,
                               poll_aux = PMD_INFO_SHOW_RXQ;
 
-    unixctl_command_register("dpif-netdev/pmd-stats-show", "[dp]",
-                             0, 1, dpif_netdev_pmd_info,
+    unixctl_command_register("dpif-netdev/pmd-stats-show", "[-pmd core] [dp]",
+                             0, 3, dpif_netdev_pmd_info,
                              (void *)&show_aux);
-    unixctl_command_register("dpif-netdev/pmd-stats-clear", "[dp]",
-                             0, 1, dpif_netdev_pmd_info,
+    unixctl_command_register("dpif-netdev/pmd-stats-clear", "[-pmd core] [dp]",
+                             0, 3, dpif_netdev_pmd_info,
                              (void *)&clear_aux);
-    unixctl_command_register("dpif-netdev/pmd-rxq-show", "[dp]",
-                             0, 1, dpif_netdev_pmd_info,
+    unixctl_command_register("dpif-netdev/pmd-rxq-show", "[-pmd core] [dp]",
+                             0, 3, dpif_netdev_pmd_info,
                              (void *)&poll_aux);
+    unixctl_command_register("dpif-netdev/pmd-rxq-rebalance", "[dp]",
+                             0, 1, dpif_netdev_pmd_rebalance,
+                             NULL);
     return 0;
 }
 
@@ -1187,6 +1269,7 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     conntrack_init(&dp->conntrack);
 
     atomic_init(&dp->emc_insert_min, DEFAULT_EM_FLOW_INSERT_MIN);
+    atomic_init(&dp->tx_flush_interval, DEFAULT_TX_FLUSH_INTERVAL);
 
     cmap_init(&dp->poll_threads);
 
@@ -1386,20 +1469,16 @@ dpif_netdev_get_stats(const struct dpif *dpif, struct dpif_dp_stats *stats)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_pmd_thread *pmd;
+    uint64_t pmd_stats[PMD_N_STATS];
 
     stats->n_flows = stats->n_hit = stats->n_missed = stats->n_lost = 0;
     CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
-        unsigned long long n;
         stats->n_flows += cmap_count(&pmd->flow_table);
-
-        atomic_read_relaxed(&pmd->stats.n[DP_STAT_MASKED_HIT], &n);
-        stats->n_hit += n;
-        atomic_read_relaxed(&pmd->stats.n[DP_STAT_EXACT_HIT], &n);
-        stats->n_hit += n;
-        atomic_read_relaxed(&pmd->stats.n[DP_STAT_MISS], &n);
-        stats->n_missed += n;
-        atomic_read_relaxed(&pmd->stats.n[DP_STAT_LOST], &n);
-        stats->n_lost += n;
+        pmd_perf_read_counters(&pmd->perf_stats, pmd_stats);
+        stats->n_hit += pmd_stats[PMD_STAT_EXACT_HIT];
+        stats->n_hit += pmd_stats[PMD_STAT_MASKED_HIT];
+        stats->n_missed += pmd_stats[PMD_STAT_MISS];
+        stats->n_lost += pmd_stats[PMD_STAT_LOST];
     }
     stats->n_masks = UINT32_MAX;
     stats->n_mask_hit = UINT64_MAX;
@@ -2829,6 +2908,9 @@ dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
         /* If this is part of a probe, Drop the packet, since executing
          * the action may actually cause spurious packets be sent into
          * the network. */
+        if (pmd->core_id == NON_PMD_CORE_ID) {
+            dp_netdev_pmd_unref(pmd);
+        }
         return 0;
     }
 
@@ -2837,6 +2919,9 @@ dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
     if (pmd->core_id == NON_PMD_CORE_ID) {
         ovs_mutex_lock(&dp->non_pmd_mutex);
     }
+
+    /* Update current time in PMD context. */
+    pmd_thread_ctx_time_update(pmd);
 
     /* The action processing expects the RSS hash to be valid, because
      * it's always initialized at the beginning of datapath processing.
@@ -2850,8 +2935,8 @@ dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
 
     dp_packet_batch_init_packet(&pp, execute->packet);
     dp_netdev_execute_actions(pmd, &pp, false, execute->flow,
-                              execute->actions, execute->actions_len,
-                              time_msec());
+                              execute->actions, execute->actions_len);
+    dp_netdev_pmd_flush_output_packets(pmd, true);
 
     if (pmd->core_id == NON_PMD_CORE_ID) {
         ovs_mutex_unlock(&dp->non_pmd_mutex);
@@ -2900,6 +2985,16 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
         smap_get_ullong(other_config, "emc-insert-inv-prob",
                         DEFAULT_EM_FLOW_INSERT_INV_PROB);
     uint32_t insert_min, cur_min;
+    uint32_t tx_flush_interval, cur_tx_flush_interval;
+
+    tx_flush_interval = smap_get_int(other_config, "tx-flush-interval",
+                                     DEFAULT_TX_FLUSH_INTERVAL);
+    atomic_read_relaxed(&dp->tx_flush_interval, &cur_tx_flush_interval);
+    if (tx_flush_interval != cur_tx_flush_interval) {
+        atomic_store_relaxed(&dp->tx_flush_interval, tx_flush_interval);
+        VLOG_INFO("Flushing interval for tx queues set to %"PRIu32" us",
+                  tx_flush_interval);
+    }
 
     if (!nullable_string_is_equal(dp->pmd_cmask, cmask)) {
         free(dp->pmd_cmask);
@@ -3053,77 +3148,162 @@ dp_netdev_actions_free(struct dp_netdev_actions *actions)
     free(actions);
 }
 
-static inline unsigned long long
-cycles_counter(void)
+static void
+dp_netdev_rxq_set_cycles(struct dp_netdev_rxq *rx,
+                         enum rxq_cycles_counter_type type,
+                         unsigned long long cycles)
 {
-#ifdef DPDK_NETDEV
-    return rte_get_tsc_cycles();
-#else
-    return 0;
-#endif
+   atomic_store_relaxed(&rx->cycles[type], cycles);
 }
 
-/* Fake mutex to make sure that the calls to cycles_count_* are balanced */
-extern struct ovs_mutex cycles_counter_fake_mutex;
-
-/* Start counting cycles.  Must be followed by 'cycles_count_end()' */
-static inline void
-cycles_count_start(struct dp_netdev_pmd_thread *pmd)
-    OVS_ACQUIRES(&cycles_counter_fake_mutex)
-    OVS_NO_THREAD_SAFETY_ANALYSIS
+static void
+dp_netdev_rxq_add_cycles(struct dp_netdev_rxq *rx,
+                         enum rxq_cycles_counter_type type,
+                         unsigned long long cycles)
 {
-    pmd->last_cycles = cycles_counter();
+    non_atomic_ullong_add(&rx->cycles[type], cycles);
 }
 
-/* Stop counting cycles and add them to the counter 'type' */
-static inline void
-cycles_count_end(struct dp_netdev_pmd_thread *pmd,
-                 enum pmd_cycles_counter_type type)
-    OVS_RELEASES(&cycles_counter_fake_mutex)
-    OVS_NO_THREAD_SAFETY_ANALYSIS
+static uint64_t
+dp_netdev_rxq_get_cycles(struct dp_netdev_rxq *rx,
+                         enum rxq_cycles_counter_type type)
 {
-    unsigned long long interval = cycles_counter() - pmd->last_cycles;
-
-    non_atomic_ullong_add(&pmd->cycles.n[type], interval);
+    unsigned long long processing_cycles;
+    atomic_read_relaxed(&rx->cycles[type], &processing_cycles);
+    return processing_cycles;
 }
 
-/* Calculate the intermediate cycle result and add to the counter 'type' */
-static inline void
-cycles_count_intermediate(struct dp_netdev_pmd_thread *pmd,
-                          enum pmd_cycles_counter_type type)
-    OVS_NO_THREAD_SAFETY_ANALYSIS
+static void
+dp_netdev_rxq_set_intrvl_cycles(struct dp_netdev_rxq *rx,
+                                unsigned long long cycles)
 {
-    unsigned long long new_cycles = cycles_counter();
-    unsigned long long interval = new_cycles - pmd->last_cycles;
-    pmd->last_cycles = new_cycles;
+    unsigned int idx = rx->intrvl_idx++ % PMD_RXQ_INTERVAL_MAX;
+    atomic_store_relaxed(&rx->cycles_intrvl[idx], cycles);
+}
 
-    non_atomic_ullong_add(&pmd->cycles.n[type], interval);
+static uint64_t
+dp_netdev_rxq_get_intrvl_cycles(struct dp_netdev_rxq *rx, unsigned idx)
+{
+    unsigned long long processing_cycles;
+    atomic_read_relaxed(&rx->cycles_intrvl[idx], &processing_cycles);
+    return processing_cycles;
+}
+
+static int
+dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
+                                   struct tx_port *p)
+{
+    int i;
+    int tx_qid;
+    int output_cnt;
+    bool dynamic_txqs;
+    struct cycle_timer timer;
+    uint64_t cycles;
+    uint32_t tx_flush_interval;
+
+    cycle_timer_start(&pmd->perf_stats, &timer);
+
+    dynamic_txqs = p->port->dynamic_txqs;
+    if (dynamic_txqs) {
+        tx_qid = dpif_netdev_xps_get_tx_qid(pmd, p);
+    } else {
+        tx_qid = pmd->static_tx_qid;
+    }
+
+    output_cnt = dp_packet_batch_size(&p->output_pkts);
+    ovs_assert(output_cnt > 0);
+
+    netdev_send(p->port->netdev, tx_qid, &p->output_pkts, dynamic_txqs);
+    dp_packet_batch_init(&p->output_pkts);
+
+    /* Update time of the next flush. */
+    atomic_read_relaxed(&pmd->dp->tx_flush_interval, &tx_flush_interval);
+    p->flush_time = pmd->ctx.now + tx_flush_interval;
+
+    ovs_assert(pmd->n_output_batches > 0);
+    pmd->n_output_batches--;
+
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_SENT_PKTS, output_cnt);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_SENT_BATCHES, 1);
+
+    /* Distribute send cycles evenly among transmitted packets and assign to
+     * their respective rx queues. */
+    cycles = cycle_timer_stop(&pmd->perf_stats, &timer) / output_cnt;
+    for (i = 0; i < output_cnt; i++) {
+        if (p->output_pkts_rxqs[i]) {
+            dp_netdev_rxq_add_cycles(p->output_pkts_rxqs[i],
+                                     RXQ_CYCLES_PROC_CURR, cycles);
+        }
+    }
+
+    return output_cnt;
+}
+
+static int
+dp_netdev_pmd_flush_output_packets(struct dp_netdev_pmd_thread *pmd,
+                                   bool force)
+{
+    struct tx_port *p;
+    int output_cnt = 0;
+
+    if (!pmd->n_output_batches) {
+        return 0;
+    }
+
+    HMAP_FOR_EACH (p, node, &pmd->send_port_cache) {
+        if (!dp_packet_batch_is_empty(&p->output_pkts)
+            && (force || pmd->ctx.now >= p->flush_time)) {
+            output_cnt += dp_netdev_pmd_flush_output_on_port(pmd, p);
+        }
+    }
+    return output_cnt;
 }
 
 static int
 dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
-                           struct netdev_rxq *rx,
+                           struct dp_netdev_rxq *rxq,
                            odp_port_t port_no)
 {
     struct dp_packet_batch batch;
+    struct cycle_timer timer;
     int error;
-    int batch_cnt = 0;
+    int batch_cnt = 0, output_cnt = 0;
+    uint64_t cycles;
 
+    /* Measure duration for polling and processing rx burst. */
+    cycle_timer_start(&pmd->perf_stats, &timer);
+
+    pmd->ctx.last_rxq = rxq;
     dp_packet_batch_init(&batch);
-    error = netdev_rxq_recv(rx, &batch);
+
+    error = netdev_rxq_recv(rxq->rx, &batch);
     if (!error) {
+        /* At least one packet received. */
         *recirc_depth_get() = 0;
+        pmd_thread_ctx_time_update(pmd);
 
         batch_cnt = batch.count;
         dp_netdev_input(pmd, &batch, port_no);
-    } else if (error != EAGAIN && error != EOPNOTSUPP) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-        VLOG_ERR_RL(&rl, "error receiving data from %s: %s",
-                    netdev_rxq_get_name(rx), ovs_strerror(error));
+        /* Assign processing cycles to rx queue. */
+        cycles = cycle_timer_stop(&pmd->perf_stats, &timer);
+        dp_netdev_rxq_add_cycles(rxq, RXQ_CYCLES_PROC_CURR, cycles);
+
+        output_cnt = dp_netdev_pmd_flush_output_packets(pmd, false);
+    } else {
+        /* Discard cycles. */
+        cycle_timer_stop(&pmd->perf_stats, &timer);
+        if (error != EAGAIN && error != EOPNOTSUPP) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+            VLOG_ERR_RL(&rl, "error receiving data from %s: %s",
+                    netdev_rxq_get_name(rxq->rx), ovs_strerror(error));
+        }
     }
 
-    return batch_cnt;
+    pmd->ctx.last_rxq = NULL;
+
+    return batch_cnt + output_cnt;
 }
 
 static struct tx_port *
@@ -3153,6 +3333,7 @@ port_reconfigure(struct dp_netdev_port *port)
         netdev_rxq_close(port->rxqs[i].rx);
         port->rxqs[i].rx = NULL;
     }
+    unsigned last_nrxq = port->n_rxq;
     port->n_rxq = 0;
 
     /* Allows 'netdev' to apply the pending configuration changes. */
@@ -3172,7 +3353,13 @@ port_reconfigure(struct dp_netdev_port *port)
     port->txq_used = xcalloc(netdev_n_txq(netdev), sizeof *port->txq_used);
 
     for (i = 0; i < netdev_n_rxq(netdev); i++) {
+        bool new_queue = i >= last_nrxq;
+        if (new_queue) {
+            memset(&port->rxqs[i], 0, sizeof port->rxqs[i]);
+        }
+
         port->rxqs[i].port = port;
+
         err = netdev_rxq_open(netdev, &port->rxqs[i].rx, i);
         if (err) {
             return err;
@@ -3200,6 +3387,7 @@ struct rr_numa {
     int n_pmds;
 
     int cur_index;
+    bool idx_inc;
 };
 
 static struct rr_numa *
@@ -3256,13 +3444,37 @@ rr_numa_list_populate(struct dp_netdev *dp, struct rr_numa_list *rr)
         numa->n_pmds++;
         numa->pmds = xrealloc(numa->pmds, numa->n_pmds * sizeof *numa->pmds);
         numa->pmds[numa->n_pmds - 1] = pmd;
+        /* At least one pmd so initialise curr_idx and idx_inc. */
+        numa->cur_index = 0;
+        numa->idx_inc = true;
     }
 }
 
+/* Returns the next pmd from the numa node in
+ * incrementing or decrementing order. */
 static struct dp_netdev_pmd_thread *
 rr_numa_get_pmd(struct rr_numa *numa)
 {
-    return numa->pmds[numa->cur_index++ % numa->n_pmds];
+    int numa_idx = numa->cur_index;
+
+    if (numa->idx_inc == true) {
+        /* Incrementing through list of pmds. */
+        if (numa->cur_index == numa->n_pmds-1) {
+            /* Reached the last pmd. */
+            numa->idx_inc = false;
+        } else {
+            numa->cur_index++;
+        }
+    } else {
+        /* Decrementing through list of pmds. */
+        if (numa->cur_index == 0) {
+            /* Reached the first pmd. */
+            numa->idx_inc = true;
+        } else {
+            numa->cur_index--;
+        }
+    }
+    return numa->pmds[numa_idx];
 }
 
 static void
@@ -3277,9 +3489,43 @@ rr_numa_list_destroy(struct rr_numa_list *rr)
     hmap_destroy(&rr->numas);
 }
 
+/* Sort Rx Queues by the processing cycles they are consuming. */
+static int
+compare_rxq_cycles(const void *a, const void *b)
+{
+    struct dp_netdev_rxq *qa;
+    struct dp_netdev_rxq *qb;
+    uint64_t cycles_qa, cycles_qb;
+
+    qa = *(struct dp_netdev_rxq **) a;
+    qb = *(struct dp_netdev_rxq **) b;
+
+    cycles_qa = dp_netdev_rxq_get_cycles(qa, RXQ_CYCLES_PROC_HIST);
+    cycles_qb = dp_netdev_rxq_get_cycles(qb, RXQ_CYCLES_PROC_HIST);
+
+    if (cycles_qa != cycles_qb) {
+        return (cycles_qa < cycles_qb) ? 1 : -1;
+    } else {
+        /* Cycles are the same so tiebreak on port/queue id.
+         * Tiebreaking (as opposed to return 0) ensures consistent
+         * sort results across multiple OS's. */
+        uint32_t port_qa = odp_to_u32(qa->port->port_no);
+        uint32_t port_qb = odp_to_u32(qb->port->port_no);
+        if (port_qa != port_qb) {
+            return port_qa > port_qb ? 1 : -1;
+        } else {
+            return netdev_rxq_get_queue_id(qa->rx)
+                    - netdev_rxq_get_queue_id(qb->rx);
+        }
+    }
+}
+
 /* Assign pmds to queues.  If 'pinned' is true, assign pmds to pinned
  * queues and marks the pmds as isolated.  Otherwise, assign non isolated
  * pmds to unpinned queues.
+ *
+ * If 'pinned' is false queues will be sorted by processing cycles they are
+ * consuming and then assigned to pmds in round robin order.
  *
  * The function doesn't touch the pmd threads, it just stores the assignment
  * in the 'pmd' member of each rxq. */
@@ -3289,19 +3535,15 @@ rxq_scheduling(struct dp_netdev *dp, bool pinned) OVS_REQUIRES(dp->port_mutex)
     struct dp_netdev_port *port;
     struct rr_numa_list rr;
     struct rr_numa *non_local_numa = NULL;
-
-    rr_numa_list_populate(dp, &rr);
+    struct dp_netdev_rxq ** rxqs = NULL;
+    int i, n_rxqs = 0;
+    struct rr_numa *numa = NULL;
+    int numa_id;
 
     HMAP_FOR_EACH (port, node, &dp->ports) {
-        struct rr_numa *numa;
-        int numa_id;
-
         if (!netdev_is_pmd(port->netdev)) {
             continue;
         }
-
-        numa_id = netdev_get_numa_id(port->netdev);
-        numa = rr_numa_list_lookup(&rr, numa_id);
 
         for (int qid = 0; qid < port->n_rxq; qid++) {
             struct dp_netdev_rxq *q = &port->rxqs[qid];
@@ -3320,36 +3562,70 @@ rxq_scheduling(struct dp_netdev *dp, bool pinned) OVS_REQUIRES(dp->port_mutex)
                     dp_netdev_pmd_unref(pmd);
                 }
             } else if (!pinned && q->core_id == OVS_CORE_UNSPEC) {
-                if (!numa) {
-                    /* There are no pmds on the queue's local NUMA node.
-                       Round-robin on the NUMA nodes that do have pmds. */
-                    non_local_numa = rr_numa_list_next(&rr, non_local_numa);
-                    if (!non_local_numa) {
-                        VLOG_ERR("There is no available (non-isolated) pmd "
-                                 "thread for port \'%s\' queue %d. This queue "
-                                 "will not be polled. Is pmd-cpu-mask set to "
-                                 "zero? Or are all PMDs isolated to other "
-                                 "queues?", netdev_get_name(port->netdev),
-                                 qid);
-                        continue;
-                    }
-                    q->pmd = rr_numa_get_pmd(non_local_numa);
-                    VLOG_WARN("There's no available (non-isolated) pmd thread "
-                              "on numa node %d. Queue %d on port \'%s\' will "
-                              "be assigned to the pmd on core %d "
-                              "(numa node %d). Expect reduced performance.",
-                              numa_id, qid, netdev_get_name(port->netdev),
-                              q->pmd->core_id, q->pmd->numa_id);
+                uint64_t cycle_hist = 0;
+
+                if (n_rxqs == 0) {
+                    rxqs = xmalloc(sizeof *rxqs);
                 } else {
-                    /* Assign queue to the next (round-robin) PMD on it's local
-                       NUMA node. */
-                    q->pmd = rr_numa_get_pmd(numa);
+                    rxqs = xrealloc(rxqs, sizeof *rxqs * (n_rxqs + 1));
                 }
+                /* Sum the queue intervals and store the cycle history. */
+                for (unsigned i = 0; i < PMD_RXQ_INTERVAL_MAX; i++) {
+                    cycle_hist += dp_netdev_rxq_get_intrvl_cycles(q, i);
+                }
+                dp_netdev_rxq_set_cycles(q, RXQ_CYCLES_PROC_HIST, cycle_hist);
+
+                /* Store the queue. */
+                rxqs[n_rxqs++] = q;
             }
         }
     }
 
+    if (n_rxqs > 1) {
+        /* Sort the queues in order of the processing cycles
+         * they consumed during their last pmd interval. */
+        qsort(rxqs, n_rxqs, sizeof *rxqs, compare_rxq_cycles);
+    }
+
+    rr_numa_list_populate(dp, &rr);
+    /* Assign the sorted queues to pmds in round robin. */
+    for (i = 0; i < n_rxqs; i++) {
+        numa_id = netdev_get_numa_id(rxqs[i]->port->netdev);
+        numa = rr_numa_list_lookup(&rr, numa_id);
+        if (!numa) {
+            /* There are no pmds on the queue's local NUMA node.
+               Round robin on the NUMA nodes that do have pmds. */
+            non_local_numa = rr_numa_list_next(&rr, non_local_numa);
+            if (!non_local_numa) {
+                VLOG_ERR("There is no available (non-isolated) pmd "
+                         "thread for port \'%s\' queue %d. This queue "
+                         "will not be polled. Is pmd-cpu-mask set to "
+                         "zero? Or are all PMDs isolated to other "
+                         "queues?", netdev_rxq_get_name(rxqs[i]->rx),
+                         netdev_rxq_get_queue_id(rxqs[i]->rx));
+                continue;
+            }
+            rxqs[i]->pmd = rr_numa_get_pmd(non_local_numa);
+            VLOG_WARN("There's no available (non-isolated) pmd thread "
+                      "on numa node %d. Queue %d on port \'%s\' will "
+                      "be assigned to the pmd on core %d "
+                      "(numa node %d). Expect reduced performance.",
+                      numa_id, netdev_rxq_get_queue_id(rxqs[i]->rx),
+                      netdev_rxq_get_name(rxqs[i]->rx),
+                      rxqs[i]->pmd->core_id, rxqs[i]->pmd->numa_id);
+        } else {
+        rxqs[i]->pmd = rr_numa_get_pmd(numa);
+        VLOG_INFO("Core %d on numa node %d assigned port \'%s\' "
+                  "rx queue %d (measured processing cycles %"PRIu64").",
+                  rxqs[i]->pmd->core_id, numa_id,
+                  netdev_rxq_get_name(rxqs[i]->rx),
+                  netdev_rxq_get_queue_id(rxqs[i]->rx),
+                  dp_netdev_rxq_get_cycles(rxqs[i], RXQ_CYCLES_PROC_HIST));
+        }
+    }
+
     rr_numa_list_destroy(&rr);
+    free(rxqs);
 }
 
 static void
@@ -3650,30 +3926,34 @@ dpif_netdev_run(struct dpif *dpif)
     struct dp_netdev *dp = get_dp_netdev(dpif);
     struct dp_netdev_pmd_thread *non_pmd;
     uint64_t new_tnl_seq;
-    int process_packets = 0;
+    bool need_to_flush = true;
 
     ovs_mutex_lock(&dp->port_mutex);
     non_pmd = dp_netdev_get_pmd(dp, NON_PMD_CORE_ID);
     if (non_pmd) {
         ovs_mutex_lock(&dp->non_pmd_mutex);
-        cycles_count_start(non_pmd);
         HMAP_FOR_EACH (port, node, &dp->ports) {
             if (!netdev_is_pmd(port->netdev)) {
                 int i;
 
                 for (i = 0; i < port->n_rxq; i++) {
-                    process_packets =
-                        dp_netdev_process_rxq_port(non_pmd,
-                                                   port->rxqs[i].rx,
-                                                   port->port_no);
-                    cycles_count_intermediate(non_pmd, process_packets ?
-                                                       PMD_CYCLES_PROCESSING
-                                                     : PMD_CYCLES_IDLE);
+                    if (dp_netdev_process_rxq_port(non_pmd,
+                                                   &port->rxqs[i],
+                                                   port->port_no)) {
+                        need_to_flush = false;
+                    }
                 }
             }
         }
-        cycles_count_end(non_pmd, PMD_CYCLES_IDLE);
-        dpif_netdev_xps_revalidate_pmd(non_pmd, time_msec(), false);
+        if (need_to_flush) {
+            /* We didn't receive anything in the process loop.
+             * Check if we need to send something.
+             * There was no time updates on current iteration. */
+            pmd_thread_ctx_time_update(non_pmd);
+            dp_netdev_pmd_flush_output_packets(non_pmd, false);
+        }
+
+        dpif_netdev_xps_revalidate_pmd(non_pmd, false);
         ovs_mutex_unlock(&dp->non_pmd_mutex);
 
         dp_netdev_pmd_unref(non_pmd);
@@ -3723,8 +4003,10 @@ pmd_free_cached_ports(struct dp_netdev_pmd_thread *pmd)
 {
     struct tx_port *tx_port_cached;
 
+    /* Flush all the queued packets. */
+    dp_netdev_pmd_flush_output_packets(pmd, true);
     /* Free all used tx queue ids. */
-    dpif_netdev_xps_revalidate_pmd(pmd, 0, true);
+    dpif_netdev_xps_revalidate_pmd(pmd, true);
 
     HMAP_FOR_EACH_POP (tx_port_cached, node, &pmd->tnl_port_cache) {
         free(tx_port_cached);
@@ -3735,7 +4017,9 @@ pmd_free_cached_ports(struct dp_netdev_pmd_thread *pmd)
 }
 
 /* Copies ports from 'pmd->tx_ports' (shared with the main thread) to
- * 'pmd->port_cache' (thread local) */
+ * thread-local copies. Copy to 'pmd->tnl_port_cache' if it is a tunnel
+ * device, otherwise to 'pmd->send_port_cache' if the port has at least
+ * one txq. */
 static void
 pmd_load_cached_ports(struct dp_netdev_pmd_thread *pmd)
     OVS_REQUIRES(pmd->port_mutex)
@@ -3797,7 +4081,7 @@ pmd_load_queues_and_ports(struct dp_netdev_pmd_thread *pmd,
 
     i = 0;
     HMAP_FOR_EACH (poll, node, &pmd->poll_list) {
-        poll_list[i].rx = poll->rxq->rx;
+        poll_list[i].rxq = poll->rxq;
         poll_list[i].port_no = poll->rxq->port->port_no;
         i++;
     }
@@ -3814,6 +4098,7 @@ static void *
 pmd_thread_main(void *f_)
 {
     struct dp_netdev_pmd_thread *pmd = f_;
+    struct pmd_perf_stats *s = &pmd->perf_stats;
     unsigned int lc = 0;
     struct polled_queue *poll_list;
     bool exiting;
@@ -3835,8 +4120,10 @@ reload:
     /* List port/core affinity */
     for (i = 0; i < poll_cnt; i++) {
        VLOG_DBG("Core %d processing port \'%s\' with queue-id %d\n",
-                pmd->core_id, netdev_rxq_get_name(poll_list[i].rx),
-                netdev_rxq_get_queue_id(poll_list[i].rx));
+                pmd->core_id, netdev_rxq_get_name(poll_list[i].rxq->rx),
+                netdev_rxq_get_queue_id(poll_list[i].rxq->rx));
+       /* Reset the rxq current cycles counter. */
+       dp_netdev_rxq_set_cycles(poll_list[i].rxq, RXQ_CYCLES_PROC_CURR, 0);
     }
 
     if (!poll_cnt) {
@@ -3847,15 +4134,26 @@ reload:
         lc = UINT_MAX;
     }
 
-    cycles_count_start(pmd);
+    pmd->intrvl_tsc_prev = 0;
+    atomic_store_relaxed(&pmd->intrvl_cycles, 0);
+    cycles_counter_update(s);
     for (;;) {
+        uint64_t iter_packets = 0;
+
+        pmd_perf_start_iteration(s);
         for (i = 0; i < poll_cnt; i++) {
             process_packets =
-                dp_netdev_process_rxq_port(pmd, poll_list[i].rx,
+                dp_netdev_process_rxq_port(pmd, poll_list[i].rxq,
                                            poll_list[i].port_no);
-            cycles_count_intermediate(pmd,
-                                      process_packets ? PMD_CYCLES_PROCESSING
-                                                      : PMD_CYCLES_IDLE);
+            iter_packets += process_packets;
+        }
+
+        if (!iter_packets) {
+            /* We didn't receive anything in the process loop.
+             * Check if we need to send something.
+             * There was no time updates on current iteration. */
+            pmd_thread_ctx_time_update(pmd);
+            iter_packets += dp_netdev_pmd_flush_output_packets(pmd, false);
         }
 
         if (lc++ > 1024) {
@@ -3864,7 +4162,7 @@ reload:
             lc = 0;
 
             coverage_try_clear();
-            dp_netdev_pmd_try_optimize(pmd);
+            dp_netdev_pmd_try_optimize(pmd, poll_list, poll_cnt);
             if (!ovsrcu_try_quiesce()) {
                 emc_cache_slow_sweep(&pmd->flow_cache);
             }
@@ -3874,9 +4172,8 @@ reload:
                 break;
             }
         }
+        pmd_perf_end_iteration(s, iter_packets);
     }
-
-    cycles_count_end(pmd, PMD_CYCLES_IDLE);
 
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     exiting = latch_is_set(&pmd->exit_latch);
@@ -3923,10 +4220,11 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
 {
     struct dp_meter *meter;
     struct dp_meter_band *band;
+    struct dp_packet *packet;
     long long int long_delta_t; /* msec */
     uint32_t delta_t; /* msec */
     int i;
-    int cnt = packets_->count;
+    const size_t cnt = dp_packet_batch_size(packets_);
     uint32_t bytes, volume;
     int exceeded_band[NETDEV_MAX_BURST];
     uint32_t exceeded_rate[NETDEV_MAX_BURST];
@@ -3948,7 +4246,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     memset(exceeded_rate, 0, cnt * sizeof *exceeded_rate);
 
     /* All packets will hit the meter at the same time. */
-    long_delta_t = (now - meter->used); /* msec */
+    long_delta_t = (now - meter->used) / 1000; /* msec */
 
     /* Make sure delta_t will not be too large, so that bucket will not
      * wrap around below. */
@@ -3959,8 +4257,8 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     meter->used = now;
     meter->packet_count += cnt;
     bytes = 0;
-    for (i = 0; i < cnt; i++) {
-        bytes += dp_packet_size(packets_->packets[i]);
+    DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
+        bytes += dp_packet_size(packet);
     }
     meter->byte_count += bytes;
 
@@ -4010,8 +4308,8 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
             } else {
                 /* Packet sizes differ, must process one-by-one. */
                 band_exceeded_pkt = cnt;
-                for (i = 0; i < cnt; i++) {
-                    uint32_t bits = dp_packet_size(packets_->packets[i]) * 8;
+                DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
+                    uint32_t bits = dp_packet_size(packet) * 8;
 
                     if (band->bucket >= bits) {
                         band->bucket -= bits;
@@ -4039,10 +4337,8 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     /* Fire the highest rate band exceeded by each packet.
      * Drop packets if needed, by swapping packet to the end that will be
      * ignored. */
-    const size_t size = dp_packet_batch_size(packets_);
-    struct dp_packet *packet;
     size_t j;
-    DP_PACKET_BATCH_REFILL_FOR_EACH (j, size, packet, packets_) {
+    DP_PACKET_BATCH_REFILL_FOR_EACH (j, cnt, packet, packets_) {
         if (exceeded_band[j] >= 0) {
             /* Meter drop packet. */
             band = &meter->bands[exceeded_band[j]];
@@ -4086,7 +4382,7 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
     /* Validate rates */
     for (i = 0; i < config->n_bands; i++) {
         if (config->bands[i].rate == 0) {
-            return EBADRQC; /* rate must be non-zero */
+            return EDOM; /* rate must be non-zero */
         }
     }
 
@@ -4106,7 +4402,7 @@ dpif_netdev_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
         meter->flags = config->flags;
         meter->n_bands = config->n_bands;
         meter->max_delta_t = 0;
-        meter->used = time_msec();
+        meter->used = time_usec();
 
         /* set up bands */
         for (i = 0; i < config->n_bands; ++i) {
@@ -4304,6 +4600,7 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     pmd->core_id = core_id;
     pmd->numa_id = numa_id;
     pmd->need_reload = false;
+    pmd->n_output_batches = 0;
 
     ovs_refcount_init(&pmd->ref_cnt);
     latch_init(&pmd->exit_latch);
@@ -4316,7 +4613,10 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     ovs_mutex_init(&pmd->port_mutex);
     cmap_init(&pmd->flow_table);
     cmap_init(&pmd->classifiers);
-    pmd->next_optimization = time_msec() + DPCLS_OPTIMIZATION_INTERVAL;
+    pmd->ctx.last_rxq = NULL;
+    pmd_thread_ctx_time_update(pmd);
+    pmd->next_optimization = pmd->ctx.now + DPCLS_OPTIMIZATION_INTERVAL;
+    pmd->rxq_next_cycle_store = pmd->ctx.now + PMD_RXQ_INTERVAL_LEN;
     hmap_init(&pmd->poll_list);
     hmap_init(&pmd->tx_ports);
     hmap_init(&pmd->tnl_port_cache);
@@ -4327,6 +4627,7 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
         emc_cache_init(&pmd->flow_cache);
         pmd_alloc_static_tx_qid(pmd);
     }
+    pmd_perf_stats_init(&pmd->perf_stats);
     cmap_insert(&dp->poll_threads, CONST_CAST(struct cmap_node *, &pmd->node),
                 hash_int(core_id, 0));
 }
@@ -4489,6 +4790,8 @@ dp_netdev_add_port_tx_to_pmd(struct dp_netdev_pmd_thread *pmd,
 
     tx->port = port;
     tx->qid = -1;
+    tx->flush_time = 0LL;
+    dp_packet_batch_init(&tx->output_pkts);
 
     hmap_insert(&pmd->tx_ports, &tx->node, hash_port_no(tx->port->port_no));
     pmd->need_reload = true;
@@ -4524,13 +4827,6 @@ dp_netdev_flow_used(struct dp_netdev_flow *netdev_flow, int cnt, int size,
     atomic_read_relaxed(&netdev_flow->stats.tcp_flags, &flags);
     flags |= tcp_flags;
     atomic_store_relaxed(&netdev_flow->stats.tcp_flags, flags);
-}
-
-static void
-dp_netdev_count_packet(struct dp_netdev_pmd_thread *pmd,
-                       enum dp_stat_type type, int cnt)
-{
-    non_atomic_ullong_add(&pmd->stats.n[type], cnt);
 }
 
 static int
@@ -4572,6 +4868,22 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
 
     return dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata,
                          actions, wc, put_actions, dp->upcall_aux);
+}
+
+static inline uint32_t
+dpif_netdev_packet_get_rss_hash_orig_pkt(struct dp_packet *packet,
+                                const struct miniflow *mf)
+{
+    uint32_t hash;
+
+    if (OVS_LIKELY(dp_packet_rss_valid(packet))) {
+        hash = dp_packet_get_rss_hash(packet);
+    } else {
+        hash = miniflow_hash_5tuple(mf, 0);
+        dp_packet_set_rss_hash(packet, hash);
+    }
+
+    return hash;
 }
 
 static inline uint32_t
@@ -4629,19 +4941,18 @@ packet_batch_per_flow_init(struct packet_batch_per_flow *batch,
 
 static inline void
 packet_batch_per_flow_execute(struct packet_batch_per_flow *batch,
-                              struct dp_netdev_pmd_thread *pmd,
-                              long long now)
+                              struct dp_netdev_pmd_thread *pmd)
 {
     struct dp_netdev_actions *actions;
     struct dp_netdev_flow *flow = batch->flow;
 
     dp_netdev_flow_used(flow, batch->array.count, batch->byte_count,
-                        batch->tcp_flags, now);
+                        batch->tcp_flags, pmd->ctx.now / 1000);
 
     actions = dp_netdev_flow_get_actions(flow);
 
     dp_netdev_execute_actions(pmd, &batch->array, true, &flow->flow,
-                              actions->actions, actions->size, now);
+                              actions->actions, actions->size);
 }
 
 static inline void
@@ -4668,8 +4979,11 @@ dp_netdev_queue_batches(struct dp_packet *pkt,
  * The function returns the number of packets that needs to be processed in the
  * 'packets' array (they have been moved to the beginning of the vector).
  *
- * If 'md_is_valid' is false, the metadata in 'packets' is not valid and must
- * be initialized by this function using 'port_no'.
+ * For performance reasons a caller may choose not to initialize the metadata
+ * in 'packets_'.  If 'md_is_valid' is false, the metadata in 'packets'
+ * is not valid and must be initialized by this function using 'port_no'.
+ * If 'md_is_valid' is true, the metadata is already valid and 'port_no'
+ * will be ignored.
  */
 static inline size_t
 emc_processing(struct dp_netdev_pmd_thread *pmd,
@@ -4682,13 +4996,16 @@ emc_processing(struct dp_netdev_pmd_thread *pmd,
     struct netdev_flow_key *key = &keys[0];
     size_t n_missed = 0, n_dropped = 0;
     struct dp_packet *packet;
-    const size_t size = dp_packet_batch_size(packets_);
+    const size_t cnt = dp_packet_batch_size(packets_);
     uint32_t cur_min;
     int i;
 
     atomic_read_relaxed(&pmd->dp->emc_insert_min, &cur_min);
+    pmd_perf_update_counter(&pmd->perf_stats,
+                            md_is_valid ? PMD_STAT_RECIRC : PMD_STAT_RECV,
+                            cnt);
 
-    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, packets_) {
+    DP_PACKET_BATCH_REFILL_FOR_EACH (i, cnt, packet, packets_) {
         struct dp_netdev_flow *flow;
 
         if (OVS_UNLIKELY(dp_packet_size(packet) < ETH_HEADER_LEN)) {
@@ -4697,7 +5014,7 @@ emc_processing(struct dp_netdev_pmd_thread *pmd,
             continue;
         }
 
-        if (i != size - 1) {
+        if (i != cnt - 1) {
             struct dp_packet **packets = packets_->packets;
             /* Prefetch next packet data and metadata. */
             OVS_PREFETCH(dp_packet_data(packets[i+1]));
@@ -4709,10 +5026,18 @@ emc_processing(struct dp_netdev_pmd_thread *pmd,
         }
         miniflow_extract(packet, &key->mf);
         key->len = 0; /* Not computed yet. */
-        key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
-
-        /* If EMC is disabled skip emc_lookup */
-        flow = (cur_min == 0) ? NULL: emc_lookup(flow_cache, key);
+        /* If EMC is disabled skip hash computation and emc_lookup */
+        if (cur_min) {
+            if (!md_is_valid) {
+                key->hash = dpif_netdev_packet_get_rss_hash_orig_pkt(packet,
+                        &key->mf);
+            } else {
+                key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+            }
+            flow = emc_lookup(flow_cache, key);
+        } else {
+            flow = NULL;
+        }
         if (OVS_LIKELY(flow)) {
             dp_netdev_queue_batches(packet, flow, &key->mf, batches,
                                     n_batches);
@@ -4727,18 +5052,17 @@ emc_processing(struct dp_netdev_pmd_thread *pmd,
         }
     }
 
-    dp_netdev_count_packet(pmd, DP_STAT_EXACT_HIT,
-                           size - n_dropped - n_missed);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_EXACT_HIT,
+                            cnt - n_dropped - n_missed);
 
     return dp_packet_batch_size(packets_);
 }
 
-static inline void
+static inline int
 handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
                      struct dp_packet *packet,
                      const struct netdev_flow_key *key,
-                     struct ofpbuf *actions, struct ofpbuf *put_actions,
-                     int *lost_cnt, long long now)
+                     struct ofpbuf *actions, struct ofpbuf *put_actions)
 {
     struct ofpbuf *add_actions;
     struct dp_packet_batch b;
@@ -4758,8 +5082,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
                              put_actions);
     if (OVS_UNLIKELY(error && error != ENOSPC)) {
         dp_packet_delete(packet);
-        (*lost_cnt)++;
-        return;
+        return error;
     }
 
     /* The Netlink encoding of datapath flow keys cannot express
@@ -4777,7 +5100,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
      * we'll send the packet up twice. */
     dp_packet_batch_init_packet(&b, packet);
     dp_netdev_execute_actions(pmd, &b, true, &match.flow,
-                              actions->data, actions->size, now);
+                              actions->data, actions->size);
 
     add_actions = put_actions->size ? put_actions : actions;
     if (OVS_LIKELY(error != ENOSPC)) {
@@ -4799,28 +5122,29 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
         ovs_mutex_unlock(&pmd->flow_mutex);
         emc_probabilistic_insert(pmd, key, netdev_flow);
     }
+    return error;
 }
 
 static inline void
 fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                      struct dp_packet_batch *packets_,
                      struct netdev_flow_key *keys,
-                     struct packet_batch_per_flow batches[], size_t *n_batches,
-                     odp_port_t in_port,
-                     long long now)
+                     struct packet_batch_per_flow batches[],
+                     size_t *n_batches,
+                     odp_port_t in_port)
 {
-    int cnt = packets_->count;
+    const size_t cnt = dp_packet_batch_size(packets_);
 #if !defined(__CHECKER__) && !defined(_WIN32)
     const size_t PKT_ARRAY_SIZE = cnt;
 #else
     /* Sparse or MSVC doesn't like variable length array. */
     enum { PKT_ARRAY_SIZE = NETDEV_MAX_BURST };
 #endif
-    struct dp_packet **packets = packets_->packets;
+    struct dp_packet *packet;
     struct dpcls *cls;
     struct dpcls_rule *rules[PKT_ARRAY_SIZE];
     struct dp_netdev *dp = pmd->dp;
-    int miss_cnt = 0, lost_cnt = 0;
+    int upcall_ok_cnt = 0, upcall_fail_cnt = 0;
     int lookup_cnt = 0, add_lookup_cnt;
     bool any_miss;
     size_t i;
@@ -4844,7 +5168,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         ofpbuf_use_stub(&actions, actions_stub, sizeof actions_stub);
         ofpbuf_use_stub(&put_actions, slow_stub, sizeof slow_stub);
 
-        for (i = 0; i < cnt; i++) {
+        DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
             struct dp_netdev_flow *netdev_flow;
 
             if (OVS_LIKELY(rules[i])) {
@@ -4862,26 +5186,29 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
-            miss_cnt++;
-            handle_packet_upcall(pmd, packets[i], &keys[i], &actions,
-                                 &put_actions, &lost_cnt, now);
+            int error = handle_packet_upcall(pmd, packet, &keys[i],
+                                             &actions, &put_actions);
+
+            if (OVS_UNLIKELY(error)) {
+                upcall_fail_cnt++;
+            } else {
+                upcall_ok_cnt++;
+            }
         }
 
         ofpbuf_uninit(&actions);
         ofpbuf_uninit(&put_actions);
         fat_rwlock_unlock(&dp->upcall_rwlock);
     } else if (OVS_UNLIKELY(any_miss)) {
-        for (i = 0; i < cnt; i++) {
+        DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
             if (OVS_UNLIKELY(!rules[i])) {
-                dp_packet_delete(packets[i]);
-                lost_cnt++;
-                miss_cnt++;
+                dp_packet_delete(packet);
+                upcall_fail_cnt++;
             }
         }
     }
 
-    for (i = 0; i < cnt; i++) {
-        struct dp_packet *packet = packets[i];
+    DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
         struct dp_netdev_flow *flow;
 
         if (OVS_UNLIKELY(!rules[i])) {
@@ -4894,26 +5221,27 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         dp_netdev_queue_batches(packet, flow, &keys[i].mf, batches, n_batches);
     }
 
-    dp_netdev_count_packet(pmd, DP_STAT_MASKED_HIT, cnt - miss_cnt);
-    dp_netdev_count_packet(pmd, DP_STAT_LOOKUP_HIT, lookup_cnt);
-    dp_netdev_count_packet(pmd, DP_STAT_MISS, miss_cnt);
-    dp_netdev_count_packet(pmd, DP_STAT_LOST, lost_cnt);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_MASKED_HIT,
+                            cnt - upcall_ok_cnt - upcall_fail_cnt);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_MASKED_LOOKUP,
+                            lookup_cnt);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_MISS,
+                            upcall_ok_cnt);
+    pmd_perf_update_counter(&pmd->perf_stats, PMD_STAT_LOST,
+                            upcall_fail_cnt);
 }
 
 /* Packets enter the datapath from a port (or from recirculation) here.
  *
- * For performance reasons a caller may choose not to initialize the metadata
- * in 'packets': in this case 'mdinit' is false and this function needs to
- * initialize it using 'port_no'.  If the metadata in 'packets' is already
- * valid, 'md_is_valid' must be true and 'port_no' will be ignored. */
+ * When 'md_is_valid' is true the metadata in 'packets' are already valid.
+ * When false the metadata in 'packets' need to be initialized. */
 static void
 dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
                   struct dp_packet_batch *packets,
                   bool md_is_valid, odp_port_t port_no)
 {
-    int cnt = packets->count;
 #if !defined(__CHECKER__) && !defined(_WIN32)
-    const size_t PKT_ARRAY_SIZE = cnt;
+    const size_t PKT_ARRAY_SIZE = dp_packet_batch_size(packets);
 #else
     /* Sparse or MSVC doesn't like variable length array. */
     enum { PKT_ARRAY_SIZE = NETDEV_MAX_BURST };
@@ -4921,7 +5249,6 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     OVS_ALIGNED_VAR(CACHE_LINE_SIZE)
         struct netdev_flow_key keys[PKT_ARRAY_SIZE];
     struct packet_batch_per_flow batches[PKT_ARRAY_SIZE];
-    long long now = time_msec();
     size_t n_batches;
     odp_port_t in_port;
 
@@ -4931,8 +5258,8 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     if (!dp_packet_batch_is_empty(packets)) {
         /* Get ingress port from first packet's metadata. */
         in_port = packets->packets[0]->md.in_port.odp_port;
-        fast_path_processing(pmd, packets, keys, batches, &n_batches,
-                             in_port, now);
+        fast_path_processing(pmd, packets, keys,
+                             batches, &n_batches, in_port);
     }
 
     /* All the flow batches need to be reset before any call to
@@ -4950,7 +5277,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     }
 
     for (i = 0; i < n_batches; i++) {
-        packet_batch_per_flow_execute(&batches[i], pmd, now);
+        packet_batch_per_flow_execute(&batches[i], pmd);
     }
 }
 
@@ -4971,7 +5298,6 @@ dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
 
 struct dp_netdev_execute_aux {
     struct dp_netdev_pmd_thread *pmd;
-    long long now;
     const struct flow *flow;
 };
 
@@ -4995,7 +5321,7 @@ dpif_netdev_register_upcall_cb(struct dpif *dpif, upcall_callback *cb,
 
 static void
 dpif_netdev_xps_revalidate_pmd(const struct dp_netdev_pmd_thread *pmd,
-                               long long now, bool purge)
+                               bool purge)
 {
     struct tx_port *tx;
     struct dp_netdev_port *port;
@@ -5005,8 +5331,8 @@ dpif_netdev_xps_revalidate_pmd(const struct dp_netdev_pmd_thread *pmd,
         if (!tx->port->dynamic_txqs) {
             continue;
         }
-        interval = now - tx->last_used;
-        if (tx->qid >= 0 && (purge || interval >= XPS_TIMEOUT_MS)) {
+        interval = pmd->ctx.now - tx->last_used;
+        if (tx->qid >= 0 && (purge || interval >= XPS_TIMEOUT)) {
             port = tx->port;
             ovs_mutex_lock(&port->txq_used_mutex);
             port->txq_used[tx->qid]--;
@@ -5018,20 +5344,16 @@ dpif_netdev_xps_revalidate_pmd(const struct dp_netdev_pmd_thread *pmd,
 
 static int
 dpif_netdev_xps_get_tx_qid(const struct dp_netdev_pmd_thread *pmd,
-                           struct tx_port *tx, long long now)
+                           struct tx_port *tx)
 {
     struct dp_netdev_port *port;
     long long interval;
     int i, min_cnt, min_qid;
 
-    if (OVS_UNLIKELY(!now)) {
-        now = time_msec();
-    }
+    interval = pmd->ctx.now - tx->last_used;
+    tx->last_used = pmd->ctx.now;
 
-    interval = now - tx->last_used;
-    tx->last_used = now;
-
-    if (OVS_LIKELY(tx->qid >= 0 && interval < XPS_TIMEOUT_MS)) {
+    if (OVS_LIKELY(tx->qid >= 0 && interval < XPS_TIMEOUT)) {
         return tx->qid;
     }
 
@@ -5057,7 +5379,7 @@ dpif_netdev_xps_get_tx_qid(const struct dp_netdev_pmd_thread *pmd,
 
     ovs_mutex_unlock(&port->txq_used_mutex);
 
-    dpif_netdev_xps_revalidate_pmd(pmd, now, false);
+    dpif_netdev_xps_revalidate_pmd(pmd, false);
 
     VLOG_DBG("Core %d: New TX queue ID %d for port \'%s\'.",
              pmd->core_id, tx->qid, netdev_get_name(tx->port->netdev));
@@ -5108,7 +5430,7 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
                             struct dp_packet *packet, bool may_steal,
                             struct flow *flow, ovs_u128 *ufid,
                             struct ofpbuf *actions,
-                            const struct nlattr *userdata, long long now)
+                            const struct nlattr *userdata)
 {
     struct dp_packet_batch b;
     int error;
@@ -5121,7 +5443,7 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
     if (!error || error == ENOSPC) {
         dp_packet_batch_init_packet(&b, packet);
         dp_netdev_execute_actions(pmd, &b, may_steal, flow,
-                                  actions->data, actions->size, now);
+                                  actions->data, actions->size);
     } else if (may_steal) {
         dp_packet_delete(packet);
     }
@@ -5137,25 +5459,47 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     struct dp_netdev_pmd_thread *pmd = aux->pmd;
     struct dp_netdev *dp = pmd->dp;
     int type = nl_attr_type(a);
-    long long now = aux->now;
     struct tx_port *p;
 
     switch ((enum ovs_action_attr)type) {
     case OVS_ACTION_ATTR_OUTPUT:
         p = pmd_send_port_cache_lookup(pmd, nl_attr_get_odp_port(a));
         if (OVS_LIKELY(p)) {
-            int tx_qid;
-            bool dynamic_txqs;
+            struct dp_packet *packet;
+            struct dp_packet_batch out;
 
-            dynamic_txqs = p->port->dynamic_txqs;
-            if (dynamic_txqs) {
-                tx_qid = dpif_netdev_xps_get_tx_qid(pmd, p, now);
-            } else {
-                tx_qid = pmd->static_tx_qid;
+            if (!may_steal) {
+                dp_packet_batch_clone(&out, packets_);
+                dp_packet_batch_reset_cutlen(packets_);
+                packets_ = &out;
+            }
+            dp_packet_batch_apply_cutlen(packets_);
+
+#ifdef DPDK_NETDEV
+            if (OVS_UNLIKELY(!dp_packet_batch_is_empty(&p->output_pkts)
+                             && packets_->packets[0]->source
+                                != p->output_pkts.packets[0]->source)) {
+                /* XXX: netdev-dpdk assumes that all packets in a single
+                 *      output batch has the same source. Flush here to
+                 *      avoid memory access issues. */
+                dp_netdev_pmd_flush_output_on_port(pmd, p);
+            }
+#endif
+            if (dp_packet_batch_size(&p->output_pkts)
+                + dp_packet_batch_size(packets_) > NETDEV_MAX_BURST) {
+                /* Flush here to avoid overflow. */
+                dp_netdev_pmd_flush_output_on_port(pmd, p);
             }
 
-            netdev_send(p->port->netdev, tx_qid, packets_, may_steal,
-                        dynamic_txqs);
+            if (dp_packet_batch_is_empty(&p->output_pkts)) {
+                pmd->n_output_batches++;
+            }
+
+            DP_PACKET_BATCH_FOR_EACH (packet, packets_) {
+                p->output_pkts_rxqs[dp_packet_batch_size(&p->output_pkts)] =
+                                                             pmd->ctx.last_rxq;
+                dp_packet_batch_add(&p->output_pkts, packet);
+            }
             return;
         }
         break;
@@ -5232,7 +5576,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 flow_extract(packet, &flow);
                 dpif_flow_hash(dp->dpif, &flow, sizeof flow, &ufid);
                 dp_execute_userspace_action(pmd, packet, may_steal, &flow,
-                                            &ufid, &actions, userdata, now);
+                                            &ufid, &actions, userdata);
             }
 
             if (clone) {
@@ -5392,14 +5736,15 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         }
 
         conntrack_execute(&dp->conntrack, packets_, aux->flow->dl_type, force,
-                          commit, zone, setmark, setlabel, helper,
-                          nat_action_info_ref);
+                          commit, zone, setmark, setlabel, aux->flow->tp_src,
+                          aux->flow->tp_dst, helper, nat_action_info_ref,
+                          pmd->ctx.now / 1000);
         break;
     }
 
     case OVS_ACTION_ATTR_METER:
         dp_netdev_run_meter(pmd->dp, packets_, nl_attr_get_u32(a),
-                            time_msec());
+                            pmd->ctx.now);
         break;
 
     case OVS_ACTION_ATTR_PUSH_VLAN:
@@ -5415,8 +5760,9 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_PUSH_ETH:
     case OVS_ACTION_ATTR_POP_ETH:
     case OVS_ACTION_ATTR_CLONE:
-    case OVS_ACTION_ATTR_ENCAP_NSH:
-    case OVS_ACTION_ATTR_DECAP_NSH:
+    case OVS_ACTION_ATTR_PUSH_NSH:
+    case OVS_ACTION_ATTR_POP_NSH:
+    case OVS_ACTION_ATTR_CT_CLEAR:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
@@ -5428,10 +5774,9 @@ static void
 dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                           struct dp_packet_batch *packets,
                           bool may_steal, const struct flow *flow,
-                          const struct nlattr *actions, size_t actions_len,
-                          long long now)
+                          const struct nlattr *actions, size_t actions_len)
 {
-    struct dp_netdev_execute_aux aux = { pmd, now, flow };
+    struct dp_netdev_execute_aux aux = { pmd, flow };
 
     odp_execute_actions(&aux, packets, may_steal, actions,
                         actions_len, dp_execute_cb);
@@ -5491,11 +5836,39 @@ dpif_netdev_ct_dump_done(struct dpif *dpif OVS_UNUSED,
 }
 
 static int
-dpif_netdev_ct_flush(struct dpif *dpif, const uint16_t *zone)
+dpif_netdev_ct_flush(struct dpif *dpif, const uint16_t *zone,
+                     const struct ct_dpif_tuple *tuple)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
 
+    if (tuple) {
+        return EOPNOTSUPP;
+    }
     return conntrack_flush(&dp->conntrack, zone);
+}
+
+static int
+dpif_netdev_ct_set_maxconns(struct dpif *dpif, uint32_t maxconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_set_maxconns(&dp->conntrack, maxconns);
+}
+
+static int
+dpif_netdev_ct_get_maxconns(struct dpif *dpif, uint32_t *maxconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_get_maxconns(&dp->conntrack, maxconns);
+}
+
+static int
+dpif_netdev_ct_get_nconns(struct dpif *dpif, uint32_t *nconns)
+{
+    struct dp_netdev *dp = get_dp_netdev(dpif);
+
+    return conntrack_get_nconns(&dp->conntrack, nconns);
 }
 
 const struct dpif_class dpif_netdev_class = {
@@ -5543,6 +5916,9 @@ const struct dpif_class dpif_netdev_class = {
     dpif_netdev_ct_dump_next,
     dpif_netdev_ct_dump_done,
     dpif_netdev_ct_flush,
+    dpif_netdev_ct_set_maxconns,
+    dpif_netdev_ct_get_maxconns,
+    dpif_netdev_ct_get_nconns,
     dpif_netdev_meter_get_features,
     dpif_netdev_meter_set,
     dpif_netdev_meter_get,
@@ -5754,12 +6130,33 @@ dpcls_sort_subtable_vector(struct dpcls *cls)
 }
 
 static inline void
-dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd)
+dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd,
+                           struct polled_queue *poll_list, int poll_cnt)
 {
     struct dpcls *cls;
-    long long int now = time_msec();
 
-    if (now > pmd->next_optimization) {
+    if (pmd->ctx.now > pmd->rxq_next_cycle_store) {
+        uint64_t curr_tsc;
+        /* Get the cycles that were used to process each queue and store. */
+        for (unsigned i = 0; i < poll_cnt; i++) {
+            uint64_t rxq_cyc_curr = dp_netdev_rxq_get_cycles(poll_list[i].rxq,
+                                                        RXQ_CYCLES_PROC_CURR);
+            dp_netdev_rxq_set_intrvl_cycles(poll_list[i].rxq, rxq_cyc_curr);
+            dp_netdev_rxq_set_cycles(poll_list[i].rxq, RXQ_CYCLES_PROC_CURR,
+                                     0);
+        }
+        curr_tsc = cycles_counter_update(&pmd->perf_stats);
+        if (pmd->intrvl_tsc_prev) {
+            /* There is a prev timestamp, store a new intrvl cycle count. */
+            atomic_store_relaxed(&pmd->intrvl_cycles,
+                                 curr_tsc - pmd->intrvl_tsc_prev);
+        }
+        pmd->intrvl_tsc_prev = curr_tsc;
+        /* Start new measuring interval */
+        pmd->rxq_next_cycle_store = pmd->ctx.now + PMD_RXQ_INTERVAL_LEN;
+    }
+
+    if (pmd->ctx.now > pmd->next_optimization) {
         /* Try to obtain the flow lock to block out revalidator threads.
          * If not possible, just try next time. */
         if (!ovs_mutex_trylock(&pmd->flow_mutex)) {
@@ -5769,7 +6166,8 @@ dp_netdev_pmd_try_optimize(struct dp_netdev_pmd_thread *pmd)
             }
             ovs_mutex_unlock(&pmd->flow_mutex);
             /* Start new measuring interval */
-            pmd->next_optimization = now + DPCLS_OPTIMIZATION_INTERVAL;
+            pmd->next_optimization = pmd->ctx.now
+                                     + DPCLS_OPTIMIZATION_INTERVAL;
         }
     }
 }

@@ -1,3 +1,22 @@
+openvswitch (2.9.0~git20180205.5a39582ca-0ubuntu1) bionic; urgency=medium
+
+  * Snapshot from branch-2.9 (LP: #1735248, LP: #1686406, LP: #1709272):
+    - d/p/dpif-kernel-gre-mtu-workaround.patch,
+      d/p/dpif-netlink-rtnl-Use-65000-instead-of-65535-as-tunnel-MTU.patch,
+      d/p/ovs-netdev-dpdk-17.11-upgrade.patch: Drop, included upstream.
+  * d/control: Switch BD's to python{3}-all-dev to enable json native
+    extensions (LP: #1672522).
+  * d/control,rules,openvswitch-doc.*: Add documentation (LP: #965283).
+  * Misc tidy of packaging:
+    - d/*: wrap-and-sort -bast.
+    - d/control: Priority optional->extra.
+    - d/openvswitch-doc.doc-base: Update Section.
+    - d/copyright: Pick machine formatted version from Debian
+      (thanks Thomas).
+    - d/control: Add missing depends on lsb-release.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 05 Feb 2018 17:12:07 +0000
+
 openvswitch (2.8.1-0ubuntu3) bionic; urgency=medium
 
   * Updates to systemd configuration:

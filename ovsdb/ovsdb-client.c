@@ -32,13 +32,16 @@
 #include "dirs.h"
 #include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
+#include "file.h"
 #include "openvswitch/json.h"
 #include "jsonrpc.h"
 #include "lib/table.h"
+#include "log.h"
 #include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
+#include "row.h"
 #include "sort.h"
 #include "svec.h"
 #include "stream.h"
@@ -70,6 +73,9 @@ struct ovsdb_client_command {
 
 /* --timestamp: Print a timestamp before each update on "monitor" command? */
 static bool timestamp;
+
+/* --force: Ignore schema differences for "restore" command? */
+static bool force;
 
 /* Format for table output. */
 static struct table_style table_style = TABLE_STYLE_DEFAULT;
@@ -131,14 +137,23 @@ main(int argc, char *argv[])
         if (argc - optind > command->min_args
             && svec_contains(&dbs, argv[optind])) {
             database = xstrdup(argv[optind++]);
-        } else if (dbs.n == 1) {
-            database = xstrdup(dbs.names[0]);
         } else if (svec_contains(&dbs, "Open_vSwitch")) {
             database = xstrdup("Open_vSwitch");
         } else {
-            jsonrpc_close(rpc);
-            ovs_fatal(0, "no default database for `%s' command, please "
-                      "specify a database name", command->name);
+            size_t n = 0;
+            const char *best = NULL;
+            for (size_t i = 0; i < dbs.n; i++) {
+                if (dbs.names[i][0] != '_') {
+                    best = dbs.names[i];
+                    n++;
+                }
+            }
+            if (n != 1) {
+                jsonrpc_close(rpc);
+                ovs_fatal(0, "no default database for `%s' command, please "
+                          "specify a database name", command->name);
+            }
+            database = xstrdup(best);
         }
         svec_destroy(&dbs);
     } else {
@@ -173,6 +188,7 @@ parse_options(int argc, char *argv[])
     enum {
         OPT_BOOTSTRAP_CA_CERT = UCHAR_MAX + 1,
         OPT_TIMESTAMP,
+        OPT_FORCE,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS,
         TABLE_OPTION_ENUMS,
@@ -182,6 +198,7 @@ parse_options(int argc, char *argv[])
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {"timestamp", no_argument, NULL, OPT_TIMESTAMP},
+        {"force", no_argument, NULL, OPT_FORCE},
         VLOG_LONG_OPTIONS,
         DAEMON_LONG_OPTIONS,
 #ifdef HAVE_OPENSSL
@@ -224,6 +241,10 @@ parse_options(int argc, char *argv[])
             timestamp = true;
             break;
 
+        case OPT_FORCE:
+            force = true;
+            break;
+
         case '?':
             exit(EXIT_FAILURE);
 
@@ -251,13 +272,19 @@ usage(void)
            "\n  get-schema-version [SERVER] [DATABASE]\n"
            "    retrieve schema for DATABASE from SERVER and report only its\n"
            "    version number on stdout\n"
+           "\n  get-schema-cksum [SERVER] [DATABASE]\n"
+           "    retrieve schema for DATABASE from SERVER and report only its\n"
+           "    checksum on stdout\n"
            "\n  list-tables [SERVER] [DATABASE]\n"
            "    list tables for DATABASE on SERVER\n"
            "\n  list-columns [SERVER] [DATABASE] [TABLE]\n"
            "    list columns in TABLE (or all tables) in DATABASE on SERVER\n"
            "\n  transact [SERVER] TRANSACTION\n"
-           "    run TRANSACTION (a JSON array of operations) on SERVER\n"
+           "    run TRANSACTION (params for \"transact\" request) on SERVER\n"
            "    and print the results as JSON on stdout\n"
+           "\n  query [SERVER] TRANSACTION\n"
+           "    run TRANSACTION (params for \"transact\" request) on SERVER,\n"
+           "    as read-only, and print the results as JSON on stdout\n"
            "\n  monitor [SERVER] [DATABASE] TABLE [COLUMN,...]...\n"
            "    monitor contents of COLUMNs in TABLE in DATABASE on SERVER.\n"
            "    COLUMNs may include !initial, !insert, !delete, !modify\n"
@@ -272,6 +299,10 @@ usage(void)
            "    in DATBASE on SERVER.\n"
            "\n  dump [SERVER] [DATABASE]\n"
            "    dump contents of DATABASE on SERVER to stdout\n"
+           "\n  backup [SERVER] [DATABASE] > SNAPSHOT\n"
+           "    dump database contents in the form of a database file\n"
+           "\n  [--force] restore [SERVER] [DATABASE] < SNAPSHOT\n"
+           "    restore database contents from a database file\n"
            "\n  lock [SERVER] LOCK\n"
            "    create or wait for LOCK in SERVER\n"
            "\n  steal [SERVER] LOCK\n"
@@ -351,7 +382,7 @@ static void
 print_json(struct json *json)
 {
     char *string = json_to_string(json, table_style.json_flags);
-    fputs(string, stdout);
+    puts(string);
     free(string);
 }
 
@@ -448,6 +479,15 @@ do_get_schema_version(struct jsonrpc *rpc, const char *database,
 }
 
 static void
+do_get_schema_cksum(struct jsonrpc *rpc, const char *database,
+                      int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    struct ovsdb_schema *schema = fetch_schema(rpc, database);
+    puts(schema->cksum);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
 do_list_tables(struct jsonrpc *rpc, const char *database,
                int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
@@ -508,20 +548,61 @@ do_list_columns(struct jsonrpc *rpc, const char *database,
     table_destroy(&t);
 }
 
+static struct json *
+do_transact__(struct jsonrpc *rpc, struct json *transaction)
+{
+    struct jsonrpc_msg *request, *reply;
+
+    request = jsonrpc_create_request("transact", transaction, NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    struct json *result = json_clone(reply->result);
+    jsonrpc_msg_destroy(reply);
+
+    return result;
+}
+
 static void
 do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
             int argc OVS_UNUSED, char *argv[])
 {
-    struct jsonrpc_msg *request, *reply;
-    struct json *transaction;
+    print_and_free_json(do_transact__(rpc, parse_json(argv[0])));
+}
 
-    transaction = parse_json(argv[0]);
+static void
+do_query(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+         int argc OVS_UNUSED, char *argv[])
+{
+    struct json *transaction = parse_json(argv[0]);
 
-    request = jsonrpc_create_request("transact", transaction, NULL);
-    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
-    print_json(reply->result);
-    putchar('\n');
-    jsonrpc_msg_destroy(reply);
+    if (transaction->type != JSON_ARRAY) {
+        ovs_fatal(0, "not a valid OVSDB query");
+    }
+
+    /* Append an "abort" operation to the query. */
+    struct json *abort_op = json_object_create();
+    json_object_put_string(abort_op, "op", "abort");
+    json_array_add(transaction, abort_op);
+    size_t abort_idx = transaction->u.array.n - 2;
+
+    /* Run query. */
+    struct json *result = do_transact__(rpc, transaction);
+
+    /* If the "abort" operation ended the transaction, remove its result. */
+    if (result->type == JSON_ARRAY
+        && result->u.array.n == abort_idx + 1
+        && result->u.array.elems[abort_idx]->type == JSON_OBJECT) {
+        struct json *op_result = result->u.array.elems[abort_idx];
+        struct json *error = shash_find_data(json_object(op_result), "error");
+        if (error
+            && error->type == JSON_STRING
+            && !strcmp(json_string(error), "aborted")) {
+            result->u.array.n--;
+            json_destroy(op_result);
+        }
+    }
+
+    /* Print the result. */
+    print_and_free_json(result);
 }
 
 /* "monitor" command. */
@@ -1231,9 +1312,8 @@ dump_table(const char *table_name, const struct shash *cols,
                           y, table_name, columns[x]->name);
             }
 
-            check_ovsdb_error(ovsdb_datum_from_json(&data[y][x],
-                                                    &columns[x]->type,
-                                                    json, NULL));
+            check_ovsdb_error(ovsdb_unconstrained_datum_from_json(
+                                  &data[y][x], &columns[x]->type, json));
         }
     }
 
@@ -1369,6 +1449,232 @@ do_dump(struct jsonrpc *rpc, const char *database,
     free(tables);
     ovsdb_schema_destroy(schema);
 }
+
+static void
+print_and_free_log_record(struct json *record)
+{
+    struct ds header = DS_EMPTY_INITIALIZER;
+    struct ds data = DS_EMPTY_INITIALIZER;
+    ovsdb_log_compose_record(record, OVSDB_MAGIC, &header, &data);
+    fwrite(header.string, header.length, 1, stdout);
+    fwrite(data.string, data.length, 1, stdout);
+    ds_destroy(&data);
+    ds_destroy(&header);
+    json_destroy(record);
+}
+
+static void
+do_backup(struct jsonrpc *rpc, const char *database,
+          int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    if (isatty(STDOUT_FILENO)) {
+        ovs_fatal(0, "not writing backup to a terminal; "
+                  "please redirect stdout to a file");
+    }
+
+    /* Get schema. */
+    struct ovsdb_schema *schema = fetch_schema(rpc, database);
+
+    /* Construct transaction to retrieve all tables. */
+    struct json *txn = json_array_create_1(json_string_create(database));
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, &schema->tables) {
+        const char *table_name = node->name;
+        const struct ovsdb_table_schema *table = node->data;
+
+        /* Get all the columns except _version and the ephemeral ones.
+         *
+         * We don't omit tables that only have ephemeral columns because of the
+         * possibility that other tables references rows in those tables; that
+         * is, even if all the columns are ephemeral, the rows themselves are
+         * not. */
+        struct json *columns = json_array_create_empty();
+        struct shash_node *node2;
+        SHASH_FOR_EACH (node2, &table->columns) {
+            const struct ovsdb_column *column = node2->data;
+
+            if (column->persistent) {
+                if (!columns) {
+                    columns = json_array_create_empty();
+                }
+                json_array_add(columns, json_string_create(column->name));
+            }
+        }
+
+        struct json *op = json_object_create();
+        json_object_put_string(op, "op", "select");
+        json_object_put_string(op, "table", table_name);
+        json_object_put(op, "where", json_array_create_empty());
+        json_object_put(op, "columns", columns);
+        json_array_add(txn, op);
+    }
+
+    /* Send request, get reply. */
+    struct jsonrpc_msg *rq = jsonrpc_create_request("transact", txn, NULL);
+    struct jsonrpc_msg *reply;
+    check_txn(jsonrpc_transact_block(rpc, rq, &reply), &reply);
+
+    /* Print schema record. */
+    print_and_free_log_record(ovsdb_schema_to_json(schema));
+
+    /* Print database transaction record. */
+    if (reply->result->type != JSON_ARRAY
+        || reply->result->u.array.n != shash_count(&schema->tables)) {
+        ovs_fatal(0, "reply is not array of %"PRIuSIZE" elements: %s",
+                  shash_count(&schema->tables),
+                  json_to_string(reply->result, 0));
+    }
+    struct json *output_txn = json_object_create();
+
+    size_t i = 0;
+    SHASH_FOR_EACH (node, &schema->tables) {
+        const char *table_name = node->name;
+        const struct ovsdb_table_schema *table = node->data;
+        const struct json *op_result = reply->result->u.array.elems[i++];
+        struct json *rows;
+
+        if (op_result->type != JSON_OBJECT
+            || !(rows = shash_find_data(json_object(op_result), "rows"))
+            || rows->type != JSON_ARRAY) {
+            ovs_fatal(0, "%s table reply is not an object with a \"rows\" "
+                      "member array: %s",
+                      table->name, json_to_string(op_result, 0));
+        }
+
+        if (!rows->u.array.n) {
+            continue;
+        }
+
+        struct json *output_rows = json_object_create();
+        for (size_t j = 0; j < rows->u.array.n; j++) {
+            struct json *row = rows->u.array.elems[j];
+            if (row->type != JSON_OBJECT) {
+                ovs_fatal(0, "%s table reply row is not an object: %s",
+                          table_name, json_to_string(row, 0));
+            }
+
+            struct json *uuid_json = shash_find_and_delete(json_object(row),
+                                                           "_uuid");
+            if (!uuid_json) {
+                ovs_fatal(0, "%s table reply row lacks _uuid member: %s",
+                          table_name, json_to_string(row, 0));
+            }
+
+            const struct ovsdb_base_type uuid_base = OVSDB_BASE_UUID_INIT;
+            union ovsdb_atom atom;
+            check_ovsdb_error(ovsdb_atom_from_json(&atom, &uuid_base,
+                                                   uuid_json, NULL));
+
+            char uuid_s[UUID_LEN + 1];
+            snprintf(uuid_s, sizeof uuid_s, UUID_FMT, UUID_ARGS(&atom.uuid));
+            json_object_put(output_rows, uuid_s, json_clone(row));
+        }
+        json_object_put(output_txn, table_name, output_rows);
+    }
+    output_txn = ovsdb_file_txn_annotate(
+        output_txn, "produced by \"ovsdb-client backup\"");
+    print_and_free_log_record(output_txn);
+
+    ovsdb_schema_destroy(schema);
+    jsonrpc_msg_destroy(reply);
+}
+
+static void
+do_restore(struct jsonrpc *rpc, const char *database,
+           int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    if (isatty(STDIN_FILENO)) {
+        ovs_fatal(0, "not reading backup from a terminal; "
+                  "please redirect stdin from a file");
+    }
+
+    struct ovsdb *backup;
+    check_ovsdb_error(ovsdb_file_open("/dev/stdin", true, &backup, NULL));
+
+    const struct ovsdb_schema *schema = backup->schema;
+    struct ovsdb_schema *schema2 = fetch_schema(rpc, database);
+    if (!ovsdb_schema_equal(schema, schema2)) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        if (strcmp(schema->version, schema2->version)) {
+            ds_put_format(&s, "backup schema has version \"%s\" but "
+                          "database schema has version \"%s\"",
+                          schema->version, schema2->version);
+        } else {
+            ds_put_format(&s, "backup schema and database schema are "
+                          "both version %s but still differ",
+                          schema->version);
+        }
+        if (!force) {
+            ovs_fatal(0, "%s (use --force to override differences, or "
+                      "\"ovsdb-client convert\" to change the schema)",
+                      ds_cstr(&s));
+        }
+        VLOG_INFO("%s", ds_cstr(&s));
+        ds_destroy(&s);
+    }
+    ovsdb_schema_destroy(schema2);
+
+    struct json *txn = json_array_create_empty();
+    json_array_add(txn, json_string_create(schema->name));
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, &backup->tables) {
+        const char *table_name = node->name;
+        struct ovsdb_table *table = node->data;
+
+        struct json *del_op = json_object_create();
+        json_object_put_string(del_op, "op", "delete");
+        json_object_put_string(del_op, "table", table_name);
+        json_object_put(del_op, "where", json_array_create_empty());
+        json_array_add(txn, del_op);
+
+        const struct ovsdb_row *row;
+        HMAP_FOR_EACH (row, hmap_node, &table->rows) {
+            struct json *ins_op = json_object_create();
+            json_object_put_string(ins_op, "op", "insert");
+            json_object_put_string(ins_op, "table", table_name);
+            json_object_put(ins_op, "uuid-name",
+                            json_string_create_nocopy(
+                                ovsdb_data_row_name(ovsdb_row_get_uuid(row))));
+            struct json *row_json = json_object_create();
+            json_object_put(ins_op, "row", row_json);
+
+            struct shash_node *node2;
+            SHASH_FOR_EACH (node2, &table->schema->columns) {
+                const struct ovsdb_column *column = node2->data;
+                const struct ovsdb_datum *datum = &row->fields[column->index];
+                const struct ovsdb_type *type = &column->type;
+                if (column->persistent
+                    && column->index >= OVSDB_N_STD_COLUMNS
+                    && !ovsdb_datum_is_default(datum, type)) {
+                    struct json *value = ovsdb_datum_to_json_with_row_names(
+                        datum, type);
+                    json_object_put(row_json, column->name, value);
+                }
+            }
+            json_array_add(txn, ins_op);
+        }
+    }
+    ovsdb_destroy(backup);
+    struct jsonrpc_msg *rq = jsonrpc_create_request("transact", txn, NULL);
+    struct jsonrpc_msg *reply;
+    check_txn(jsonrpc_transact_block(rpc, rq, &reply), &reply);
+    if (reply->result->type != JSON_ARRAY) {
+        ovs_fatal(0, "result is not array");
+    }
+    for (size_t i = 0; i < json_array(reply->result)->n; i++) {
+        struct json *json = json_array(reply->result)->elems[i];
+        if (json->type != JSON_OBJECT) {
+            ovs_fatal(0, "result array element is not object");
+        }
+        struct shash *object = json_object(json);
+        if (shash_find(object, "error")) {
+            ovs_fatal(0, "server returned error reply: %s",
+                      json_to_string(json, JSSF_SORT));
+        }
+    }
+    jsonrpc_msg_destroy(reply);
+}
+
 
 static void
 do_help(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
@@ -1511,7 +1817,6 @@ do_lock(struct jsonrpc *rpc, const char *method, const char *lock)
         } else if (msg->type == JSONRPC_REPLY
                    && json_equal(msg->id, request_id)) {
             print_json(msg->result);
-            putchar('\n');
             fflush(stdout);
             enable_lock_request = true;
             json_destroy(request_id);
@@ -1520,7 +1825,6 @@ do_lock(struct jsonrpc *rpc, const char *method, const char *lock)
         } else if (msg->type == JSONRPC_NOTIFY) {
             puts(msg->method);
             print_json(msg->params);
-            putchar('\n');
             fflush(stdout);
         }
 
@@ -1575,12 +1879,16 @@ static const struct ovsdb_client_command all_commands[] = {
     { "list-dbs",           NEED_RPC,      0, 0,       do_list_dbs },
     { "get-schema",         NEED_DATABASE, 0, 0,       do_get_schema },
     { "get-schema-version", NEED_DATABASE, 0, 0,       do_get_schema_version },
+    { "get-schema-cksum",   NEED_DATABASE, 0, 0,       do_get_schema_cksum },
     { "list-tables",        NEED_DATABASE, 0, 0,       do_list_tables },
     { "list-columns",       NEED_DATABASE, 0, 1,       do_list_columns },
     { "transact",           NEED_RPC,      1, 1,       do_transact },
+    { "query",              NEED_RPC,      1, 1,       do_query },
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
     { "monitor-cond",       NEED_DATABASE, 2, 3,       do_monitor_cond },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
+    { "backup",             NEED_DATABASE, 0, 0,       do_backup },
+    { "restore",            NEED_DATABASE, 0, 0,       do_restore },
     { "lock",               NEED_RPC,      1, 1,       do_lock_create },
     { "steal",              NEED_RPC,      1, 1,       do_lock_steal },
     { "unlock",             NEED_RPC,      1, 1,       do_lock_unlock },

@@ -36,9 +36,10 @@
 #include "openvswitch/vlog.h"
 #include "ovn-controller.h"
 #include "ovn/actions.h"
-#include "poll-loop.h"
+#include "ovn/lib/extend-table.h"
+#include "openvswitch/poll-loop.h"
 #include "physical.h"
-#include "rconn.h"
+#include "openvswitch/rconn.h"
 #include "socket-util.h"
 #include "util.h"
 #include "vswitch-idl.h"
@@ -131,7 +132,10 @@ static struct rconn_packet_counter *tx_counter;
 static struct hmap installed_flows;
 
 /* A reference to the group_table. */
-static struct group_table *groups;
+static struct ovn_extend_table *groups;
+
+/* A reference to the meter_table. */
+static struct ovn_extend_table *meters;
 
 /* MFF_* field ID for our Geneve option.  In S_TLV_TABLE_MOD_SENT, this is
  * the option we requested (we don't know whether we obtained it yet).  In
@@ -144,13 +148,16 @@ static struct ofpbuf *encode_flow_mod(struct ofputil_flow_mod *);
 
 static struct ofpbuf *encode_group_mod(const struct ofputil_group_mod *);
 
+static struct ofpbuf *encode_meter_mod(const struct ofputil_meter_mod *);
+
 static void ovn_flow_table_clear(struct hmap *flow_table);
 static void ovn_flow_table_destroy(struct hmap *flow_table);
 
 static void ofctrl_recv(const struct ofp_header *, enum ofptype);
 
 void
-ofctrl_init(struct group_table *group_table)
+ofctrl_init(struct ovn_extend_table *group_table,
+            struct ovn_extend_table *meter_table)
 {
     swconn = rconn_create(5, 0, DSCP_DEFAULT, 1 << OFP13_VERSION);
     tx_counter = rconn_packet_counter_create();
@@ -158,6 +165,7 @@ ofctrl_init(struct group_table *group_table)
     ovs_list_init(&flow_updates);
     ovn_init_symtab(&symtab);
     groups = group_table;
+    meters = meter_table;
 }
 
 /* S_NEW, for a new connection.
@@ -385,7 +393,19 @@ run_S_CLEAR_FLOWS(void)
 
     /* Clear existing groups, to match the state of the switch. */
     if (groups) {
-        ovn_group_table_clear(groups, true);
+        ovn_extend_table_clear(groups, true);
+    }
+
+    /* Send a meter_mod to delete all meters. */
+    struct ofputil_meter_mod mm;
+    memset(&mm, 0, sizeof mm);
+    mm.command = OFPMC13_DELETE;
+    mm.meter.meter_id = OFPM13_ALL;
+    queue_msg(encode_meter_mod(&mm));
+
+    /* Clear existing meters, to match the state of the switch. */
+    if (meters) {
+        ovn_extend_table_clear(meters, true);
     }
 
     /* All flow updates are irrelevant now. */
@@ -620,9 +640,9 @@ ofctrl_add_flow(struct hmap *desired_flows,
 
     if (ovn_flow_lookup(desired_flows, f)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
-        if (!VLOG_DROP_INFO(&rl)) {
+        if (!VLOG_DROP_DBG(&rl)) {
             char *s = ovn_flow_to_string(f);
-            VLOG_INFO("dropping duplicate flow: %s", s);
+            VLOG_DBG("dropping duplicate flow: %s", s);
             free(s);
         }
 
@@ -747,44 +767,6 @@ add_flow_mod(struct ofputil_flow_mod *fm, struct ovs_list *msgs)
 
 /* group_table. */
 
-/* Finds and returns a group_info in 'existing_groups' whose key is identical
- * to 'target''s key, or NULL if there is none. */
-static struct group_info *
-ovn_group_lookup(struct hmap *exisiting_groups,
-                 const struct group_info *target)
-{
-    struct group_info *e;
-
-    HMAP_FOR_EACH_WITH_HASH(e, hmap_node, target->hmap_node.hash,
-                            exisiting_groups) {
-        if (e->group_id == target->group_id) {
-            return e;
-        }
-   }
-    return NULL;
-}
-
-/* Clear either desired_groups or existing_groups in group_table. */
-void
-ovn_group_table_clear(struct group_table *group_table, bool existing)
-{
-    struct group_info *g, *next;
-    struct hmap *target_group = existing
-                                ? &group_table->existing_groups
-                                : &group_table->desired_groups;
-
-    HMAP_FOR_EACH_SAFE (g, next, hmap_node, target_group) {
-        hmap_remove(target_group, &g->hmap_node);
-        /* Don't unset bitmap for desired group_info if the group_id
-         * was not freshly reserved. */
-        if (existing || g->new_group_id) {
-            bitmap_set0(group_table->group_ids, g->group_id);
-        }
-        ds_destroy(&g->group);
-        free(g);
-    }
-}
-
 static struct ofpbuf *
 encode_group_mod(const struct ofputil_group_mod *gm)
 {
@@ -795,6 +777,20 @@ static void
 add_group_mod(const struct ofputil_group_mod *gm, struct ovs_list *msgs)
 {
     struct ofpbuf *msg = encode_group_mod(gm);
+    ovs_list_push_back(msgs, &msg->list_node);
+}
+
+
+static struct ofpbuf *
+encode_meter_mod(const struct ofputil_meter_mod *mm)
+{
+    return ofputil_encode_meter_mod(OFP13_VERSION, mm);
+}
+
+static void
+add_meter_mod(const struct ofputil_meter_mod *mm, struct ovs_list *msgs)
+{
+    struct ofpbuf *msg = encode_meter_mod(mm);
     ovs_list_push_back(msgs, &msg->list_node);
 }
 
@@ -827,11 +823,10 @@ ofctrl_can_put(void)
 /* Replaces the flow table on the switch, if possible, by the flows added
  * with ofctrl_add_flow().
  *
- * Replaces the group table on the switch, if possible, by the contents of
- * 'groups->desired_groups'.  Regardless of whether the group table
- * is updated, this deletes all the groups from the
- * 'groups->desired_groups' and frees them. (The hmap itself isn't
- * destroyed.)
+ * Replaces the group table and meter table on the switch, if possible, by the
+ *  contents of 'groups->desired'.  Regardless of whether the group table
+ * is updated, this deletes all the groups from the 'groups->desired' and frees
+ * them. (The hmap itself isn't destroyed.)
  *
  * Sends conntrack flush messages to each zone in 'pending_ct_zones' that
  * is in the CT_ZONE_OF_QUEUED state and then moves the zone into the
@@ -844,7 +839,8 @@ ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
 {
     if (!ofctrl_can_put()) {
         ovn_flow_table_clear(flow_table);
-        ovn_group_table_clear(groups, false);
+        ovn_extend_table_clear(groups, false);
+        ovn_extend_table_clear(meters, false);
         return;
     }
 
@@ -864,31 +860,47 @@ ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
 
     /* Iterate through all the desired groups. If there are new ones,
      * add them to the switch. */
-    struct group_info *desired;
-    HMAP_FOR_EACH(desired, hmap_node, &groups->desired_groups) {
-        if (!ovn_group_lookup(&groups->existing_groups, desired)) {
-            /* Create and install new group. */
-            struct ofputil_group_mod gm;
-            enum ofputil_protocol usable_protocols;
-            char *error;
-            struct ds group_string = DS_EMPTY_INITIALIZER;
-            ds_put_format(&group_string, "group_id=%u,%s",
-                          desired->group_id, ds_cstr(&desired->group));
-
-            error = parse_ofp_group_mod_str(&gm, OFPGC11_ADD,
-                                            ds_cstr(&group_string), NULL,
-                                            &usable_protocols);
-            if (!error) {
-                add_group_mod(&gm, &msgs);
-            } else {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_ERR_RL(&rl, "new group %s %s", error,
-                         ds_cstr(&group_string));
-                free(error);
-            }
-            ds_destroy(&group_string);
-            ofputil_uninit_group_mod(&gm);
+    struct ovn_extend_table_info *desired;
+    EXTEND_TABLE_FOR_EACH_UNINSTALLED (desired, groups) {
+        /* Create and install new group. */
+        struct ofputil_group_mod gm;
+        enum ofputil_protocol usable_protocols;
+        char *group_string = xasprintf("group_id=%"PRIu32",%s",
+                                       desired->table_id,
+                                       ds_cstr(&desired->info));
+        char *error = parse_ofp_group_mod_str(&gm, OFPGC11_ADD, group_string,
+                                              NULL, &usable_protocols);
+        if (!error) {
+            add_group_mod(&gm, &msgs);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_ERR_RL(&rl, "new group %s %s", error, group_string);
+            free(error);
         }
+        free(group_string);
+        ofputil_uninit_group_mod(&gm);
+    }
+
+    /* Iterate through all the desired meters. If there are new ones,
+     * add them to the switch. */
+    struct ovn_extend_table_info *m_desired;
+    EXTEND_TABLE_FOR_EACH_UNINSTALLED (m_desired, meters) {
+        /* Create and install new meter. */
+        struct ofputil_meter_mod mm;
+        enum ofputil_protocol usable_protocols;
+        char *meter_string = xasprintf("meter=%"PRIu32",%s",
+                                       m_desired->table_id,
+                                       ds_cstr(&m_desired->info));
+        char *error = parse_ofp_meter_mod_str(&mm, meter_string, OFPMC13_ADD,
+                                              &usable_protocols);
+        if (!error) {
+            add_meter_mod(&mm, &msgs);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_ERR_RL(&rl, "new meter %s %s", error, meter_string);
+            free(error);
+        }
+        free(meter_string);
     }
 
     /* Iterate through all of the installed flows.  If any of them are no
@@ -964,53 +976,58 @@ ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
 
     /* Iterate through the installed groups from previous runs. If they
      * are not needed delete them. */
-    struct group_info *installed, *next_group;
-    HMAP_FOR_EACH_SAFE(installed, next_group, hmap_node,
-                       &groups->existing_groups) {
-        if (!ovn_group_lookup(&groups->desired_groups, installed)) {
-            /* Delete the group. */
-            struct ofputil_group_mod gm;
-            enum ofputil_protocol usable_protocols;
-            char *error;
-            struct ds group_string = DS_EMPTY_INITIALIZER;
-            ds_put_format(&group_string, "group_id=%u", installed->group_id);
-
-            error = parse_ofp_group_mod_str(&gm, OFPGC11_DELETE,
-                                            ds_cstr(&group_string), NULL,
-                                            &usable_protocols);
-            if (!error) {
-                add_group_mod(&gm, &msgs);
-            } else {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_ERR_RL(&rl, "Error deleting group %d: %s",
-                         installed->group_id, error);
-                free(error);
-            }
-            ds_destroy(&group_string);
-            ofputil_uninit_group_mod(&gm);
-
-            /* Remove 'installed' from 'groups->existing_groups' */
-            hmap_remove(&groups->existing_groups, &installed->hmap_node);
-            ds_destroy(&installed->group);
-
-            /* Dealloc group_id. */
-            bitmap_set0(groups->group_ids, installed->group_id);
-            free(installed);
-        }
-    }
-
-    /* Move the contents of desired_groups to existing_groups. */
-    HMAP_FOR_EACH_SAFE(desired, next_group, hmap_node,
-                       &groups->desired_groups) {
-        hmap_remove(&groups->desired_groups, &desired->hmap_node);
-        if (!ovn_group_lookup(&groups->existing_groups, desired)) {
-            hmap_insert(&groups->existing_groups, &desired->hmap_node,
-                        desired->hmap_node.hash);
+    struct ovn_extend_table_info *installed, *next_group;
+    EXTEND_TABLE_FOR_EACH_INSTALLED (installed, next_group, groups) {
+        /* Delete the group. */
+        struct ofputil_group_mod gm;
+        enum ofputil_protocol usable_protocols;
+        char *group_string = xasprintf("group_id=%"PRIu32"",
+                                       installed->table_id);
+        char *error = parse_ofp_group_mod_str(&gm, OFPGC11_DELETE,
+                                              group_string, NULL,
+                                              &usable_protocols);
+        if (!error) {
+            add_group_mod(&gm, &msgs);
         } else {
-           ds_destroy(&desired->group);
-           free(desired);
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_ERR_RL(&rl, "Error deleting group %d: %s",
+                        installed->table_id, error);
+            free(error);
         }
+        free(group_string);
+        ofputil_uninit_group_mod(&gm);
+        ovn_extend_table_remove(groups, installed);
     }
+
+    /* Move the contents of groups->desired to groups->existing. */
+    ovn_extend_table_move(groups);
+
+    /* Iterate through the installed meters from previous runs. If they
+     * are not needed delete them. */
+    struct ovn_extend_table_info *m_installed, *next_meter;
+    EXTEND_TABLE_FOR_EACH_INSTALLED (m_installed, next_meter, meters) {
+        /* Delete the meter. */
+        struct ofputil_meter_mod mm;
+        enum ofputil_protocol usable_protocols;
+        char *meter_string = xasprintf("meter=%"PRIu32"",
+                                       m_installed->table_id);
+        char *error = parse_ofp_meter_mod_str(&mm, meter_string,
+                                              OFPMC13_DELETE,
+                                              &usable_protocols);
+        if (!error) {
+            add_meter_mod(&mm, &msgs);
+        } else {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+            VLOG_ERR_RL(&rl,  "Error deleting meter %"PRIu32": %s",
+                        m_installed->table_id, error);
+            free(error);
+        }
+        free(meter_string);
+        ovn_extend_table_remove(meters, m_installed);
+    }
+
+    /* Move the contents of meters->desired to meters->existing. */
+    ovn_extend_table_move(meters);
 
     if (!ovs_list_is_empty(&msgs)) {
         /* Add a barrier to the list of messages. */

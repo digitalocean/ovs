@@ -15,6 +15,8 @@
  */
 
 #include <config.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -36,7 +38,7 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "timeval.h"
 
 VLOG_DEFINE_THIS_MODULE(in_band);

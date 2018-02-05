@@ -118,6 +118,10 @@ valgrind by using the ``check-valgrind`` target::
 When you do this, the "valgrind" results for test ``<N>`` are reported in files
 named ``tests/testsuite.dir/<N>/valgrind.*``.
 
+To test the testsuite of kernel datapath under valgrind, you can use the
+``check-kernel-valgrind`` target and find the "valgrind" results under
+directory ``tests/system-kmod-testsuite.dir/``.
+
 All the same options are available via TESTSUITEFLAGS.
 
 .. hint::
@@ -280,8 +284,9 @@ Native
 ++++++
 
 The datapath testsuite as invoked by Vagrant above may also be run manually on
-a Linux system with root privileges. These tests may take several minutes to
-complete, and cannot be run in parallel.
+a Linux system with root privileges. Make sure, no other Open vSwitch instance
+is running on the test suite. These tests may take several minutes to complete,
+and cannot be run in parallel.
 
 Userspace datapath
 '''''''''''''''''''
@@ -290,7 +295,7 @@ To invoke the datapath testsuite with the userspace datapath, run::
 
     $ make check-system-userspace
 
-The results of the testsuite are in ``tests/system-userspace-traffic.dir``.
+The results of the testsuite are in ``tests/system-userspace-testsuite.dir``.
 
 Kernel datapath
 '''''''''''''''
@@ -310,7 +315,7 @@ testsuite against that kernel module::
 
     $ make check-kmod
 
-The results of the testsuite are in ``tests/system-kmod-traffic.dir``.
+The results of the testsuite are in ``tests/system-kmod-testsuite.dir``.
 
 .. _testing-static-analysis:
 

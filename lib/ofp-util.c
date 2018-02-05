@@ -4517,12 +4517,8 @@ ofputil_pull_ofp16_port(struct ofputil_phy_port *pp, struct ofpbuf *msg)
     if (error) {
         return error;
     }
-    if (op->hw_addr_type & htons(OFPPHAT16_EUI48)) {
-        pp->hw_addr = op->hw_addr;
-    }
-    if (op->hw_addr_type & htons(OFPPHAT16_EUI64)) {
-        pp->hw_addr64 = op->hw_addr64;
-    }
+    pp->hw_addr = op->hw_addr;
+    pp->hw_addr64 = op->hw_addr64;
     ovs_strlcpy_arrays(pp->name, op->name);
 
     pp->config = ntohl(op->config) & OFPPC11_ALL;
@@ -4616,14 +4612,8 @@ ofputil_put_ofp16_port(const struct ofputil_phy_port *pp, struct ofpbuf *b)
     op = ofpbuf_put_zeros(b, sizeof *op);
     op->port_no = ofputil_port_to_ofp11(pp->port_no);
     op->length = htons(sizeof *op + sizeof *eth);
-    if (!eth_addr_is_zero(pp->hw_addr)) {
-        op->hw_addr_type |= htons(OFPPHAT16_EUI48);
-        op->hw_addr = pp->hw_addr;
-    }
-    if (!eth_addr64_is_zero(pp->hw_addr64)) {
-        op->hw_addr_type |= htons(OFPPHAT16_EUI64);
-        op->hw_addr64 = pp->hw_addr64;
-    }
+    op->hw_addr = pp->hw_addr;
+    op->hw_addr64 = pp->hw_addr64;
     ovs_strlcpy_arrays(op->name, pp->name);
     op->config = htonl(pp->config & OFPPC11_ALL);
     op->state = htonl(pp->state & OFPPS11_ALL);
@@ -5180,13 +5170,8 @@ ofputil_decode_ofp16_port_mod(struct ofpbuf *b, bool loose,
         return error;
     }
 
-    if (opm->hw_addr_type & htons(OFPPHAT16_EUI48)) {
-        pm->hw_addr = opm->hw_addr;
-    }
-    if (opm->hw_addr_type & htons(OFPPHAT16_EUI64)) {
-        pm->hw_addr64 = opm->hw_addr64;
-    }
     pm->hw_addr = opm->hw_addr;
+    pm->hw_addr64 = opm->hw_addr64;
     pm->config = ntohl(opm->config) & OFPPC11_ALL;
     pm->mask = ntohl(opm->mask) & OFPPC11_ALL;
 
@@ -5282,14 +5267,8 @@ ofputil_encode_port_mod(const struct ofputil_port_mod *pm,
         b = ofpraw_alloc(OFPRAW_OFPT16_PORT_MOD, ofp_version, 0);
         opm = ofpbuf_put_zeros(b, sizeof *opm);
         opm->port_no = ofputil_port_to_ofp11(pm->port_no);
-        if (!eth_addr_is_zero(pm->hw_addr)) {
-            opm->hw_addr_type |= htons(OFPPHAT16_EUI48);
-            opm->hw_addr = pm->hw_addr;
-        }
-        if (!eth_addr64_is_zero(pm->hw_addr64)) {
-            opm->hw_addr_type |= htons(OFPPHAT16_EUI64);
-            opm->hw_addr64 = pm->hw_addr64;
-        }
+        opm->hw_addr = pm->hw_addr;
+        opm->hw_addr64 = pm->hw_addr64;
         opm->config = htonl(pm->config & OFPPC11_ALL);
         opm->mask = htonl(pm->mask & OFPPC11_ALL);
 
@@ -8020,15 +7999,18 @@ ofputil_append_ofp14_port_stats(const struct ofputil_port_stats *ops,
 {
     struct ofp14_port_stats_prop_ethernet *eth;
     struct intel_port_stats_rfc2819 *stats_rfc2819;
+    struct intel_port_custom_stats *stats_custom;
     struct ofp14_port_stats *ps14;
     struct ofpbuf *reply;
+    uint16_t i;
+    ovs_be64 counter_value;
+    size_t custom_stats_start, start_ofs;
 
-    reply = ofpmp_reserve(replies, sizeof *ps14 + sizeof *eth +
-                          sizeof *stats_rfc2819);
+    reply = ofpbuf_from_list(ovs_list_back(replies));
+    start_ofs = reply->size;
 
     ps14 = ofpbuf_put_uninit(reply, sizeof *ps14);
-    ps14->length = htons(sizeof *ps14 + sizeof *eth +
-                         sizeof *stats_rfc2819);
+
     memset(ps14->pad, 0, sizeof ps14->pad);
     ps14->port_no = ofputil_port_to_ofp11(ops->port_no);
     ps14->duration_sec = htonl(ops->duration_sec);
@@ -8048,10 +8030,10 @@ ofputil_append_ofp14_port_stats(const struct ofputil_port_stats *ops,
     eth->rx_crc_err = htonll(ops->stats.rx_crc_errors);
     eth->collisions = htonll(ops->stats.collisions);
 
-    uint64_t prop_type = OFPPROP_EXP(INTEL_VENDOR_ID,
+    uint64_t prop_type_stats = OFPPROP_EXP(INTEL_VENDOR_ID,
                                      INTEL_PORT_STATS_RFC2819);
 
-    stats_rfc2819 = ofpprop_put_zeros(reply, prop_type,
+    stats_rfc2819 = ofpprop_put_zeros(reply, prop_type_stats,
                                       sizeof *stats_rfc2819);
 
     memset(stats_rfc2819->pad, 0, sizeof stats_rfc2819->pad);
@@ -8097,6 +8079,38 @@ ofputil_append_ofp14_port_stats(const struct ofputil_port_stats *ops,
         htonll(ops->stats.rx_fragmented_errors);
     stats_rfc2819->rx_jabber_errors =
         htonll(ops->stats.rx_jabber_errors);
+
+    if (ops->custom_stats.counters && ops->custom_stats.size) {
+        custom_stats_start = reply->size;
+
+        uint64_t prop_type_custom = OFPPROP_EXP(INTEL_VENDOR_ID,
+                                                INTEL_PORT_STATS_CUSTOM);
+
+        stats_custom = ofpprop_put_zeros(reply, prop_type_custom,
+                                         sizeof *stats_custom);
+
+        stats_custom->stats_array_size = htons(ops->custom_stats.size);
+
+        for (i = 0; i < ops->custom_stats.size; i++) {
+            uint8_t counter_size = strlen(ops->custom_stats.counters[i].name);
+            /* Counter name size */
+            ofpbuf_put(reply, &counter_size, sizeof(counter_size));
+            /* Counter name */
+            ofpbuf_put(reply, ops->custom_stats.counters[i].name,
+                       counter_size);
+            /* Counter value */
+            counter_value = htonll(ops->custom_stats.counters[i].value);
+            ofpbuf_put(reply, &counter_value,
+                       sizeof(ops->custom_stats.counters[i].value));
+        }
+
+        ofpprop_end(reply, custom_stats_start);
+    }
+
+    ps14 = ofpbuf_at_assert(reply, start_ofs, sizeof *ps14);
+    ps14->length = htons(reply->size - start_ofs);
+
+    ofpmp_postappend(replies, start_ofs);
 }
 
 /* Encode a ports stat for 'ops' and append it to 'replies'. */
@@ -8260,6 +8274,56 @@ parse_intel_port_stats_rfc2819_property(const struct ofpbuf *payload,
 }
 
 static enum ofperr
+parse_intel_port_custom_property(const struct ofpbuf *payload,
+                                 struct ofputil_port_stats *ops)
+{
+    const struct intel_port_custom_stats *custom_stats = payload->data;
+
+    ops->custom_stats.size = ntohs(custom_stats->stats_array_size);
+
+    ops->custom_stats.counters = xcalloc(ops->custom_stats.size,
+                                         sizeof *ops->custom_stats.counters);
+
+    uint16_t msg_size = ntohs(custom_stats->length);
+    uint16_t current_len = sizeof *custom_stats;
+    uint8_t *current = (uint8_t *)payload->data + current_len;
+    uint8_t string_size = 0;
+    uint8_t value_size = 0;
+    ovs_be64 counter_value = 0;
+
+    for (int i = 0; i < ops->custom_stats.size; i++) {
+        current_len += string_size + value_size;
+        current += string_size + value_size;
+
+        value_size = sizeof(uint64_t);
+        /* Counter name size */
+        string_size = *current;
+
+        /* Buffer overrun check */
+        if (current_len + string_size + value_size > msg_size) {
+            VLOG_WARN_RL(&bad_ofmsg_rl, "Custom statistics buffer overrun! "
+                         "Further message parsing is aborted.");
+            break;
+        }
+
+        current++;
+        current_len++;
+
+        /* Counter name. */
+        struct netdev_custom_counter *c = &ops->custom_stats.counters[i];
+        size_t len = MIN(string_size, sizeof c->name - 1);
+        memcpy(c->name, current, len);
+        c->name[len] = '\0';
+        memcpy(&counter_value, current + string_size, value_size);
+
+        /* Counter value. */
+        c->value = ntohll(counter_value);
+    }
+
+    return 0;
+}
+
+static enum ofperr
 parse_intel_port_stats_property(const struct ofpbuf *payload,
                                 uint32_t exp_type,
                                 struct ofputil_port_stats *ops)
@@ -8269,6 +8333,9 @@ parse_intel_port_stats_property(const struct ofpbuf *payload,
     switch (exp_type) {
     case INTEL_PORT_STATS_RFC2819:
         error = parse_intel_port_stats_rfc2819_property(payload, ops);
+        break;
+    case INTEL_PORT_STATS_CUSTOM:
+        error = parse_intel_port_custom_property(payload, ops);
         break;
     default:
         error = OFPERR_OFPBPC_BAD_EXP_TYPE;
@@ -8329,6 +8396,11 @@ ofputil_pull_ofp14_port_stats(struct ofputil_port_stats *ops,
                                                     INTEL_PORT_STATS_RFC2819,
                                                     ops);
             break;
+        case OFPPROP_EXP(INTEL_VENDOR_ID, INTEL_PORT_STATS_CUSTOM):
+            error = parse_intel_port_stats_property(&payload,
+                                                    INTEL_PORT_STATS_CUSTOM,
+                                                    ops);
+            break;
         default:
             error = OFPPROP_UNKNOWN(true, "port stats", type);
             break;
@@ -8375,6 +8447,7 @@ ofputil_decode_port_stats(struct ofputil_port_stats *ps, struct ofpbuf *msg)
     enum ofpraw raw;
 
     memset(&(ps->stats), 0xFF, sizeof (ps->stats));
+    memset(&(ps->custom_stats), 0, sizeof (ps->custom_stats));
 
     error = (msg->header ? ofpraw_decode(&raw, msg->header)
              : ofpraw_pull(&raw, msg));

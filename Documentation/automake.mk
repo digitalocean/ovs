@@ -23,6 +23,7 @@ DOC_SOURCE = \
 	Documentation/intro/install/windows.rst \
 	Documentation/intro/install/xenserver.rst \
 	Documentation/tutorials/index.rst \
+	Documentation/tutorials/faucet.rst \
 	Documentation/tutorials/ovs-advanced.rst \
 	Documentation/tutorials/ovn-openstack.rst \
 	Documentation/tutorials/ovn-sandbox.rst \
@@ -39,13 +40,16 @@ DOC_SOURCE = \
 	Documentation/topics/integration.rst \
 	Documentation/topics/language-bindings.rst \
 	Documentation/topics/openflow.rst \
+	Documentation/topics/ovn-news-2.8.rst \
 	Documentation/topics/ovsdb-replication.rst \
 	Documentation/topics/porting.rst \
+	Documentation/topics/role-based-access-control.rst \
 	Documentation/topics/tracing.rst \
 	Documentation/topics/windows.rst \
 	Documentation/howto/index.rst \
 	Documentation/howto/docker.rst \
 	Documentation/howto/dpdk.rst \
+	Documentation/howto/firewalld.rst \
 	Documentation/howto/kvm.rst \
 	Documentation/howto/libvirt.rst \
 	Documentation/howto/selinux.rst \
@@ -78,6 +82,8 @@ DOC_SOURCE = \
 	Documentation/internals/index.rst \
 	Documentation/internals/authors.rst \
 	Documentation/internals/bugs.rst \
+	Documentation/internals/charter.rst \
+	Documentation/internals/committer-emeritus-status.rst \
 	Documentation/internals/committer-grant-revocation.rst \
 	Documentation/internals/committer-responsibilities.rst \
 	Documentation/internals/documentation.rst \
@@ -139,7 +145,10 @@ endif
 # rST formatted manpages under Documentation/ref.
 RST_MANPAGES = \
 	ovs-test.8.rst \
-	ovs-vlan-test.8.rst
+	ovs-vlan-test.8.rst \
+	ovsdb-server.7.rst \
+	ovsdb.5.rst \
+	ovsdb.7.rst
 
 # The GNU standards say that these variables should control
 # installation directories for manpages in each section.  Automake

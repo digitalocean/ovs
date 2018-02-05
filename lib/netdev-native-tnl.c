@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <net/if.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
@@ -506,6 +507,9 @@ netdev_vxlan_pop_header(struct dp_packet *packet)
     unsigned int hlen;
     ovs_be32 vx_flags;
     enum packet_type next_pt = PT_ETH;
+
+    ovs_assert(packet->l3_ofs > 0);
+    ovs_assert(packet->l4_ofs > 0);
 
     pkt_metadata_init_tnl(md);
     if (VXLAN_HLEN > dp_packet_l4_size(packet)) {

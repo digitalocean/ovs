@@ -196,15 +196,9 @@ x2nrealloc(void *p, size_t *n, size_t s)
     return xrealloc(p, *n * s);
 }
 
-/* The desired minimum alignment for an allocated block of memory. */
-#define MEM_ALIGN MAX(sizeof(void *), 8)
-BUILD_ASSERT_DECL(IS_POW2(MEM_ALIGN));
-BUILD_ASSERT_DECL(CACHE_LINE_SIZE >= MEM_ALIGN);
-
-/* Allocates and returns 'size' bytes of memory in dedicated cache lines.  That
- * is, the memory block returned will not share a cache line with other data,
- * avoiding "false sharing".  (The memory returned will not be at the start of
- * a cache line, though, so don't assume such alignment.)
+/* Allocates and returns 'size' bytes of memory aligned to a cache line and in
+ * dedicated cache lines.  That is, the memory block returned will not share a
+ * cache line with other data, avoiding "false sharing".
  *
  * Use free_cacheline() to free the returned memory block. */
 void *
@@ -221,28 +215,37 @@ xmalloc_cacheline(size_t size)
     }
     return p;
 #else
-    void **payload;
-    void *base;
-
     /* Allocate room for:
      *
-     *     - Up to CACHE_LINE_SIZE - 1 bytes before the payload, so that the
-     *       start of the payload doesn't potentially share a cache line.
+     *     - Header padding: Up to CACHE_LINE_SIZE - 1 bytes, to allow the
+     *       pointer to be aligned exactly sizeof(void *) bytes before the
+     *       beginning of a cache line.
      *
-     *     - A payload consisting of a void *, followed by padding out to
-     *       MEM_ALIGN bytes, followed by 'size' bytes of user data.
+     *     - Pointer: A pointer to the start of the header padding, to allow us
+     *       to free() the block later.
      *
-     *     - Space following the payload up to the end of the cache line, so
-     *       that the end of the payload doesn't potentially share a cache line
-     *       with some following block. */
-    base = xmalloc((CACHE_LINE_SIZE - 1)
-                   + ROUND_UP(MEM_ALIGN + size, CACHE_LINE_SIZE));
-
-    /* Locate the payload and store a pointer to the base at the beginning. */
-    payload = (void **) ROUND_UP((uintptr_t) base, CACHE_LINE_SIZE);
-    *payload = base;
-
-    return (char *) payload + MEM_ALIGN;
+     *     - User data: 'size' bytes.
+     *
+     *     - Trailer padding: Enough to bring the user data up to a cache line
+     *       multiple.
+     *
+     * +---------------+---------+------------------------+---------+
+     * | header        | pointer | user data              | trailer |
+     * +---------------+---------+------------------------+---------+
+     * ^               ^         ^
+     * |               |         |
+     * p               q         r
+     *
+     */
+    void *p = xmalloc((CACHE_LINE_SIZE - 1)
+                      + sizeof(void *)
+                      + ROUND_UP(size, CACHE_LINE_SIZE));
+    bool runt = PAD_SIZE((uintptr_t) p, CACHE_LINE_SIZE) < sizeof(void *);
+    void *r = (void *) ROUND_UP((uintptr_t) p + (runt ? CACHE_LINE_SIZE : 0),
+                                CACHE_LINE_SIZE);
+    void **q = (void **) r - 1;
+    *q = p;
+    return r;
 #endif
 }
 
@@ -265,7 +268,8 @@ free_cacheline(void *p)
     free(p);
 #else
     if (p) {
-        free(*(void **) ((uintptr_t) p - MEM_ALIGN));
+        void **q = (void **) p - 1;
+        free(*q);
     }
 #endif
 }
@@ -315,6 +319,19 @@ ovs_strzcpy(char *dst, const char *src, size_t size)
         memcpy(dst, src, len);
         memset(dst + len, '\0', size - len);
     }
+}
+
+/*
+ * Returns true if 'str' ends with given 'suffix'.
+ */
+int
+string_ends_with(const char *str, const char *suffix)
+{
+    int str_len = strlen(str);
+    int suffix_len = strlen(suffix);
+
+    return (str_len >= suffix_len) &&
+           (0 == strcmp(str + (str_len - suffix_len), suffix));
 }
 
 /* Prints 'format' on stderr, formatting it like printf() does.  If 'err_no' is
@@ -490,7 +507,10 @@ ovs_set_program_name(const char *argv0, const char *version)
     size_t max_len = strlen(argv0) + 1;
 
     SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
+#if _MSC_VER < 1900
+     /* This function is deprecated from 1900 (Visual Studio 2015) */
     _set_output_format(_TWO_DIGIT_EXPONENT);
+#endif
 
     basename = xmalloc(max_len);
     _splitpath_s(argv0, NULL, 0, NULL, 0, basename, max_len, NULL, 0);
@@ -642,48 +662,53 @@ void
 ovs_hex_dump(FILE *stream, const void *buf_, size_t size,
              uintptr_t ofs, bool ascii)
 {
-  const uint8_t *buf = buf_;
-  const size_t per_line = 16; /* Maximum bytes per line. */
+    const uint8_t *buf = buf_;
+    const size_t per_line = 16; /* Maximum bytes per line. */
 
-  while (size > 0)
-    {
-      size_t start, end, n;
-      size_t i;
+    while (size > 0) {
+        size_t i;
 
-      /* Number of bytes on this line. */
-      start = ofs % per_line;
-      end = per_line;
-      if (end - start > size)
-        end = start + size;
-      n = end - start;
-
-      /* Print line. */
-      fprintf(stream, "%08"PRIxMAX"  ", (uintmax_t) ROUND_DOWN(ofs, per_line));
-      for (i = 0; i < start; i++)
-        fprintf(stream, "   ");
-      for (; i < end; i++)
-        fprintf(stream, "%02x%c",
-                buf[i - start], i == per_line / 2 - 1? '-' : ' ');
-      if (ascii)
-        {
-          for (; i < per_line; i++)
-            fprintf(stream, "   ");
-          fprintf(stream, "|");
-          for (i = 0; i < start; i++)
-            fprintf(stream, " ");
-          for (; i < end; i++) {
-              int c = buf[i - start];
-              putc(c >= 32 && c < 127 ? c : '.', stream);
-          }
-          for (; i < per_line; i++)
-            fprintf(stream, " ");
-          fprintf(stream, "|");
+        /* Number of bytes on this line. */
+        size_t start = ofs % per_line;
+        size_t end = per_line;
+        if (end - start > size) {
+            end = start + size;
         }
-      fprintf(stream, "\n");
+        size_t n = end - start;
 
-      ofs += n;
-      buf += n;
-      size -= n;
+        /* Print line. */
+        fprintf(stream, "%08"PRIxMAX" ",
+                (uintmax_t) ROUND_DOWN(ofs, per_line));
+        for (i = 0; i < start; i++) {
+            fprintf(stream, "   ");
+        }
+        for (; i < end; i++) {
+            fprintf(stream, "%c%02x",
+                    i == per_line / 2 ? '-' : ' ', buf[i - start]);
+        }
+        if (ascii) {
+            fprintf(stream, " ");
+            for (; i < per_line; i++) {
+                fprintf(stream, "   ");
+            }
+            fprintf(stream, "|");
+            for (i = 0; i < start; i++) {
+                fprintf(stream, " ");
+            }
+            for (; i < end; i++) {
+                int c = buf[i - start];
+                putc(c >= 32 && c < 127 ? c : '.', stream);
+            }
+            for (; i < per_line; i++) {
+                fprintf(stream, " ");
+            }
+            fprintf(stream, "|");
+        }
+        fprintf(stream, "\n");
+
+        ofs += n;
+        buf += n;
+        size -= n;
     }
 }
 
@@ -692,8 +717,13 @@ str_to_int(const char *s, int base, int *i)
 {
     long long ll;
     bool ok = str_to_llong(s, base, &ll);
+
+    if (!ok || ll < INT_MIN || ll > INT_MAX) {
+        *i = 0;
+        return false;
+    }
     *i = ll;
-    return ok;
+    return true;
 }
 
 bool
@@ -701,8 +731,13 @@ str_to_long(const char *s, int base, long *li)
 {
     long long ll;
     bool ok = str_to_llong(s, base, &ll);
+
+    if (!ok || ll < LONG_MIN || ll > LONG_MAX) {
+        *li = 0;
+        return false;
+    }
     *li = ll;
-    return ok;
+    return true;
 }
 
 bool
@@ -743,6 +778,24 @@ str_to_uint(const char *s, int base, unsigned int *u)
         return false;
     } else {
         *u = ll;
+        return true;
+    }
+}
+
+bool
+str_to_ullong(const char *s, int base, unsigned long long *x)
+{
+    int save_errno = errno;
+    char *tail;
+
+    errno = 0;
+    *x = strtoull(s, &tail, base);
+    if (errno == EINVAL || errno == ERANGE || tail == s || *tail != '\0') {
+        errno = save_errno;
+        *x = 0;
+        return false;
+    } else {
+        errno = save_errno;
         return true;
     }
 }
@@ -2193,6 +2246,41 @@ xsleep(unsigned int seconds)
     Sleep(seconds * 1000);
 #else
     sleep(seconds);
+#endif
+    ovsrcu_quiesce_end();
+}
+
+/* High resolution sleep. */
+void
+xnanosleep(uint64_t nanoseconds)
+{
+    ovsrcu_quiesce_start();
+#ifndef _WIN32
+    int retval;
+    struct timespec ts_sleep;
+    nsec_to_timespec(nanoseconds, &ts_sleep);
+
+    int error = 0;
+    do {
+        retval = nanosleep(&ts_sleep, NULL);
+        error = retval < 0 ? errno : 0;
+    } while (error == EINTR);
+#else
+    HANDLE timer = CreateWaitableTimer(NULL, FALSE, NULL);
+    if (timer) {
+        LARGE_INTEGER duetime;
+        duetime.QuadPart = -nanoseconds;
+        if (SetWaitableTimer(timer, &duetime, 0, NULL, NULL, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
+        } else {
+            VLOG_ERR_ONCE("SetWaitableTimer Failed (%s)",
+                           ovs_lasterror_to_string());
+        }
+        CloseHandle(timer);
+    } else {
+        VLOG_ERR_ONCE("CreateWaitableTimer Failed (%s)",
+                       ovs_lasterror_to_string());
+    }
 #endif
     ovsrcu_quiesce_end();
 }

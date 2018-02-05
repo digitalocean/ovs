@@ -472,7 +472,9 @@ daemonize_start(bool access_datapath)
         if (daemon_pid > 0) {
             /* Running in monitor process. */
             fork_notify_startup(saved_daemonize_fd);
-            close_standard_fds();
+            if (detach) {
+                close_standard_fds();
+            }
             monitor_daemon(daemon_pid);
         }
         /* Running in daemon process. */
@@ -535,6 +537,8 @@ daemon_usage(void)
     printf(
         "\nDaemon options:\n"
         "  --detach                run in background as daemon\n"
+        "  --monitor               creates a process to monitor this daemon\n"
+        "  --user=username[:group] changes the effective daemon user:group\n"
         "  --no-chdir              do not chdir to '/'\n"
         "  --pidfile[=FILE]        create pidfile (default: %s/%s.pid)\n"
         "  --overwrite-pidfile     with --pidfile, start even if already "

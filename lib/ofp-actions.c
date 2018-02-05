@@ -15,6 +15,8 @@
  */
 
 #include <config.h>
+
+#include <sys/types.h>
 #include <netinet/in.h>
 
 #include "bundle.h"
@@ -348,12 +350,18 @@ enum ofp_raw_action_type {
     /* NX1.3+(47): struct nx_action_decap, ... */
     NXAST_RAW_DECAP,
 
+    /* NX1.3+(48): void. */
+    NXAST_RAW_DEC_NSH_TTL,
+
 /* ## ------------------ ## */
 /* ## Debugging actions. ## */
 /* ## ------------------ ## */
 
 /* These are intentionally undocumented, subject to change, and ovs-vswitchd */
 /* accepts them only if started with --enable-dummy. */
+
+    /* NX1.0+(254): void. */
+    NXAST_RAW_DEBUG_SLOW,
 
     /* NX1.0+(255): void. */
     NXAST_RAW_DEBUG_RECIRC,
@@ -473,6 +481,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_UNROLL_XLATE:
     case OFPACT_CT_CLEAR:
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
     case OFPACT_METER:
     case OFPACT_CLEAR_ACTIONS:
     case OFPACT_WRITE_METADATA:
@@ -480,6 +489,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_NAT:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_DEC_NSH_TTL:
         return ofpact_next(ofpact);
 
     case OFPACT_CLONE:
@@ -4330,6 +4340,39 @@ format_DECAP(const struct ofpact_decap *a,
     ds_put_format(s, "%s)%s", colors.paren, colors.end);
 }
 
+/* Action dec_nsh_ttl */
+
+static enum ofperr
+decode_NXAST_RAW_DEC_NSH_TTL(struct ofpbuf *out)
+{
+    ofpact_put_DEC_NSH_TTL(out);
+    return 0;
+}
+
+static void
+encode_DEC_NSH_TTL(const struct ofpact_null *null OVS_UNUSED,
+            enum ofp_version ofp_version OVS_UNUSED, struct ofpbuf *out)
+{
+    put_NXAST_DEC_NSH_TTL(out);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_DEC_NSH_TTL(char *arg OVS_UNUSED,
+           const struct ofputil_port_map *port_map OVS_UNUSED,
+           struct ofpbuf *ofpacts,
+           enum ofputil_protocol *usable_protocols OVS_UNUSED)
+{
+    ofpact_put_DEC_NSH_TTL(ofpacts);
+    return NULL;
+}
+
+static void
+format_DEC_NSH_TTL(const struct ofpact_null *a OVS_UNUSED,
+            const struct ofputil_port_map *port_map OVS_UNUSED, struct ds *s)
+{
+    ds_put_format(s, "%sdec_nsh_ttl%s", colors.special, colors.end);
+}
+
 
 /* Action structures for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE, and
  * NXAST_RESUBMIT_TABLE_CT.
@@ -5482,7 +5525,6 @@ parse_UNROLL_XLATE(char *arg OVS_UNUSED,
                    enum ofputil_protocol *usable_protocols OVS_UNUSED)
 {
     OVS_NOT_REACHED();
-    return NULL;
 }
 
 static void
@@ -5535,7 +5577,7 @@ encode_CLONE(const struct ofpact_nest *clone,
     const size_t ofs = out->size;
     struct ext_action_header *eah;
 
-    eah = put_NXAST_CLONE(out);
+    put_NXAST_CLONE(out);
     len = ofpacts_put_openflow_actions(clone->actions,
                                        ofpact_nest_get_action_len(clone),
                                        out, ofp_version);
@@ -5801,7 +5843,7 @@ format_SAMPLE(const struct ofpact_sample *a,
     ds_put_format(s, "%s)%s", colors.paren, colors.end);
 }
 
-/* debug_recirc instruction. */
+/* debug instructions. */
 
 static bool enable_debug;
 
@@ -5848,6 +5890,43 @@ format_DEBUG_RECIRC(const struct ofpact_null *a OVS_UNUSED,
     ds_put_format(s, "%sdebug_recirc%s", colors.value, colors.end);
 }
 
+static enum ofperr
+decode_NXAST_RAW_DEBUG_SLOW(struct ofpbuf *out)
+{
+    if (!enable_debug) {
+        return OFPERR_OFPBAC_BAD_VENDOR_TYPE;
+    }
+
+    ofpact_put_DEBUG_SLOW(out);
+    return 0;
+}
+
+static void
+encode_DEBUG_SLOW(const struct ofpact_null *n OVS_UNUSED,
+                  enum ofp_version ofp_version OVS_UNUSED,
+                  struct ofpbuf *out)
+{
+    put_NXAST_DEBUG_SLOW(out);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_DEBUG_SLOW(char *arg OVS_UNUSED,
+                 const struct ofputil_port_map *port_map OVS_UNUSED,
+                 struct ofpbuf *ofpacts,
+                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+{
+    ofpact_put_DEBUG_SLOW(ofpacts);
+    return NULL;
+}
+
+static void
+format_DEBUG_SLOW(const struct ofpact_null *a OVS_UNUSED,
+                  const struct ofputil_port_map *port_map OVS_UNUSED,
+                  struct ds *s)
+{
+    ds_put_format(s, "%sdebug_slow%s", colors.value, colors.end);
+}
+
 /* Action structure for NXAST_CT.
  *
  * Pass traffic to the connection tracker.
@@ -5858,20 +5937,19 @@ format_DEBUG_RECIRC(const struct ofpact_null *a OVS_UNUSED,
  *
  *   - Packet State:
  *
- *      Untracked packets have not yet passed through the connection tracker,
- *      and the connection state for such packets is unknown. In most cases,
- *      packets entering the OpenFlow pipeline will initially be in the
- *      untracked state. Untracked packets may become tracked by executing
- *      NXAST_CT with a "recirc_table" specified. This makes various aspects
- *      about the connection available, in particular the connection state.
+ *      Untracked packets have an unknown connection state.  In most
+ *      cases, packets entering the OpenFlow pipeline will initially be
+ *      in the untracked state. Untracked packets may become tracked by
+ *      executing NXAST_CT with a "recirc_table" specified. This makes
+ *      various aspects about the connection available, in particular
+ *      the connection state.
  *
- *      Tracked packets have previously passed through the connection tracker.
- *      These packets will remain tracked through until the end of the OpenFlow
- *      pipeline. Tracked packets which have NXAST_CT executed with a
- *      "recirc_table" specified will return to the tracked state.
- *
- *      The packet state is only significant for the duration of packet
- *      processing within the OpenFlow pipeline.
+ *      An NXAST_CT action always puts the packet into an untracked
+ *      state for the current processing path.  If "recirc_table" is
+ *      set, execution is forked and the packet passes through the
+ *      connection tracker.  The specified table's processing path is
+ *      able to match on Connection state until the end of the OpenFlow
+ *      pipeline or NXAST_CT is called again.
  *
  *   - Connection State:
  *
@@ -7115,6 +7193,7 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
     case OFPACT_SET_VLAN_VID:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_DEC_NSH_TTL:
         return true;
     case OFPACT_BUNDLE:
     case OFPACT_CLEAR_ACTIONS:
@@ -7151,6 +7230,7 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
     case OFPACT_WRITE_ACTIONS:
     case OFPACT_WRITE_METADATA:
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
         return false;
     default:
         OVS_NOT_REACHED();
@@ -7192,6 +7272,7 @@ ofpact_is_allowed_in_actions_set(const struct ofpact *a)
     case OFPACT_STRIP_VLAN:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_DEC_NSH_TTL:
         return true;
 
     /* In general these actions are excluded because they are not part of
@@ -7219,6 +7300,7 @@ ofpact_is_allowed_in_actions_set(const struct ofpact *a)
     case OFPACT_STACK_POP:
     case OFPACT_STACK_PUSH:
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
 
     /* The action set may only include actions and thus
      * may not include any instructions */
@@ -7305,6 +7387,7 @@ ofpacts_execute_action_set(struct ofpbuf *action_list,
     ofpacts_copy_last(action_list, action_set, OFPACT_PUSH_VLAN);
     ofpacts_copy_last(action_list, action_set, OFPACT_DEC_TTL);
     ofpacts_copy_last(action_list, action_set, OFPACT_DEC_MPLS_TTL);
+    ofpacts_copy_last(action_list, action_set, OFPACT_DEC_NSH_TTL);
     ofpacts_copy_all(action_list, action_set, ofpact_is_set_or_move_action);
     ofpacts_copy_last(action_list, action_set, OFPACT_SET_QUEUE);
 
@@ -7317,6 +7400,7 @@ ofpacts_execute_action_set(struct ofpbuf *action_list,
     if (!ofpacts_copy_last(action_list, action_set, OFPACT_GROUP) &&
         !ofpacts_copy_last(action_list, action_set, OFPACT_OUTPUT) &&
         !ofpacts_copy_last(action_list, action_set, OFPACT_RESUBMIT) &&
+        !ofpacts_copy_last(action_list, action_set, OFPACT_CT_CLEAR) &&
         !ofpacts_copy_last(action_list, action_set, OFPACT_CT)) {
         ofpbuf_clear(action_list);
     }
@@ -7441,11 +7525,13 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type)
     case OFPACT_UNROLL_XLATE:
     case OFPACT_SAMPLE:
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
     case OFPACT_CT:
     case OFPACT_CT_CLEAR:
     case OFPACT_NAT:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_DEC_NSH_TTL:
     default:
         return OVSINST_OFPIT11_APPLY_ACTIONS;
     }
@@ -8107,6 +8193,7 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         return OFPERR_OFPBAC_BAD_TYPE;
 
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
         return 0;
 
     case OFPACT_ENCAP:
@@ -8129,6 +8216,13 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
              * Do not allow subsequent actions that depend on packet headers. */
             flow->packet_type = htonl(PT_UNKNOWN);
             flow->dl_type = OVS_BE16_MAX;
+        }
+        return 0;
+
+    case OFPACT_DEC_NSH_TTL:
+        if ((flow->packet_type != htonl(PT_NSH)) &&
+            (flow->dl_type != htons(ETH_TYPE_NSH))) {
+            inconsistent_match(usable_protocols);
         }
         return 0;
 
@@ -8622,11 +8716,13 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
     case OFPACT_METER:
     case OFPACT_GROUP:
     case OFPACT_DEBUG_RECIRC:
+    case OFPACT_DEBUG_SLOW:
     case OFPACT_CT:
     case OFPACT_CT_CLEAR:
     case OFPACT_NAT:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_DEC_NSH_TTL:
     default:
         return false;
     }
@@ -9175,6 +9271,9 @@ ofpact_decode_raw(enum ofp_version ofp_version,
         }
     }
 
+    VLOG_WARN_RL(&rl, "unknown %s action for vendor %#"PRIx32" and "
+                 "type %"PRIu16, ofputil_version_to_string(ofp_version),
+                 hdrs.vendor, hdrs.type);
     return (hdrs.vendor
             ? OFPERR_OFPBAC_BAD_VENDOR_TYPE
             : OFPERR_OFPBAC_BAD_TYPE);

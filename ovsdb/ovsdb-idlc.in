@@ -122,8 +122,33 @@ def cMembers(prefix, tableName, columnName, column, const, refTable=True):
 def sorted_columns(table):
     return sorted(table.columns.items())
 
+# If a column name in the schema is a C or C++ keyword, append an underscore
+# to the column name.
+def replace_cplusplus_keyword(schema):
+    keywords = {'alignas', 'alignof', 'and', 'and_eq', 'asm', 'auto', 'bitand',
+                'bitor', 'bool', 'break', 'case', 'catch', 'char', 'char16_t',
+                'char32_t', 'class', 'compl', 'concept', 'const', 'const_cast',
+                'constexpr', 'continue', 'decltype', 'default', 'delete', 'do',
+                'double', 'dynamic_cast', 'else', 'enum', 'explicit', 'export',
+                'extern', 'false', 'float', 'for', 'friend', 'goto', 'if',
+                'inline', 'int', 'long', 'mutable', 'namespace', 'new',
+                'noexcept', 'not', 'not_eq', 'nullptr', 'operator', 'or',
+                'or_eq', 'private', 'protected', 'public', 'register',
+                'reinterpret_cast', 'requires', 'restrict', 'return', 'short',
+                'signed', 'sizeof', 'static', 'static_assert', 'static_cast',
+                'struct', 'switch', 'template', 'this', 'thread_local',
+                'throw', 'true', 'try', 'typedef', 'typeid', 'typename',
+                'union', 'unsigned', 'using', 'virtual', 'void', 'volatile',
+                'wchar_t', 'while', 'xor', 'xor_eq'}
+
+    for tableName, table in schema.tables.items():
+        for columnName in table.columns:
+            if columnName in keywords:
+                table.columns[columnName + '_'] = table.columns.pop(columnName)
+
 def printCIDLHeader(schemaFile):
     schema = parseSchema(schemaFile)
+    replace_cplusplus_keyword(schema)
     prefix = schema.idlPrefix
     print('''\
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
@@ -137,7 +162,12 @@ def printCIDLHeader(schemaFile):
 #include "ovsdb-data.h"
 #include "ovsdb-idl-provider.h"
 #include "smap.h"
-#include "uuid.h"''' % {'prefix': prefix.upper()})
+#include "uuid.h"
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
+''' % {'prefix': prefix.upper()})
 
     for tableName, table in sorted(schema.tables.items()):
         structName = "%s%s" % (prefix, tableName.lower())
@@ -281,7 +311,7 @@ bool %(s)s_is_updated(const struct %(s)s *, enum %(s)s_column_id);
     # Table indexes.
         print("struct %(s)s * %(s)s_index_init_row(struct ovsdb_idl *, const struct ovsdb_idl_table_class *);" % {'s': structName})
         print
-        for columnName, column in sorted(table.columns.iteritems()):
+        for columnName, column in sorted(table.columns.items()):
             print('void %(s)s_index_set_%(c)s(const struct %(s)s *,' % {'s': structName, 'c': columnName})
             if column.type.is_smap():
                 args = ['const struct smap *']
@@ -305,6 +335,10 @@ bool %(s)s_is_updated(const struct %(s)s *, enum %(s)s_column_id);
     print("\nextern struct ovsdb_idl_class %sidl_class;" % prefix)
 
     print("\nconst char * %sget_db_version(void);" % prefix)
+    print('''
+#ifdef  __cplusplus
+}
+#endif''')
     print("\n#endif /* %(prefix)sIDL_HEADER */" % {'prefix': prefix.upper()})
 
 def printEnum(type, members):
@@ -319,6 +353,7 @@ def printEnum(type, members):
 
 def printCIDLSource(schemaFile):
     schema = parseSchema(schemaFile)
+    replace_cplusplus_keyword(schema)
     prefix = schema.idlPrefix
     print('''\
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
@@ -1028,12 +1063,12 @@ void
         print("""
 /* Creates a new row of kind "%(t)s". */
 struct %(s)s *
-%(s)s_index_init_row(struct ovsdb_idl *idl, const struct ovsdb_idl_table_class *class)
+%(s)s_index_init_row(struct ovsdb_idl *idl, const struct ovsdb_idl_table_class *class_)
 {""" % {'s': structName, 't': tableName})
-        #for columnName, column in sorted(table.columns.iteritems()):
+        #for columnName, column in sorted(table.columns.items()):
         #    if column.type.is_smap():
         #        print "    smap_init(&row->%s);" % columnName
-        print("    return (struct %(s)s *) ovsdb_idl_index_init_row(idl, class);" % {'s': structName, 't': tableName})
+        print("    return (struct %(s)s *) ovsdb_idl_index_init_row(idl, class_);" % {'s': structName, 't': tableName})
         print("}")
 
         print("""
@@ -1097,7 +1132,7 @@ struct %(s)s *
     return %(s)s_cast(ovsdb_idl_index_data(CONST_CAST(struct ovsdb_idl_index_cursor *, cursor)));
 }""" % { 's' : structName })
         # Indexes Set functions
-        for columnName, column in sorted(table.columns.iteritems()):
+        for columnName, column in sorted(table.columns.items()):
             type = column.type
 
             comment, members = cMembers(prefix, tableName, columnName,
@@ -1264,11 +1299,11 @@ void
                                   for x in column.type.cInitType("%s_col_%s" % (tableName, columnName), prereqs))
             print("""\
     [%(P)s%(T)s_COL_%(C)s] = {
-         .name = "%(c)s",
+         .name = "%(column_name_in_schema)s",
          .type = {
 %(type)s
          },
-         .mutable = %(mutable)s,
+         .is_mutable = %(mutable)s,
          .parse = %(s)s_parse_%(c)s,
          .unparse = %(s)s_unparse_%(c)s,
     },\n""" % {'P': prefix.upper(),
@@ -1277,7 +1312,8 @@ void
                'C': columnName.upper(),
                's': structName,
                'mutable': mutable,
-               'type': type_init})
+               'type': type_init,
+               'column_name_in_schema': column.name})
         print("};")
 
     # Table classes.
@@ -1289,9 +1325,13 @@ void
             is_root = "true"
         else:
             is_root = "false"
-        print("    {\"%s\", %s," % (tableName, is_root))
+        if table.max_rows == 1:
+            is_singleton = "true"
+        else:
+            is_singleton = "false"
+        print("    {\"%s\", %s, %s," % (tableName, is_root, is_singleton))
         print("     %s_columns, ARRAY_SIZE(%s_columns)," % (
-            structName, structName))
+              structName, structName))
         print("     sizeof(struct %s), %s_init__}," % (structName, structName))
     print("};")
 
