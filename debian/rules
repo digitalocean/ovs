@@ -3,7 +3,7 @@
 #export DH_VERBOSE=1
 
 %:
-	dh $@ --with autoreconf,python2,python3,systemd,sphinxdoc --parallel
+	dh $@ --with autoreconf,python2,python3,systemd,sphinxdoc
 
 # use --as-needed only if supported by dh-autoreconf (to simplify backporting)
 DH_AS_NEEDED=$(shell dpkg --compare-versions $$(dpkg --status dh-autoreconf | grep Version | cut -d' ' -f2) ge 6 && echo --as-needed)
@@ -37,10 +37,7 @@ endif
 
 # NOTE(jamespage): Don't skip any tests for the moment
 SKIP_TEST =
-# NOTE(jamespage): Skip some tests under DPDK build only
-# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1709272
 SKIP_TEST_DPDK =
-#1-1210 1227-2337 2339-
 
 override_dh_auto_test:
 # NOTE(jamespage): skip tests on armhf until
@@ -67,9 +64,9 @@ endif # nocheck
 endif # armhf
 
 override_dh_auto_build:
-	$(MAKE) -C _debian distdir=openvswitch
+	$(MAKE) $(PARALLEL) -C _debian distdir=openvswitch
 ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
-	$(MAKE) -C _dpdk distdir=openvswitch_dpdk
+	$(MAKE) $(PARALLEL) -C _dpdk distdir=openvswitch_dpdk
 endif
 
 override_dh_auto_clean:

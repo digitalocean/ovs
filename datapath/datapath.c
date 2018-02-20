@@ -51,6 +51,7 @@
 #include <net/genetlink.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
+#include <net/nsh.h>
 
 #include "datapath.h"
 #include "conntrack.h"
@@ -339,8 +340,10 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 			     const struct dp_upcall_info *upcall_info,
 				 uint32_t cutlen)
 {
-	unsigned short gso_type = skb_shinfo(skb)->gso_type;
+#ifdef HAVE_SKB_GSO_UDP
+	unsigned int gso_type = skb_shinfo(skb)->gso_type;
 	struct sw_flow_key later_key;
+#endif
 	struct sk_buff *segs, *nskb;
 	struct ovs_skb_cb ovs_cb;
 	int err;
@@ -352,7 +355,7 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 		return PTR_ERR(segs);
 	if (segs == NULL)
 		return -EINVAL;
-
+#ifdef HAVE_SKB_GSO_UDP
 	if (gso_type & SKB_GSO_UDP) {
 		/* The initial flow key extracted by ovs_flow_key_extract()
 		 * in this case is for a first fragment, so we need to
@@ -361,14 +364,15 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 		later_key = *key;
 		later_key.ip.frag = OVS_FRAG_TYPE_LATER;
 	}
-
+#endif
 	/* Queue all of the segments. */
 	skb = segs;
 	do {
 		*OVS_CB(skb) = ovs_cb;
+#ifdef HAVE_SKB_GSO_UDP
 		if (gso_type & SKB_GSO_UDP && skb != segs)
 			key = &later_key;
-
+#endif
 		err = queue_userspace_packet(dp, skb, key, upcall_info, cutlen);
 		if (err)
 			break;
@@ -1136,7 +1140,8 @@ static int ovs_nla_init_match_and_action(struct net *net,
 		if (!a[OVS_FLOW_ATTR_KEY]) {
 			OVS_NLERR(log,
 				  "Flow key attribute not present in set flow.");
-			return -EINVAL;
+			error = -EINVAL;
+			goto error;
 		}
 
 		*acts = get_flow_actions(net, a[OVS_FLOW_ATTR_ACTIONS], key,
@@ -2408,6 +2413,7 @@ static int __init dp_init(void)
 
 	pr_info("Open vSwitch switching datapath %s\n", VERSION);
 
+	ovs_nsh_init();
 	err = action_fifos_init();
 	if (err)
 		goto error;
@@ -2463,6 +2469,7 @@ error_unreg_rtnl_link:
 error_action_fifos_exit:
 	action_fifos_exit();
 error:
+	ovs_nsh_cleanup();
 	return err;
 }
 
@@ -2478,6 +2485,7 @@ static void dp_cleanup(void)
 	ovs_flow_exit();
 	ovs_internal_dev_rtnl_link_unregister();
 	action_fifos_exit();
+	ovs_nsh_cleanup();
 }
 
 module_init(dp_init);

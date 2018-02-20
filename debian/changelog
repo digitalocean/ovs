@@ -1,3 +1,10 @@
+openvswitch (2.9.0-0ubuntu1) bionic; urgency=medium
+
+  * d/rules: Enable parallel builds for dh_auto_build target.
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 20 Feb 2018 18:11:14 +0000
+
 openvswitch (2.9.0~git20180205.5a39582ca-0ubuntu1) bionic; urgency=medium
 
   * Snapshot from branch-2.9 (LP: #1735248, LP: #1686406, LP: #1709272):

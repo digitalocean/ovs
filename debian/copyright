@@ -1,6 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Open vSwitch
 Source: http://openvswitch.org/
+Files-Excluded: debian
 
 Files: *
 Copyright: (c) 2007-2013 Nicira, Inc.
