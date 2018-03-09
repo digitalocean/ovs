@@ -1,0 +1,20 @@
+--- a/tests/test-vconn.c
++++ b/tests/test-vconn.c
+@@ -242,7 +242,7 @@
+        if (retval == sizeof hello) {
+            enum ofpraw raw;
+ 
+-           CHECK(hello.version, OFP13_VERSION);
++           CHECK(hello.version, OFP14_VERSION);
+            CHECK(ofpraw_decode_partial(&raw, &hello, sizeof hello), 0);
+            CHECK(raw, OFPRAW_OFPT_HELLO);
+            CHECK(ntohs(hello.length), sizeof hello);
+@@ -315,7 +315,7 @@
+            if (retval == sizeof hello) {
+                enum ofpraw raw;
+ 
+-               CHECK(hello.version, OFP13_VERSION);
++               CHECK(hello.version, OFP14_VERSION);
+                CHECK(ofpraw_decode_partial(&raw, &hello, sizeof hello), 0);
+                CHECK(raw, OFPRAW_OFPT_HELLO);
+                CHECK(ntohs(hello.length), sizeof hello);
