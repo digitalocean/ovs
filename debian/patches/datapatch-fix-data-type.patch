@@ -1,0 +1,60 @@
+datapath: fix data type in queue_gso_packets
+
+Upstream commit:
+    commit 2734166e89639c973c6e125ac8bcfc2d9db72b70
+    Author: Gustavo A. R. Silva <garsilva@embeddedor.com>
+    Date:   Sat Nov 25 13:14:40 2017 -0600
+
+    net: openvswitch: datapath: fix data type in queue_gso_packets
+
+    gso_type is being used in binary AND operations together with SKB_GSO_UDP.
+    The issue is that variable gso_type is of type unsigned short and
+    SKB_GSO_UDP expands to more than 16 bits:
+
+    SKB_GSO_UDP = 1 << 16
+
+    this makes any binary AND operation between gso_type and SKB_GSO_UDP to
+    be always zero, hence making some code unreachable and likely causing
+    undesired behavior.
+
+    Fix this by changing the data type of variable gso_type to unsigned int.
+
+    Addresses-Coverity-ID: 1462223
+    Fixes: 0c19f846d582 ("net: accept UFO datagrams from tuntap and packet")
+    Signed-off-by: Gustavo A. R. Silva <garsilva@embeddedor.com>
+    Acked-by: Willem de Bruijn <willemb@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+While backporting this I found another couple of instances of the
+same issue so I fixed them up as well.
+
+Cc: Gustavo A. R. Silva <garsilva@embeddedor.com>
+Signed-off-by: Greg Rose <gvrose8192@gmail.com>
+Acked-by: Pravin B Shelar <pshelar@ovn.org>
+
+Index: ovs/datapath/datapath.c
+===================================================================
+--- ovs.orig/datapath/datapath.c
++++ ovs/datapath/datapath.c
+@@ -339,7 +339,7 @@ static int queue_gso_packets(struct data
+ 			     const struct dp_upcall_info *upcall_info,
+ 				 uint32_t cutlen)
+ {
+-	unsigned short gso_type = skb_shinfo(skb)->gso_type;
++	unsigned int gso_type = skb_shinfo(skb)->gso_type;
+ 	struct sw_flow_key later_key;
+ 	struct sk_buff *segs, *nskb;
+ 	struct ovs_skb_cb ovs_cb;
+Index: ovs/datapath/linux/compat/stt.c
+===================================================================
+--- ovs.orig/datapath/linux/compat/stt.c
++++ ovs/datapath/linux/compat/stt.c
+@@ -1310,7 +1310,7 @@ static bool validate_checksum(struct sk_
+ static bool set_offloads(struct sk_buff *skb)
+ {
+ 	struct stthdr *stth = stt_hdr(skb);
+-	unsigned short gso_type;
++	unsigned int gso_type;
+ 	int l3_header_size;
+ 	int l4_header_size;
+ 	u16 csum_offset;
