@@ -97,7 +97,7 @@ struct datapath {
  * struct ovs_skb_cb - OVS data in skb CB
  * @input_vport: The original vport packet came in on. This value is cached
  * when a packet is received by OVS.
- * @mru: The maximum received fragement size; 0 if the packet is not
+ *mru: The maximum received fragement size; 0 if the packet is not
  * fragmented.
  */
 struct ovs_skb_cb {

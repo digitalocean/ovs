@@ -73,8 +73,7 @@ struct stt_dev {
 #define STT_PROTO_TCP		BIT(3)
 #define STT_PROTO_TYPES		(STT_PROTO_IPV4 | STT_PROTO_TCP)
 
-#define SUPPORTED_GSO_TYPES (SKB_GSO_TCPV4 | SKB_GSO_UDP | SKB_GSO_DODGY | \
-			     SKB_GSO_TCPV6)
+#define SUPPORTED_GSO_TYPES (SKB_GSO_TCPV4 | SKB_GSO_DODGY | SKB_GSO_TCPV6)
 
 /* The length and offset of a fragment are encoded in the sequence number.
  * STT_SEQ_LEN_SHIFT is the left shift needed to store the length.
@@ -659,8 +658,6 @@ static int stt_can_offload(struct sk_buff *skb, __be16 l3_proto, u8 l4_proto)
 
 		if (l4_proto == IPPROTO_TCP)
 			csum_offset = offsetof(struct tcphdr, check);
-		else if (l4_proto == IPPROTO_UDP)
-			csum_offset = offsetof(struct udphdr, check);
 		else
 			return 0;
 
@@ -690,14 +687,14 @@ static int stt_can_offload(struct sk_buff *skb, __be16 l3_proto, u8 l4_proto)
 	}
 
 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
-		/* Assume receiver can only offload TCP/UDP over IPv4/6,
+		/* Assume receiver can only offload TCP over IPv4/6,
 		 * and require 802.1Q VLANs to be accelerated.
 		 */
 		if (l3_proto != htons(ETH_P_IP) &&
 		    l3_proto != htons(ETH_P_IPV6))
 			return 0;
 
-		if (l4_proto != IPPROTO_TCP && l4_proto != IPPROTO_UDP)
+		if (l4_proto != IPPROTO_TCP)
 			return 0;
 
 		/* L4 offset must fit in a 1-byte field. */
@@ -1209,7 +1206,7 @@ static bool validate_checksum(struct sk_buff *skb)
 static bool set_offloads(struct sk_buff *skb)
 {
 	struct stthdr *stth = stt_hdr(skb);
-	unsigned short gso_type;
+	unsigned short gso_type = 0;
 	int l3_header_size;
 	int l4_header_size;
 	u16 csum_offset;
@@ -1250,7 +1247,6 @@ static bool set_offloads(struct sk_buff *skb)
 	case STT_PROTO_IPV4:
 		/* UDP/IPv4 */
 		csum_offset = offsetof(struct udphdr, check);
-		gso_type = SKB_GSO_UDP;
 		l3_header_size = sizeof(struct iphdr);
 		l4_header_size = sizeof(struct udphdr);
 		skb->protocol = htons(ETH_P_IP);
@@ -1258,7 +1254,6 @@ static bool set_offloads(struct sk_buff *skb)
 	default:
 		/* UDP/IPv6 */
 		csum_offset = offsetof(struct udphdr, check);
-		gso_type = SKB_GSO_UDP;
 		l3_header_size = sizeof(struct ipv6hdr);
 		l4_header_size = sizeof(struct udphdr);
 		skb->protocol = htons(ETH_P_IPV6);
@@ -1276,7 +1271,7 @@ static bool set_offloads(struct sk_buff *skb)
 	skb->csum_offset = csum_offset;
 	skb->ip_summed = CHECKSUM_PARTIAL;
 
-	if (stth->mss) {
+	if (stth->mss && gso_type) {
 		if (unlikely(skb_unclone(skb, GFP_ATOMIC)))
 			return false;
 
