@@ -756,10 +756,6 @@ static void do_output(struct datapath *dp, struct sk_buff *skb, int out_port,
 {
 	struct vport *vport = ovs_vport_rcu(dp, out_port);
 
-	if (!skb_is_gso(skb) && !mru) {
-		OVS_CB(skb)->mru = vport->dev->mtu;
-	}
-
 	if (likely(vport)) {
 		u16 mru = OVS_CB(skb)->mru;
 
