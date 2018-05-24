@@ -137,7 +137,7 @@ int lockdep_ovsl_is_held(void)
 #endif
 
 static int queue_gso_packets(struct datapath *dp, struct sk_buff *,
-			     const struct sw_flow_key *,
+			     struct sw_flow_key *,
 			     const struct dp_upcall_info *,
 			     uint32_t cutlen);
 static int queue_userspace_packet(struct datapath *dp, struct sk_buff *,
@@ -335,7 +335,7 @@ err:
 }
 
 static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
-			     const struct sw_flow_key *key,
+			     struct sw_flow_key *key,
 			     const struct dp_upcall_info *upcall_info,
 				 uint32_t cutlen)
 {
@@ -360,6 +360,7 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 		 */
 		later_key = *key;
 		later_key.ip.frag = OVS_FRAG_TYPE_LATER;
+		key->ip.frag = OVS_FRAG_TYPE_FIRST;
 	}
 
 	/* Queue all of the segments. */
