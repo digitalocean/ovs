@@ -360,7 +360,10 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 		 */
 		later_key = *key;
 		later_key.ip.frag = OVS_FRAG_TYPE_LATER;
-		key->ip.frag = OVS_FRAG_TYPE_FIRST;
+
+		if (segs->next) {
+			key->ip.frag = OVS_FRAG_TYPE_FIRST;
+		}
 	}
 
 	/* Queue all of the segments. */
