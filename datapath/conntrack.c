@@ -999,9 +999,16 @@ int ovs_ct_execute(struct net *net, struct sk_buff *skb,
 	skb_pull_rcsum(skb, nh_ofs);
 
 	if (key->ip.frag != OVS_FRAG_TYPE_NONE) {
-		err = handle_fragments(net, key, info->zone.id, skb);
-		if (err)
-			return err;
+		bool real_fragment = true;
+
+		if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP)
+			real_fragment = !!(ip_hdr(skb)->frag_off & htons(IP_OFFSET | IP_MF));
+
+		if (real_fragment) {
+			err = handle_fragments(net, key, info->zone.id, skb);
+			if (err)
+				return err;
+		}
 	}
 
 	if (info->commit)
