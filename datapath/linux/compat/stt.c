@@ -522,7 +522,7 @@ static int coalesce_skb(struct sk_buff **headp)
 #else
 static int coalesce_skb(struct sk_buff **headp)
 {
-	struct sk_buff *frag, *head = *headp, *next;
+	struct sk_buff *frag, *head, *next;
 
 	err = straighten_frag_list(headp);
 	if (unlikely(err))
