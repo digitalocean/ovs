@@ -523,6 +523,7 @@ static int coalesce_skb(struct sk_buff **headp)
 static int coalesce_skb(struct sk_buff **headp)
 {
 	struct sk_buff *frag, *head, *next;
+	int err;
 
 	err = straighten_frag_list(headp);
 	if (unlikely(err))
@@ -530,7 +531,6 @@ static int coalesce_skb(struct sk_buff **headp)
 	head = *headp;
 
 	int delta = FRAG_CB(head)->first.tot_len - skb_headlen(head);
-	int err;
 
 	if (unlikely(!head->next))
 		return 0;
