@@ -406,7 +406,6 @@ static int skb_list_segment(struct sk_buff *head, bool ipv4, int l4_offset)
 	return 0;
 }
 
-#ifndef SKIP_ZERO_COPY
 static struct sk_buff *normalize_frag_list(struct sk_buff *head,
 					   struct sk_buff **skbp)
 {
@@ -474,6 +473,7 @@ static int straighten_frag_list(struct sk_buff **skbp)
 	return 0;
 }
 
+#ifndef SKIP_ZERO_COPY
 static int coalesce_skb(struct sk_buff **headp)
 {
 	struct sk_buff *frag, *head, *prev;
@@ -522,9 +522,15 @@ static int coalesce_skb(struct sk_buff **headp)
 #else
 static int coalesce_skb(struct sk_buff **headp)
 {
-	struct sk_buff *frag, *head = *headp, *next;
-	int delta = FRAG_CB(head)->first.tot_len - skb_headlen(head);
+	struct sk_buff *frag, *head, *next;
 	int err;
+
+	err = straighten_frag_list(headp);
+	if (unlikely(err))
+		return err;
+	head = *headp;
+
+	int delta = FRAG_CB(head)->first.tot_len - skb_headlen(head);
 
 	if (unlikely(!head->next))
 		return 0;
@@ -1453,7 +1459,7 @@ static void stt_rcv(struct stt_dev *stt_dev, struct sk_buff *skb)
 	if (!skb)
 		return;
 
-	if (skb->next && coalesce_skb(&skb))
+	if ((skb->next || skb_shinfo(skb)->frag_list) && coalesce_skb(&skb))
 		goto drop;
 
 	err = iptunnel_pull_header(skb,
