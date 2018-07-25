@@ -39,10 +39,9 @@ Package: openvswitch-common
 Architecture: linux-any
 Depends:
  openssl,
- python,
- python (>= 2.7),
- python-six,
+ python3-six,
  ${misc:Depends},
+ ${python3:Depends},
  ${shlibs:Depends},
 Suggests:
  ethtool,
@@ -128,10 +127,11 @@ Depends:
  netbase,
  openvswitch-common (= ${binary:Version}),
  procps,
- python-argparse,
+ python3-netifaces,
+ python3-openvswitch (>= ${source:Version}),
  uuid-runtime,
  ${misc:Depends},
- ${python:Depends},
+ ${python3:Depends},
  ${shlibs:Depends},
 Description: Open vSwitch switch implementations
  Open vSwitch is a production quality, multilayer, software-based,
@@ -151,7 +151,7 @@ Depends:
  dpdk,
  openvswitch-switch (= ${binary:Version}),
  ${misc:Depends},
- ${python:Depends},
+ ${python3:Depends},
  ${shlibs:Depends},
 Enhances:
  openvswitch-switch,
@@ -176,10 +176,9 @@ Description: DPDK enabled Open vSwitch switch implementation
 Package: openvswitch-test
 Architecture: all
 Depends:
- python (>= 2.7) | python-argparse,
- python-twisted-web,
+ python3-twisted,
  ${misc:Depends},
- ${python:Depends},
+ ${python3:Depends},
 Description: Open vSwitch test package
  Open vSwitch is a production quality, multilayer, software-based,
  Ethernet virtual switch. It is designed to enable massive network
@@ -215,9 +214,9 @@ Depends:
  lsb-release,
  openvswitch-common (>= ${binary:Version}),
  openvswitch-switch (>= ${binary:Version}),
- python,
- python-openvswitch (>= ${source:Version}),
+ python3-openvswitch (>= ${source:Version}),
  ${misc:Depends},
+ ${python3:Depends},
  ${shlibs:Depends},
 Description: Open vSwitch VTEP utilities
  Open vSwitch is a production quality, multilayer, software-based, Ethernet
@@ -234,10 +233,10 @@ Description: Open vSwitch VTEP utilities
 Package: ovn-central
 Architecture: linux-any
 Depends:
+ lsb-release,
  openvswitch-common (= ${binary:Version}),
  openvswitch-switch (= ${binary:Version}),
  ovn-common (= ${binary:Version}),
- lsb-release,
  ${misc:Depends},
  ${shlibs:Depends},
 Description: OVN central components
@@ -284,10 +283,9 @@ Depends:
  openvswitch-common (= ${binary:Version}),
  openvswitch-switch (= ${binary:Version}),
  ovn-common (= ${binary:Version}),
- python (>= 2.7),
- python-openvswitch (= ${source:Version}),
+ python3-openvswitch (= ${source:Version}),
  ${misc:Depends},
- ${python:Depends},
+ ${python3:Depends},
  ${shlibs:Depends},
 Description: OVN Docker drivers
  OVN, the Open Virtual Network, is a system to support virtual network

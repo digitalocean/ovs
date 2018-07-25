@@ -1,3 +1,14 @@
+openvswitch (2.9.2-0ubuntu1) cosmic; urgency=medium
+
+  * Switch openvswitch-* packages to use Python 3 (LP: #1735377):
+    - d/p/py3-compat.patch: Misc py3 compat fixes for bug tools.
+    - d/control: ${python:Depends} -> ${python3:Depends}.
+  * New upstream release (LP: #1780752).
+  * d/rules: Tidy test execution.
+  * d/rules: Skip test 8 on arm64,armhf.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 25 Jul 2018 11:40:26 +0100
+
 openvswitch (2.9.0-0ubuntu1) bionic; urgency=medium
 
   * d/rules: Enable parallel builds for dh_auto_build target.

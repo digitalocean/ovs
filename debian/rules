@@ -39,12 +39,13 @@ endif
 SKIP_TEST =
 SKIP_TEST_DPDK =
 
+# Skip test 8 (bash completion) on arm architectures
+ifneq (,$(filter arm64 armhf, $(DEB_HOST_ARCH)))
+SKIP_TEST = 1-7 9-
+SKIP_TEST_DPDK = 1-7 9-
+endif # arm64 armhf
+
 override_dh_auto_test:
-# NOTE(jamespage): skip tests on armhf until
-# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1686406
-# is resolved
-#
-ifeq (,$(filter armhf,$(DEB_HOST_ARCH)))
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
                 $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \
@@ -59,9 +60,8 @@ ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 		cat _dpdk/tests/testsuite.log; \
 		exit 1; \
 	fi
-endif # i386/amd64/arm64
+endif # i386/amd64/ppc64el/arm64
 endif # nocheck
-endif # armhf
 
 override_dh_auto_build:
 	$(MAKE) $(PARALLEL) -C _debian distdir=openvswitch
@@ -90,9 +90,12 @@ override_dh_install:
 	set -e && for pyvers in $(PYTHON3S); do \
         cd python && python$$pyvers setup.py install --install-layout=deb \
             --root $(CURDIR)/debian/python3-openvswitch; cd ..; \
+        mkdir -p $(CURDIR)/debian/openvswitch-test/usr/lib/python$$pyvers/dist-packages/ovstest; \
+        install -v -D python/ovstest/*.py \
+            $(CURDIR)/debian/openvswitch-test/usr/lib/python$$pyvers/dist-packages/ovstest; \
     done
 ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
-	install -D _dpdk/vswitchd/ovs-vswitchd \
+	install -v -D _dpdk/vswitchd/ovs-vswitchd \
         $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
 endif
 
