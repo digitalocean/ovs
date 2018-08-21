@@ -6,7 +6,7 @@ m4_divert_push([PREPARE_TESTS])
 # of every rxq (one per line) in the form:
 # port_name rxq_id numa_id core_id
 parse_pmd_rxq_show () {
-    awk '/pmd thread/ {numa=$4; core=substr($6, 1, length($6) - 1)} /\tport:/ {print  $2, $4, numa, core}' | sort
+    awk '/pmd thread/ {numa=$4; core=substr($6, 1, length($6) - 1)} /^  port:/ {print  $2, $4, numa, core}' | sort
 }
 
 # Given the output of `ovs-appctl dpif-netdev/pmd-rxq-show`,
@@ -72,15 +72,15 @@ CHECK_PMD_THREADS_CREATED()
 
 AT_CHECK([ovs-appctl dpif-netdev/pmd-rxq-show | sed SED_NUMA_CORE_PATTERN], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	isolated : false
-	port: p0              	queue-id:  0	pmd usage: NOT AVAIL
+  isolated : false
+  port: p0                queue-id:  0  pmd usage: NOT AVAIL
 ])
 
 AT_CHECK([ovs-appctl dpif/show | sed 's/\(tx_queues=\)[[0-9]]*/\1<cleared>/g'], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
-	br0:
-		br0 65534/100: (dummy-internal)
-		p0 1/1: (dummy-pmd: configured_rx_queues=1, configured_tx_queues=<cleared>, requested_rx_queues=1, requested_tx_queues=<cleared>)
+  br0:
+    br0 65534/100: (dummy-internal)
+    p0 1/1: (dummy-pmd: configured_rx_queues=1, configured_tx_queues=<cleared>, requested_rx_queues=1, requested_tx_queues=<cleared>)
 ])
 
 OVS_VSWITCHD_STOP
@@ -96,22 +96,22 @@ AT_CHECK([ovs-vsctl set interface p0 options:n_rxq=8])
 
 AT_CHECK([ovs-appctl dpif/show | sed 's/\(tx_queues=\)[[0-9]]*/\1<cleared>/g'], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
-	br0:
-		br0 65534/100: (dummy-internal)
-		p0 1/1: (dummy-pmd: configured_rx_queues=8, configured_tx_queues=<cleared>, requested_rx_queues=8, requested_tx_queues=<cleared>)
+  br0:
+    br0 65534/100: (dummy-internal)
+    p0 1/1: (dummy-pmd: configured_rx_queues=8, configured_tx_queues=<cleared>, requested_rx_queues=8, requested_tx_queues=<cleared>)
 ])
 
 AT_CHECK([ovs-appctl dpif-netdev/pmd-rxq-show | sed SED_NUMA_CORE_PATTERN], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	isolated : false
-	port: p0              	queue-id:  0	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  1	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  2	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  3	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  4	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  5	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  6	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  7	pmd usage: NOT AVAIL
+  isolated : false
+  port: p0                queue-id:  0  pmd usage: NOT AVAIL
+  port: p0                queue-id:  1  pmd usage: NOT AVAIL
+  port: p0                queue-id:  2  pmd usage: NOT AVAIL
+  port: p0                queue-id:  3  pmd usage: NOT AVAIL
+  port: p0                queue-id:  4  pmd usage: NOT AVAIL
+  port: p0                queue-id:  5  pmd usage: NOT AVAIL
+  port: p0                queue-id:  6  pmd usage: NOT AVAIL
+  port: p0                queue-id:  7  pmd usage: NOT AVAIL
 ])
 
 OVS_VSWITCHD_STOP
@@ -127,22 +127,22 @@ CHECK_PMD_THREADS_CREATED()
 
 AT_CHECK([ovs-appctl dpif/show | sed 's/\(tx_queues=\)[[0-9]]*/\1<cleared>/g'], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
-	br0:
-		br0 65534/100: (dummy-internal)
-		p0 1/1: (dummy-pmd: configured_rx_queues=8, configured_tx_queues=<cleared>, requested_rx_queues=8, requested_tx_queues=<cleared>)
+  br0:
+    br0 65534/100: (dummy-internal)
+    p0 1/1: (dummy-pmd: configured_rx_queues=8, configured_tx_queues=<cleared>, requested_rx_queues=8, requested_tx_queues=<cleared>)
 ])
 
 AT_CHECK([ovs-appctl dpif-netdev/pmd-rxq-show | sed SED_NUMA_CORE_PATTERN], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	isolated : false
-	port: p0              	queue-id:  0	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  1	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  2	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  3	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  4	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  5	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  6	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  7	pmd usage: NOT AVAIL
+  isolated : false
+  port: p0                queue-id:  0  pmd usage: NOT AVAIL
+  port: p0                queue-id:  1  pmd usage: NOT AVAIL
+  port: p0                queue-id:  2  pmd usage: NOT AVAIL
+  port: p0                queue-id:  3  pmd usage: NOT AVAIL
+  port: p0                queue-id:  4  pmd usage: NOT AVAIL
+  port: p0                queue-id:  5  pmd usage: NOT AVAIL
+  port: p0                queue-id:  6  pmd usage: NOT AVAIL
+  port: p0                queue-id:  7  pmd usage: NOT AVAIL
 ])
 
 TMP=$(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])
@@ -160,15 +160,15 @@ CHECK_PMD_THREADS_CREATED([1], [], [+$TMP])
 
 AT_CHECK([ovs-appctl dpif-netdev/pmd-rxq-show | sed SED_NUMA_CORE_PATTERN], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	isolated : false
-	port: p0              	queue-id:  0	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  1	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  2	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  3	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  4	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  5	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  6	pmd usage: NOT AVAIL
-	port: p0              	queue-id:  7	pmd usage: NOT AVAIL
+  isolated : false
+  port: p0                queue-id:  0  pmd usage: NOT AVAIL
+  port: p0                queue-id:  1  pmd usage: NOT AVAIL
+  port: p0                queue-id:  2  pmd usage: NOT AVAIL
+  port: p0                queue-id:  3  pmd usage: NOT AVAIL
+  port: p0                queue-id:  4  pmd usage: NOT AVAIL
+  port: p0                queue-id:  5  pmd usage: NOT AVAIL
+  port: p0                queue-id:  6  pmd usage: NOT AVAIL
+  port: p0                queue-id:  7  pmd usage: NOT AVAIL
 ])
 
 OVS_VSWITCHD_STOP
@@ -185,26 +185,28 @@ CHECK_PMD_THREADS_CREATED()
 AT_CHECK([ovs-appctl vlog/set dpif_netdev:dbg])
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:emc-insert-inv-prob=1])
+AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:smc-enable=true])
 
 sleep 1
 
 AT_CHECK([ovs-appctl dpif/show | sed 's/\(tx_queues=\)[[0-9]]*/\1<cleared>/g'], [0], [dnl
 dummy@ovs-dummy: hit:0 missed:0
-	br0:
-		br0 65534/100: (dummy-internal)
-		p0 7/1: (dummy-pmd: configured_rx_queues=4, configured_tx_queues=<cleared>, requested_rx_queues=4, requested_tx_queues=<cleared>)
+  br0:
+    br0 65534/100: (dummy-internal)
+    p0 7/1: (dummy-pmd: configured_rx_queues=4, configured_tx_queues=<cleared>, requested_rx_queues=4, requested_tx_queues=<cleared>)
 ])
 
-AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show | sed SED_NUMA_CORE_PATTERN | sed '/cycles/d' | grep pmd -A 8], [0], [dnl
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show | sed SED_NUMA_CORE_PATTERN | sed '/cycles/d' | grep pmd -A 9], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	packets received: 0
-	packet recirculations: 0
-	avg. datapath passes per packet: 0.00
-	emc hits: 0
-	megaflow hits: 0
-	avg. subtable lookups per megaflow hit: 0.00
-	miss with success upcall: 0
-	miss with failed upcall: 0
+  packets received: 0
+  packet recirculations: 0
+  avg. datapath passes per packet: 0.00
+  emc hits: 0
+  smc hits: 0
+  megaflow hits: 0
+  avg. subtable lookups per megaflow hit: 0.00
+  miss with success upcall: 0
+  miss with failed upcall: 0
 ])
 
 ovs-appctl time/stop
@@ -225,16 +227,17 @@ AT_CHECK([cat ovs-vswitchd.log | filter_flow_install | strip_xout], [0], [dnl
 recirc_id(0),in_port(1),packet_type(ns=0,id=0),eth(src=50:54:00:00:00:77,dst=50:54:00:00:01:78),eth_type(0x0800),ipv4(frag=no), actions: <del>
 ])
 
-AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show | sed SED_NUMA_CORE_PATTERN | sed '/cycles/d' | grep pmd -A 8], [0], [dnl
+AT_CHECK([ovs-appctl dpif-netdev/pmd-stats-show | sed SED_NUMA_CORE_PATTERN | sed '/cycles/d' | grep pmd -A 9], [0], [dnl
 pmd thread numa_id <cleared> core_id <cleared>:
-	packets received: 20
-	packet recirculations: 0
-	avg. datapath passes per packet: 1.00
-	emc hits: 19
-	megaflow hits: 0
-	avg. subtable lookups per megaflow hit: 0.00
-	miss with success upcall: 1
-	miss with failed upcall: 0
+  packets received: 20
+  packet recirculations: 0
+  avg. datapath passes per packet: 1.00
+  emc hits: 19
+  smc hits: 0
+  megaflow hits: 0
+  avg. subtable lookups per megaflow hit: 0.00
+  miss with success upcall: 1
+  miss with failed upcall: 0
 ])
 
 OVS_VSWITCHD_STOP
@@ -266,8 +269,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 AT_CHECK([ovs-vsctl set interface p1 options:n_rxq=4])
@@ -288,15 +291,15 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 dnl Check resetting to default number of rx queues after removal from the db.
 AT_CHECK([ovs-vsctl remove interface p1 options n_rxq])
 
 AT_CHECK([ovs-appctl dpif/show | grep p1 | sed 's/\(tx_queues=\)[[0-9]]*/\1<cleared>/g'], [0], [dnl
-		p1 1/1: (dummy-pmd: configured_rx_queues=1, configured_tx_queues=<cleared>, requested_rx_queues=1, requested_tx_queues=<cleared>)
+    p1 1/1: (dummy-pmd: configured_rx_queues=1, configured_tx_queues=<cleared>, requested_rx_queues=1, requested_tx_queues=<cleared>)
 ])
 
 OVS_VSWITCHD_STOP
@@ -339,10 +342,10 @@ AT_CHECK([ovs-appctl dpctl/dump-flows | flow_dump_prepend_pmd], [0], [dnl
 ])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 OVS_VSWITCHD_STOP
@@ -374,8 +377,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 AT_CHECK([ovs-ofctl monitor br0 65534 invalid_ttl --detach --no-chdir --pidfile 2> ofctl_monitor.log])
@@ -386,8 +389,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=2 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=2 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 AT_CHECK([ovs-vsctl set Interface p2 options:numa_id=1])
@@ -407,8 +410,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 AT_CHECK([ovs-ofctl monitor br0 65534 invalid_ttl --detach --no-chdir --pidfile 2> ofctl_monitor.log])
@@ -419,8 +422,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=2 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=2 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 OVS_VSWITCHD_STOP
@@ -448,8 +451,8 @@ AT_CHECK([ovs-appctl netdev-dummy/receive p2 --qid 0 'in_port(1),eth(src=50:54:0
 OVS_WAIT_UNTIL([test `ovs-pcap br0.pcap | wc -l` -ge 2])
 
 AT_CHECK([ovs-pcap br0.pcap], [0], [dnl
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
 ])
 
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=2])
@@ -467,10 +470,10 @@ AT_CHECK([ovs-appctl netdev-dummy/receive p2 --qid 0 'in_port(1),eth(src=50:54:0
 OVS_WAIT_UNTIL([test `ovs-pcap br0.pcap | wc -l` -ge 4])
 
 AT_CHECK([ovs-pcap br0.pcap], [0], [dnl
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
-50540000000a50540000000908004500001c00000000400166df0a0000020a0000010800f7ff00000000
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+50540000000a50540000000908004500005c000000004001669f0a0000020a000001080013fc00000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
 ])
 
 OVS_VSWITCHD_STOP
@@ -498,8 +501,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 AT_CHECK([ovs-vsctl del-port br0 p1])
@@ -513,8 +516,8 @@ OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 2])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:f7ff
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=106 in_port=1 (via action) data_len=106 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 icmp_csum:13fc
 ])
 
 OVS_VSWITCHD_STOP
@@ -681,11 +684,11 @@ p1 0 0 0
 
 AT_CHECK([ovs-appctl dpctl/show dummy@dp0], [0], [dnl
 dummy@dp0:
-	lookups: hit:0 missed:0 lost:0
-	flows: 0
-	port 0: dp0 (dummy-internal)
-	port 1: p1 (dummy-pmd: configured_rx_queues=1, configured_tx_queues=1, requested_rx_queues=1, requested_tx_queues=1)
-	port 2: p2 (dummy)
+  lookups: hit:0 missed:0 lost:0
+  flows: 0
+  port 0: dp0 (dummy-internal)
+  port 1: p1 (dummy-pmd: configured_rx_queues=1, configured_tx_queues=1, requested_rx_queues=1, requested_tx_queues=1)
+  port 2: p2 (dummy)
 ])
 
 AT_CHECK([ovs-appctl dpctl/add-flow dummy@dp0 'in_port(1),eth(src=00:00:00:00:00:01,dst=00:00:00:00:00:02),eth_type(0x1234)' 2], [0], [dnl

@@ -13,7 +13,6 @@ ovn/utilities/ovn-sbctl.8: \
 	lib/common.man \
 	lib/db-ctl-base.man \
 	lib/ssl-bootstrap.man \
-	lib/ssl-peer-ca-cert.man \
 	lib/ssl.man \
 	lib/table.man \
 	lib/vlog.man
@@ -21,7 +20,6 @@ ovn/utilities/ovn-sbctl.8.in:
 lib/common.man:
 lib/db-ctl-base.man:
 lib/ssl-bootstrap.man:
-lib/ssl-peer-ca-cert.man:
 lib/ssl.man:
 lib/table.man:
 lib/vlog.man:
@@ -254,10 +252,12 @@ vswitchd/ovs-vswitchd.8: \
 	lib/coverage-unixctl.man \
 	lib/daemon.man \
 	lib/dpctl.man \
+	lib/dpif-netdev-unixctl.man \
 	lib/memory-unixctl.man \
 	lib/netdev-dpdk-unixctl.man \
 	lib/service.man \
 	lib/ssl-bootstrap.man \
+	lib/ssl-peer-ca-cert.man \
 	lib/ssl.man \
 	lib/unixctl.man \
 	lib/vlog-unixctl.man \
@@ -270,10 +270,12 @@ lib/common.man:
 lib/coverage-unixctl.man:
 lib/daemon.man:
 lib/dpctl.man:
+lib/dpif-netdev-unixctl.man:
 lib/memory-unixctl.man:
 lib/netdev-dpdk-unixctl.man:
 lib/service.man:
 lib/ssl-bootstrap.man:
+lib/ssl-peer-ca-cert.man:
 lib/ssl.man:
 lib/unixctl.man:
 lib/vlog-unixctl.man:

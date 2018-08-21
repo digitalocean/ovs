@@ -91,6 +91,16 @@ VLOG_DEFINE_THIS_MODULE(ofproto_dpif_xlate);
  * recursive or not. */
 #define MAX_RESUBMITS (MAX_DEPTH * MAX_DEPTH)
 
+/* The structure holds an array of IP addresses assigned to a bridge and the
+ * number of elements in the array. These data are mutable and are evaluated
+ * when ARP or Neighbor Advertisement packets received on a native tunnel
+ * port are xlated. So 'ref_cnt' and RCU are used for synchronization. */
+struct xbridge_addr {
+    struct in6_addr *addr;        /* Array of IP addresses of xbridge. */
+    int n_addr;                   /* Number of IP addresses. */
+    struct ovs_refcount ref_cnt;
+};
+
 struct xbridge {
     struct hmap_node hmap_node;   /* Node in global 'xbridges' map. */
     struct ofproto_dpif *ofproto; /* Key in global 'xbridges' map. */
@@ -114,6 +124,8 @@ struct xbridge {
 
     /* Datapath feature support. */
     struct dpif_backer_support support;
+
+    struct xbridge_addr *addr;
 };
 
 struct xbundle {
@@ -237,7 +249,6 @@ struct xlate_ctx {
      */
     int depth;                  /* Current resubmit nesting depth. */
     int resubmits;              /* Total number of resubmits. */
-    bool in_group;              /* Currently translating ofgroup, if true. */
     bool in_action_set;         /* Currently translating action_set, if true. */
     bool in_packet_out;         /* Currently translating a packet_out msg, if
                                  * true. */
@@ -516,12 +527,12 @@ static OVSRCU_TYPE(struct xlate_cfg *) xcfgp = OVSRCU_INITIALIZER(NULL);
 static struct xlate_cfg *new_xcfg = NULL;
 
 typedef void xlate_actions_handler(const struct ofpact *, size_t ofpacts_len,
-                                   struct xlate_ctx *, bool);
+                                   struct xlate_ctx *, bool, bool);
 static bool may_receive(const struct xport *, struct xlate_ctx *);
 static void do_xlate_actions(const struct ofpact *, size_t ofpacts_len,
-                             struct xlate_ctx *, bool);
+                             struct xlate_ctx *, bool, bool);
 static void clone_xlate_actions(const struct ofpact *, size_t ofpacts_len,
-                                struct xlate_ctx *, bool);
+                                struct xlate_ctx *, bool, bool);
 static void xlate_normal(struct xlate_ctx *);
 static void xlate_table_action(struct xlate_ctx *, ofp_port_t in_port,
                                uint8_t table_id, bool may_packet_in,
@@ -584,7 +595,8 @@ static void xlate_xbridge_set(struct xbridge *, struct dpif *,
                               const struct dpif_ipfix *,
                               const struct netflow *,
                               bool forward_bpdu, bool has_in_band,
-                              const struct dpif_backer_support *);
+                              const struct dpif_backer_support *,
+                              const struct xbridge_addr *);
 static void xlate_xbundle_set(struct xbundle *xbundle,
                               enum port_vlan_mode vlan_mode,
                               uint16_t qinq_ethtype, int vlan,
@@ -702,7 +714,8 @@ xlate_report_actions(const struct xlate_ctx *ctx, enum oftrace_node_type type,
     if (OVS_UNLIKELY(ctx->xin->trace)) {
         struct ds s = DS_EMPTY_INITIALIZER;
         ds_put_format(&s, "%s: ", title);
-        ofpacts_format(ofpacts, ofpacts_len, NULL, &s);
+        struct ofpact_format_params fp = { .s = &s };
+        ofpacts_format(ofpacts, ofpacts_len, &fp);
         oftrace_report(ctx->xin->trace, type, ds_cstr(&s));
         ds_destroy(&s);
     }
@@ -723,7 +736,8 @@ xlate_report_action_set(const struct xlate_ctx *ctx, const char *verb)
         ofpacts_execute_action_set(&action_list, &ctx->action_set);
         if (action_list.size) {
             struct ds s = DS_EMPTY_INITIALIZER;
-            ofpacts_format(action_list.data, action_list.size, NULL, &s);
+            struct ofpact_format_params fp = { .s = &s };
+            ofpacts_format(action_list.data, action_list.size, &fp);
             xlate_report(ctx, OFT_DETAIL, "action set %s: %s",
                          verb, ds_cstr(&s));
             ds_destroy(&s);
@@ -836,6 +850,56 @@ xlate_xport_init(struct xlate_cfg *xcfg, struct xport *xport)
                 uuid_hash(&xport->uuid));
 }
 
+static struct xbridge_addr *
+xbridge_addr_create(struct xbridge *xbridge)
+{
+    struct xbridge_addr *xbridge_addr = xbridge->addr;
+    struct in6_addr *addr = NULL, *mask = NULL;
+    struct netdev *dev;
+    int err, n_addr = 0;
+
+    err = netdev_open(xbridge->name, NULL, &dev);
+    if (!err) {
+        err = netdev_get_addr_list(dev, &addr, &mask, &n_addr);
+        if (!err) {
+            if (!xbridge->addr ||
+                n_addr != xbridge->addr->n_addr ||
+                (xbridge->addr->addr && memcmp(addr, xbridge->addr->addr,
+                                               sizeof(*addr) * n_addr))) {
+                xbridge_addr = xzalloc(sizeof *xbridge_addr);
+                xbridge_addr->addr = addr;
+                xbridge_addr->n_addr = n_addr;
+                ovs_refcount_init(&xbridge_addr->ref_cnt);
+            } else {
+                free(addr);
+            }
+            free(mask);
+        }
+        netdev_close(dev);
+    }
+
+    return xbridge_addr;
+}
+
+static struct xbridge_addr *
+xbridge_addr_ref(const struct xbridge_addr *addr_)
+{
+    struct xbridge_addr *addr = CONST_CAST(struct xbridge_addr *, addr_);
+    if (addr) {
+        ovs_refcount_ref(&addr->ref_cnt);
+    }
+    return addr;
+}
+
+static void
+xbridge_addr_unref(struct xbridge_addr *addr)
+{
+    if (addr && ovs_refcount_unref_relaxed(&addr->ref_cnt) == 1) {
+        free(addr->addr);
+        free(addr);
+    }
+}
+
 static void
 xlate_xbridge_set(struct xbridge *xbridge,
                   struct dpif *dpif,
@@ -846,7 +910,8 @@ xlate_xbridge_set(struct xbridge *xbridge,
                   const struct dpif_ipfix *ipfix,
                   const struct netflow *netflow,
                   bool forward_bpdu, bool has_in_band,
-                  const struct dpif_backer_support *support)
+                  const struct dpif_backer_support *support,
+                  const struct xbridge_addr *addr)
 {
     if (xbridge->ml != ml) {
         mac_learning_unref(xbridge->ml);
@@ -886,6 +951,11 @@ xlate_xbridge_set(struct xbridge *xbridge,
     if (xbridge->netflow != netflow) {
         netflow_unref(xbridge->netflow);
         xbridge->netflow = netflow_ref(netflow);
+    }
+
+    if (xbridge->addr != addr) {
+        xbridge_addr_unref(xbridge->addr);
+        xbridge->addr = xbridge_addr_ref(addr);
     }
 
     xbridge->dpif = dpif;
@@ -981,7 +1051,7 @@ xlate_xbridge_copy(struct xbridge *xbridge)
                       xbridge->rstp, xbridge->ms, xbridge->mbridge,
                       xbridge->sflow, xbridge->ipfix, xbridge->netflow,
                       xbridge->forward_bpdu, xbridge->has_in_band,
-                      &xbridge->support);
+                      &xbridge->support, xbridge->addr);
     LIST_FOR_EACH (xbundle, list_node, &xbridge->xbundles) {
         xlate_xbundle_copy(new_xbridge, xbundle);
     }
@@ -1139,6 +1209,7 @@ xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
                   const struct dpif_backer_support *support)
 {
     struct xbridge *xbridge;
+    struct xbridge_addr *xbridge_addr, *old_addr;
 
     ovs_assert(new_xcfg);
 
@@ -1153,8 +1224,16 @@ xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
     free(xbridge->name);
     xbridge->name = xstrdup(name);
 
+    xbridge_addr = xbridge_addr_create(xbridge);
+    old_addr = xbridge->addr;
+
     xlate_xbridge_set(xbridge, dpif, ml, stp, rstp, ms, mbridge, sflow, ipfix,
-                      netflow, forward_bpdu, has_in_band, support);
+                      netflow, forward_bpdu, has_in_band, support,
+                      xbridge_addr);
+
+    if (xbridge_addr != old_addr) {
+        xbridge_addr_unref(xbridge_addr);
+    }
 }
 
 static void
@@ -1184,6 +1263,7 @@ xlate_xbridge_remove(struct xlate_cfg *xcfg, struct xbridge *xbridge)
     netflow_unref(xbridge->netflow);
     stp_unref(xbridge->stp);
     rstp_unref(xbridge->rstp);
+    xbridge_addr_unref(xbridge->addr);
     hmap_destroy(&xbridge->xports);
     free(xbridge->name);
     free(xbridge);
@@ -1748,6 +1828,30 @@ bucket_is_alive(const struct xlate_ctx *ctx,
                && group_is_alive(ctx, bucket->watch_group, depth + 1)));
 }
 
+static void
+xlate_report_bucket_not_live(const struct xlate_ctx *ctx,
+                             const struct ofputil_bucket *bucket)
+{
+    if (OVS_UNLIKELY(ctx->xin->trace)) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        if (bucket->watch_port != OFPP_ANY) {
+            ds_put_cstr(&s, "port ");
+            ofputil_format_port(bucket->watch_port, NULL, &s);
+        }
+        if (bucket->watch_group != OFPG_ANY) {
+            if (s.length) {
+                ds_put_cstr(&s, " and ");
+            }
+            ds_put_format(&s, "port %"PRIu32, bucket->watch_group);
+        }
+
+        xlate_report(ctx, OFT_DETAIL, "bucket %"PRIu32": not live due to %s",
+                     bucket->bucket_id, ds_cstr(&s));
+
+        ds_destroy(&s);
+    }
+}
+
 static struct ofputil_bucket *
 group_first_live_bucket(const struct xlate_ctx *ctx,
                         const struct group_dpif *group, int depth)
@@ -1757,6 +1861,7 @@ group_first_live_bucket(const struct xlate_ctx *ctx,
         if (bucket_is_alive(ctx, bucket, depth)) {
             return bucket;
         }
+        xlate_report_bucket_not_live(ctx, bucket);
     }
 
     return NULL;
@@ -1779,6 +1884,10 @@ group_best_live_bucket(const struct xlate_ctx *ctx,
                 best_bucket = bucket;
                 best_score = score;
             }
+            xlate_report(ctx, OFT_DETAIL, "bucket %"PRIu32": score %"PRIu32,
+                         bucket->bucket_id, score);
+        } else {
+            xlate_report_bucket_not_live(ctx, bucket);
         }
     }
 
@@ -1942,10 +2051,9 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         int snaplen;
 
         /* Get the details of the mirror represented by the rightmost 1-bit. */
-        bool has_mirror = mirror_get(xbridge->mbridge, raw_ctz(mirrors),
-                                     &vlans, &dup_mirrors,
-                                     &out, &snaplen, &out_vlan);
-        ovs_assert(has_mirror);
+        ovs_assert(mirror_get(xbridge->mbridge, raw_ctz(mirrors),
+                              &vlans, &dup_mirrors,
+                              &out, &snaplen, &out_vlan));
 
 
         /* If this mirror selects on the basis of VLAN, and it does not select
@@ -2950,10 +3058,11 @@ compose_sample_action(struct xlate_ctx *ctx,
         ctx->xbridge, ctx->xin->flow.in_port.ofp_port);
     uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port,
                                      flow_hash_5tuple(&ctx->xin->flow, 0));
-    int cookie_offset = odp_put_userspace_action(pid, cookie, sizeof *cookie,
-                                                 tunnel_out_port,
-                                                 include_actions,
-                                                 ctx->odp_actions);
+    size_t cookie_offset = odp_put_userspace_action(pid, cookie,
+                                                    sizeof *cookie,
+                                                    tunnel_out_port,
+                                                    include_actions,
+                                                    ctx->odp_actions);
 
     if (is_sample) {
         nl_msg_end_nested(ctx->odp_actions, actions_offset);
@@ -3267,6 +3376,9 @@ propagate_tunnel_data_to_flow(struct xlate_ctx *ctx, struct eth_addr dmac,
 
     switch (tnl_type) {
     case OVS_VPORT_TYPE_GRE:
+    case OVS_VPORT_TYPE_ERSPAN:
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+    case OVS_VPORT_TYPE_IP6GRE:
         nw_proto = IPPROTO_GRE;
         break;
     case OVS_VPORT_TYPE_VXLAN:
@@ -3319,6 +3431,10 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
     /* Backup flow & base_flow data. */
     memcpy(&old_base_flow, &ctx->base_flow, sizeof old_base_flow);
     memcpy(&old_flow, &ctx->xin->flow, sizeof old_flow);
+
+    if (flow->tunnel.ip_src) {
+        in6_addr_set_mapped_ipv4(&s_ip6, flow->tunnel.ip_src);
+    }
 
     err = tnl_route_lookup_flow(ctx, flow, &d_ip6, &s_ip6, &out_dev);
     if (err) {
@@ -3705,6 +3821,54 @@ check_output_prerequisites(struct xlate_ctx *ctx,
     return true;
 }
 
+/* Function verifies if destination address of received Neighbor Advertisement
+ * message stored in 'flow' is correct. It should be either FF02::1:FFXX:XXXX
+ * where XX:XXXX stands for the last 24 bits of 'ipv6_addr' or it should match
+ * 'ipv6_addr'. */
+static bool
+is_nd_dst_correct(const struct flow *flow, const struct in6_addr *ipv6_addr)
+{
+    const uint8_t *flow_ipv6_addr = (uint8_t *) &flow->ipv6_dst;
+    const uint8_t *addr = (uint8_t *) ipv6_addr;
+
+    return (IN6_IS_ADDR_MC_LINKLOCAL(&flow->ipv6_dst) &&
+            flow_ipv6_addr[11] == 0x01 &&
+            flow_ipv6_addr[12] == 0xff &&
+            flow_ipv6_addr[13] == addr[13] &&
+            flow_ipv6_addr[14] == addr[14] &&
+            flow_ipv6_addr[15] == addr[15]) ||
+            IN6_ARE_ADDR_EQUAL(&flow->ipv6_dst, ipv6_addr);
+}
+
+/* Function verifies if the ARP reply or Neighbor Advertisement represented by
+ * 'flow' addresses the 'xbridge' of 'ctx'. Returns true if the ARP TA or
+ * neighbor discovery destination is in the list of configured IP addresses of
+ * the bridge. Otherwise, it returns false. */
+static bool
+is_neighbor_reply_correct(const struct xlate_ctx *ctx, const struct flow *flow)
+{
+    bool ret = false;
+    int i;
+    struct xbridge_addr *xbridge_addr = xbridge_addr_ref(ctx->xbridge->addr);
+
+    /* Verify if 'nw_dst' of ARP or 'ipv6_dst' of ICMPV6 is in the list. */
+    for (i = 0; xbridge_addr && i < xbridge_addr->n_addr; i++) {
+        struct in6_addr *ip_addr = &xbridge_addr->addr[i];
+        if ((IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+             flow->dl_type == htons(ETH_TYPE_ARP) &&
+             in6_addr_get_mapped_ipv4(ip_addr) == flow->nw_dst) ||
+            (!IN6_IS_ADDR_V4MAPPED(ip_addr) &&
+              is_nd_dst_correct(flow, ip_addr))) {
+            /* Found a match. */
+            ret = true;
+            break;
+        }
+    }
+
+    xbridge_addr_unref(xbridge_addr);
+    return ret;
+}
+
 static bool
 terminate_native_tunnel(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                         struct flow *flow, struct flow_wildcards *wc,
@@ -3717,6 +3881,15 @@ terminate_native_tunnel(struct xlate_ctx *ctx, ofp_port_t ofp_port,
     if (ofp_port == OFPP_LOCAL &&
         ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
         *tnl_port = tnl_port_map_lookup(flow, wc);
+
+        /* If no tunnel port was found and it's about an ARP or ICMPv6 packet,
+         * do tunnel neighbor snooping. */
+        if (*tnl_port == ODPP_NONE &&
+            (flow->dl_type == htons(ETH_TYPE_ARP) ||
+             flow->nw_proto == IPPROTO_ICMPV6) &&
+             is_neighbor_reply_correct(ctx, flow)) {
+            tnl_neigh_snoop(flow, wc, ctx->xbridge->name);
+        }
     }
 
     return *tnl_port != ODPP_NONE;
@@ -3743,7 +3916,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
     /* If 'struct flow' gets additional metadata, we'll need to zero it out
      * before traversing a patch port. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
     memset(&flow_tnl, 0, sizeof flow_tnl);
 
     if (!check_output_prerequisites(ctx, xport, flow, check_stp)) {
@@ -3831,10 +4004,15 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             struct ovs_action_hash *act_hash;
 
             /* Hash action. */
+            enum ovs_hash_alg hash_alg = xr->hash_alg;
+            if (hash_alg > ctx->xbridge->support.max_hash_alg) {
+                /* Algorithm supported by all datapaths. */
+                hash_alg = OVS_HASH_ALG_L4;
+            }
             act_hash = nl_msg_put_unspec_uninit(ctx->odp_actions,
                                                 OVS_ACTION_ATTR_HASH,
                                                 sizeof *act_hash);
-            act_hash->hash_alg = xr->hash_alg;
+            act_hash->hash_alg = hash_alg;
             act_hash->hash_basis = xr->hash_basis;
 
             /* Recirc action. */
@@ -3925,7 +4103,7 @@ xlate_recursively(struct xlate_ctx *ctx, struct rule_dpif *rule,
     ctx->rule_cookie = rule->up.flow_cookie;
     actions = rule_get_actions(&rule->up);
     actions_xlator(actions->ofpacts, actions->ofpacts_len, ctx,
-                   is_last_action);
+                   is_last_action, false);
     ctx->rule_cookie = old_cookie;
     ctx->rule = old_rule;
     ctx->depth -= deepens;
@@ -4083,6 +4261,14 @@ static void
 xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket,
                    bool is_last_action)
 {
+    struct ovs_list *old_trace = ctx->xin->trace;
+    if (OVS_UNLIKELY(ctx->xin->trace)) {
+        char *s = xasprintf("bucket %"PRIu32, bucket->bucket_id);
+        ctx->xin->trace = &oftrace_report(ctx->xin->trace, OFT_BUCKET,
+                                          s)->subs;
+        free(s);
+    }
+
     uint64_t action_list_stub[1024 / 8];
     struct ofpbuf action_list = OFPBUF_STUB_INITIALIZER(action_list_stub);
     struct ofpbuf action_set = ofpbuf_const_initializer(bucket->ofpacts,
@@ -4092,7 +4278,8 @@ xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket,
 
     ofpacts_execute_action_set(&action_list, &action_set);
     ctx->depth++;
-    do_xlate_actions(action_list.data, action_list.size, ctx, is_last_action);
+    do_xlate_actions(action_list.data, action_list.size, ctx, is_last_action,
+                     true);
     ctx->depth--;
 
     ofpbuf_uninit(&action_list);
@@ -4143,57 +4330,27 @@ xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket,
         /* reset the error and continue processing other buckets */
         ctx->error = XLATE_OK;
     }
+
+    ctx->xin->trace = old_trace;
 }
 
-static void
-xlate_all_group(struct xlate_ctx *ctx, struct group_dpif *group,
-                bool is_last_action)
+static struct ofputil_bucket *
+pick_ff_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
-    struct ofputil_bucket *bucket;
-    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
-        bool last = is_last_action && !bucket->list_node.next;
-        xlate_group_bucket(ctx, bucket, last);
-    }
-    xlate_group_stats(ctx, group, NULL);
+    return group_first_live_bucket(ctx, group, 0);
 }
 
-static void
-xlate_ff_group(struct xlate_ctx *ctx, struct group_dpif *group,
-               bool is_last_action)
+static struct ofputil_bucket *
+pick_default_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
-    struct ofputil_bucket *bucket;
-
-    bucket = group_first_live_bucket(ctx, group, 0);
-    if (bucket) {
-        xlate_group_bucket(ctx, bucket, is_last_action);
-        xlate_group_stats(ctx, group, bucket);
-    } else if (ctx->xin->xcache) {
-        ofproto_group_unref(&group->up);
-    }
+    flow_mask_hash_fields(&ctx->xin->flow, ctx->wc,
+                          NX_HASH_FIELDS_SYMMETRIC_L4);
+    return group_best_live_bucket(ctx, group,
+                                  flow_hash_symmetric_l4(&ctx->xin->flow, 0));
 }
 
-static void
-xlate_default_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
-                           bool is_last_action)
-{
-    struct flow_wildcards *wc = ctx->wc;
-    struct ofputil_bucket *bucket;
-    uint32_t basis;
-
-    basis = flow_hash_symmetric_l4(&ctx->xin->flow, 0);
-    flow_mask_hash_fields(&ctx->xin->flow, wc, NX_HASH_FIELDS_SYMMETRIC_L4);
-    bucket = group_best_live_bucket(ctx, group, basis);
-    if (bucket) {
-        xlate_group_bucket(ctx, bucket, is_last_action);
-        xlate_group_stats(ctx, group, bucket);
-    } else if (ctx->xin->xcache) {
-        ofproto_group_unref(&group->up);
-    }
-}
-
-static void
-xlate_hash_fields_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
-                               bool is_last_action)
+static struct ofputil_bucket *
+pick_hash_fields_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
     const struct field_array *fields = &group->up.props.fields;
     const uint8_t *mask_values = fields->values;
@@ -4229,54 +4386,50 @@ xlate_hash_fields_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
         mf_mask_field_masked(mf, &mask, ctx->wc);
     }
 
-    struct ofputil_bucket *bucket = group_best_live_bucket(ctx, group, basis);
-    if (bucket) {
-        xlate_group_bucket(ctx, bucket, is_last_action);
-        xlate_group_stats(ctx, group, bucket);
-    } else if (ctx->xin->xcache) {
-        ofproto_group_unref(&group->up);
-    }
+    return group_best_live_bucket(ctx, group, basis);
 }
 
-static void
-xlate_dp_hash_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
-                           bool is_last_action)
+static struct ofputil_bucket *
+pick_dp_hash_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
-    struct ofputil_bucket *bucket;
+    uint32_t dp_hash = ctx->xin->flow.dp_hash;
 
     /* dp_hash value 0 is special since it means that the dp_hash has not been
      * computed, as all computed dp_hash values are non-zero.  Therefore
      * compare to zero can be used to decide if the dp_hash value is valid
      * without masking the dp_hash field. */
-    if (!ctx->xin->flow.dp_hash) {
-        uint64_t param = group->up.props.selection_method_param;
-
-        ctx_trigger_recirculate_with_hash(ctx, param >> 32, (uint32_t)param);
+    if (!dp_hash) {
+        enum ovs_hash_alg hash_alg = group->hash_alg;
+        if (hash_alg > ctx->xbridge->support.max_hash_alg) {
+            /* Algorithm supported by all datapaths. */
+            hash_alg = OVS_HASH_ALG_L4;
+        }
+        ctx_trigger_recirculate_with_hash(ctx, hash_alg, group->hash_basis);
+        return NULL;
     } else {
-        uint32_t n_buckets = group->up.n_buckets;
-        if (n_buckets) {
-            /* Minimal mask to cover the number of buckets. */
-            uint32_t mask = (1 << log_2_ceil(n_buckets)) - 1;
-            /* Multiplier chosen to make the trivial 1 bit case to
-             * actually distribute amongst two equal weight buckets. */
-            uint32_t basis = 0xc2b73583 * (ctx->xin->flow.dp_hash & mask);
+        uint32_t hash_mask = group->hash_mask;
+        ctx->wc->masks.dp_hash |= hash_mask;
 
-            ctx->wc->masks.dp_hash |= mask;
-            bucket = group_best_live_bucket(ctx, group, basis);
-            if (bucket) {
-                xlate_group_bucket(ctx, bucket, is_last_action);
-                xlate_group_stats(ctx, group, bucket);
+        /* Starting from the original masked dp_hash value iterate over the
+         * hash mapping table to find the first live bucket. As the buckets
+         * are quasi-randomly spread over the hash values, this maintains
+         * a distribution according to bucket weights even when some buckets
+         * are non-live. */
+        for (int i = 0; i <= hash_mask; i++) {
+            struct ofputil_bucket *b =
+                    group->hash_map[(dp_hash + i) & hash_mask];
+            if (bucket_is_alive(ctx, b, 0)) {
+                return b;
             }
         }
+
+        return NULL;
     }
 }
 
-static void
-xlate_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
-                   bool is_last_action)
+static struct ofputil_bucket *
+pick_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
 {
-    const char *selection_method = group->up.props.selection_method;
-
     /* Select groups may access flow keys beyond L2 in order to
      * select a bucket. Recirculate as appropriate to make this possible.
      */
@@ -4284,41 +4437,58 @@ xlate_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
         ctx_trigger_freeze(ctx);
     }
 
-    if (selection_method[0] == '\0') {
-        xlate_default_select_group(ctx, group, is_last_action);
-    } else if (!strcasecmp("hash", selection_method)) {
-        xlate_hash_fields_select_group(ctx, group, is_last_action);
-    } else if (!strcasecmp("dp_hash", selection_method)) {
-        xlate_dp_hash_select_group(ctx, group, is_last_action);
-    } else {
-        /* Parsing of groups should ensure this never happens */
+    switch (group->selection_method) {
+    case SEL_METHOD_DEFAULT:
+        return pick_default_select_group(ctx, group);
+        break;
+    case SEL_METHOD_HASH:
+        return pick_hash_fields_select_group(ctx, group);
+        break;
+    case SEL_METHOD_DP_HASH:
+        return pick_dp_hash_select_group(ctx, group);
+        break;
+    default:
+        /* Parsing of groups ensures this never happens */
         OVS_NOT_REACHED();
     }
+
+    return NULL;
 }
 
 static void
 xlate_group_action__(struct xlate_ctx *ctx, struct group_dpif *group,
                      bool is_last_action)
 {
-    bool was_in_group = ctx->in_group;
-    ctx->in_group = true;
+    if (group->up.type == OFPGT11_ALL || group->up.type == OFPGT11_INDIRECT) {
+        struct ovs_list *last_bucket = ovs_list_back(&group->up.buckets);
+        struct ofputil_bucket *bucket;
+        LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+            bool is_last_bucket = &bucket->list_node == last_bucket;
+            xlate_group_bucket(ctx, bucket, is_last_action && is_last_bucket);
+        }
+        xlate_group_stats(ctx, group, NULL);
+    } else {
+        struct ofputil_bucket *bucket;
+        if (group->up.type == OFPGT11_SELECT) {
+            bucket = pick_select_group(ctx, group);
+        } else if (group->up.type == OFPGT11_FF) {
+            bucket = pick_ff_group(ctx, group);
+        } else {
+            OVS_NOT_REACHED();
+        }
 
-    switch (group->up.type) {
-    case OFPGT11_ALL:
-    case OFPGT11_INDIRECT:
-        xlate_all_group(ctx, group, is_last_action);
-        break;
-    case OFPGT11_SELECT:
-        xlate_select_group(ctx, group, is_last_action);
-        break;
-    case OFPGT11_FF:
-        xlate_ff_group(ctx, group, is_last_action);
-        break;
-    default:
-        OVS_NOT_REACHED();
+        if (bucket) {
+            xlate_report(ctx, OFT_DETAIL, "using bucket %"PRIu32,
+                         bucket->bucket_id);
+            xlate_group_bucket(ctx, bucket, is_last_action);
+            xlate_group_stats(ctx, group, bucket);
+        } else {
+            xlate_report(ctx, OFT_DETAIL, "no live bucket");
+            if (ctx->xin->xcache) {
+                ofproto_group_unref(&group->up);
+            }
+        }
     }
-
-    ctx->in_group = was_in_group;
 }
 
 static bool
@@ -4449,6 +4619,7 @@ static void
 xlate_controller_action(struct xlate_ctx *ctx, int len,
                         enum ofp_packet_in_reason reason,
                         uint16_t controller_id,
+                        uint32_t provider_meter_id,
                         const uint8_t *userdata, size_t userdata_len)
 {
     xlate_commit_actions(ctx);
@@ -4485,9 +4656,21 @@ xlate_controller_action(struct xlate_ctx *ctx, int len,
     }
     recirc_refs_add(&ctx->xout->recircs, recirc_id);
 
+    /* If the controller action didn't request a meter (indicated by a
+     * 'meter_id' argument other than NX_CTLR_NO_METER), see if one was
+     * configured through the "controller" virtual meter.
+     *
+     * Internally, ovs-vswitchd uses UINT32_MAX to indicate no meter is
+     * configured. */
+    uint32_t meter_id;
+    if (provider_meter_id == UINT32_MAX) {
+        meter_id = ctx->xbridge->ofproto->up.controller_meter_id;
+    } else {
+        meter_id = provider_meter_id;
+    }
+
     size_t offset;
     size_t ac_offset;
-    uint32_t meter_id = ctx->xbridge->ofproto->up.controller_meter_id;
     if (meter_id != UINT32_MAX) {
         /* If controller meter is configured, generate clone(meter, userspace)
          * action. */
@@ -4571,8 +4754,8 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
             act_hash = nl_msg_put_unspec_uninit(ctx->odp_actions,
                                                 OVS_ACTION_ATTR_HASH,
                                                 sizeof *act_hash);
-            act_hash->hash_alg = OVS_HASH_ALG_L4;  /* Make configurable. */
-            act_hash->hash_basis = 0;              /* Make configurable. */
+            act_hash->hash_alg = ctx->dp_hash_alg;
+            act_hash->hash_basis = ctx->dp_hash_basis;
         }
         nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC, recirc_id);
     }
@@ -4682,7 +4865,7 @@ compose_dec_ttl(struct xlate_ctx *ctx, struct ofpact_cnt_ids *ids)
 
         for (i = 0; i < ids->n_controllers; i++) {
             xlate_controller_action(ctx, UINT16_MAX, OFPR_INVALID_TTL,
-                                    ids->cnt_ids[i], NULL, 0);
+                                    ids->cnt_ids[i], UINT32_MAX, NULL, 0);
         }
 
         /* Stop processing for current table. */
@@ -4723,7 +4906,7 @@ compose_dec_nsh_ttl_action(struct xlate_ctx *ctx)
             return false;
         } else {
             xlate_controller_action(ctx, UINT16_MAX, OFPR_INVALID_TTL,
-                                    0, NULL, 0);
+                                    0, UINT32_MAX, NULL, 0);
         }
     }
 
@@ -4756,7 +4939,7 @@ compose_dec_mpls_ttl_action(struct xlate_ctx *ctx)
             return false;
         } else {
             xlate_controller_action(ctx, UINT16_MAX, OFPR_INVALID_TTL, 0,
-                                    NULL, 0);
+                                    UINT32_MAX, NULL, 0);
         }
     }
 
@@ -4783,7 +4966,8 @@ compose_dec_mpls_ttl_action(struct xlate_ctx *ctx)
 static void
 xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
                     uint16_t controller_len, bool may_packet_in,
-                    bool is_last_action, bool truncate)
+                    bool is_last_action, bool truncate,
+                    bool group_bucket_action)
 {
     ofp_port_t prev_nf_output_iface = ctx->nf_output_iface;
 
@@ -4811,10 +4995,10 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
     case OFPP_CONTROLLER:
         xlate_controller_action(ctx, controller_len,
                                 (ctx->in_packet_out ? OFPR_PACKET_OUT
-                                 : ctx->in_group ? OFPR_GROUP
+                                 : group_bucket_action ? OFPR_GROUP
                                  : ctx->in_action_set ? OFPR_ACTION_SET
                                  : OFPR_ACTION),
-                                0, NULL, 0);
+                                0, UINT32_MAX, NULL, 0);
         break;
     case OFPP_NONE:
         break;
@@ -4841,7 +5025,8 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
 static void
 xlate_output_reg_action(struct xlate_ctx *ctx,
                         const struct ofpact_output_reg *or,
-                        bool is_last_action)
+                        bool is_last_action,
+                        bool group_bucket_action)
 {
     uint64_t port = mf_get_subfield(&or->src, &ctx->xin->flow);
     if (port <= UINT16_MAX) {
@@ -4852,7 +5037,8 @@ xlate_output_reg_action(struct xlate_ctx *ctx,
         memset(&value, 0xff, sizeof value);
         mf_write_subfield_flow(&or->src, &value, &ctx->wc->masks);
         xlate_output_action(ctx, u16_to_ofp(port), or->max_len,
-                            false, is_last_action, false);
+                            false, is_last_action, false,
+                            group_bucket_action);
     } else {
         xlate_report(ctx, OFT_WARN, "output port %"PRIu64" is out of range",
                      port);
@@ -4862,7 +5048,8 @@ xlate_output_reg_action(struct xlate_ctx *ctx,
 static void
 xlate_output_trunc_action(struct xlate_ctx *ctx,
                     ofp_port_t port, uint32_t max_len,
-                    bool is_last_action)
+                    bool is_last_action,
+                    bool group_bucket_action)
 {
     bool support_trunc = ctx->xbridge->support.trunc;
     struct ovs_action_trunc *trunc;
@@ -4899,7 +5086,8 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
                                 OVS_ACTION_ATTR_TRUNC,
                                 sizeof *trunc);
             trunc->max_len = max_len;
-            xlate_output_action(ctx, port, 0, false, is_last_action, true);
+            xlate_output_action(ctx, port, 0, false, is_last_action, true,
+                                group_bucket_action);
             if (!support_trunc) {
                 ctx->xout->slow |= SLOW_ACTION;
             }
@@ -4913,7 +5101,8 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
 static void
 xlate_enqueue_action(struct xlate_ctx *ctx,
                      const struct ofpact_enqueue *enqueue,
-                     bool is_last_action)
+                     bool is_last_action,
+                     bool group_bucket_action)
 {
     ofp_port_t ofp_port = enqueue->port;
     uint32_t queue_id = enqueue->queue;
@@ -4925,7 +5114,8 @@ xlate_enqueue_action(struct xlate_ctx *ctx,
     if (error) {
         /* Fall back to ordinary output action. */
         xlate_output_action(ctx, enqueue->port, 0, false,
-                            is_last_action, false);
+                            is_last_action, false,
+                            group_bucket_action);
         return;
     }
 
@@ -4988,7 +5178,8 @@ slave_enabled_cb(ofp_port_t ofp_port, void *xbridge_)
 static void
 xlate_bundle_action(struct xlate_ctx *ctx,
                     const struct ofpact_bundle *bundle,
-                    bool is_last_action)
+                    bool is_last_action,
+                    bool group_bucket_action)
 {
     ofp_port_t port;
 
@@ -4998,7 +5189,8 @@ xlate_bundle_action(struct xlate_ctx *ctx,
         nxm_reg_load(&bundle->dst, ofp_to_u16(port), &ctx->xin->flow, ctx->wc);
         xlate_report_subfield(ctx, &bundle->dst);
     } else {
-        xlate_output_action(ctx, port, 0, false, is_last_action, false);
+        xlate_output_action(ctx, port, 0, false, is_last_action, false,
+                            group_bucket_action);
     }
 }
 
@@ -5025,7 +5217,9 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
         if (OVS_UNLIKELY(ctx->xin->trace)) {
             struct ds s = DS_EMPTY_INITIALIZER;
             ds_put_format(&s, "table=%"PRIu8" ", fm.table_id);
-            match_format(&fm.match, NULL, &s, OFP_DEFAULT_PRIORITY);
+            minimatch_format(&fm.match,
+                             ofproto_get_tun_tab(&ctx->xin->ofproto->up),
+                             NULL, &s, OFP_DEFAULT_PRIORITY);
             ds_chomp(&s, ' ');
             ds_put_format(&s, " priority=%d", fm.priority);
             if (fm.new_cookie) {
@@ -5041,7 +5235,8 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
                 ds_put_cstr(&s, " send_flow_rem");
             }
             ds_put_cstr(&s, " actions=");
-            ofpacts_format(fm.ofpacts, fm.ofpacts_len, NULL, &s);
+            struct ofpact_format_params fp = { .s = &s };
+            ofpacts_format(fm.ofpacts, fm.ofpacts_len, &fp);
             xlate_report(ctx, OFT_DETAIL, "%s", ds_cstr(&s));
             ds_destroy(&s);
         }
@@ -5095,6 +5290,8 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
             xlate_report_error(ctx, "LEARN action execution failed (%s).",
                                ofperr_to_string(error));
         }
+
+        minimatch_destroy(&fm.match);
     } else {
         xlate_report(ctx, OFT_WARN,
                      "suppressing side effects, so learn action ignored");
@@ -5292,7 +5489,8 @@ reversible_actions(const struct ofpact *ofpacts, size_t ofpacts_len)
 
 static void
 clone_xlate_actions(const struct ofpact *actions, size_t actions_len,
-                    struct xlate_ctx *ctx, bool is_last_action)
+                    struct xlate_ctx *ctx, bool is_last_action,
+                    bool group_bucket_action OVS_UNUSED)
 {
     struct ofpbuf old_stack = ctx->stack;
     union mf_subvalue new_stack[1024 / sizeof(union mf_subvalue)];
@@ -5309,7 +5507,7 @@ clone_xlate_actions(const struct ofpact *actions, size_t actions_len,
 
     if (reversible_actions(actions, actions_len) || is_last_action) {
         old_flow = ctx->xin->flow;
-        do_xlate_actions(actions, actions_len, ctx, is_last_action);
+        do_xlate_actions(actions, actions_len, ctx, is_last_action, false);
         if (!ctx->freezing) {
             xlate_action_set(ctx);
         }
@@ -5333,7 +5531,7 @@ clone_xlate_actions(const struct ofpact *actions, size_t actions_len,
     if (ctx->xbridge->support.clone) { /* Use clone action */
         /* Use clone action as datapath clone. */
         offset = nl_msg_start_nested(ctx->odp_actions, OVS_ACTION_ATTR_CLONE);
-        do_xlate_actions(actions, actions_len, ctx, true);
+        do_xlate_actions(actions, actions_len, ctx, true, false);
         if (!ctx->freezing) {
             xlate_action_set(ctx);
         }
@@ -5349,7 +5547,7 @@ clone_xlate_actions(const struct ofpact *actions, size_t actions_len,
         offset = nl_msg_start_nested(ctx->odp_actions, OVS_ACTION_ATTR_SAMPLE);
         ac_offset = nl_msg_start_nested(ctx->odp_actions,
                                         OVS_SAMPLE_ATTR_ACTIONS);
-        do_xlate_actions(actions, actions_len, ctx, true);
+        do_xlate_actions(actions, actions_len, ctx, true, false);
         if (!ctx->freezing) {
             xlate_action_set(ctx);
         }
@@ -5396,7 +5594,8 @@ compose_clone(struct xlate_ctx *ctx, const struct ofpact_nest *oc,
 {
     size_t oc_actions_len = ofpact_nest_get_action_len(oc);
 
-    clone_xlate_actions(oc->actions, oc_actions_len, ctx, is_last_action);
+    clone_xlate_actions(oc->actions, oc_actions_len, ctx, is_last_action,
+                        false);
 }
 
 static void
@@ -5478,7 +5677,7 @@ xlate_action_set(struct xlate_ctx *ctx)
         struct ovs_list *old_trace = ctx->xin->trace;
         ctx->xin->trace = xlate_report(ctx, OFT_TABLE,
                                        "--. Executing action set:");
-        do_xlate_actions(action_list.data, action_list.size, ctx, true);
+        do_xlate_actions(action_list.data, action_list.size, ctx, true, false);
         ctx->xin->trace = old_trace;
 
         ctx->in_action_set = false;
@@ -5721,7 +5920,7 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
     ctx->wc->masks.ct_mark = 0;
     ctx->wc->masks.ct_label = OVS_U128_ZERO;
     do_xlate_actions(ofc->actions, ofpact_ct_get_action_len(ofc), ctx,
-                     is_last_action);
+                     is_last_action, false);
 
     if (ofc->zone_src.field) {
         zone = mf_get_subfield(&ofc->zone_src, &ctx->xin->flow);
@@ -5757,6 +5956,8 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
     /* The ct_* fields are only available in the scope of the 'recirc_table'
      * call chain. */
     flow_clear_conntrack(&ctx->xin->flow);
+    xlate_report(ctx, OFT_DETAIL, "Sets the packet to an untracked state, "
+                 "and clears all the conntrack fields.");
     ctx->conntracked = false;
 }
 
@@ -6131,15 +6332,13 @@ xlate_ofpact_unroll_xlate(struct xlate_ctx *ctx,
 
 static void
 do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
-                 struct xlate_ctx *ctx, bool is_last_action)
+                 struct xlate_ctx *ctx, bool is_last_action,
+                 bool group_bucket_action)
 {
     struct flow_wildcards *wc = ctx->wc;
     struct flow *flow = &ctx->xin->flow;
     const struct ofpact *a;
 
-    if (ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
-        tnl_neigh_snoop(flow, wc, ctx->xbridge->name);
-    }
     /* dl_type already in the mask, not set below. */
 
     if (!ofpacts_len) {
@@ -6173,7 +6372,8 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         if (OVS_UNLIKELY(ctx->xin->trace)) {
             struct ds s = DS_EMPTY_INITIALIZER;
-            ofpacts_format(a, OFPACT_ALIGN(a->len), NULL, &s);
+            struct ofpact_format_params fp = { .s = &s };
+            ofpacts_format(a, OFPACT_ALIGN(a->len), &fp);
             xlate_report(ctx, OFT_ACTION, "%s", ds_cstr(&s));
             ds_destroy(&s);
         }
@@ -6182,7 +6382,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         case OFPACT_OUTPUT:
             xlate_output_action(ctx, ofpact_get_OUTPUT(a)->port,
                                 ofpact_get_OUTPUT(a)->max_len, true, last,
-                                false);
+                                false, group_bucket_action);
             break;
 
         case OFPACT_GROUP:
@@ -6205,6 +6405,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                 xlate_controller_action(ctx, controller->max_len,
                                         controller->reason,
                                         controller->controller_id,
+                                        controller->provider_meter_id,
                                         controller->userdata,
                                         controller->userdata_len);
             }
@@ -6213,7 +6414,8 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         case OFPACT_ENQUEUE:
             memset(&wc->masks.skb_priority, 0xff,
                    sizeof wc->masks.skb_priority);
-            xlate_enqueue_action(ctx, ofpact_get_ENQUEUE(a), last);
+            xlate_enqueue_action(ctx, ofpact_get_ENQUEUE(a), last,
+                                 group_bucket_action);
             break;
 
         case OFPACT_SET_VLAN_VID:
@@ -6429,16 +6631,19 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
 
         case OFPACT_BUNDLE:
-            xlate_bundle_action(ctx, ofpact_get_BUNDLE(a), last);
+            xlate_bundle_action(ctx, ofpact_get_BUNDLE(a), last,
+                                group_bucket_action);
             break;
 
         case OFPACT_OUTPUT_REG:
-            xlate_output_reg_action(ctx, ofpact_get_OUTPUT_REG(a), last);
+            xlate_output_reg_action(ctx, ofpact_get_OUTPUT_REG(a), last,
+                    group_bucket_action);
             break;
 
         case OFPACT_OUTPUT_TRUNC:
             xlate_output_trunc_action(ctx, ofpact_get_OUTPUT_TRUNC(a)->port,
-                                ofpact_get_OUTPUT_TRUNC(a)->max_len, last);
+                                ofpact_get_OUTPUT_TRUNC(a)->max_len, last,
+                                group_bucket_action);
             break;
 
         case OFPACT_LEARN:
@@ -6856,7 +7061,6 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         .depth = xin->depth,
         .resubmits = xin->resubmits,
-        .in_group = false,
         .in_action_set = false,
         .in_packet_out = xin->in_packet_out,
         .pending_encap = false,
@@ -7071,6 +7275,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
          *
          * We do not perform special processing on thawed packets, since that
          * was done before they were frozen and should not be redone. */
+        mirror_ingress_packet(&ctx);
     } else if (in_port && in_port->xbundle
                && xbundle_mirror_out(xbridge, in_port->xbundle)) {
         xlate_report_error(&ctx, "dropping packet received on port "
@@ -7104,7 +7309,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             }
 
             mirror_ingress_packet(&ctx);
-            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true);
+            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true, false);
             if (ctx.error) {
                 goto exit;
             }

@@ -63,7 +63,7 @@ m4_define([CONFIGURE_VETH_OFFLOADS],
 # Perform requirements checks for running conntrack tests.
 #
 m4_define([CHECK_CONNTRACK],
-    [AT_SKIP_IF([test $HAVE_PYTHON = no])]
+    [AT_SKIP_IF([test $HAVE_PYTHON2 = no])]
 )
 
 # CHECK_CONNTRACK_ALG()
@@ -93,22 +93,28 @@ m4_define([CHECK_CONNTRACK_LOCAL_STACK],
     AT_SKIP_IF([:])
 ])
 
+# CHECK_CONNTRACK_FRAG_OVERLAP()
+#
+# The userspace datapath does not support fragments yet.
+m4_define([CHECK_CONNTRACK_FRAG_OVERLAP],
+[
+    AT_SKIP_IF([:])
+])
+
+# CHECK_CONNTRACK_FRAG_IPV6_MULT_EXTEN()
+#
+# The userspace datapath does not support fragments yet.
+m4_define([CHECK_CONNTRACK_FRAG_IPV6_MULT_EXTEN],
+[
+    AT_SKIP_IF([:])
+])
+
 # CHECK_CONNTRACK_NAT()
 #
 # Perform requirements checks for running conntrack NAT tests. The userspace
 # datapath supports NAT.
 #
 m4_define([CHECK_CONNTRACK_NAT])
-
-# CHECK_CT_DPIF_FLUSH_BY_CT_TUPLE()
-#
-# Perform requirements checks for running ovs-dpctl flush-conntrack by
-# conntrack 5-tuple test. The userspace datapath does not support
-# this feature yet.
-m4_define([CHECK_CT_DPIF_FLUSH_BY_CT_TUPLE],
-[
-    AT_SKIP_IF([:])
-])
 
 # CHECK_CT_DPIF_SET_GET_MAXCONNS()
 #

@@ -28,7 +28,8 @@
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofp-errors.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-match.h"
+#include "openvswitch/ofp-port.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
@@ -741,7 +742,6 @@ oxm_pull_field_array(const void *fields_data, size_t fields_len,
                                 NULL);
         if (error) {
             VLOG_DBG_RL(&rl, "error pulling field array field");
-            return error;
         } else if (!field) {
             VLOG_DBG_RL(&rl, "unknown field array field");
             error = OFPERR_OFPBMC_BAD_FIELD;
@@ -750,7 +750,7 @@ oxm_pull_field_array(const void *fields_data, size_t fields_len,
             error = OFPERR_OFPBMC_DUP_FIELD;
         } else if (!mf_is_mask_valid(field, &value)) {
             VLOG_DBG_RL(&rl, "bad mask in field array field '%s'", field->name);
-            return OFPERR_OFPBMC_BAD_MASK;
+            error = OFPERR_OFPBMC_BAD_MASK;
         } else {
             field_array_set(field->id, &value, fa);
         }
@@ -761,6 +761,8 @@ oxm_pull_field_array(const void *fields_data, size_t fields_len,
             VLOG_DBG_RL(&rl, "error parsing OXM at offset %"PRIdPTR" "
                         "within field array (%s)", pos - start,
                         ofperr_to_string(error));
+
+            free(fa->values);
             return error;
         }
     }
@@ -1024,9 +1026,8 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     ovs_be16 dl_type = get_dl_type(flow);
     ovs_be32 spi_mask;
     int match_len;
-    int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
 
     struct nxm_put_ctx ctx = { .output = b, .implied_ethernet = false };
 
@@ -1155,6 +1156,17 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
                flow->tunnel.gbp_flags, match->wc.masks.tunnel.gbp_flags);
     tun_metadata_to_nx_match(b, oxm, match);
 
+    /* ERSPAN */
+    nxm_put_32m(&ctx, MFF_TUN_ERSPAN_IDX, oxm,
+                htonl(flow->tunnel.erspan_idx),
+                htonl(match->wc.masks.tunnel.erspan_idx));
+    nxm_put_8m(&ctx, MFF_TUN_ERSPAN_VER, oxm,
+                flow->tunnel.erspan_ver, match->wc.masks.tunnel.erspan_ver);
+    nxm_put_8m(&ctx, MFF_TUN_ERSPAN_DIR, oxm,
+                flow->tunnel.erspan_dir, match->wc.masks.tunnel.erspan_dir);
+    nxm_put_8m(&ctx, MFF_TUN_ERSPAN_HWID, oxm,
+                flow->tunnel.erspan_hwid, match->wc.masks.tunnel.erspan_hwid);
+
     /* Network Service Header */
     nxm_put_8m(&ctx, MFF_NSH_FLAGS, oxm, flow->nsh.flags,
             match->wc.masks.nsh.flags);
@@ -1181,12 +1193,12 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
 
     /* Registers. */
     if (oxm < OFP15_VERSION) {
-        for (i = 0; i < FLOW_N_REGS; i++) {
+        for (int i = 0; i < FLOW_N_REGS; i++) {
             nxm_put_32m(&ctx, MFF_REG0 + i, oxm,
                         htonl(flow->regs[i]), htonl(match->wc.masks.regs[i]));
         }
     } else {
-        for (i = 0; i < FLOW_N_XREGS; i++) {
+        for (int i = 0; i < FLOW_N_XREGS; i++) {
             nxm_put_64m(&ctx, MFF_XREG0 + i, oxm,
                         htonll(flow_get_xreg(flow, i)),
                         htonll(flow_get_xreg(&match->wc.masks, i)));
@@ -1375,18 +1387,13 @@ oxm_put_field_array(struct ofpbuf *b, const struct field_array *fa,
 {
     size_t start_len = b->size;
 
-    /* Field arrays are only used with the group selection method
-     * property and group properties are only available in OpenFlow 1.5+.
-     * So the following assertion should never fail.
-     *
-     * If support for older OpenFlow versions is desired then some care
-     * will need to be taken of different TLVs that handle the same
-     * flow fields. In particular:
+    /* XXX Some care might need to be taken of different TLVs that handle the
+     * same flow fields. In particular:
+
      * - VLAN_TCI, VLAN_VID and MFF_VLAN_PCP
      * - IP_DSCP_MASK and DSCP_SHIFTED
      * - REGS and XREGS
      */
-    ovs_assert(version >= OFP15_VERSION);
 
     size_t i, offset = 0;
 

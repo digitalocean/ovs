@@ -178,10 +178,10 @@ dnl Configure Linux tc compat.
 AC_DEFUN([OVS_CHECK_LINUX_TC], [
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/pkt_cls.h>], [
-        int x = TCA_FLOWER_KEY_IP_TTL_MASK;
+        int x = TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST;
     ])],
-    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_IP_TTL_MASK], [1],
-               [Define to 1 if TCA_FLOWER_KEY_IP_TTL_MASK is avaiable.])])
+    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST], [1],
+               [Define to 1 if TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST is avaiable.])])
 
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_vlan.h>], [
@@ -467,6 +467,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [IS_ERR_OR_NULL])
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [PTR_ERR_OR_ZERO])
 
+  OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h], [DEFINE_STATIC_KEY_FALSE],
+                  [OVS_DEFINE([HAVE_UPSTREAM_STATIC_KEY])])
+
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [eth_hw_addr_random])
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [ether_addr_copy])
 
@@ -531,7 +534,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [OVS_GREP_IFELSE([$KSRC/include/net/ip_tunnels.h],
                                          [iptunnel_pull_offloads],
                         [OVS_GREP_IFELSE([$KSRC/include/net/dst_cache.h], [dst_cache],
-                                         [OVS_DEFINE([USE_UPSTREAM_TUNNEL])])])])
+                        [OVS_GREP_IFELSE([$KSRC/include/net/erspan.h], [erspan_md2],
+                                         [OVS_DEFINE([USE_UPSTREAM_TUNNEL])])])])])
 
   OVS_GREP_IFELSE([$KSRC/include/net/dst_cache.h], [dst_cache],
                   [OVS_DEFINE([USE_BUILTIN_DST_CACHE])])
@@ -587,6 +591,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_NF_HOOKFN_ARG_PRIV])])
   OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_ops],
                         [owner], [OVS_DEFINE([HAVE_NF_HOOKS_OPS_OWNER])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [NFPROTO_INET])
+
 
   OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter_ipv6.h], [nf_ipv6_ops],
                         [fragment.*sock], [OVS_DEFINE([HAVE_NF_IPV6_OPS_FRAGMENT])])
@@ -609,6 +615,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [nf_ct_is_untracked])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_zones.h],
                   [nf_ct_zone_init])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_l3proto.h],
+                        [net_ns_get])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_labels.h],
                   [nf_connlabels_get])
   OVS_FIND_PARAM_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_labels.h],
@@ -618,7 +626,10 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [nf_conn_labels], [words])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_ct_nat_ext_add])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_nat_alloc_null_binding])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_nat.h], [nf_nat_range2])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_seqadj.h], [nf_ct_seq_adjust])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_count.h], [nf_conncount_gc_list],
+                  [OVS_DEFINE([HAVE_UPSTREAM_NF_CONNCOUNT])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32])
   OVS_GREP_IFELSE([$KSRC/include/linux/random.h], [prandom_u32_max])
@@ -633,6 +644,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h],
                                    [rcu_read_lock_held])])
   OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h], [lockdep_rtnl_is_held])
+  OVS_GREP_IFELSE([$KSRC/include/linux/rtnetlink.h], [net_rwsem])
 
   # Check for the proto_data_valid member in struct sk_buff.  The [^@]
   # is necessary because some versions of this header remove the
@@ -809,9 +821,78 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/timekeeping.h],
                   [ktime_get_ts64],
                   [OVS_DEFINE([HAVE_KTIME_GET_TS64])])
+  OVS_GREP_IFELSE([$KSRC/include/net/net_namespace.h],
+                  [EXPORT_SYMBOL_GPL(peernet2id_alloc)],
+                  [OVS_DEFINE([HAVE_PEERNET2ID_ALLOC])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/timekeeping.h],
+                  [ktime_get_ns],
+                  [OVS_DEFINE([HAVE_KTIME_GET_NS])])
   OVS_GREP_IFELSE([$KSRC/include/net/inet_frag.h],
                   frag_percpu_counter_batch[],
                   [OVS_DEFINE([HAVE_FRAG_PERCPU_COUNTER_BATCH])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],
+                  [null_compute_pseudo],
+                  [OVS_DEFINE([HAVE_NULL_COMPUTE_PSEUDO])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],
+                  [__skb_checksum_convert],
+                  [OVS_DEFINE([HAVE_SKB_CHECKSUM_CONVERT])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netdevice.h], [net_device],
+                        [max_mtu],
+                        [OVS_DEFINE([HAVE_NET_DEVICE_MAX_MTU])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/ip6_tunnel.h], [__ip6_tnl_parm],
+                        [erspan_ver],
+                        [OVS_DEFINE([HAVE_IP6_TNL_PARM_ERSPAN_VER])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],
+                  [SKB_GSO_IPXIP6],
+                  [OVS_DEFINE([HAVE_SKB_GSO_IPXIP6])])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/ipv6.h],
+                        [ip6_make_flowlabel], [fl6],
+                        [OVS_DEFINE([HAVE_IP6_MAKE_FLOWLABEL_FL6])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/ipv6.h], [netns_sysctl_ipv6],
+                        [auto_flowlabels],
+                        [OVS_DEFINE([HAVE_NETNS_SYSCTL_IPV6_AUTO_FLOWLABELS])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h],
+                  [netif_keep_dst],
+                  [OVS_DEFINE([HAVE_NETIF_KEEP_DST])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netdevice.h], [net_device_ops],
+                        [ndo_get_iflink],
+                        [OVS_DEFINE([HAVE_NDO_GET_IFLINK])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],
+                  [skb_set_inner_ipproto],
+                  [OVS_DEFINE([HAVE_SKB_SET_INNER_IPPROTO])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [tunnel_encap_types],
+                  [OVS_DEFINE([HAVE_TUNNEL_ENCAP_TYPES])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_IPTUN_ENCAP_TYPE],
+                  [OVS_DEFINE([HAVE_IFLA_IPTUN_ENCAP_TYPE])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_IPTUN_COLLECT_METADATA],
+                  [OVS_DEFINE([HAVE_IFLA_IPTUN_COLLECT_METADATA])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_ENCAP_DPORT])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_COLLECT_METADATA])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_IGNORE_DF])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_FWMARK])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_ERSPAN_INDEX])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_GRE_ERSPAN_HWID])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/if_tunnel.h],
+                  [IFLA_IPTUN_FWMARK])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/skbuff.h], [sk_buff],
+                        [csum_valid],
+                        [OVS_DEFINE([HAVE_SKBUFF_CSUM_VALID])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],
+                  [skb_checksum_simple_validate])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h],
+                  [void.*ndo_get_stats64],
+                  [OVS_DEFINE([HAVE_VOID_NDO_GET_STATS64])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/timer.h], [init_timer_deferrable],
+                  [OVS_DEFINE([HAVE_INIT_TIMER_DEFERRABLE])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

@@ -93,6 +93,10 @@ need the following software:
 - Python 2.7. You must also have the Python ``six`` library version 1.4.0
   or later.
 
+- Unbound library, from http://www.unbound.net, is optional but recommended if
+  you want to enable ovs-vswitchd and other utilities to use DNS names when
+  specifying OpenFlow and OVSDB remotes. If unbound library is already
+  installed, then Open vSwitch will automatically build with support for it.
 
 On Linux, you may choose to compile the kernel module that comes with the Open
 vSwitch distribution or to use the kernel module built into the Linux kernel
@@ -151,6 +155,8 @@ The datapath tests for userspace and Linux datapaths also rely upon:
 - curl. Version 7.47.0 is known to work. Earlier versions should also work.
 
 - tftpy. Version 0.6.2 is known to work. Earlier versions should also work.
+
+- netstat.  Available from various distro specific packages
 
 The ovs-vswitchd.conf.db(5) manpage will include an E-R diagram, in formats
 other than plain text, only if you have the following:
@@ -337,7 +343,7 @@ modules for more than one Linux version. For example::
     $ mkdir _gcc && (cd _gcc && ./configure CC=gcc)
     $ mkdir _clang && (cd _clang && ./configure CC=clang)
 
-Under certains loads the ovsdb-server and other components perform better when
+Under certain loads the ovsdb-server and other components perform better when
 using the jemalloc memory allocator, instead of the glibc memory allocator. If
 you wish to link with jemalloc add it to LIBS::
 

@@ -335,9 +335,8 @@ raft_make_address_passive(const char *address_)
         return xasprintf("p%s", address_);
     } else {
         char *address = xstrdup(address_);
-        char *p = strchr(address, ':') + 1;
-        char *host = inet_parse_token(&p);
-        char *port = inet_parse_token(&p);
+        char *host, *port;
+        inet_parse_host_port_tokens(strchr(address, ':') + 1, &host, &port);
 
         struct ds paddr = DS_EMPTY_INITIALIZER;
         ds_put_format(&paddr, "p%.3s:%s:", address, port);
@@ -3839,22 +3838,22 @@ raft_store_snapshot(struct raft *raft, const struct json *new_snapshot_data)
     }
 
     uint64_t new_log_start = raft->last_applied + 1;
-    const struct raft_entry new_snapshot = {
+    struct raft_entry new_snapshot = {
         .term = raft_get_term(raft, new_log_start - 1),
-        .data = CONST_CAST(struct json *, new_snapshot_data),
+        .data = json_clone(new_snapshot_data),
         .eid = *raft_get_eid(raft, new_log_start - 1),
-        .servers = CONST_CAST(struct json *,
-                              raft_servers_for_index(raft, new_log_start - 1)),
+        .servers = json_clone(raft_servers_for_index(raft, new_log_start - 1)),
     };
     struct ovsdb_error *error = raft_save_snapshot(raft, new_log_start,
                                                    &new_snapshot);
     if (error) {
+        raft_entry_uninit(&new_snapshot);
         return error;
     }
 
     raft->log_synced = raft->log_end - 1;
     raft_entry_uninit(&raft->snap);
-    raft_entry_clone(&raft->snap, &new_snapshot);
+    raft->snap = new_snapshot;
     for (size_t i = 0; i < new_log_start - raft->log_start; i++) {
         raft_entry_uninit(&raft->entries[i]);
     }

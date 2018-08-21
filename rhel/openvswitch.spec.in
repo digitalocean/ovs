@@ -38,6 +38,7 @@ BuildRequires: openssl-devel
 BuildRequires: checkpolicy, selinux-policy-devel
 BuildRequires: autoconf, automake, libtool
 BuildRequires: python-sphinx
+BuildRequires: unbound-devel
 
 %bcond_without check
 %bcond_with check_datapath_kernel
@@ -70,9 +71,7 @@ Tailored Open vSwitch SELinux policy
 ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=%{_localstatedir} \
     --libdir=%{_libdir} --enable-ssl --enable-shared
 make %{_smp_mflags}
-make selinux/openvswitch-custom.te
-cd selinux
-make -f %{_datadir}/selinux/devel/Makefile
+make selinux-policy
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -171,8 +170,11 @@ fi
 /sbin/chkconfig --add openvswitch
 /sbin/chkconfig openvswitch on
 
+%pre selinux-policy
+%selinux_relabel_pre -s targeted
+
 %post selinux-policy
-/usr/sbin/semodule -i %{_datadir}/selinux/packages/%{name}/openvswitch-custom.pp &> /dev/null || :
+%selinux_modules_install -s targeted %{_datadir}/selinux/packages/%{name}/openvswitch-custom.pp
 
 %preun
 if [ "$1" = "0" ]; then     # $1 = 0 for uninstall
@@ -189,10 +191,13 @@ fi
 
 %postun selinux-policy
 if [ $1 -eq 0 ] ; then
-  /usr/sbin/semodule -r openvswitch-custom &> /dev/null || :
+  %selinux_modules_uninstall -s targeted openvswitch-custom
 fi
 
 exit 0
+
+%posttrans selinux-policy
+%selinux_relabel_post -s targeted
 
 %files
 %defattr(-,root,root)
@@ -239,6 +244,7 @@ exit 0
 /usr/share/man/man8/ovs-ctl.8.gz
 /usr/share/man/man8/ovs-dpctl.8.gz
 /usr/share/man/man8/ovs-dpctl-top.8.gz
+/usr/share/man/man8/ovs-kmod-ctl.8.gz
 /usr/share/man/man8/ovs-ofctl.8.gz
 /usr/share/man/man8/ovs-parse-backtrace.8.gz
 /usr/share/man/man8/ovs-pki.8.gz
@@ -252,13 +258,14 @@ exit 0
 /usr/share/openvswitch/scripts/ovs-bugtool-*
 /usr/share/openvswitch/scripts/ovs-check-dead-ifs
 /usr/share/openvswitch/scripts/ovs-ctl
+/usr/share/openvswitch/scripts/ovs-kmod-ctl
 /usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-save
 /usr/share/openvswitch/scripts/ovs-vtep
 /usr/share/openvswitch/scripts/sysconfig.template
 /usr/share/openvswitch/vswitch.ovsschema
 /usr/share/openvswitch/vtep.ovsschema
-%doc COPYING NOTICE README.rst NEWS rhel/README.RHEL.rst
+%doc NOTICE README.rst NEWS rhel/README.RHEL.rst
 /var/lib/openvswitch
 /var/log/openvswitch
 

@@ -171,7 +171,8 @@ tnl_type_to_nw_proto(const char type[])
     if (!strcmp(type, "stt")) {
         return IPPROTO_TCP;
     }
-    if (!strcmp(type, "gre")) {
+    if (!strcmp(type, "gre") || !strcmp(type, "erspan") ||
+        !strcmp(type, "ip6erspan") || !strcmp(type, "ip6gre")) {
         return IPPROTO_GRE;
     }
     if (!strcmp(type, "vxlan")) {
@@ -223,9 +224,8 @@ tnl_port_unref(const struct cls_rule *cr)
     struct tnl_port_in *p = tnl_port_cast(cr);
 
     if (cr && ovs_refcount_unref_relaxed(&p->ref_cnt) == 1) {
-        if (classifier_remove(&cls, cr)) {
-            ovsrcu_postpone(tnl_port_free, p);
-        }
+        classifier_remove_assert(&cls, cr);
+        ovsrcu_postpone(tnl_port_free, p);
     }
 }
 

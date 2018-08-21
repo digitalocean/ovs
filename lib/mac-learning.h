@@ -89,7 +89,7 @@
 struct mac_learning;
 
 /* Default maximum size of a MAC learning table, in entries. */
-#define MAC_DEFAULT_MAX 2048
+#define MAC_DEFAULT_MAX 8192
 
 /* Time, in seconds, before expiring a mac_entry due to inactivity. */
 #define MAC_ENTRY_DEFAULT_IDLE_TIME 300
@@ -160,6 +160,12 @@ struct mac_learning {
     struct ovs_rwlock rwlock;
     bool need_revalidate;
 
+    /* Statistics */
+    uint64_t total_learned;
+    uint64_t total_expired;
+    uint64_t total_evicted;
+    uint64_t total_moved;
+
     /* Fairness.
      *
      * Both of these data structures include the same "struct
@@ -183,6 +189,7 @@ int mac_entry_age(const struct mac_learning *ml, const struct mac_entry *e)
 struct mac_learning *mac_learning_create(unsigned int idle_time);
 struct mac_learning *mac_learning_ref(const struct mac_learning *);
 void mac_learning_unref(struct mac_learning *);
+void mac_learning_clear_statistics(struct mac_learning *ml);
 
 bool mac_learning_run(struct mac_learning *ml) OVS_REQ_WRLOCK(ml->rwlock);
 void mac_learning_wait(struct mac_learning *ml)

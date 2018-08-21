@@ -65,7 +65,6 @@
 
 VLOG_DEFINE_THIS_MODULE(netdev_bsd);
 
-
 struct netdev_rxq_bsd {
     struct netdev_rxq up;
 
@@ -618,7 +617,8 @@ netdev_rxq_bsd_recv_tap(struct netdev_rxq_bsd *rxq, struct dp_packet *buffer)
 }
 
 static int
-netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
+netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch,
+                    int *qfill)
 {
     struct netdev_rxq_bsd *rxq = netdev_rxq_bsd_cast(rxq_);
     struct netdev *netdev = rxq->up.netdev;
@@ -643,6 +643,11 @@ netdev_bsd_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
         batch->packets[0] = packet;
         batch->count = 1;
     }
+
+    if (qfill) {
+        *qfill = -ENOTSUP;
+    }
+
     return retval;
 }
 
@@ -1511,7 +1516,7 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
     NULL, /* get_carrier_resets */                   \
     NULL, /* set_miimon_interval */                  \
     netdev_bsd_get_stats,                            \
-                                                     \
+    NULL, /* get_custom_stats */                     \
     GET_FEATURES,                                    \
     NULL, /* set_advertisement */                    \
     NULL, /* get_pt_mode */                          \
@@ -1547,7 +1552,8 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
     netdev_bsd_rxq_wait,                             \
     netdev_bsd_rxq_drain,                            \
                                                      \
-    NO_OFFLOAD_API                                   \
+    NO_OFFLOAD_API,                                  \
+    NULL /* get_block_id */   \
 }
 
 const struct netdev_class netdev_bsd_class =

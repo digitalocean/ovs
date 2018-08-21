@@ -33,31 +33,34 @@
 #include <unistd.h>
 
 #include "bitmap.h"
-#include "dpif-provider.h"
 #include "dpif-netlink-rtnl.h"
-#include "openvswitch/dynamic-string.h"
-#include "flow.h"
+#include "dpif-provider.h"
 #include "fat-rwlock.h"
-#include "netdev.h"
-#include "netdev-provider.h"
+#include "flow.h"
 #include "netdev-linux.h"
+#include "netdev-provider.h"
 #include "netdev-vport.h"
+#include "netdev.h"
 #include "netlink-conntrack.h"
 #include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "netlink.h"
+#include "netnsid.h"
 #include "odp-util.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/flow.h"
+#include "openvswitch/match.h"
 #include "openvswitch/ofpbuf.h"
-#include "packets.h"
 #include "openvswitch/poll-loop.h"
-#include "random.h"
 #include "openvswitch/shash.h"
+#include "openvswitch/thread.h"
+#include "openvswitch/vlog.h"
+#include "packets.h"
+#include "random.h"
 #include "sset.h"
 #include "timeval.h"
 #include "unaligned.h"
 #include "util.h"
-#include "openvswitch/vlog.h"
-#include "openvswitch/flow.h"
 
 VLOG_DEFINE_THIS_MODULE(dpif_netlink);
 #ifdef _WIN32
@@ -210,6 +213,8 @@ static int ovs_datapath_family;
 static int ovs_vport_family;
 static int ovs_flow_family;
 static int ovs_packet_family;
+static int ovs_meter_family;
+static int ovs_ct_limit_family;
 
 /* Generic Netlink multicast groups for OVS.
  *
@@ -785,6 +790,15 @@ get_vport_type(const struct dpif_netlink_vport *vport)
     case OVS_VPORT_TYPE_STT:
         return "stt";
 
+    case OVS_VPORT_TYPE_ERSPAN:
+        return "erspan";
+
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+        return "ip6erspan"; 
+
+    case OVS_VPORT_TYPE_IP6GRE:
+        return "ip6gre";
+
     case OVS_VPORT_TYPE_UNSPEC:
     case __OVS_VPORT_TYPE_MAX:
         break;
@@ -806,12 +820,18 @@ netdev_to_ovs_vport_type(const char *type)
         return OVS_VPORT_TYPE_STT;
     } else if (!strcmp(type, "geneve")) {
         return OVS_VPORT_TYPE_GENEVE;
-    } else if (strstr(type, "gre")) {
-        return OVS_VPORT_TYPE_GRE;
     } else if (!strcmp(type, "vxlan")) {
         return OVS_VPORT_TYPE_VXLAN;
     } else if (!strcmp(type, "lisp")) {
         return OVS_VPORT_TYPE_LISP;
+    } else if (!strcmp(type, "erspan")) {
+        return OVS_VPORT_TYPE_ERSPAN;
+    } else if (!strcmp(type, "ip6erspan")) {
+        return OVS_VPORT_TYPE_IP6ERSPAN;
+    } else if (!strcmp(type, "ip6gre")) {
+        return OVS_VPORT_TYPE_IP6GRE;
+    } else if (!strcmp(type, "gre")) {
+        return OVS_VPORT_TYPE_GRE;
     } else {
         return OVS_VPORT_TYPE_UNSPEC;
     }
@@ -1287,7 +1307,7 @@ dpif_netlink_port_poll(const struct dpif *dpif_, char **devnamep)
         int error;
 
         ofpbuf_use_stub(&buf, buf_stub, sizeof buf_stub);
-        error = nl_sock_recv(dpif->port_notifier, &buf, false);
+        error = nl_sock_recv(dpif->port_notifier, &buf, NULL, false);
         if (!error) {
             struct dpif_netlink_vport vport;
 
@@ -1446,13 +1466,13 @@ dpif_netlink_init_flow_del(struct dpif_netlink *dpif,
 }
 
 enum {
-    DUMP_OVS_FLOWS_BIT       = 0,
-    DUMP_OFFLOADED_FLOWS_BIT = 1,
+    DUMP_OVS_FLOWS_BIT    = 0,
+    DUMP_NETDEV_FLOWS_BIT = 1,
 };
 
 enum {
-    DUMP_OVS_FLOWS       = (1 << DUMP_OVS_FLOWS_BIT),
-    DUMP_OFFLOADED_FLOWS = (1 << DUMP_OFFLOADED_FLOWS_BIT),
+    DUMP_OVS_FLOWS    = (1 << DUMP_OVS_FLOWS_BIT),
+    DUMP_NETDEV_FLOWS = (1 << DUMP_NETDEV_FLOWS_BIT),
 };
 
 struct dpif_netlink_flow_dump {
@@ -1478,7 +1498,7 @@ start_netdev_dump(const struct dpif *dpif_,
 {
     ovs_mutex_init(&dump->netdev_lock);
 
-    if (!(dump->type & DUMP_OFFLOADED_FLOWS)) {
+    if (!(dump->type & DUMP_NETDEV_FLOWS)) {
         dump->netdev_dumps_num = 0;
         dump->netdev_dumps = NULL;
         return;
@@ -1501,7 +1521,7 @@ dpif_netlink_get_dump_type(char *str) {
     }
     if ((netdev_is_flow_api_enabled() && !str)
         || (str && (!strcmp(str, "offloaded") || !strcmp(str, "dpctl")))) {
-        type |= DUMP_OFFLOADED_FLOWS;
+        type |= DUMP_NETDEV_FLOWS;
     }
 
     return type;
@@ -1639,7 +1659,8 @@ dpif_netlink_flow_to_dpif_flow(struct dpif *dpif, struct dpif_flow *dpif_flow,
                        &dpif_flow->ufid);
     }
     dpif_netlink_flow_get_stats(datapath_flow, &dpif_flow->stats);
-    dpif_flow->offloaded = false;
+    dpif_flow->attrs.offloaded = false;
+    dpif_flow->attrs.dp_layer = "ovs";
 }
 
 /* The design is such that all threads are working together on the first dump
@@ -1681,6 +1702,7 @@ dpif_netlink_netdev_match_to_dpif_flow(struct match *match,
                                        struct ofpbuf *mask_buf,
                                        struct nlattr *actions,
                                        struct dpif_flow_stats *stats,
+                                       struct dpif_flow_attrs *attrs,
                                        ovs_u128 *ufid,
                                        struct dpif_flow *flow,
                                        bool terse OVS_UNUSED)
@@ -1723,7 +1745,7 @@ dpif_netlink_netdev_match_to_dpif_flow(struct match *match,
 
     flow->pmd_id = PMD_ID_NULL;
 
-    flow->offloaded = true;
+    memcpy(&flow->attrs, attrs, sizeof *attrs);
 
     return 0;
 }
@@ -1755,6 +1777,7 @@ dpif_netlink_flow_dump_next(struct dpif_flow_dump_thread *thread_,
         struct match match;
         struct nlattr *actions;
         struct dpif_flow_stats stats;
+        struct dpif_flow_attrs attrs;
         ovs_u128 ufid;
         bool has_next;
 
@@ -1762,7 +1785,7 @@ dpif_netlink_flow_dump_next(struct dpif_flow_dump_thread *thread_,
         ofpbuf_use_stack(&act, actbuf, sizeof *actbuf);
         ofpbuf_use_stack(&mask, maskbuf, sizeof *maskbuf);
         has_next = netdev_flow_dump_next(netdev_dump, &match,
-                                        &actions, &stats,
+                                        &actions, &stats, &attrs,
                                         &ufid,
                                         &thread->nl_flows,
                                         &act);
@@ -1771,6 +1794,7 @@ dpif_netlink_flow_dump_next(struct dpif_flow_dump_thread *thread_,
                                                    &key, &mask,
                                                    actions,
                                                    &stats,
+                                                   &attrs,
                                                    &ufid,
                                                    f,
                                                    dump->up.terse);
@@ -1906,7 +1930,7 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
 
         switch (op->type) {
         case DPIF_OP_FLOW_PUT:
-            put = &op->u.flow_put;
+            put = &op->flow_put;
             dpif_netlink_init_flow_put(dpif, put, &flow);
             if (put->stats) {
                 flow.nlmsg_flags |= NLM_F_ECHO;
@@ -1916,7 +1940,7 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
             break;
 
         case DPIF_OP_FLOW_DEL:
-            del = &op->u.flow_del;
+            del = &op->flow_del;
             dpif_netlink_init_flow_del(dpif, del, &flow);
             if (del->stats) {
                 flow.nlmsg_flags |= NLM_F_ECHO;
@@ -1928,26 +1952,26 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
         case DPIF_OP_EXECUTE:
             /* Can't execute a packet that won't fit in a Netlink attribute. */
             if (OVS_UNLIKELY(nl_attr_oversized(
-                                 dp_packet_size(op->u.execute.packet)))) {
+                                 dp_packet_size(op->execute.packet)))) {
                 /* Report an error immediately if this is the first operation.
                  * Otherwise the easiest thing to do is to postpone to the next
                  * call (when this will be the first operation). */
                 if (i == 0) {
                     VLOG_ERR_RL(&error_rl,
                                 "dropping oversized %"PRIu32"-byte packet",
-                                dp_packet_size(op->u.execute.packet));
+                                dp_packet_size(op->execute.packet));
                     op->error = ENOBUFS;
                     return 1;
                 }
                 n_ops = i;
             } else {
-                dpif_netlink_encode_execute(dpif->dp_ifindex, &op->u.execute,
+                dpif_netlink_encode_execute(dpif->dp_ifindex, &op->execute,
                                             &aux->request);
             }
             break;
 
         case DPIF_OP_FLOW_GET:
-            get = &op->u.flow_get;
+            get = &op->flow_get;
             dpif_netlink_init_flow_get(dpif, get, &flow);
             aux->txn.reply = get->buffer;
             dpif_netlink_flow_to_ofpbuf(&flow, &aux->request);
@@ -1975,7 +1999,7 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
 
         switch (op->type) {
         case DPIF_OP_FLOW_PUT:
-            put = &op->u.flow_put;
+            put = &op->flow_put;
             if (put->stats) {
                 if (!op->error) {
                     struct dpif_netlink_flow reply;
@@ -1990,7 +2014,7 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
             break;
 
         case DPIF_OP_FLOW_DEL:
-            del = &op->u.flow_del;
+            del = &op->flow_del;
             if (del->stats) {
                 if (!op->error) {
                     struct dpif_netlink_flow reply;
@@ -2008,7 +2032,7 @@ dpif_netlink_operate__(struct dpif_netlink *dpif,
             break;
 
         case DPIF_OP_FLOW_GET:
-            get = &op->u.flow_get;
+            get = &op->flow_get;
             if (!op->error) {
                 struct dpif_netlink_flow reply;
 
@@ -2038,6 +2062,7 @@ parse_flow_get(struct dpif_netlink *dpif, struct dpif_flow_get *get)
     struct match match;
     struct nlattr *actions;
     struct dpif_flow_stats stats;
+    struct dpif_flow_attrs attrs;
     struct ofpbuf buf;
     uint64_t act_buf[1024 / 8];
     struct odputil_keybuf maskbuf;
@@ -2048,7 +2073,7 @@ parse_flow_get(struct dpif_netlink *dpif, struct dpif_flow_get *get)
 
     ofpbuf_use_stack(&buf, &act_buf, sizeof act_buf);
     err = netdev_ports_flow_get(dpif->dpif.dpif_class, &match,
-                                &actions, get->ufid, &stats, &buf);
+                                &actions, get->ufid, &stats, &attrs, &buf);
     if (err) {
         return err;
     }
@@ -2059,7 +2084,7 @@ parse_flow_get(struct dpif_netlink *dpif, struct dpif_flow_get *get)
     ofpbuf_use_stack(&act, &actbuf, sizeof actbuf);
     ofpbuf_use_stack(&mask, &maskbuf, sizeof maskbuf);
     dpif_netlink_netdev_match_to_dpif_flow(&match, &key, &mask, actions,
-                                           &stats,
+                                           &stats, &attrs,
                                            (ovs_u128 *) get->ufid,
                                            dpif_flow,
                                            false);
@@ -2079,7 +2104,6 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
     odp_port_t in_port;
     const struct nlattr *nla;
     size_t left;
-    int outputs = 0;
     struct netdev *dev;
     struct offload_info info;
     ovs_be16 dst_port = 0;
@@ -2106,19 +2130,12 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
         return EOPNOTSUPP;
     }
 
-    /* Get tunnel dst port and count outputs */
+    /* Get tunnel dst port */
     NL_ATTR_FOR_EACH(nla, left, put->actions, put->actions_len) {
         if (nl_attr_type(nla) == OVS_ACTION_ATTR_OUTPUT) {
             const struct netdev_tunnel_config *tnl_cfg;
             struct netdev *outdev;
             odp_port_t out_port;
-
-            outputs++;
-            if (outputs > 1) {
-                VLOG_DBG_RL(&rl, "offloading multiple ports isn't supported");
-                err = EOPNOTSUPP;
-                goto out;
-            }
 
             out_port = nl_attr_get_odp_port(nla);
             outdev = netdev_ports_get(out_port, dpif_class);
@@ -2148,12 +2165,12 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
             struct dpif_op op;
 
             op.type = DPIF_OP_FLOW_DEL;
-            op.u.flow_del.key = put->key;
-            op.u.flow_del.key_len = put->key_len;
-            op.u.flow_del.ufid = put->ufid;
-            op.u.flow_del.pmd_id = put->pmd_id;
-            op.u.flow_del.stats = NULL;
-            op.u.flow_del.terse = false;
+            op.flow_del.key = put->key;
+            op.flow_del.key_len = put->key_len;
+            op.flow_del.ufid = put->ufid;
+            op.flow_del.pmd_id = put->pmd_id;
+            op.flow_del.stats = NULL;
+            op.flow_del.terse = false;
 
             opp = &op;
             dpif_netlink_operate__(dpif, &opp, 1);
@@ -2194,7 +2211,7 @@ try_send_to_netdev(struct dpif_netlink *dpif, struct dpif_op *op)
 
     switch (op->type) {
     case DPIF_OP_FLOW_PUT: {
-        struct dpif_flow_put *put = &op->u.flow_put;
+        struct dpif_flow_put *put = &op->flow_put;
 
         if (!put->ufid) {
             break;
@@ -2205,7 +2222,7 @@ try_send_to_netdev(struct dpif_netlink *dpif, struct dpif_op *op)
         break;
     }
     case DPIF_OP_FLOW_DEL: {
-        struct dpif_flow_del *del = &op->u.flow_del;
+        struct dpif_flow_del *del = &op->flow_del;
 
         if (!del->ufid) {
             break;
@@ -2217,9 +2234,9 @@ try_send_to_netdev(struct dpif_netlink *dpif, struct dpif_op *op)
         break;
     }
     case DPIF_OP_FLOW_GET: {
-        struct dpif_flow_get *get = &op->u.flow_get;
+        struct dpif_flow_get *get = &op->flow_get;
 
-        if (!op->u.flow_get.ufid) {
+        if (!op->flow_get.ufid) {
             break;
         }
 
@@ -2621,7 +2638,7 @@ dpif_netlink_recv_windows(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(sock_pool[i].nl_sock, buf, false);
+            error = nl_sock_recv(sock_pool[i].nl_sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -2696,7 +2713,7 @@ dpif_netlink_recv__(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(ch->sock, buf, false);
+            error = nl_sock_recv(ch->sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -2904,45 +2921,539 @@ dpif_netlink_ct_flush(struct dpif *dpif OVS_UNUSED, const uint16_t *zone,
     }
 }
 
+static int
+dpif_netlink_ct_set_limits(struct dpif *dpif OVS_UNUSED,
+                           const uint32_t *default_limits,
+                           const struct ovs_list *zone_limits)
+{
+    struct ovs_zone_limit req_zone_limit;
+
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+                          NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_SET,
+                          OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    size_t opt_offset;
+    opt_offset = nl_msg_start_nested(request, OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+    if (default_limits) {
+        req_zone_limit.zone_id = OVS_ZONE_LIMIT_DEFAULT_ZONE;
+        req_zone_limit.limit = *default_limits;
+        nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+    }
+
+    if (!ovs_list_is_empty(zone_limits)) {
+        struct ct_dpif_zone_limit *zone_limit;
+
+        LIST_FOR_EACH (zone_limit, node, zone_limits) {
+            req_zone_limit.zone_id = zone_limit->zone;
+            req_zone_limit.limit = zone_limit->limit;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+    }
+    nl_msg_end_nested(request, opt_offset);
+
+    int err = nl_transact(NETLINK_GENERIC, request, NULL);
+    ofpbuf_uninit(request);
+    return err;
+}
+
+static int
+dpif_netlink_zone_limits_from_ofpbuf(const struct ofpbuf *buf,
+                                     uint32_t *default_limit,
+                                     struct ovs_list *zone_limits)
+{
+    static const struct nl_policy ovs_ct_limit_policy[] = {
+        [OVS_CT_LIMIT_ATTR_ZONE_LIMIT] = { .type = NL_A_NESTED,
+                                           .optional = true },
+    };
+
+    struct ofpbuf b = ofpbuf_const_initializer(buf->data, buf->size);
+    struct nlmsghdr *nlmsg = ofpbuf_try_pull(&b, sizeof *nlmsg);
+    struct genlmsghdr *genl = ofpbuf_try_pull(&b, sizeof *genl);
+    struct ovs_header *ovs_header = ofpbuf_try_pull(&b, sizeof *ovs_header);
+
+    struct nlattr *attr[ARRAY_SIZE(ovs_ct_limit_policy)];
+
+    if (!nlmsg || !genl || !ovs_header
+        || nlmsg->nlmsg_type != ovs_ct_limit_family
+        || !nl_policy_parse(&b, 0, ovs_ct_limit_policy, attr,
+                            ARRAY_SIZE(ovs_ct_limit_policy))) {
+        return EINVAL;
+    }
+
+
+    if (!attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]) {
+        return EINVAL;
+    }
+
+    int rem = NLA_ALIGN(
+                nl_attr_get_size(attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]));
+    const struct ovs_zone_limit *zone_limit =
+                nl_attr_get(attr[OVS_CT_LIMIT_ATTR_ZONE_LIMIT]);
+
+    while (rem >= sizeof *zone_limit) {
+        if (zone_limit->zone_id == OVS_ZONE_LIMIT_DEFAULT_ZONE) {
+            *default_limit = zone_limit->limit;
+        } else if (zone_limit->zone_id < OVS_ZONE_LIMIT_DEFAULT_ZONE ||
+                   zone_limit->zone_id > UINT16_MAX) {
+        } else {
+            ct_dpif_push_zone_limit(zone_limits, zone_limit->zone_id,
+                                    zone_limit->limit, zone_limit->count);
+        }
+        rem -= NLA_ALIGN(sizeof *zone_limit);
+        zone_limit = ALIGNED_CAST(struct ovs_zone_limit *,
+            (unsigned char *) zone_limit  + NLA_ALIGN(sizeof *zone_limit));
+    }
+    return 0;
+}
+
+static int
+dpif_netlink_ct_get_limits(struct dpif *dpif OVS_UNUSED,
+                           uint32_t *default_limit,
+                           const struct ovs_list *zone_limits_request,
+                           struct ovs_list *zone_limits_reply)
+{
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+            NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_GET,
+            OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    if (!ovs_list_is_empty(zone_limits_request)) {
+        size_t opt_offset = nl_msg_start_nested(request,
+                                                OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+
+        struct ovs_zone_limit req_zone_limit;
+        req_zone_limit.zone_id = OVS_ZONE_LIMIT_DEFAULT_ZONE;
+        nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+
+        struct ct_dpif_zone_limit *zone_limit;
+        LIST_FOR_EACH (zone_limit, node, zone_limits_request) {
+            req_zone_limit.zone_id = zone_limit->zone;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+
+        nl_msg_end_nested(request, opt_offset);
+    }
+
+    struct ofpbuf *reply;
+    int err = nl_transact(NETLINK_GENERIC, request, &reply);
+    if (err) {
+        goto out;
+    }
+
+    err = dpif_netlink_zone_limits_from_ofpbuf(reply, default_limit,
+                                               zone_limits_reply);
+
+out:
+    ofpbuf_uninit(request);
+    ofpbuf_uninit(reply);
+    return err;
+}
+
+static int
+dpif_netlink_ct_del_limits(struct dpif *dpif OVS_UNUSED,
+                           const struct ovs_list *zone_limits)
+{
+    if (ovs_ct_limit_family < 0) {
+        return EOPNOTSUPP;
+    }
+
+    struct ofpbuf *request = ofpbuf_new(NL_DUMP_BUFSIZE);
+    nl_msg_put_genlmsghdr(request, 0, ovs_ct_limit_family,
+            NLM_F_REQUEST | NLM_F_ECHO, OVS_CT_LIMIT_CMD_DEL,
+            OVS_CT_LIMIT_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(request, sizeof *ovs_header);
+    ovs_header->dp_ifindex = 0;
+
+    if (!ovs_list_is_empty(zone_limits)) {
+        size_t opt_offset =
+            nl_msg_start_nested(request, OVS_CT_LIMIT_ATTR_ZONE_LIMIT);
+
+        struct ct_dpif_zone_limit *zone_limit;
+        LIST_FOR_EACH (zone_limit, node, zone_limits) {
+            struct ovs_zone_limit req_zone_limit;
+            req_zone_limit.zone_id = zone_limit->zone;
+            nl_msg_put(request, &req_zone_limit, sizeof req_zone_limit);
+        }
+        nl_msg_end_nested(request, opt_offset);
+    }
+
+    int err = nl_transact(NETLINK_GENERIC, request, NULL);
+
+    ofpbuf_uninit(request);
+    return err;
+}
 
 /* Meters */
+
+/* Set of supported meter flags */
+#define DP_SUPPORTED_METER_FLAGS_MASK \
+    (OFPMF13_STATS | OFPMF13_PKTPS | OFPMF13_KBPS | OFPMF13_BURST)
+
+/* Meter support was introduced in Linux 4.15.  In some versions of
+ * Linux 4.15, 4.16, and 4.17, there was a bug that never set the id
+ * when the meter was created, so all meters essentially had an id of
+ * zero.  Check for that condition and disable meters on those kernels. */
+static bool probe_broken_meters(struct dpif *);
+
 static void
-dpif_netlink_meter_get_features(const struct dpif * dpif OVS_UNUSED,
+dpif_netlink_meter_init(struct dpif_netlink *dpif, struct ofpbuf *buf,
+                        void *stub, size_t size, uint32_t command)
+{
+    ofpbuf_use_stub(buf, stub, size);
+
+    nl_msg_put_genlmsghdr(buf, 0, ovs_meter_family, NLM_F_REQUEST | NLM_F_ECHO,
+                          command, OVS_METER_VERSION);
+
+    struct ovs_header *ovs_header;
+    ovs_header = ofpbuf_put_uninit(buf, sizeof *ovs_header);
+    ovs_header->dp_ifindex = dpif->dp_ifindex;
+}
+
+/* Execute meter 'request' in the kernel datapath.  If the command
+ * fails, returns a positive errno value.  Otherwise, stores the reply
+ * in '*replyp', parses the policy according to 'reply_policy' into the
+ * array of Netlink attribute in 'a', and returns 0.  On success, the
+ * caller is responsible for calling ofpbuf_delete() on '*replyp'
+ * ('replyp' will contain pointers into 'a'). */
+static int
+dpif_netlink_meter_transact(struct ofpbuf *request, struct ofpbuf **replyp,
+                            const struct nl_policy *reply_policy,
+                            struct nlattr **a, size_t size_a)
+{
+    int error = nl_transact(NETLINK_GENERIC, request, replyp);
+    ofpbuf_uninit(request);
+
+    if (error) {
+        return error;
+    }
+
+    struct nlmsghdr *nlmsg = ofpbuf_try_pull(*replyp, sizeof *nlmsg);
+    struct genlmsghdr *genl = ofpbuf_try_pull(*replyp, sizeof *genl);
+    struct ovs_header *ovs_header = ofpbuf_try_pull(*replyp,
+                                                    sizeof *ovs_header);
+    if (!nlmsg || !genl || !ovs_header
+        || nlmsg->nlmsg_type != ovs_meter_family
+        || !nl_policy_parse(*replyp, 0, reply_policy, a, size_a)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_DBG_RL(&rl,
+                    "Kernel module response to meter tranaction is invalid");
+        return EINVAL;
+    }
+    return 0;
+}
+
+static void
+dpif_netlink_meter_get_features(const struct dpif *dpif_,
                                 struct ofputil_meter_features *features)
 {
-    features->max_meters = 0;
-    features->band_types = 0;
-    features->capabilities = 0;
-    features->max_bands = 0;
-    features->max_color = 0;
+    if (probe_broken_meters(CONST_CAST(struct dpif *, dpif_))) {
+        features = NULL;
+        return;
+    }
+
+    struct ofpbuf buf, *msg;
+    uint64_t stub[1024 / 8];
+
+    static const struct nl_policy ovs_meter_features_policy[] = {
+        [OVS_METER_ATTR_MAX_METERS] = { .type = NL_A_U32 },
+        [OVS_METER_ATTR_MAX_BANDS] = { .type = NL_A_U32 },
+        [OVS_METER_ATTR_BANDS] = { .type = NL_A_NESTED, .optional = true },
+    };
+    struct nlattr *a[ARRAY_SIZE(ovs_meter_features_policy)];
+
+    struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
+    dpif_netlink_meter_init(dpif, &buf, stub, sizeof stub,
+                            OVS_METER_CMD_FEATURES);
+    if (dpif_netlink_meter_transact(&buf, &msg, ovs_meter_features_policy, a,
+                                    ARRAY_SIZE(ovs_meter_features_policy))) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl,
+                  "dpif_netlink_meter_transact OVS_METER_CMD_FEATURES failed");
+        return;
+    }
+
+    features->max_meters = nl_attr_get_u32(a[OVS_METER_ATTR_MAX_METERS]);
+    features->max_bands = nl_attr_get_u32(a[OVS_METER_ATTR_MAX_BANDS]);
+
+    /* Bands is a nested attribute of zero or more nested
+     * band attributes.  */
+    if (a[OVS_METER_ATTR_BANDS]) {
+        const struct nlattr *nla;
+        size_t left;
+
+        NL_NESTED_FOR_EACH (nla, left, a[OVS_METER_ATTR_BANDS]) {
+            const struct nlattr *band_nla;
+            size_t band_left;
+
+            NL_NESTED_FOR_EACH (band_nla, band_left, nla) {
+                if (nl_attr_type(band_nla) == OVS_BAND_ATTR_TYPE) {
+                    if (nl_attr_get_size(band_nla) == sizeof(uint32_t)) {
+                        switch (nl_attr_get_u32(band_nla)) {
+                        case OVS_METER_BAND_TYPE_DROP:
+                            features->band_types |= 1 << OFPMBT13_DROP;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    features->capabilities = DP_SUPPORTED_METER_FLAGS_MASK;
+
+    ofpbuf_delete(msg);
 }
 
 static int
-dpif_netlink_meter_set(struct dpif *dpif OVS_UNUSED,
-                       ofproto_meter_id *meter_id OVS_UNUSED,
-                       struct ofputil_meter_config *config OVS_UNUSED)
+dpif_netlink_meter_set__(struct dpif *dpif_, ofproto_meter_id meter_id,
+                         struct ofputil_meter_config *config)
 {
-    return EFBIG; /* meter_id out of range */
+    struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
+    struct ofpbuf buf, *msg;
+    uint64_t stub[1024 / 8];
+
+    static const struct nl_policy ovs_meter_set_response_policy[] = {
+        [OVS_METER_ATTR_ID] = { .type = NL_A_U32 },
+    };
+    struct nlattr *a[ARRAY_SIZE(ovs_meter_set_response_policy)];
+
+    if (config->flags & ~DP_SUPPORTED_METER_FLAGS_MASK) {
+        return EBADF; /* Unsupported flags set */
+    }
+
+    for (size_t i = 0; i < config->n_bands; i++) {
+        switch (config->bands[i].type) {
+        case OFPMBT13_DROP:
+            break;
+        default:
+            return ENODEV; /* Unsupported band type */
+        }
+    }
+
+    dpif_netlink_meter_init(dpif, &buf, stub, sizeof stub, OVS_METER_CMD_SET);
+
+    nl_msg_put_u32(&buf, OVS_METER_ATTR_ID, meter_id.uint32);
+
+    if (config->flags & OFPMF13_KBPS) {
+        nl_msg_put_flag(&buf, OVS_METER_ATTR_KBPS);
+    }
+
+    size_t bands_offset = nl_msg_start_nested(&buf, OVS_METER_ATTR_BANDS);
+    /* Bands */
+    for (size_t i = 0; i < config->n_bands; ++i) {
+        struct ofputil_meter_band * band = &config->bands[i];
+        uint32_t band_type;
+
+        size_t band_offset = nl_msg_start_nested(&buf, OVS_BAND_ATTR_UNSPEC);
+
+        switch (band->type) {
+        case OFPMBT13_DROP:
+            band_type = OVS_METER_BAND_TYPE_DROP;
+            break;
+        default:
+            band_type = OVS_METER_BAND_TYPE_UNSPEC;
+        }
+        nl_msg_put_u32(&buf, OVS_BAND_ATTR_TYPE, band_type);
+        nl_msg_put_u32(&buf, OVS_BAND_ATTR_RATE, band->rate);
+        nl_msg_put_u32(&buf, OVS_BAND_ATTR_BURST,
+                       config->flags & OFPMF13_BURST ?
+                       band->burst_size : band->rate);
+        nl_msg_end_nested(&buf, band_offset);
+    }
+    nl_msg_end_nested(&buf, bands_offset);
+
+    int error = dpif_netlink_meter_transact(&buf, &msg,
+                                    ovs_meter_set_response_policy, a,
+                                    ARRAY_SIZE(ovs_meter_set_response_policy));
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl,
+                     "dpif_netlink_meter_transact OVS_METER_CMD_SET failed");
+        return error;
+    }
+
+    if (nl_attr_get_u32(a[OVS_METER_ATTR_ID]) != meter_id.uint32) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl,
+                     "Kernel returned a different meter id than requested");
+    }
+    ofpbuf_delete(msg);
+    return 0;
 }
 
 static int
-dpif_netlink_meter_get(const struct dpif *dpif OVS_UNUSED,
-                       ofproto_meter_id meter_id OVS_UNUSED,
-                       struct ofputil_meter_stats *stats OVS_UNUSED,
-                       uint16_t n_bands OVS_UNUSED)
+dpif_netlink_meter_set(struct dpif *dpif_, ofproto_meter_id meter_id,
+                       struct ofputil_meter_config *config)
 {
-    return EFBIG; /* meter_id out of range */
+    if (probe_broken_meters(dpif_)) {
+        return ENOMEM;
+    }
+
+    return dpif_netlink_meter_set__(dpif_, meter_id, config);
+}
+
+/* Retrieve statistics and/or delete meter 'meter_id'.  Statistics are
+ * stored in 'stats', if it is not null.  If 'command' is
+ * OVS_METER_CMD_DEL, the meter is deleted and statistics are optionally
+ * retrieved.  If 'command' is OVS_METER_CMD_GET, then statistics are
+ * simply retrieved. */
+static int
+dpif_netlink_meter_get_stats(const struct dpif *dpif_,
+                             ofproto_meter_id meter_id,
+                             struct ofputil_meter_stats *stats,
+                             uint16_t max_bands,
+                             enum ovs_meter_cmd command)
+{
+    struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
+    struct ofpbuf buf, *msg;
+    uint64_t stub[1024 / 8];
+
+    static const struct nl_policy ovs_meter_stats_policy[] = {
+        [OVS_METER_ATTR_ID] = { .type = NL_A_U32, .optional = true},
+        [OVS_METER_ATTR_STATS] = { NL_POLICY_FOR(struct ovs_flow_stats),
+                                   .optional = true},
+        [OVS_METER_ATTR_BANDS] = { .type = NL_A_NESTED, .optional = true },
+    };
+    struct nlattr *a[ARRAY_SIZE(ovs_meter_stats_policy)];
+
+    dpif_netlink_meter_init(dpif, &buf, stub, sizeof stub, command);
+
+    nl_msg_put_u32(&buf, OVS_METER_ATTR_ID, meter_id.uint32);
+
+    int error = dpif_netlink_meter_transact(&buf, &msg,
+                                            ovs_meter_stats_policy, a,
+                                            ARRAY_SIZE(ovs_meter_stats_policy));
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_INFO_RL(&rl, "dpif_netlink_meter_transact %s failed",
+                     command == OVS_METER_CMD_GET ? "get" : "del");
+        return error;
+    }
+
+    if (stats
+        && a[OVS_METER_ATTR_ID]
+        && a[OVS_METER_ATTR_STATS]
+        && nl_attr_get_u32(a[OVS_METER_ATTR_ID]) == meter_id.uint32) {
+        /* return stats */
+        const struct ovs_flow_stats *stat;
+        const struct nlattr *nla;
+        size_t left;
+
+        stat = nl_attr_get(a[OVS_METER_ATTR_STATS]);
+        stats->packet_in_count = get_32aligned_u64(&stat->n_packets);
+        stats->byte_in_count = get_32aligned_u64(&stat->n_bytes);
+
+        if (a[OVS_METER_ATTR_BANDS]) {
+            size_t n_bands = 0;
+            NL_NESTED_FOR_EACH (nla, left, a[OVS_METER_ATTR_BANDS]) {
+                const struct nlattr *band_nla;
+                band_nla = nl_attr_find_nested(nla, OVS_BAND_ATTR_STATS);
+                if (band_nla && nl_attr_get_size(band_nla) \
+                                == sizeof(struct ovs_flow_stats)) {
+                    stat = nl_attr_get(band_nla);
+
+                    if (n_bands < max_bands) {
+                        stats->bands[n_bands].packet_count
+                            = get_32aligned_u64(&stat->n_packets);
+                        stats->bands[n_bands].byte_count
+                            = get_32aligned_u64(&stat->n_bytes);
+                        ++n_bands;
+                    }
+                } else {
+                    stats->bands[n_bands].packet_count = 0;
+                    stats->bands[n_bands].byte_count = 0;
+                    ++n_bands;
+                }
+            }
+            stats->n_bands = n_bands;
+        } else {
+            /* For a non-existent meter, return 0 stats. */
+            stats->n_bands = 0;
+        }
+    }
+
+    ofpbuf_delete(msg);
+    return error;
 }
 
 static int
-dpif_netlink_meter_del(struct dpif *dpif OVS_UNUSED,
-                       ofproto_meter_id meter_id OVS_UNUSED,
-                       struct ofputil_meter_stats *stats OVS_UNUSED,
-                       uint16_t n_bands OVS_UNUSED)
+dpif_netlink_meter_get(const struct dpif *dpif, ofproto_meter_id meter_id,
+                       struct ofputil_meter_stats *stats, uint16_t max_bands)
 {
-    return EFBIG; /* meter_id out of range */
+    return dpif_netlink_meter_get_stats(dpif, meter_id, stats, max_bands,
+                                        OVS_METER_CMD_GET);
 }
 
+static int
+dpif_netlink_meter_del(struct dpif *dpif, ofproto_meter_id meter_id,
+                       struct ofputil_meter_stats *stats, uint16_t max_bands)
+{
+    return dpif_netlink_meter_get_stats(dpif, meter_id, stats, max_bands,
+                                        OVS_METER_CMD_DEL);
+}
+
+static bool
+probe_broken_meters__(struct dpif *dpif)
+{
+    /* This test is destructive if a probe occurs while ovs-vswitchd is
+     * running (e.g., an ovs-dpctl meter command is called), so choose a
+     * random high meter id to make this less likely to occur. */
+    ofproto_meter_id id1 = { 54545401 };
+    ofproto_meter_id id2 = { 54545402 };
+    struct ofputil_meter_band band = {OFPMBT13_DROP, 0, 1, 0};
+    struct ofputil_meter_config config1 = { 1, OFPMF13_KBPS, 1, &band};
+    struct ofputil_meter_config config2 = { 2, OFPMF13_KBPS, 1, &band};
+
+    /* Try adding two meters and make sure that they both come back with
+     * the proper meter id.  Use the "__" version so that we don't cause
+     * a recurve deadlock. */
+    dpif_netlink_meter_set__(dpif, id1, &config1);
+    dpif_netlink_meter_set__(dpif, id2, &config2);
+
+    if (dpif_netlink_meter_get(dpif, id1, NULL, 0)
+        || dpif_netlink_meter_get(dpif, id2, NULL, 0)) {
+        VLOG_INFO("The kernel module has a broken meter implementation.");
+        return true;
+    }
+
+    dpif_netlink_meter_del(dpif, id1, NULL, 0);
+    dpif_netlink_meter_del(dpif, id2, NULL, 0);
+
+    return false;
+}
+
+static bool
+probe_broken_meters(struct dpif *dpif)
+{
+    /* This is a once-only test because currently OVS only has at most a single
+     * Netlink capable datapath on any given platform. */
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+
+    static bool broken_meters = false;
+    if (ovsthread_once_start(&once)) {
+        broken_meters = probe_broken_meters__(dpif);
+        ovsthread_once_done(&once);
+    }
+    return broken_meters;
+}
 
 const struct dpif_class dpif_netlink_class = {
     "system",
@@ -2992,6 +3503,9 @@ const struct dpif_class dpif_netlink_class = {
     NULL,                       /* ct_set_maxconns */
     NULL,                       /* ct_get_maxconns */
     NULL,                       /* ct_get_nconns */
+    dpif_netlink_ct_set_limits,
+    dpif_netlink_ct_get_limits,
+    dpif_netlink_ct_del_limits,
     dpif_netlink_meter_get_features,
     dpif_netlink_meter_set,
     dpif_netlink_meter_get,
@@ -3008,7 +3522,7 @@ dpif_netlink_init(void)
         error = nl_lookup_genl_family(OVS_DATAPATH_FAMILY,
                                       &ovs_datapath_family);
         if (error) {
-            VLOG_WARN("Generic Netlink family '%s' does not exist. "
+            VLOG_INFO("Generic Netlink family '%s' does not exist. "
                       "The Open vSwitch kernel module is probably not loaded.",
                       OVS_DATAPATH_FAMILY);
         }
@@ -3025,6 +3539,17 @@ dpif_netlink_init(void)
         if (!error) {
             error = nl_lookup_genl_mcgroup(OVS_VPORT_FAMILY, OVS_VPORT_MCGROUP,
                                            &ovs_vport_mcgroup);
+        }
+        if (!error) {
+            if (nl_lookup_genl_family(OVS_METER_FAMILY, &ovs_meter_family)) {
+                VLOG_INFO("The kernel module does not support meters.");
+            }
+        }
+        if (nl_lookup_genl_family(OVS_CT_LIMIT_FAMILY,
+                                  &ovs_ct_limit_family) < 0) {
+            VLOG_INFO("Generic Netlink family '%s' does not exist. "
+                      "Please update the Open vSwitch kernel module to enable "
+                      "the conntrack limit feature.", OVS_CT_LIMIT_FAMILY);
         }
 
         ovs_tunnels_out_of_tree = dpif_netlink_rtnl_probe_oot_tunnels();
@@ -3071,6 +3596,7 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
         [OVS_VPORT_ATTR_STATS] = { NL_POLICY_FOR(struct ovs_vport_stats),
                                    .optional = true },
         [OVS_VPORT_ATTR_OPTIONS] = { .type = NL_A_NESTED, .optional = true },
+        [OVS_VPORT_ATTR_NETNSID] = { .type = NL_A_U32, .optional = true },
     };
 
     dpif_netlink_vport_init(vport);
@@ -3105,6 +3631,12 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
     if (a[OVS_VPORT_ATTR_OPTIONS]) {
         vport->options = nl_attr_get(a[OVS_VPORT_ATTR_OPTIONS]);
         vport->options_len = nl_attr_get_size(a[OVS_VPORT_ATTR_OPTIONS]);
+    }
+    if (a[OVS_VPORT_ATTR_NETNSID]) {
+        netnsid_set(&vport->netnsid,
+                    nl_attr_get_u32(a[OVS_VPORT_ATTR_NETNSID]));
+    } else {
+        netnsid_set_local(&vport->netnsid);
     }
     return 0;
 }

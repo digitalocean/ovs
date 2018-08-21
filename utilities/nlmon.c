@@ -25,6 +25,7 @@
 #include <linux/rtnetlink.h>
 #include "netlink.h"
 #include "netlink-socket.h"
+#include "netnsid.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/poll-loop.h"
 #include "timeval.h"
@@ -41,6 +42,7 @@ main(int argc OVS_UNUSED, char *argv[])
 {
     uint64_t buf_stub[4096 / 64];
     struct nl_sock *sock;
+    int nsid;
     struct ofpbuf buf;
     int error;
 
@@ -57,9 +59,10 @@ main(int argc OVS_UNUSED, char *argv[])
         ovs_fatal(error, "could not join RTNLGRP_LINK multicast group");
     }
 
+    nl_sock_listen_all_nsid(sock, true);
     ofpbuf_use_stub(&buf, buf_stub, sizeof buf_stub);
     for (;;) {
-        error = nl_sock_recv(sock, &buf, false);
+        error = nl_sock_recv(sock, &buf, &nsid, false);
         if (error == EAGAIN) {
             /* Nothing to do. */
         } else if (error == ENOBUFS) {
@@ -116,20 +119,25 @@ main(int argc OVS_UNUSED, char *argv[])
                     : nlh->nlmsg_type == RTM_GETLINK ? "RTM_GETLINK"
                     : nlh->nlmsg_type == RTM_SETLINK ? "RTM_SETLINK"
                     : "other"));
-            printf("\tflags:");
+            printf("  flags:");
             for (i = 0; i < ARRAY_SIZE(flags); i++) {
                 if (iim->ifi_flags & flags[i].flag) {
                     printf(" %s", flags[i].name);
                 }
             }
             printf("\n");
+            if (netnsid_is_remote(nsid)) {
+                printf("  netns id: %d\n", nsid);
+            } else {
+                printf("  netns id: local\n");
+            }
             if (attrs[IFLA_MASTER]) {
                 uint32_t idx = nl_attr_get_u32(attrs[IFLA_MASTER]);
                 char ifname[IFNAMSIZ];
                 if (!if_indextoname(idx, ifname)) {
                     strcpy(ifname, "unknown");
                 }
-                printf("\tmaster=%"PRIu32" (%s)\n", idx, ifname);
+                printf("  master=%"PRIu32" (%s)\n", idx, ifname);
             }
         }
 

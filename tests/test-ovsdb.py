@@ -240,6 +240,16 @@ def print_idl(idl, step):
             print(''.join(s))
             n += 1
 
+    if "singleton" in idl.tables:
+        sng = idl.tables["singleton"].rows
+        for row in six.itervalues(sng):
+            s = ["%03d:" % step]
+            s.append(" name=%s" % row.name)
+            if hasattr(row, "uuid"):
+                s.append(" uuid=%s" % row.uuid)
+            print(''.join(s))
+            n += 1
+
     if not n:
         print("%03d: empty" % step)
     sys.stdout.flush()
@@ -552,6 +562,11 @@ def do_idl(schema_file, remote, *commands):
     track_notify = False
 
     if remote.startswith("ssl:"):
+        if len(commands) < 3:
+            sys.stderr.write("SSL connection requires private key, "
+                             "certificate for private key, and peer CA "
+                             "certificate as arguments\n")
+            sys.exit(1)
         ovs.stream.Stream.ssl_set_private_key_file(commands[0])
         ovs.stream.Stream.ssl_set_certificate_file(commands[1])
         ovs.stream.Stream.ssl_set_ca_cert_file(commands[2])
@@ -580,9 +595,16 @@ def do_idl(schema_file, remote, *commands):
         idl.index_create("simple3", "simple3_by_name")
 
     if commands:
-        error, stream = ovs.stream.Stream.open_block(
-            ovs.stream.Stream.open(remote))
-        if error:
+        remotes = remote.split(',')
+        stream = None
+        for r in remotes:
+            error, stream = ovs.stream.Stream.open_block(
+                ovs.stream.Stream.open(r))
+            if not error and stream:
+                break
+            stream = None
+
+        if not stream:
             sys.stderr.write("failed to connect to \"%s\"" % remote)
             sys.exit(1)
         rpc = ovs.jsonrpc.Connection(stream)

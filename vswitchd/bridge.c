@@ -45,7 +45,6 @@
 #include "openvswitch/list.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-print.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "ovs-lldp.h"
@@ -63,6 +62,7 @@
 #include "sset.h"
 #include "system-stats.h"
 #include "timeval.h"
+#include "tnl-ports.h"
 #include "util.h"
 #include "unixctl.h"
 #include "lib/vswitch-idl.h"
@@ -89,7 +89,6 @@ struct iface {
 
     /* These members are valid only within bridge_reconfigure(). */
     const char *type;           /* Usually same as cfg->type. */
-    const char *netdev_type;    /* type that should be used for netdev_open. */
     const struct ovsrec_interface *cfg;
 };
 
@@ -409,6 +408,8 @@ bridge_init(const char *remote)
     ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_db_version);
     ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_system_type);
     ovsdb_idl_omit(idl, &ovsrec_open_vswitch_col_system_version);
+    ovsdb_idl_omit_alert(idl, &ovsrec_open_vswitch_col_dpdk_version);
+    ovsdb_idl_omit_alert(idl, &ovsrec_open_vswitch_col_dpdk_initialized);
 
     ovsdb_idl_omit_alert(idl, &ovsrec_bridge_col_datapath_id);
     ovsdb_idl_omit_alert(idl, &ovsrec_bridge_col_datapath_version);
@@ -600,7 +601,8 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
                                       OFPROTO_MAX_IDLE_DEFAULT));
     ofproto_set_vlan_limit(smap_get_int(&ovs_cfg->other_config, "vlan-limit",
                                        LEGACY_MAX_VLAN_HEADERS));
-
+    ofproto_set_bundle_idle_timeout(smap_get_int(&ovs_cfg->other_config,
+                                                 "bundle-idle-timeout", 0));
     ofproto_set_threads(
         smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0),
         smap_get_int(&ovs_cfg->other_config, "n-revalidator-threads", 0));
@@ -823,7 +825,9 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
             goto delete;
         }
 
-        if (strcmp(ofproto_port.type, iface->netdev_type)
+        const char *netdev_type = ofproto_port_open_type(br->ofproto,
+                                                         iface->type);
+        if (strcmp(ofproto_port.type, netdev_type)
             || netdev_set_config(iface->netdev, &iface->cfg->options, NULL)) {
             /* The interface is the wrong type or can't be configured.
              * Delete it. */
@@ -1779,7 +1783,7 @@ iface_do_create(const struct bridge *br,
         goto error;
     }
 
-    type = ofproto_port_open_type(br->cfg->datapath_type,
+    type = ofproto_port_open_type(br->ofproto,
                                   iface_get_type(iface_cfg, br->cfg));
     error = netdev_open(iface_cfg->name, type, &netdev);
     if (error) {
@@ -1857,8 +1861,6 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
     iface->ofp_port = ofp_port;
     iface->netdev = netdev;
     iface->type = iface_get_type(iface_cfg, br->cfg);
-    iface->netdev_type = ofproto_port_open_type(br->cfg->datapath_type,
-                                                iface->type);
     iface->cfg = iface_cfg;
     hmap_insert(&br->ifaces, &iface->ofp_port_node,
                 hash_ofp_port(ofp_port));
@@ -2838,10 +2840,13 @@ run_status_update(void)
          * previous one is not done. */
         seq = seq_read(connectivity_seq_get());
         if (seq != connectivity_seqno || status_txn_try_again) {
+            const struct ovsrec_open_vswitch *cfg =
+                ovsrec_open_vswitch_first(idl);
             struct bridge *br;
 
             connectivity_seqno = seq;
             status_txn = ovsdb_idl_txn_create(idl);
+            dpdk_status(cfg);
             HMAP_FOR_EACH (br, node, &all_bridges) {
                 struct port *port;
 
@@ -3137,24 +3142,24 @@ qos_unixctl_show_queue(unsigned int queue_id,
     }
 
     SMAP_FOR_EACH (node, details) {
-        ds_put_format(ds, "\t%s: %s\n", node->key, node->value);
+        ds_put_format(ds, "  %s: %s\n", node->key, node->value);
     }
 
     error = netdev_get_queue_stats(iface->netdev, queue_id, &stats);
     if (!error) {
         if (stats.tx_packets != UINT64_MAX) {
-            ds_put_format(ds, "\ttx_packets: %"PRIu64"\n", stats.tx_packets);
+            ds_put_format(ds, "  tx_packets: %"PRIu64"\n", stats.tx_packets);
         }
 
         if (stats.tx_bytes != UINT64_MAX) {
-            ds_put_format(ds, "\ttx_bytes: %"PRIu64"\n", stats.tx_bytes);
+            ds_put_format(ds, "  tx_bytes: %"PRIu64"\n", stats.tx_bytes);
         }
 
         if (stats.tx_errors != UINT64_MAX) {
-            ds_put_format(ds, "\ttx_errors: %"PRIu64"\n", stats.tx_errors);
+            ds_put_format(ds, "  tx_errors: %"PRIu64"\n", stats.tx_errors);
         }
     } else {
-        ds_put_format(ds, "\tFailed to get statistics for queue %u: %s",
+        ds_put_format(ds, "  Failed to get statistics for queue %u: %s",
                       queue_id, ovs_strerror(error));
     }
 }
@@ -3446,18 +3451,10 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
             const struct ovsrec_interface *cfg = port_rec->interfaces[i];
             struct iface *iface = iface_lookup(br, cfg->name);
             const char *type = iface_get_type(cfg, br->cfg);
-            const char *dp_type = br->cfg->datapath_type;
-            const char *netdev_type = ofproto_port_open_type(dp_type, type);
 
             if (iface) {
                 iface->cfg = cfg;
                 iface->type = type;
-                iface->netdev_type = netdev_type;
-            } else if (!strcmp(type, "null")) {
-                VLOG_WARN_ONCE("%s: The null interface type is deprecated and"
-                               " may be removed in February 2013. Please email"
-                               " dev@openvswitch.org with concerns.",
-                               cfg->name);
             } else {
                 /* We will add new interfaces later. */
             }
@@ -4079,11 +4076,7 @@ port_del_ifaces(struct port *port)
     /* Collect list of new interfaces. */
     sset_init(&new_ifaces);
     for (i = 0; i < port->cfg->n_interfaces; i++) {
-        const char *name = port->cfg->interfaces[i]->name;
-        const char *type = port->cfg->interfaces[i]->type;
-        if (strcmp(type, "null")) {
-            sset_add(&new_ifaces, name);
-        }
+        sset_add(&new_ifaces, port->cfg->interfaces[i]->name);
     }
 
     /* Get rid of deleted interfaces. */
@@ -4355,6 +4348,8 @@ iface_destroy__(struct iface *iface)
 
         ovs_list_remove(&iface->port_elem);
         hmap_remove(&br->iface_by_name, &iface->name_node);
+
+        tnl_port_map_delete_ipdev(netdev_get_name(iface->netdev));
 
         /* The user is changing configuration here, so netdev_remove needs to be
          * used as opposed to netdev_close */

@@ -22,8 +22,8 @@
 #include "openflow/openflow.h"
 #include "openflow/nicira-ext.h"
 #include "openvswitch/meta-flow.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofp-errors.h"
+#include "openvswitch/ofp-protocol.h"
 #include "openvswitch/types.h"
 #include "openvswitch/ofp-ed-props.h"
 
@@ -287,6 +287,8 @@ struct ofpact_output {
     uint16_t max_len;           /* Max send len, for port OFPP_CONTROLLER. */
 };
 
+#define NX_CTLR_NO_METER 0
+
 /* OFPACT_CONTROLLER.
  *
  * Used for NXAST_CONTROLLER. */
@@ -305,6 +307,12 @@ struct ofpact_controller {
         /* Arbitrary data to include in the packet-in message (currently,
          * only in NXT_PACKET_IN2). */
         uint16_t userdata_len;
+
+        /* Meter to which this controller action should be associated.
+         * If requested, this will override a "controller" virtual meter.
+         * A value of NX_CTLR_NO_METER means no meter is requested. */
+        uint32_t meter_id;
+        uint32_t provider_meter_id;
     );
     uint8_t userdata[0];
 };
@@ -1064,18 +1072,34 @@ bool ofpacts_equal_stringwise(const struct ofpact a[], size_t a_len,
 const struct mf_field *ofpact_get_mf_dst(const struct ofpact *ofpact);
 uint32_t ofpacts_get_meter(const struct ofpact[], size_t ofpacts_len);
 
-/* Formatting and parsing ofpacts. */
+/* Formatting ofpacts. */
+struct ofpact_format_params {
+    /* Input. */
+    const struct ofputil_port_map *port_map;
+    const struct ofputil_table_map *table_map;
+
+    /* Output. */
+    struct ds *s;
+};
 void ofpacts_format(const struct ofpact[], size_t ofpacts_len,
-                    const struct ofputil_port_map *, struct ds *);
-char *ofpacts_parse_actions(const char *, const struct ofputil_port_map *,
-                            struct ofpbuf *ofpacts,
-                            enum ofputil_protocol *usable_protocols)
-    OVS_WARN_UNUSED_RESULT;
-char *ofpacts_parse_instructions(const char *, const struct ofputil_port_map *,
-                                 struct ofpbuf *ofpacts,
-                                 enum ofputil_protocol *usable_protocols)
-    OVS_WARN_UNUSED_RESULT;
+                    const struct ofpact_format_params *);
 const char *ofpact_name(enum ofpact_type);
+
+/* Parsing ofpacts. */
+struct ofpact_parse_params {
+    /* Input. */
+    const struct ofputil_port_map *port_map;
+    const struct ofputil_table_map *table_map;
+
+    /* Output. */
+    struct ofpbuf *ofpacts;
+    enum ofputil_protocol *usable_protocols;
+};
+char *ofpacts_parse_actions(const char *, const struct ofpact_parse_params *)
+    OVS_WARN_UNUSED_RESULT;
+char *ofpacts_parse_instructions(const char *,
+                                 const struct ofpact_parse_params *)
+    OVS_WARN_UNUSED_RESULT;
 
 /* Internal use by the helpers below. */
 void ofpact_init(struct ofpact *, enum ofpact_type, size_t len);

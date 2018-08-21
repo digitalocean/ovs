@@ -37,11 +37,6 @@ struct net;
         alloc_netdev_mq(sizeof_priv, name, setup, 1)
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
-#define unregister_netdevice_queue(dev, head)	unregister_netdevice(dev)
-#define unregister_netdevice_many(head)
-#endif
-
 #ifndef HAVE_DEV_DISABLE_LRO
 extern void dev_disable_lro(struct net_device *dev);
 #endif
@@ -321,4 +316,11 @@ static inline void skb_gso_error_unwind(struct sk_buff *skb, __be16 protocol,
 	skb->mac_len = mac_len;
 }
 #endif
+
+#ifndef HAVE_NETIF_KEEP_DST
+static inline void netif_keep_dst(struct net_device *dev)
+{
+}
+#endif
+
 #endif /* __LINUX_NETDEVICE_WRAPPER_H */

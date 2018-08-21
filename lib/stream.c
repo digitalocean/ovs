@@ -126,11 +126,11 @@ stream_usage(const char *name, bool active, bool passive,
     printf("\n");
     if (active) {
         printf("Active %s connection methods:\n", name);
-        printf("  tcp:IP:PORT             "
-               "PORT at remote IP\n");
+        printf("  tcp:HOST:PORT           "
+               "PORT at remote HOST\n");
 #ifdef HAVE_OPENSSL
-        printf("  ssl:IP:PORT             "
-               "SSL PORT at remote IP\n");
+        printf("  ssl:HOST:PORT           "
+               "SSL PORT at remote HOST\n");
 #endif
         printf("  unix:FILE               "
                "Unix domain socket named FILE\n");
@@ -747,8 +747,7 @@ pstream_open_with_default_port(const char *name_,
  *     - On error, function returns false and *ss contains garbage.
  */
 bool
-stream_parse_target_with_default_port(const char *target,
-                                      uint16_t default_port,
+stream_parse_target_with_default_port(const char *target, int default_port,
                                       struct sockaddr_storage *ss)
 {
     return ((!strncmp(target, "tcp:", 4) || !strncmp(target, "ssl:", 4))

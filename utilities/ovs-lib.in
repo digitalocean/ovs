@@ -1,3 +1,5 @@
+# -*- sh -*-
+# vi:syntax=sh
 # This is a shell function library sourced by some Open vSwitch scripts.
 # It is not intended to be invoked on its own.
 
@@ -256,7 +258,7 @@ stop_daemon () {
                 case $action in
                     EXIT)
                         action "Exiting $1 ($pid)" \
-                            ${bindir}/ovs-appctl -T 1 -t $rundir/$1.$pid.ctl exit
+                            ${bindir}/ovs-appctl -T 1 -t $rundir/$1.$pid.ctl exit $2
                         ;;
                     TERM)
                         action "Killing $1 ($pid)" kill $pid
@@ -387,7 +389,10 @@ move_ip_routes () {
 
 ovsdb_tool () {
     if [ "$OVS_USER" != "" ]; then
-        runuser --user "${OVS_USER%:*}" -- ovsdb-tool -vconsole:off "$@"
+        local uid=$(id -u "${OVS_USER%:*}")
+        local gid=$(id -g "${OVS_USER%:*}")
+        local groups=$(id -G "${OVS_USER%:*}" | tr ' ' ',')
+        setpriv --reuid "$uid" --regid "$gid" --groups "$groups" ovsdb-tool -vconsole:off "$@"
     else
         ovsdb-tool -vconsole:off "$@"
     fi
@@ -501,6 +506,10 @@ ovs_vsctl () {
 ## force-reload-kmod ##
 ## ----------------- ##
 
+ovs_kmod_ctl () {
+    "$dir0/ovs-kmod-ctl" "$@"
+}
+
 internal_interfaces () {
     # Outputs a list of internal interfaces:
     #
@@ -599,6 +608,9 @@ force_reload_kmod () {
     stop_ovsdb
     start_ovsdb || return 1
 
+    if [ -n "$(ovs-dpctl show)" ]; then
+        action "Flush old conntrack entries" ovs-appctl dpctl/flush-conntrack
+    fi
     stop_forwarding
 
     if action "Saving interface configuration" save_interfaces; then
@@ -614,15 +626,8 @@ force_reload_kmod () {
     for dp in `ovs-dpctl dump-dps`; do
         action "Removing datapath: $dp" ovs-dpctl del-dp "$dp"
     done
-    action "ovs-appctl dpctl/flush-conntrack"
 
-    for vport in `awk '/^vport_/ { print $1 }' /proc/modules`; do
-        action "Removing $vport module" rmmod $vport
-    done
-
-    if test -e /sys/module/openvswitch; then
-        action "Removing openvswitch module" rmmod openvswitch
-    fi
+    ovs_kmod_ctl remove
 
     # Start vswitchd by asking it to wait till flow restore is finished.
     flow_restore_wait

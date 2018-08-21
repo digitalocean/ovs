@@ -19,6 +19,7 @@
 #include "lib/packets.h"
 
 struct nbrec_logical_router_port;
+struct sbrec_logical_flow;
 struct uuid;
 
 struct ipv4_netaddr {
@@ -73,5 +74,11 @@ const char *db_table_usage(struct ds *tables,
                            int n_tables);
 
 bool ovn_is_known_nb_lsp_type(const char *type);
+
+uint32_t sbrec_logical_flow_hash(const struct sbrec_logical_flow *);
+uint32_t ovn_logical_flow_hash(const struct uuid *logical_datapath,
+                               uint8_t table_id, const char *pipeline,
+                               uint16_t priority,
+                               const char *match, const char *actions);
 
 #endif

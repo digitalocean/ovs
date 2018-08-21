@@ -64,6 +64,9 @@ struct ovn_extend_table;
     OVNACT(CT_CLEAR,          ovnact_null)            \
     OVNACT(CLONE,             ovnact_nest)            \
     OVNACT(ARP,               ovnact_nest)            \
+    OVNACT(ICMP4,             ovnact_nest)            \
+    OVNACT(ICMP6,             ovnact_nest)            \
+    OVNACT(TCP_RESET,         ovnact_nest)            \
     OVNACT(ND_NA,             ovnact_nest)            \
     OVNACT(ND_NA_ROUTER,      ovnact_nest)            \
     OVNACT(GET_ARP,           ovnact_get_mac_bind)    \
@@ -281,6 +284,7 @@ struct ovnact_log {
     uint8_t verdict;            /* One of LOG_VERDICT_*. */
     uint8_t severity;           /* One of LOG_SEVERITY_*. */
     char *name;
+    char *meter;
 };
 
 /* OVNACT_SET_METER. */
@@ -430,6 +434,18 @@ enum action_opcode {
      * The actions, in OpenFlow 1.3 format, follow the action_header.
      */
     ACTION_OPCODE_ND_NS,
+
+    /* "icmp4 { ...actions... } and icmp6 { ...actions... }".
+     *
+     * The actions, in OpenFlow 1.3 format, follow the action_header.
+     */
+    ACTION_OPCODE_ICMP,
+
+    /* "tcp_reset { ...actions... }".
+     *
+     * The actions, in OpenFlow 1.3 format, follow the action_header.
+     */
+    ACTION_OPCODE_TCP_RESET,
 
     /* "nd_na_router { ...actions... }" with rso flag 'ND_RSO_ROUTER' set.
         *

@@ -212,7 +212,7 @@ parse_json(const char *s)
 {
     struct json *json = json_from_string(s);
     if (json->type == JSON_STRING) {
-        ovs_fatal(0, "\"%s\": %s", s, json->u.string);
+        ovs_fatal(0, "\"%s\": %s", s, json->string);
     }
     return json;
 }
@@ -224,14 +224,6 @@ print_and_free_json(struct json *json)
     json_destroy(json);
     puts(string);
     free(string);
-}
-
-static struct ovsdb_error *
-write_and_free_json(struct ovsdb_log *log, struct json *json)
-{
-    struct ovsdb_error *error = ovsdb_log_write(log, json);
-    json_destroy(json);
-    return error;
 }
 
 static void
@@ -270,7 +262,7 @@ do_create(struct ovs_cmdl_context *ctx)
     /* Create database file. */
     check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC,
                                      OVSDB_LOG_CREATE_EXCL, -1, &log));
-    check_ovsdb_error(write_and_free_json(log, json));
+    check_ovsdb_error(ovsdb_log_write_and_free(log, json));
     check_ovsdb_error(ovsdb_log_commit_block(log));
     ovsdb_log_close(log);
 }
@@ -348,9 +340,9 @@ write_standalone_db(const char *file_name, const char *comment,
         return error;
     }
 
-    error = write_and_free_json(log, ovsdb_schema_to_json(db->schema));
+    error = ovsdb_log_write_and_free(log, ovsdb_schema_to_json(db->schema));
     if (!error) {
-        error = write_and_free_json(log, ovsdb_to_txn_json(db, comment));
+        error = ovsdb_log_write_and_free(log, ovsdb_to_txn_json(db, comment));
     }
     ovsdb_log_close(log);
 
@@ -685,7 +677,7 @@ print_db_changes(struct shash *tables, struct smap *names,
                 }
             }
 
-            printf("\ttable %s", table);
+            printf("  table %s", table);
 
             if (!old_name) {
                 if (new_name) {
@@ -730,7 +722,7 @@ print_db_changes(struct shash *tables, struct smap *names,
                         if (!value_string) {
                             value_string = json_to_string(value, JSSF_SORT);
                         }
-                        printf("\t\t%s=%s\n", column, value_string);
+                        printf("    %s=%s\n", column, value_string);
                         free(value_string);
                     }
                 }
@@ -743,7 +735,7 @@ print_db_changes(struct shash *tables, struct smap *names,
                                     xmemdup0(row_uuid, 8));
                 }
             } else if (columns->type == JSON_NULL) {
-                printf("\t\tdelete row\n");
+                printf("    delete row\n");
                 smap_remove(names, row_uuid);
             }
 
@@ -1009,6 +1001,7 @@ do_show_log(struct ovs_cmdl_context *ctx)
 }
 
 struct server {
+    struct ovsdb_log *log;
     const char *filename;
     const char *nickname;
 
@@ -1060,7 +1053,7 @@ get_server_name(const struct cluster *c, const struct uuid *sid,
                 char buf[SID_LEN + 1], size_t bufsize)
 {
     for (size_t i = 0; i < c->n_servers; i++) {
-        struct server *s = &c->servers[c->n_servers];
+        struct server *s = &c->servers[i];
         if (uuid_equals(&s->header.sid, sid)) {
             return s->filename;
         }
@@ -1172,18 +1165,25 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
         struct server *s = &c.servers[c.n_servers];
         s->filename = ctx->argv[i];
 
-        struct ovsdb_log *log;
         check_ovsdb_error(ovsdb_log_open(s->filename, RAFT_MAGIC,
-                                         OVSDB_LOG_READ_ONLY, -1, &log));
+                                         OVSDB_LOG_READ_ONLY, -1, &s->log));
 
         struct json *json;
-        check_ovsdb_error(ovsdb_log_read(log, &json));
+        check_ovsdb_error(ovsdb_log_read(s->log, &json));
         check_ovsdb_error(raft_header_from_json(&s->header, json));
         json_destroy(json);
 
         if (s->header.joining) {
             printf("%s has not joined the cluster, omitting\n", s->filename);
+            ovsdb_log_close(s->log);
             continue;
+        }
+        for (size_t j = 0; j < c.n_servers; j++) {
+            if (uuid_equals(&s->header.sid, &c.servers[j].header.sid)) {
+                ovs_fatal(0, "Duplicate server ID "SID_FMT" in %s and %s.",
+                          SID_ARGS(&s->header.sid),
+                          s->filename, c.servers[j].filename);
+            }
         }
         if (c.n_servers > 0) {
             struct server *s0 = &c.servers[0];
@@ -1199,6 +1199,10 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
                           s->filename, s->header.name);
             }
         }
+        c.n_servers++;
+    }
+
+    for (struct server *s = c.servers; s < &c.servers[c.n_servers]; s++) {
         s->snap = &s->header.snap;
         s->log_start = s->log_end = s->header.snap_index + 1;
 
@@ -1217,7 +1221,9 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
                 s->records = x2nrealloc(s->records, &allocated_records,
                                         sizeof *s->records);
             }
-            check_ovsdb_error(ovsdb_log_read(log, &json));
+
+            struct json *json;
+            check_ovsdb_error(ovsdb_log_read(s->log, &json));
             if (!json) {
                 break;
             }
@@ -1237,7 +1243,6 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
             if (term > max_term) {
                 max_term = term;
             }
-
 
             switch (r->type) {
             case RAFT_REC_ENTRY:
@@ -1367,9 +1372,8 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
             }
         }
 
-        ovsdb_log_close(log);
-
-        c.n_servers++;
+        ovsdb_log_close(s->log);
+        s->log = NULL;
     }
 
     /* Check the Leader Completeness property from Figure 3.2: If a log entry
@@ -1381,7 +1385,8 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
     struct commit *commit = NULL;
     for (uint64_t term = min_term; term <= max_term; term++) {
         struct leader *leader = find_leader(&c, term);
-        if (leader && commit && commit->index >= leader->log_end) {
+        if (leader && leader->log_end
+            && commit && commit->index >= leader->log_end) {
             ovs_fatal(0, "leader %s for term %"PRIu64" has log entries only "
                       "up to index %"PRIu64", but index %"PRIu64" was "
                       "committed in a previous term (e.g. by %s)",

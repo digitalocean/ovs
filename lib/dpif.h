@@ -392,7 +392,7 @@
 #include "dp-packet.h"
 #include "netdev.h"
 #include "openflow/openflow.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-meter.h"
 #include "ovs-numa.h"
 #include "packets.h"
 #include "util.h"
@@ -507,6 +507,11 @@ struct dpif_flow_stats {
     uint16_t tcp_flags;
 };
 
+struct dpif_flow_attrs {
+    bool offloaded;         /* True if flow is offloaded to HW. */
+    const char *dp_layer;   /* DP layer the flow is handled in. */
+};
+
 void dpif_flow_stats_extract(const struct flow *, const struct dp_packet *packet,
                              long long int used, struct dpif_flow_stats *);
 void dpif_flow_stats_format(const struct dpif_flow_stats *, struct ds *);
@@ -589,7 +594,7 @@ struct dpif_flow {
     bool ufid_present;            /* True if 'ufid' was provided by datapath.*/
     unsigned pmd_id;              /* Datapath poll mode driver id. */
     struct dpif_flow_stats stats; /* Flow statistics. */
-    bool offloaded;               /* True if flow is offloaded */
+    struct dpif_flow_attrs attrs; /* Flow attributes. */
 };
 int dpif_flow_dump_next(struct dpif_flow_dump_thread *,
                         struct dpif_flow *flows, int max_flows);
@@ -760,7 +765,7 @@ struct dpif_op {
         struct dpif_flow_del flow_del;
         struct dpif_execute execute;
         struct dpif_flow_get flow_get;
-    } u;
+    };
 };
 
 void dpif_operate(struct dpif *, struct dpif_op **ops, size_t n_ops);
@@ -863,7 +868,7 @@ void dpif_print_packet(struct dpif *, struct dpif_upcall *);
 /* Meters. */
 void dpif_meter_get_features(const struct dpif *,
                              struct ofputil_meter_features *);
-int dpif_meter_set(struct dpif *, ofproto_meter_id *meter_id,
+int dpif_meter_set(struct dpif *, ofproto_meter_id meter_id,
                    struct ofputil_meter_config *);
 int dpif_meter_get(const struct dpif *, ofproto_meter_id meter_id,
                    struct ofputil_meter_stats *, uint16_t n_bands);

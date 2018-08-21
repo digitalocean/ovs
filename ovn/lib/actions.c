@@ -78,7 +78,7 @@ ovnact_init(struct ovnact *ovnact, enum ovnact_type type, size_t len)
 
 static size_t
 encode_start_controller_op(enum action_opcode opcode, bool pause,
-                           struct ofpbuf *ofpacts)
+                           uint32_t meter_id, struct ofpbuf *ofpacts)
 {
     size_t ofs = ofpacts->size;
 
@@ -86,6 +86,7 @@ encode_start_controller_op(enum action_opcode opcode, bool pause,
     oc->max_len = UINT16_MAX;
     oc->reason = OFPR_ACTION;
     oc->pause = pause;
+    oc->meter_id = meter_id;
 
     struct action_header ah = { .opcode = htonl(opcode) };
     ofpbuf_put(ofpacts, &ah, sizeof ah);
@@ -105,7 +106,8 @@ encode_finish_controller_op(size_t ofs, struct ofpbuf *ofpacts)
 static void
 encode_controller_op(enum action_opcode opcode, struct ofpbuf *ofpacts)
 {
-    size_t ofs = encode_start_controller_op(opcode, false, ofpacts);
+    size_t ofs = encode_start_controller_op(opcode, false, NX_CTLR_NO_METER,
+                                            ofpacts);
     encode_finish_controller_op(ofs, ofpacts);
 }
 
@@ -234,7 +236,8 @@ add_prerequisite(struct action_context *ctx, const char *prerequisite)
     struct expr *expr;
     char *error;
 
-    expr = expr_parse_string(prerequisite, ctx->pp->symtab, NULL, &error);
+    expr = expr_parse_string(prerequisite, ctx->pp->symtab, NULL, NULL,
+                             &error);
     ovs_assert(!error);
     ctx->prereqs = expr_combine(EXPR_T_AND, ctx->prereqs, expr);
 }
@@ -1048,7 +1051,7 @@ encode_CT_LB(const struct ovnact_ct_lb *cl,
                       recirc_table, zone_reg);
     }
 
-    table_id = ovn_extend_table_assign_id(ep->group_table, &ds);
+    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds));
     ds_destroy(&ds);
     if (table_id == EXT_TABLE_ID_INVALID) {
         return;
@@ -1131,6 +1134,24 @@ parse_ARP(struct action_context *ctx)
 }
 
 static void
+parse_ICMP4(struct action_context *ctx)
+{
+    parse_nested_action(ctx, OVNACT_ICMP4, "ip4");
+}
+
+static void
+parse_ICMP6(struct action_context *ctx)
+{
+    parse_nested_action(ctx, OVNACT_ICMP6, "ip6");
+}
+
+static void
+parse_TCP_RESET(struct action_context *ctx)
+{
+    parse_nested_action(ctx, OVNACT_TCP_RESET, "tcp");
+}
+
+static void
 parse_ND_NA(struct action_context *ctx)
 {
     parse_nested_action(ctx, OVNACT_ND_NA, "nd_ns");
@@ -1170,6 +1191,24 @@ format_ARP(const struct ovnact_nest *nest, struct ds *s)
 }
 
 static void
+format_ICMP4(const struct ovnact_nest *nest, struct ds *s)
+{
+    format_nested_action(nest, "icmp4", s);
+}
+
+static void
+format_ICMP6(const struct ovnact_nest *nest, struct ds *s)
+{
+    format_nested_action(nest, "icmp6", s);
+}
+
+static void
+format_TCP_RESET(const struct ovnact_nest *nest, struct ds *s)
+{
+    format_nested_action(nest, "tcp_reset", s);
+}
+
+static void
 format_ND_NA(const struct ovnact_nest *nest, struct ds *s)
 {
     format_nested_action(nest, "nd_na", s);
@@ -1194,10 +1233,10 @@ format_CLONE(const struct ovnact_nest *nest, struct ds *s)
 }
 
 static void
-encode_nested_neighbor_actions(const struct ovnact_nest *on,
-                               const struct ovnact_encode_params *ep,
-                               enum action_opcode opcode,
-                               struct ofpbuf *ofpacts)
+encode_nested_actions(const struct ovnact_nest *on,
+                      const struct ovnact_encode_params *ep,
+                      enum action_opcode opcode,
+                      struct ofpbuf *ofpacts)
 {
     /* Convert nested actions into ofpacts. */
     uint64_t inner_ofpacts_stub[1024 / 8];
@@ -1208,7 +1247,8 @@ encode_nested_neighbor_actions(const struct ovnact_nest *on,
      * converted to OpenFlow, as its userdata.  ovn-controller will convert the
      * packet to ARP or NA and then send the packet and actions back to the
      * switch inside an OFPT_PACKET_OUT message. */
-    size_t oc_offset = encode_start_controller_op(opcode, false, ofpacts);
+    size_t oc_offset = encode_start_controller_op(opcode, false,
+                                                  NX_CTLR_NO_METER, ofpacts);
     ofpacts_put_openflow_actions(inner_ofpacts.data, inner_ofpacts.size,
                                  ofpacts, OFP13_VERSION);
     encode_finish_controller_op(oc_offset, ofpacts);
@@ -1222,7 +1262,31 @@ encode_ARP(const struct ovnact_nest *on,
            const struct ovnact_encode_params *ep,
            struct ofpbuf *ofpacts)
 {
-    encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ARP, ofpacts);
+    encode_nested_actions(on, ep, ACTION_OPCODE_ARP, ofpacts);
+}
+
+static void
+encode_ICMP4(const struct ovnact_nest *on,
+             const struct ovnact_encode_params *ep,
+             struct ofpbuf *ofpacts)
+{
+    encode_nested_actions(on, ep, ACTION_OPCODE_ICMP, ofpacts);
+}
+
+static void
+encode_ICMP6(const struct ovnact_nest *on,
+             const struct ovnact_encode_params *ep,
+             struct ofpbuf *ofpacts)
+{
+    encode_nested_actions(on, ep, ACTION_OPCODE_ICMP, ofpacts);
+}
+
+static void
+encode_TCP_RESET(const struct ovnact_nest *on,
+                 const struct ovnact_encode_params *ep,
+                 struct ofpbuf *ofpacts)
+{
+    encode_nested_actions(on, ep, ACTION_OPCODE_TCP_RESET, ofpacts);
 }
 
 static void
@@ -1230,7 +1294,7 @@ encode_ND_NA(const struct ovnact_nest *on,
              const struct ovnact_encode_params *ep,
              struct ofpbuf *ofpacts)
 {
-    encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ND_NA, ofpacts);
+    encode_nested_actions(on, ep, ACTION_OPCODE_ND_NA, ofpacts);
 }
 
 static void
@@ -1238,8 +1302,7 @@ encode_ND_NA_ROUTER(const struct ovnact_nest *on,
              const struct ovnact_encode_params *ep,
              struct ofpbuf *ofpacts)
 {
-    encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ND_NA_ROUTER,
-                                   ofpacts);
+    encode_nested_actions(on, ep, ACTION_OPCODE_ND_NA_ROUTER, ofpacts);
 }
 
 static void
@@ -1247,7 +1310,7 @@ encode_ND_NS(const struct ovnact_nest *on,
              const struct ovnact_encode_params *ep,
              struct ofpbuf *ofpacts)
 {
-    encode_nested_neighbor_actions(on, ep, ACTION_OPCODE_ND_NS, ofpacts);
+    encode_nested_actions(on, ep, ACTION_OPCODE_ND_NS, ofpacts);
 }
 
 static void
@@ -1607,7 +1670,7 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
             if (c[i].masked) {
                 plen = (uint8_t) ip_count_cidr_bits(c[i].mask.ipv4);
             }
-            opt_header[1] += (1 + (plen / 8) + sizeof(ovs_be32)) ;
+            opt_header[1] += (1 + DIV_ROUND_UP(plen, 8) + sizeof(ovs_be32));
         }
 
         /* Copied from RFC 3442. Please refer to this RFC for the format of
@@ -1632,7 +1695,7 @@ encode_put_dhcpv4_option(const struct ovnact_gen_option *o,
                 plen = ip_count_cidr_bits(c[i].mask.ipv4);
             }
             ofpbuf_put(ofpacts, &plen, 1);
-            ofpbuf_put(ofpacts, &c[i].value.ipv4, plen / 8);
+            ofpbuf_put(ofpacts, &c[i].value.ipv4, DIV_ROUND_UP(plen, 8));
             ofpbuf_put(ofpacts, &c[i + 1].value.ipv4,
                        sizeof(ovs_be32));
         }
@@ -1678,7 +1741,8 @@ encode_PUT_DHCPV4_OPTS(const struct ovnact_put_opts *pdo,
     struct mf_subfield dst = expr_resolve_field(&pdo->dst);
 
     size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_PUT_DHCP_OPTS,
-                                                  true, ofpacts);
+                                                  true, NX_CTLR_NO_METER,
+                                                  ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -1709,7 +1773,7 @@ encode_PUT_DHCPV6_OPTS(const struct ovnact_put_opts *pdo,
     struct mf_subfield dst = expr_resolve_field(&pdo->dst);
 
     size_t oc_offset = encode_start_controller_op(
-        ACTION_OPCODE_PUT_DHCPV6_OPTS, true, ofpacts);
+        ACTION_OPCODE_PUT_DHCPV6_OPTS, true, NX_CTLR_NO_METER, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -1804,7 +1868,8 @@ encode_DNS_LOOKUP(const struct ovnact_dns_lookup *dl,
     struct mf_subfield dst = expr_resolve_field(&dl->dst);
 
     size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_DNS_LOOKUP,
-                                                  true, ofpacts);
+                                                  true, NX_CTLR_NO_METER,
+                                                  ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -1967,7 +2032,7 @@ encode_PUT_ND_RA_OPTS(const struct ovnact_put_opts *po,
     struct mf_subfield dst = expr_resolve_field(&po->dst);
 
     size_t oc_offset = encode_start_controller_op(
-        ACTION_OPCODE_PUT_ND_RA_OPTS, true, ofpacts);
+        ACTION_OPCODE_PUT_ND_RA_OPTS, true, NX_CTLR_NO_METER, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -2006,7 +2071,8 @@ parse_log_arg(struct action_context *ctx, struct ovnact_log *log)
         } else if (lexer_match_id(ctx->lexer, "allow")) {
             log->verdict = LOG_VERDICT_ALLOW;
         } else {
-            lexer_syntax_error(ctx->lexer, "unknown acl verdict");
+            lexer_syntax_error(ctx->lexer, "unknown verdict");
+            return;
         }
     } else if (lexer_match_id(ctx->lexer, "name")) {
         if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
@@ -2038,9 +2104,25 @@ parse_log_arg(struct action_context *ctx, struct ovnact_log *log)
                 log->severity = severity;
                 lexer_get(ctx->lexer);
                 return;
+            } else {
+                lexer_syntax_error(ctx->lexer, "unknown severity");
+                return;
             }
         }
         lexer_syntax_error(ctx->lexer, "expecting severity");
+    } else if (lexer_match_id(ctx->lexer, "meter")) {
+        if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+            return;
+        }
+        /* If multiple meters are given, use the most recent. */
+        if (ctx->lexer->token.type == LEX_T_STRING) {
+            free(log->meter);
+            log->meter = xstrdup(ctx->lexer->token.s);
+        } else {
+            lexer_syntax_error(ctx->lexer, "expecting string");
+            return;
+        }
+        lexer_get(ctx->lexer);
     } else {
         lexer_syntax_error(ctx->lexer, NULL);
     }
@@ -2064,6 +2146,9 @@ parse_LOG(struct action_context *ctx)
             lexer_match(ctx->lexer, LEX_T_COMMA);
         }
     }
+    if (log->verdict == LOG_VERDICT_UNKNOWN) {
+        lexer_syntax_error(ctx->lexer, "expecting verdict");
+    }
 }
 
 static void
@@ -2076,16 +2161,31 @@ format_LOG(const struct ovnact_log *log, struct ds *s)
     }
 
     ds_put_format(s, "verdict=%s, ", log_verdict_to_string(log->verdict));
-    ds_put_format(s, "severity=%s);", log_severity_to_string(log->severity));
+    ds_put_format(s, "severity=%s", log_severity_to_string(log->severity));
+
+    if (log->meter) {
+        ds_put_format(s, ", meter=\"%s\"", log->meter);
+    }
+
+    ds_put_cstr(s, ");");
 }
 
 static void
 encode_LOG(const struct ovnact_log *log,
-           const struct ovnact_encode_params *ep OVS_UNUSED,
-           struct ofpbuf *ofpacts)
+           const struct ovnact_encode_params *ep, struct ofpbuf *ofpacts)
 {
+    uint32_t meter_id = NX_CTLR_NO_METER;
+
+    if (log->meter) {
+        meter_id = ovn_extend_table_assign_id(ep->meter_table, log->meter);
+        if (meter_id == EXT_TABLE_ID_INVALID) {
+            VLOG_WARN("Unable to assign id for log meter: %s", log->meter);
+            return;
+        }
+    }
+
     size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_LOG, false,
-                                                  ofpacts);
+                                                  meter_id, ofpacts);
 
     struct log_pin_header *lph = ofpbuf_put_uninit(ofpacts, sizeof *lph);
     lph->verdict = log->verdict;
@@ -2103,6 +2203,7 @@ static void
 ovnact_log_free(struct ovnact_log *log)
 {
     free(log->name);
+    free(log->meter);
 }
 
 static void
@@ -2157,24 +2258,23 @@ encode_SET_METER(const struct ovnact_set_meter *cl,
     uint32_t table_id;
     struct ofpact_meter *om;
 
-    struct ds ds = DS_EMPTY_INITIALIZER;
+    /* Use the special "__string:" prefix to indicate that the name
+     * describes the meter itself. */
+    char *name;
     if (cl->burst) {
-        ds_put_format(&ds,
-                      "kbps burst stats bands=type=drop rate=%"PRId64" "
-                      "burst_size=%"PRId64"",
-                      cl->rate, cl->burst);
+        name = xasprintf("__string: kbps burst stats bands=type=drop "
+                         "rate=%"PRId64" burst_size=%"PRId64"", cl->rate,
+                         cl->burst);
     } else {
-        ds_put_format(&ds, "kbps stats bands=type=drop rate=%"PRId64"",
-                      cl->rate);
+        name = xasprintf("__string: kbps stats bands=type=drop "
+                         "rate=%"PRId64"", cl->rate);
     }
 
-    table_id = ovn_extend_table_assign_id(ep->meter_table, &ds);
+    table_id = ovn_extend_table_assign_id(ep->meter_table, name);
+    free(name);
     if (table_id == EXT_TABLE_ID_INVALID) {
-        ds_destroy(&ds);
         return;
     }
-
-    ds_destroy(&ds);
 
     /* Create an action to set the meter. */
     om = ofpact_put_METER(ofpacts);
@@ -2257,6 +2357,12 @@ parse_action(struct action_context *ctx)
         parse_CLONE(ctx);
     } else if (lexer_match_id(ctx->lexer, "arp")) {
         parse_ARP(ctx);
+    } else if (lexer_match_id(ctx->lexer, "icmp4")) {
+        parse_ICMP4(ctx);
+    } else if (lexer_match_id(ctx->lexer, "icmp6")) {
+        parse_ICMP6(ctx);
+    } else if (lexer_match_id(ctx->lexer, "tcp_reset")) {
+        parse_TCP_RESET(ctx);
     } else if (lexer_match_id(ctx->lexer, "nd_na")) {
         parse_ND_NA(ctx);
     } else if (lexer_match_id(ctx->lexer, "nd_na_router")) {

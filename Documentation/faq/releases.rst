@@ -66,7 +66,8 @@ Q: What Linux kernel versions does each Open vSwitch release work with?
     2.6.x        3.10 to 4.7
     2.7.x        3.10 to 4.9
     2.8.x        3.10 to 4.12
-    2.9.x        3.10 to 4.15
+    2.9.x        3.10 to 4.13
+    2.10.x       3.10 to 4.15
     ============ ==============
 
     Open vSwitch userspace should also work with the Linux kernel module built
@@ -123,6 +124,8 @@ Q: Are all features available with all datapaths?
     Set action            YES            YES            YES       PARTIAL
     NIC Bonding           YES            YES            YES       YES
     Multiple VTEPs        YES            YES            YES       YES
+    Meters                4.15           YES            YES       NO
+    Conntrack zone limit  4.18           YES            NO        NO
     ===================== ============== ============== ========= =======
 
     Do note, however:
@@ -162,9 +165,10 @@ Q: What DPDK version does each Open vSwitch release work with?
     2.4.x        2.0
     2.5.x        2.2
     2.6.x        16.07.2
-    2.7.x        16.11.6
+    2.7.x        16.11.7
     2.8.x        17.05.2
-    2.9.x        17.11.2
+    2.9.x        17.11.3
+    2.10.x       17.11.3
     ============ =======
 
 Q: Are all the DPDK releases that OVS versions work with maintained?

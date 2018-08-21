@@ -42,6 +42,8 @@
 #include "vport-internal_dev.h"
 
 static LIST_HEAD(vport_ops_list);
+static bool compat_gre_loaded = false;
+static bool compat_ip6_tunnel_loaded = false;
 
 /* Protected by RCU read lock for reading, ovs_mutex for writing. */
 static struct hlist_head *dev_table;
@@ -64,27 +66,62 @@ int ovs_vport_init(void)
 	err = lisp_init_module();
 	if (err)
 		goto err_lisp;
-	err = ipgre_init();
-	if (err)
+	err = gre_init();
+	if (err && err != -EEXIST) {
 		goto err_gre;
+	} else {
+		if (err == -EEXIST) {
+			pr_warn("Cannot take GRE protocol rx entry"\
+				"- The GRE/ERSPAN rx feature not supported\n");
+			/* continue GRE tx */
+		}
+
+		err = ipgre_init();
+		if (err && err != -EEXIST) 
+			goto err_ipgre;
+		compat_gre_loaded = true;
+	}
+	err = ip6gre_init();
+	if (err && err != -EEXIST) {
+		goto err_ip6gre;
+	} else {
+		if (err == -EEXIST) {
+			pr_warn("IPv6 GRE/ERSPAN Rx mode is not supported\n");
+			goto skip_ip6_tunnel_init;
+		}
+	}
+
+	err = ip6_tunnel_init();
+	if (err)
+		goto err_ip6_tunnel;
+	else
+		compat_ip6_tunnel_loaded = true;
+
+skip_ip6_tunnel_init:
 	err = geneve_init_module();
 	if (err)
 		goto err_geneve;
-
 	err = vxlan_init_module();
 	if (err)
 		goto err_vxlan;
 	err = ovs_stt_init_module();
 	if (err)
 		goto err_stt;
-	return 0;
 
+	return 0;
+	ovs_stt_cleanup_module();
 err_stt:
 	vxlan_cleanup_module();
 err_vxlan:
 	geneve_cleanup_module();
 err_geneve:
+	ip6_tunnel_cleanup();
+err_ip6_tunnel:
+	ip6gre_fini();
+err_ip6gre:
 	ipgre_fini();
+err_ipgre:
+	gre_exit();
 err_gre:
 	lisp_cleanup_module();
 err_lisp:
@@ -99,10 +136,16 @@ err_lisp:
  */
 void ovs_vport_exit(void)
 {
+	if (compat_gre_loaded) {
+		gre_exit();
+		ipgre_fini();
+	}
 	ovs_stt_cleanup_module();
 	vxlan_cleanup_module();
 	geneve_cleanup_module();
-	ipgre_fini();
+	if (compat_ip6_tunnel_loaded)
+		ip6_tunnel_cleanup();
+	ip6gre_fini();
 	lisp_cleanup_module();
 	kfree(dev_table);
 }
@@ -263,6 +306,10 @@ struct vport *ovs_vport_add(const struct vport_parms *parms)
 		return vport;
 	}
 
+	if (parms->type == OVS_VPORT_TYPE_GRE && !compat_gre_loaded) {
+		pr_warn("GRE protocol already loaded!\n");
+		return ERR_PTR(-EAFNOSUPPORT);
+	}
 	/* Unlock to attempt module load and return -EAGAIN if load
 	 * was successful as we need to restart the port addition
 	 * workflow.
@@ -508,10 +555,10 @@ int ovs_vport_receive(struct vport *vport, struct sk_buff *skb,
 	return 0;
 }
 
-static unsigned int packet_length(const struct sk_buff *skb,
-				  struct net_device *dev)
+static int packet_length(const struct sk_buff *skb,
+			 struct net_device *dev)
 {
-	unsigned int length = skb->len - dev->hard_header_len;
+	int length = skb->len - dev->hard_header_len;
 
 	if (!skb_vlan_tag_present(skb) &&
 	    eth_type_vlan(skb->protocol))
@@ -522,7 +569,7 @@ static unsigned int packet_length(const struct sk_buff *skb,
 	 * account for 802.1ad. e.g. is_skb_forwardable().
 	 */
 
-	return length;
+	return length > 0 ? length: 0;
 }
 
 void ovs_vport_send(struct vport *vport, struct sk_buff *skb, u8 mac_proto)

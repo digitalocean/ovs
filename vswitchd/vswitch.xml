@@ -218,11 +218,17 @@
       </column>
 
       <column name="other_config" key="dpdk-init"
-              type='{"type": "boolean"}'>
+              type='{"type": "string"}'>
         <p>
-          Set this value to <code>true</code> to enable runtime support for
-          DPDK ports. The vswitch must have compile-time support for DPDK as
-          well.
+          Set this value to <code>true</code> or <code>try</code> to enable
+          runtime support for DPDK ports. The vswitch must have compile-time
+          support for DPDK as well.
+        </p>
+        <p>
+          A value of <code>true</code> will cause the ovs-vswitchd process to
+          abort if DPDK cannot be initialized. A value of <code>try</code>
+          will allow the ovs-vswitchd process to continue running even if DPDK
+          cannot be initialized.
         </p>
         <p>
           The default value is <code>false</code>. Changing this value requires
@@ -302,9 +308,10 @@
         </p>
         <p>
           If dpdk-socket-mem and dpdk-alloc-mem are not specified, dpdk-socket-mem
-          will be used and the default value is 1024,0. If dpdk-socket-mem and
-          dpdk-alloc-mem are specified at same time, dpdk-socket-mem will be
-          used as default. Changing this value requires restarting the daemon.
+          will be used and the default value is 1024 for each numa node. If
+          dpdk-socket-mem and dpdk-alloc-mem are specified at same time,
+          dpdk-socket-mem will be used as default. Changing this value
+          requires restarting the daemon.
         </p>
       </column>
 
@@ -359,6 +366,23 @@
         </p>
       </column>
 
+      <column name="other_config" key="per-port-memory"
+              type='{"type": "boolean"}'>
+        <p>
+          By default OVS DPDK uses a shared memory model wherein devices
+          that have the same MTU and socket values can share the same
+          mempool. Setting this value to <code>true</code> changes this
+          behaviour. Per port memory allow DPDK devices to use private
+          memory per device. This can provide greater transparency as
+          regards memory usage but potentially at the cost of greater memory
+          requirements.
+        </p>
+        <p>
+          Changing this value requires restarting the daemon if dpdk-init has
+          already been set to true.
+        </p>
+      </column>
+
       <column name="other_config" key="tx-flush-interval"
               type='{"type": "integer",
                      "minInteger": 0, "maxInteger": 1000000}'>
@@ -372,6 +396,31 @@
         </p>
         <p>
           Defaults to 0 i.e. instant packet sending (latency optimized).
+        </p>
+      </column>
+
+      <column name="other_config" key="pmd-perf-metrics"
+              type='{"type": "boolean"}'>
+        <p>
+          Enables recording of detailed PMD performance metrics for analysis
+          and trouble-shooting. This can have a performance impact in the
+          order of 1%.
+        </p>
+        <p>
+          Defaults to false but can be changed at any time.
+        </p>
+      </column>
+
+      <column name="other_config" key="smc-enable"
+              type='{"type": "boolean"}'>
+        <p>
+          Signature match cache or SMC is a cache between EMC and megaflow
+          cache. It does not store the full key of the flow, so it is more
+          memory efficient comparing to EMC cache. SMC is especially useful
+          when flow count is larger than EMC capacity.
+        </p>
+        <p>
+          Defaults to false but can be changed at any time.
         </p>
       </column>
 
@@ -450,6 +499,18 @@
           VLAN.
         </p>
       </column>
+      <column name="other_config" key="bundle-idle-timeout"
+              type='{"type": "integer", "minInteger": 1}'>
+        <p>
+          The maximum time (in seconds) that idle bundles will wait
+          to be expired since it was either opened, modified or closed.
+        </p>
+        <p>
+          OpenFlow specification mandates the timeout to be at least one
+          second. The default is 10 seconds.
+        </p>
+    </column>
+
     </group>
 
     <group title="Status">
@@ -464,6 +525,11 @@
         Sequence number that Open vSwitch sets to the current value of
         <ref column="next_cfg"/> after it finishes applying a set of
         configuration changes.
+      </column>
+
+      <column name="dpdk_initialized">
+        True if <ref column="other_config" key="dpdk-init"/> is set to
+        true and the DPDK library is successfully initialized.
       </column>
 
       <group title="Statistics">
@@ -649,6 +715,12 @@
         </p>
       </column>
 
+      <column name="dpdk_version">
+        <p>
+          The version of the linked DPDK library.
+        </p>
+      </column>
+
     </group>
 
     <group title="Capabilities">
@@ -687,10 +759,20 @@
       </p>
 
       <column name="manager_options">
-        Database clients to which the Open vSwitch database server should
-        connect or to which it should listen, along with options for how these
-        connection should be configured.  See the <ref table="Manager"/> table
-        for more information.
+        <p>
+          Database clients to which the Open vSwitch database server should
+          connect or to which it should listen, along with options for how
+          these connections should be configured.  See the <ref
+          table="Manager"/> table for more information.
+        </p>
+
+        <p>
+          For this column to serve its purpose, <code>ovsdb-server</code> must
+          be configured to honor it.  The easiest way to do this is to invoke
+          <code>ovsdb-server</code> with the option
+          <option>--remote=db:Open_vSwitch,Open_vSwitch,manager_options</option>
+          The startup scripts that accompany Open vSwitch do this by default.
+        </p>
       </column>
     </group>
 
@@ -1319,7 +1401,7 @@
               type='{"type": "integer", "minInteger": 1}'>
         <p>
           The maximum number of MAC addresses to learn.  The default is
-          currently 2048.  The value, if specified, is forced into a reasonable
+          currently 8192.  The value, if specified, is forced into a reasonable
           range, currently 10 to 1,000,000.
         </p>
       </column>
@@ -2100,7 +2182,8 @@
           their hardware.</li>
         </ul>
         <p>Some interfaces may not have a software-controllable MAC
-        address.</p>
+        address.  This option only affects internal ports.  For other type ports,
+        you can change the MAC address outside Open vSwitch, using ip command.</p>
       </column>
 
       <column name="error">
@@ -2270,10 +2353,6 @@
           <dd>
             A pair of virtual devices that act as a patch cable.
           </dd>
-
-          <dt><code>null</code></dt>
-          <dd>An ignored interface. Deprecated and slated for removal in
-          February 2013.</dd>
         </dl>
       </column>
     </group>
@@ -2565,6 +2644,13 @@
             </li>
           </ul>
         </column>
+        <column name="options" key="seq" type='{"type": "boolean"}'>
+          <p>
+            Optional.  A 4-byte sequence number field for GRE tunnel only.
+            Default is disabled, set to <code>true</code> to enable.
+            Sequence number is incremented by one on each outgoing packet.
+          </p>
+        </column>
       </group>
 
       <group title="Tunnel Options: gre, geneve, and vxlan">
@@ -2593,6 +2679,40 @@
 
         </column>
       </group>
+    </group>
+
+    <group title="Tunnel Options: erspan only">
+      <p>
+        Only <code>erspan</code> interfaces support these options.
+      </p>
+      <column name="options" key="erspan_idx">
+        <p>
+          20 bit index/port number associated with the ERSPAN traffic's
+          source port and direction (ingress/egress).  This field is
+          platform dependent.
+        </p>
+      </column>
+
+      <column name="options" key="erspan_ver">
+        <p>
+          ERSPAN version: 1 for version 1 (type II)
+          or 2 for version 2 (type III).
+        </p>
+      </column>
+
+      <column name="options" key="erspan_dir">
+        <p>
+          Specifies the ERSPAN v2 mirrored traffic's direction.
+          1 for egress traffic, and 0 for ingress traffic.
+        </p>
+      </column>
+
+      <column name="options" key="erspan_hwid">
+        <p>
+          ERSPAN hardware ID is a 6-bit unique identifier of an
+          ERSPAN v2 engine within a system.
+        </p>
+      </column>
     </group>
 
     <group title="Patch Options">
@@ -4347,26 +4467,25 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           controllers:
         </p>
         <dl>
-          <dt><code>ssl:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
+          <dt><code>ssl:<var>host</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
             <p>The specified SSL <var>port</var> on the host at the
-            given <var>ip</var>, which must be expressed as an IP
-            address (not a DNS name).  The <ref table="Open_vSwitch"
-            column="ssl"/> column in the <ref table="Open_vSwitch"/>
-            table must point to a valid SSL configuration when this form
-            is used.</p>
+            given <var>host</var>, which can either be a DNS name (if built
+            with unbound library) or an IP address.  The <ref table="Open_vSwitch"
+            column="ssl"/> column in the <ref table="Open_vSwitch"/> table must
+            point to a valid SSL configuration when this form is used.</p>
             <p>If <var>port</var> is not specified, it defaults to 6653.</p>
             <p>SSL support is an optional feature that is not always built as
             part of Open vSwitch.</p>
           </dd>
-          <dt><code>tcp:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
+          <dt><code>tcp:<var>host</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
             <p>
               The specified TCP <var>port</var> on the host at the given
-              <var>ip</var>, which must be expressed as an IP address (not a
-              DNS name), where <var>ip</var> can be IPv4 or IPv6 address.  If
-              <var>ip</var> is an IPv6 address, wrap it in square brackets,
-              e.g. <code>tcp:[::1]:6653</code>.
+              <var>host</var>, which can either be a DNS name (if built with
+              unbound library) or an IP address (IPv4 or IPv6). If <var>host</var>
+              is an IPv6 address, wrap it in square brackets, e.g.
+              <code>tcp:[::1]:6653</code>.
             </p>
             <p>
               If <var>port</var> is not specified, it defaults to 6653.
@@ -4378,19 +4497,19 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           controllers:
         </p>
         <dl>
-          <dt><code>pssl:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
+          <dt><code>pssl:</code>[<var>port</var>][<code>:<var>host</var></code>]</dt>
           <dd>
             <p>
               Listens for SSL connections on the specified TCP <var>port</var>.
-              If <var>ip</var>, which must be expressed as an IP address (not a
-              DNS name), is specified, then connections are restricted to the
-              specified local IP address (either IPv4 or IPv6).  If
-              <var>ip</var> is an IPv6 address, wrap it in square brackets,
-              e.g. <code>pssl:6653:[::1]</code>.
+              If <var>host</var>, which can either be a DNS name (if built with
+              unbound library) or an IP address, is specified, then connections
+              are restricted to the resolved or specified local IP address
+              (either IPv4 or IPv6).  If <var>host</var> is an IPv6 address,
+              wrap it in square brackets, e.g. <code>pssl:6653:[::1]</code>.
             </p>
             <p>
               If <var>port</var> is not specified, it defaults to
-              6653.  If <var>ip</var> is not specified then it listens only on
+              6653.  If <var>host</var> is not specified then it listens only on
               IPv4 (but not IPv6) addresses.  The
               <ref table="Open_vSwitch" column="ssl"/>
               column in the <ref table="Open_vSwitch"/> table must point to a
@@ -4404,16 +4523,17 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
               part of Open vSwitch.
             </p>
           </dd>
-          <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
+          <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>host</var></code>]</dt>
           <dd>
             <p>
               Listens for connections on the specified TCP <var>port</var>.  If
-              <var>ip</var>, which must be expressed as an IP address (not a
-              DNS name), is specified, then connections are restricted to the
-              specified local IP address (either IPv4 or IPv6).  If
-              <var>ip</var> is an IPv6 address, wrap it in square brackets,
-              e.g. <code>ptcp:6653:[::1]</code>. If <var>ip</var> is not
-              specified then it listens only on IPv4 addresses.
+              <var>host</var>, which can either be a DNS name (if built with
+              unbound library) or an IP address, is specified, then connections
+              are restricted to the resolved or specified local IP address
+              (either IPv4 or IPv6).  If <var>host</var> is an IPv6 address, wrap
+              it in square brackets, e.g. <code>ptcp:6653:[::1]</code>. If
+              <var>host</var> is not specified then it listens only on IPv4
+              addresses.
             </p>
             <p>
               If <var>port</var> is not specified, it defaults to 6653.
@@ -4750,12 +4870,12 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           The following connection methods are currently supported:
         </p>
         <dl>
-          <dt><code>ssl:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
+          <dt><code>ssl:<var>host</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
             <p>
               The specified SSL <var>port</var> on the host at the given
-              <var>ip</var>, which must be expressed as an IP address
-              (not a DNS name).  The <ref table="Open_vSwitch"
+              <var>host</var>, which can either be a DNS name (if built with
+              unbound library) or an IP address.  The <ref table="Open_vSwitch"
               column="ssl"/> column in the <ref table="Open_vSwitch"/>
               table must point to a valid SSL configuration when this
               form is used.
@@ -4769,30 +4889,30 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
             </p>
           </dd>
 
-          <dt><code>tcp:<var>ip</var></code>[<code>:<var>port</var></code>]</dt>
+          <dt><code>tcp:<var>host</var></code>[<code>:<var>port</var></code>]</dt>
           <dd>
             <p>
               The specified TCP <var>port</var> on the host at the given
-              <var>ip</var>, which must be expressed as an IP address (not a
-              DNS name), where <var>ip</var> can be IPv4 or IPv6 address.  If
-              <var>ip</var> is an IPv6 address, wrap it in square brackets,
-              e.g. <code>tcp:[::1]:6640</code>.
+              <var>host</var>, which can either be a DNS name (if built with
+              unbound library) or an IP address (IPv4 or IPv6).  If <var>host</var>
+              is an IPv6 address, wrap it in square brackets, e.g.
+              <code>tcp:[::1]:6640</code>.
             </p>
             <p>
               If <var>port</var> is not specified, it defaults to 6640.
             </p>
           </dd>
-          <dt><code>pssl:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
+          <dt><code>pssl:</code>[<var>port</var>][<code>:<var>host</var></code>]</dt>
           <dd>
             <p>
               Listens for SSL connections on the specified TCP <var>port</var>.
               Specify 0 for <var>port</var> to have the kernel automatically
-              choose an available port.  If <var>ip</var>, which must be
-              expressed as an IP address (not a DNS name), is specified, then
-              connections are restricted to the specified local IP address
-              (either IPv4 or IPv6 address).  If <var>ip</var> is an IPv6
-              address, wrap in square brackets,
-              e.g. <code>pssl:6640:[::1]</code>.  If <var>ip</var> is not
+              choose an available port.  If <var>host</var>, which can either
+              be a DNS name (if built with unbound library) or an IP address,
+              is specified, then connections are restricted to the resolved or
+              specified local IP address (either IPv4 or IPv6 address).  If
+              <var>host</var> is an IPv6 address, wrap in square brackets,
+              e.g. <code>pssl:6640:[::1]</code>.  If <var>host</var> is not
               specified then it listens only on IPv4 (but not IPv6) addresses.
               The <ref table="Open_vSwitch" column="ssl"/> column in the <ref
               table="Open_vSwitch"/> table must point to a valid SSL
@@ -4806,17 +4926,17 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
               part of Open vSwitch.
             </p>
           </dd>
-          <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>ip</var></code>]</dt>
+          <dt><code>ptcp:</code>[<var>port</var>][<code>:<var>host</var></code>]</dt>
           <dd>
             <p>
               Listens for connections on the specified TCP <var>port</var>.
               Specify 0 for <var>port</var> to have the kernel automatically
-              choose an available port.  If <var>ip</var>, which must be
-              expressed as an IP address (not a DNS name), is specified, then
-              connections are restricted to the specified local IP address
-              (either IPv4 or IPv6 address).  If <var>ip</var> is an IPv6
-              address, wrap it in square brackets,
-              e.g. <code>ptcp:6640:[::1]</code>.  If <var>ip</var> is not
+              choose an available port.  If <var>host</var>, which can either
+              be a DNS name (if built with unbound library) or an IP address,
+              is specified, then connections are restricted to the resolved or
+              specified local IP address (either IPv4 or IPv6 address).  If
+              <var>host</var> is an IPv6 address, wrap it in square brackets,
+              e.g. <code>ptcp:6640:[::1]</code>.  If <var>host</var> is not
               specified then it listens only on IPv4 addresses.
             </p>
             <p>
@@ -5120,13 +5240,24 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
     monitoring of switches.</p>
 
     <column name="agent">
-      Name of the network device whose IP address should be reported as the
-      ``agent address'' to collectors.  If not specified, the agent device is
-      figured from the first target address and the routing table.  If the
-      routing table does not contain a route to the target, the IP address
-      defaults to the <ref table="Controller" column="local_ip"/> in the
-      collector's <ref table="Controller"/>.  If an agent IP address cannot be
-      determined any of these ways, sFlow is disabled.
+      <p>
+        Determines the agent address, that is, the IP address reported to
+        collectors as the source of the sFlow data.  It may be an IP address or
+        the name of a network device.  In the latter case, the network device's
+        IP address is used,
+      </p>
+
+      <p>
+        If not specified, the agent device is figured from the first target
+        address and the routing table.  If the routing table does not contain a
+        route to the target, the IP address defaults to the <ref
+        table="Controller" column="local_ip"/> in the collector's <ref
+        table="Controller"/>.
+      </p>
+
+      <p>
+        If an agent IP address cannot be determined, sFlow is disabled.
+      </p>
     </column>
 
     <column name="header">

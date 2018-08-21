@@ -99,6 +99,12 @@ vport_type_to_kind(enum ovs_vport_type type,
         }
     case OVS_VPORT_TYPE_GENEVE:
         return "geneve";
+    case OVS_VPORT_TYPE_ERSPAN:
+        return "erspan";
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+        return "ip6erspan";
+    case OVS_VPORT_TYPE_IP6GRE:
+        return "ip6gre";
     case OVS_VPORT_TYPE_NETDEV:
     case OVS_VPORT_TYPE_INTERNAL:
     case OVS_VPORT_TYPE_LISP:
@@ -253,6 +259,9 @@ dpif_netlink_rtnl_verify(const struct netdev_tunnel_config *tnl_cfg,
         err = dpif_netlink_rtnl_vxlan_verify(tnl_cfg, kind, reply);
         break;
     case OVS_VPORT_TYPE_GRE:
+    case OVS_VPORT_TYPE_ERSPAN:
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+    case OVS_VPORT_TYPE_IP6GRE:
         err = dpif_netlink_rtnl_gre_verify(tnl_cfg, kind, reply);
         break;
     case OVS_VPORT_TYPE_GENEVE:
@@ -270,6 +279,19 @@ dpif_netlink_rtnl_verify(const struct netdev_tunnel_config *tnl_cfg,
 
     ofpbuf_delete(reply);
     return err;
+}
+
+static int
+rtnl_set_mtu(const char *name, uint32_t mtu, struct ofpbuf *request)
+{
+    ofpbuf_clear(request);
+    nl_msg_put_nlmsghdr(request, 0, RTM_SETLINK,
+                        NLM_F_REQUEST | NLM_F_ACK);
+    ofpbuf_put_zeros(request, sizeof(struct ifinfomsg));
+    nl_msg_put_string(request, IFLA_IFNAME, name);
+    nl_msg_put_u32(request, IFLA_MTU, mtu);
+
+    return nl_transact(NETLINK_ROUTE, request, NULL);
 }
 
 static int
@@ -316,6 +338,9 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
         nl_msg_put_be16(&request, IFLA_VXLAN_PORT, tnl_cfg->dst_port);
         break;
     case OVS_VPORT_TYPE_GRE:
+    case OVS_VPORT_TYPE_ERSPAN:
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+    case OVS_VPORT_TYPE_IP6GRE:
         nl_msg_put_flag(&request, IFLA_GRE_COLLECT_METADATA);
         break;
     case OVS_VPORT_TYPE_GENEVE:
@@ -338,18 +363,17 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
     nl_msg_end_nested(&request, linkinfo_off);
 
     err = nl_transact(NETLINK_ROUTE, &request, NULL);
-    if (!err && type == OVS_VPORT_TYPE_GRE) {
+    if (!err && (type == OVS_VPORT_TYPE_GRE ||
+                 type == OVS_VPORT_TYPE_IP6GRE)) {
         /* Work around a bug in kernel GRE driver, which ignores IFLA_MTU in
          * RTM_NEWLINK, by setting the MTU again.  See
-         * https://bugzilla.redhat.com/show_bug.cgi?id=1488484. */
-        ofpbuf_clear(&request);
-        nl_msg_put_nlmsghdr(&request, 0, RTM_SETLINK,
-                            NLM_F_REQUEST | NLM_F_ACK);
-        ofpbuf_put_zeros(&request, sizeof(struct ifinfomsg));
-        nl_msg_put_string(&request, IFLA_IFNAME, name);
-        nl_msg_put_u32(&request, IFLA_MTU, MAX_MTU);
-
-        int err2 = nl_transact(NETLINK_ROUTE, &request, NULL);
+         * https://bugzilla.redhat.com/show_bug.cgi?id=1488484.
+         *
+         * In case of MAX_MTU exceeds hw max MTU, retry a smaller value. */
+        int err2 = rtnl_set_mtu(name, MAX_MTU, &request);
+        if (err2) {
+            err2 = rtnl_set_mtu(name, 1450, &request);
+        }
         if (err2) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
@@ -433,6 +457,9 @@ dpif_netlink_rtnl_port_destroy(const char *name, const char *type)
     case OVS_VPORT_TYPE_VXLAN:
     case OVS_VPORT_TYPE_GRE:
     case OVS_VPORT_TYPE_GENEVE:
+    case OVS_VPORT_TYPE_ERSPAN:
+    case OVS_VPORT_TYPE_IP6ERSPAN:
+    case OVS_VPORT_TYPE_IP6GRE:
         return dpif_netlink_rtnl_destroy(name);
     case OVS_VPORT_TYPE_NETDEV:
     case OVS_VPORT_TYPE_INTERNAL:

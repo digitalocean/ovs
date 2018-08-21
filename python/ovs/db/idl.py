@@ -95,20 +95,24 @@ class Idl(object):
     IDL_S_MONITOR_REQUESTED = 1
     IDL_S_MONITOR_COND_REQUESTED = 2
 
-    def __init__(self, remote, schema, probe_interval=None):
+    def __init__(self, remote, schema_helper, probe_interval=None):
         """Creates and returns a connection to the database named 'db_name' on
         'remote', which should be in a form acceptable to
         ovs.jsonrpc.session.open().  The connection will maintain an in-memory
         replica of the remote database.
 
-        'schema' should be the schema for the remote database.  The caller may
-        have cut it down by removing tables or columns that are not of
-        interest.  The IDL will only replicate the tables and columns that
-        remain.  The caller may also add a attribute named 'alert' to selected
-        remaining columns, setting its value to False; if so, then changes to
-        those columns will not be considered changes to the database for the
-        purpose of the return value of Idl.run() and Idl.change_seqno.  This is
-        useful for columns that the IDL's client will write but not read.
+        'remote' can be comma separated multiple remotes and each remote
+        should be in a form acceptable to ovs.jsonrpc.session.open().
+
+        'schema_helper' should be an instance of the SchemaHelper class which
+        generates schema for the remote database. The caller may have cut it
+        down by removing tables or columns that are not of interest.  The IDL
+        will only replicate the tables and columns that remain.  The caller may
+        also add an attribute named 'alert' to selected remaining columns,
+        setting its value to False; if so, then changes to those columns will
+        not be considered changes to the database for the purpose of the return
+        value of Idl.run() and Idl.change_seqno.  This is useful for columns
+        that the IDL's client will write but not read.
 
         As a convenience to users, 'schema' may also be an instance of the
         SchemaHelper class.
@@ -120,13 +124,14 @@ class Idl(object):
         milliseconds. If None it will just use the default value in OVS.
         """
 
-        assert isinstance(schema, SchemaHelper)
-        schema = schema.get_idl_schema()
+        assert isinstance(schema_helper, SchemaHelper)
+        schema = schema_helper.get_idl_schema()
 
         self.tables = schema.tables
         self.readonly = schema.readonly
         self._db = schema
-        self._session = ovs.jsonrpc.Session.open(remote,
+        remotes = self._parse_remotes(remote)
+        self._session = ovs.jsonrpc.Session.open_multiple(remotes,
             probe_interval=probe_interval)
         self._monitor_request_id = None
         self._last_seqno = None
@@ -153,6 +158,19 @@ class Idl(object):
             table.idl = self
             table.condition = [True]
             table.cond_changed = False
+
+    def _parse_remotes(self, remote):
+        # If remote is -
+        # "tcp:10.0.0.1:6641,unix:/tmp/db.sock,t,s,tcp:10.0.0.2:6642"
+        # this function returns
+        # ["tcp:10.0.0.1:6641", "unix:/tmp/db.sock,t,s", tcp:10.0.0.2:6642"]
+        remotes = []
+        for r in remote.split(','):
+            if remotes and r.find(":") == -1:
+                remotes[-1] += "," + r
+            else:
+                remotes.append(r)
+        return remotes
 
     def index_create(self, table, name):
         """Create a named multi-column index on a table"""
@@ -533,10 +551,8 @@ class Idl(object):
             if not row:
                 raise error.Error('Modify non-existing row')
 
-            old_row_diff_json = self.__apply_diff(table, row,
-                                                  row_update['modify'])
-            self.notify(ROW_UPDATE, row,
-                        Row.from_json(self, table, uuid, old_row_diff_json))
+            old_row = self.__apply_diff(table, row, row_update['modify'])
+            self.notify(ROW_UPDATE, row, Row(self, table, uuid, old_row))
             changed = True
         else:
             raise error.Error('<row-update> unknown operation',
@@ -605,7 +621,7 @@ class Idl(object):
                         row_update[column.name] = self.__column_name(column)
 
     def __apply_diff(self, table, row, row_diff):
-        old_row_diff_json = {}
+        old_row = {}
         for column_name, datum_diff_json in six.iteritems(row_diff):
             column = table.columns.get(column_name)
             if not column:
@@ -622,12 +638,12 @@ class Idl(object):
                           % (column_name, table.name, e))
                 continue
 
-            old_row_diff_json[column_name] = row._data[column_name].to_json()
+            old_row[column_name] = row._data[column_name].copy()
             datum = row._data[column_name].diff(datum_diff)
             if datum != row._data[column_name]:
                 row._data[column_name] = datum
 
-        return old_row_diff_json
+        return old_row
 
     def __row_update(self, table, row, row_json):
         changed = False

@@ -83,7 +83,7 @@ fi
 
 if [ "$DPDK" ]; then
     if [ -z "$DPDK_VER" ]; then
-        DPDK_VER="17.11.2"
+        DPDK_VER="17.11.3"
     fi
     install_dpdk $DPDK_VER
     if [ "$CC" = "clang" ]; then
@@ -97,6 +97,8 @@ elif [ "$CC" != "clang" ]; then
 fi
 
 configure_ovs $EXTRA_OPTS $*
+
+make selinux-policy
 
 # Only build datapath if we are testing kernel w/o running testsuite
 if [ "$KERNEL" ] && [ ! "$TESTSUITE" ] && [ ! "$DPDK" ]; then

@@ -947,12 +947,14 @@ do_ssl_init(void)
 {
     SSL_METHOD *method;
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined (LIBRESSL_VERSION_NUMBER)
 #ifdef _WIN32
     /* The following call is needed if we "#include <openssl/applink.c>". */
     CRYPTO_malloc_init();
 #endif
     SSL_library_init();
     SSL_load_error_strings();
+#endif
 
     if (!RAND_status()) {
         /* We occasionally see OpenSSL fail to seed its random number generator
@@ -1186,8 +1188,13 @@ stream_ssl_set_protocols(const char *arg)
     }
 
     /* Start with all the flags off and turn them on as requested. */
-    long protocol_flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1;
-    protocol_flags |= SSL_OP_NO_TLSv1_1 | SSL_OP_NO_TLSv1_2;
+#ifndef SSL_OP_NO_SSL_MASK
+    /* For old OpenSSL without this macro, this is the correct value.  */
+#define SSL_OP_NO_SSL_MASK (SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | \
+                            SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 | \
+                            SSL_OP_NO_TLSv1_2)
+#endif
+    long protocol_flags = SSL_OP_NO_SSL_MASK;
 
     char *s = xstrdup(arg);
     char *save_ptr = NULL;
@@ -1247,12 +1254,12 @@ read_cert_file(const char *file_name, X509 ***certs, size_t *n_certs)
     }
 
     for (;;) {
-        X509 *certificate;
+        X509 *cert;
         int c;
 
         /* Read certificate from file. */
-        certificate = PEM_read_X509(file, NULL, NULL, NULL);
-        if (!certificate) {
+        cert = PEM_read_X509(file, NULL, NULL, NULL);
+        if (!cert) {
             size_t i;
 
             VLOG_ERR("PEM_read_X509 failed reading %s: %s",
@@ -1271,7 +1278,7 @@ read_cert_file(const char *file_name, X509 ***certs, size_t *n_certs)
         if (*n_certs >= allocated_certs) {
             *certs = x2nrealloc(*certs, &allocated_certs, sizeof **certs);
         }
-        (*certs)[(*n_certs)++] = certificate;
+        (*certs)[(*n_certs)++] = cert;
 
         /* Are there additional certificates in the file? */
         do {

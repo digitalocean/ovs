@@ -37,14 +37,15 @@ struct simap;
 struct pkt_metadata;
 
 #define SLOW_PATH_REASONS                                               \
-    /* These reasons are mutually exclusive. */                         \
     SPR(SLOW_CFM,        "cfm",        "Consists of CFM packets")       \
     SPR(SLOW_BFD,        "bfd",        "Consists of BFD packets")       \
     SPR(SLOW_LACP,       "lacp",       "Consists of LACP packets")      \
     SPR(SLOW_STP,        "stp",        "Consists of STP packets")       \
     SPR(SLOW_LLDP,       "lldp",       "Consists of LLDP packets")      \
     SPR(SLOW_ACTION,     "action",                                      \
-        "Uses action(s) not supported by datapath")
+        "Uses action(s) not supported by datapath")                     \
+    SPR(SLOW_MATCH,      "match",                                       \
+        "Datapath can't match specifically enough")
 
 /* Indexes for slow-path reasons.  Client code uses "enum slow_path_reason"
  * values instead of these, these are just a way to construct those. */
@@ -54,7 +55,7 @@ enum {
 #undef SPR
 };
 
-/* Reasons why a subfacet might not be fast-pathable.
+/* Reasons why a flow might not be fast-pathable.
  *
  * Each reason is a separate bit to allow reasons to be combined. */
 enum slow_path_reason {
@@ -146,7 +147,7 @@ void odp_portno_name_format(const struct hmap *portno_names,
  * add another field and forget to adjust this value.
  */
 #define ODPUTIL_FLOW_KEY_BYTES 640
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently

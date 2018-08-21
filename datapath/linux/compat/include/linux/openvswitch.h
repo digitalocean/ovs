@@ -238,6 +238,9 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_GENEVE,	 /* Geneve tunnel. */
 	OVS_VPORT_TYPE_LISP = 105,  /* LISP tunnel */
 	OVS_VPORT_TYPE_STT = 106, /* STT tunnel */
+	OVS_VPORT_TYPE_ERSPAN = 107, /* ERSPAN tunnel. */
+	OVS_VPORT_TYPE_IP6ERSPAN = 108, /* ERSPAN tunnel. */
+	OVS_VPORT_TYPE_IP6GRE = 109,
 	__OVS_VPORT_TYPE_MAX
 };
 
@@ -283,6 +286,8 @@ enum ovs_vport_attr {
 				/* receiving upcalls */
 	OVS_VPORT_ATTR_STATS,	/* struct ovs_vport_stats */
 	OVS_VPORT_ATTR_PAD,
+	OVS_VPORT_ATTR_IFINDEX,
+	OVS_VPORT_ATTR_NETNSID,
 	__OVS_VPORT_ATTR_MAX
 };
 
@@ -393,6 +398,7 @@ enum ovs_tunnel_key_attr {
 	OVS_TUNNEL_KEY_ATTR_IPV6_SRC,		/* struct in6_addr src IPv6 address. */
 	OVS_TUNNEL_KEY_ATTR_IPV6_DST,		/* struct in6_addr dst IPv6 address. */
 	OVS_TUNNEL_KEY_ATTR_PAD,
+	OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS,	/* struct erspan_metadata */
 	__OVS_TUNNEL_KEY_ATTR_MAX
 };
 
@@ -718,6 +724,10 @@ struct ovs_action_push_vlan {
  */
 enum ovs_hash_alg {
 	OVS_HASH_ALG_L4,
+#ifndef __KERNEL__
+	OVS_HASH_ALG_SYM_L4,
+#endif
+	__OVS_HASH_MAX
 };
 
 /*
@@ -924,12 +934,12 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_CT_CLEAR,     /* No argument. */
 	OVS_ACTION_ATTR_PUSH_NSH,     /* Nested OVS_NSH_KEY_ATTR_*. */
 	OVS_ACTION_ATTR_POP_NSH,      /* No argument. */
+	OVS_ACTION_ATTR_METER,         /* u32 meter number. */
 
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
 	OVS_ACTION_ATTR_CLONE,         /* Nested OVS_CLONE_ATTR_*.  */
-	OVS_ACTION_ATTR_METER,         /* u32 meter number. */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */
@@ -942,5 +952,84 @@ enum ovs_action_attr {
 };
 
 #define OVS_ACTION_ATTR_MAX (__OVS_ACTION_ATTR_MAX - 1)
+
+/* Meters. */
+#define OVS_METER_FAMILY  "ovs_meter"
+#define OVS_METER_MCGROUP "ovs_meter"
+#define OVS_METER_VERSION 0x1
+
+enum ovs_meter_cmd {
+	OVS_METER_CMD_UNSPEC,
+	OVS_METER_CMD_FEATURES,	/* Get features supported by the datapath. */
+	OVS_METER_CMD_SET,	/* Add or modify a meter. */
+	OVS_METER_CMD_DEL,	/* Delete a meter. */
+	OVS_METER_CMD_GET	/* Get meter stats. */
+};
+
+enum ovs_meter_attr {
+	OVS_METER_ATTR_UNSPEC,
+	OVS_METER_ATTR_ID,	/* u32 meter ID within datapath. */
+	OVS_METER_ATTR_KBPS,	/* No argument. If set, units in kilobits
+				 * per second. Otherwise, units in
+				 * packets per second.
+				 */
+	OVS_METER_ATTR_STATS,	/* struct ovs_flow_stats for the meter. */
+	OVS_METER_ATTR_BANDS,	/* Nested attributes for meter bands. */
+	OVS_METER_ATTR_USED,	/* u64 msecs last used in monotonic time. */
+	OVS_METER_ATTR_CLEAR,	/* Flag to clear stats, used. */
+	OVS_METER_ATTR_MAX_METERS, /* u32 number of meters supported. */
+	OVS_METER_ATTR_MAX_BANDS,  /* u32 max number of bands per meter. */
+	OVS_METER_ATTR_PAD,
+	__OVS_METER_ATTR_MAX
+};
+
+#define OVS_METER_ATTR_MAX (__OVS_METER_ATTR_MAX - 1)
+
+enum ovs_band_attr {
+	OVS_BAND_ATTR_UNSPEC,
+	OVS_BAND_ATTR_TYPE,	/* u32 OVS_METER_BAND_TYPE_* constant. */
+	OVS_BAND_ATTR_RATE,	/* u32 band rate in meter units (see above). */
+	OVS_BAND_ATTR_BURST,	/* u32 burst size in meter units. */
+	OVS_BAND_ATTR_STATS,	/* struct ovs_flow_stats for the band. */
+	__OVS_BAND_ATTR_MAX
+};
+
+#define OVS_BAND_ATTR_MAX (__OVS_BAND_ATTR_MAX - 1)
+
+enum ovs_meter_band_type {
+	OVS_METER_BAND_TYPE_UNSPEC,
+	OVS_METER_BAND_TYPE_DROP,   /* Drop exceeding packets. */
+	__OVS_METER_BAND_TYPE_MAX
+};
+
+#define OVS_METER_BAND_TYPE_MAX (__OVS_METER_BAND_TYPE_MAX - 1)
+
+/* Conntrack limit */
+#define OVS_CT_LIMIT_FAMILY  "ovs_ct_limit"
+#define OVS_CT_LIMIT_MCGROUP "ovs_ct_limit"
+#define OVS_CT_LIMIT_VERSION 0x1
+
+enum ovs_ct_limit_cmd {
+	OVS_CT_LIMIT_CMD_UNSPEC,
+	OVS_CT_LIMIT_CMD_SET,		/* Add or modify ct limit. */
+	OVS_CT_LIMIT_CMD_DEL,		/* Delete ct limit. */
+	OVS_CT_LIMIT_CMD_GET		/* Get ct limit. */
+};
+
+enum ovs_ct_limit_attr {
+	OVS_CT_LIMIT_ATTR_UNSPEC,
+	OVS_CT_LIMIT_ATTR_ZONE_LIMIT,	/* Nested struct ovs_zone_limit. */
+	__OVS_CT_LIMIT_ATTR_MAX
+};
+
+#define OVS_CT_LIMIT_ATTR_MAX (__OVS_CT_LIMIT_ATTR_MAX - 1)
+
+#define OVS_ZONE_LIMIT_DEFAULT_ZONE -1
+
+struct ovs_zone_limit {
+	int zone_id;
+	__u32 limit;
+	__u32 count;
+};
 
 #endif /* _LINUX_OPENVSWITCH_H */

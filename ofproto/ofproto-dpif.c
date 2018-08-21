@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +31,7 @@
 #include "lacp.h"
 #include "learn.h"
 #include "mac-learning.h"
+#include "math.h"
 #include "mcast-snooping.h"
 #include "multipath.h"
 #include "netdev-vport.h"
@@ -54,9 +54,7 @@
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
-#include "openvswitch/ofp-parse.h"
 #include "openvswitch/ofp-print.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/uuid.h"
 #include "openvswitch/vlog.h"
@@ -661,6 +659,8 @@ dealloc(struct ofproto *ofproto_)
 static void
 close_dpif_backer(struct dpif_backer *backer, bool del)
 {
+    struct simap_node *node;
+
     ovs_assert(backer->refcount > 0);
 
     if (--backer->refcount) {
@@ -669,6 +669,9 @@ close_dpif_backer(struct dpif_backer *backer, bool del)
 
     udpif_destroy(backer->udpif);
 
+    SIMAP_FOR_EACH (node, &backer->tnl_backers) {
+        dpif_port_del(backer->dpif, u32_to_odp(node->data), false);
+    }
     simap_destroy(&backer->tnl_backers);
     ovs_rwlock_destroy(&backer->odp_to_ofport_lock);
     hmap_destroy(&backer->odp_to_ofport_map);
@@ -1227,7 +1230,7 @@ check_ct_eventmask(struct dpif_backer *backer)
 
     /* Compose a dummy UDP packet. */
     dp_packet_init(&packet, 0);
-    flow_compose(&packet, &flow, 0);
+    flow_compose(&packet, &flow, NULL, 64);
 
     /* Execute the actions.  On older datapaths this fails with EINVAL, on
      * newer datapaths it succeeds. */
@@ -1286,6 +1289,50 @@ check_ct_clear(struct dpif_backer *backer)
               dpif_name(backer->dpif), (supported) ? "supports"
                                                    : "does not support");
     return supported;
+}
+
+/* Probe the highest dp_hash algorithm supported by the datapath. */
+static size_t
+check_max_dp_hash_alg(struct dpif_backer *backer)
+{
+    struct odputil_keybuf keybuf;
+    struct ofpbuf key;
+    struct flow flow;
+    struct ovs_action_hash *hash;
+    int max_alg = 0;
+
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+        .probe = true,
+    };
+
+    memset(&flow, 0, sizeof flow);
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&odp_parms, &key);
+
+    /* All datapaths support algortithm 0 (OVS_HASH_ALG_L4). */
+    for (int alg = 1; alg < __OVS_HASH_MAX; alg++) {
+        struct ofpbuf actions;
+        bool ok;
+
+        ofpbuf_init(&actions, 300);
+        hash = nl_msg_put_unspec_uninit(&actions,
+                                        OVS_ACTION_ATTR_HASH, sizeof *hash);
+        hash->hash_basis = 0;
+        hash->hash_alg = alg;
+        ok = dpif_probe_feature(backer->dpif, "Max dp_hash algorithm", &key,
+                                &actions, NULL);
+        ofpbuf_uninit(&actions);
+        if (ok) {
+            max_alg = alg;
+        } else {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: Max dp_hash algorithm probed to be %d",
+            dpif_name(backer->dpif), max_alg);
+    return max_alg;
 }
 
 #define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE, ETHTYPE)               \
@@ -1350,6 +1397,7 @@ check_support(struct dpif_backer *backer)
     backer->rt_support.sample_nesting = check_max_sample_nesting(backer);
     backer->rt_support.ct_eventmask = check_ct_eventmask(backer);
     backer->rt_support.ct_clear = check_ct_clear(backer);
+    backer->rt_support.max_hash_alg = check_max_dp_hash_alg(backer);
 
     /* Flow fields. */
     backer->rt_support.odp.ct_state = check_ct_state(backer);
@@ -1472,6 +1520,7 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     controller->max_len = UINT16_MAX;
     controller->controller_id = 0;
     controller->reason = OFPR_IMPLICIT_MISS;
+    controller->meter_id = NX_CTLR_NO_METER;
     ofpact_finish_CONTROLLER(&ofpacts, &controller);
 
     error = add_internal_miss_flow(ofproto, id++, &ofpacts,
@@ -1734,11 +1783,9 @@ flush(struct ofproto *ofproto_)
 
 static void
 query_tables(struct ofproto *ofproto,
-             struct ofputil_table_features *features,
+             struct ofputil_table_features *features OVS_UNUSED,
              struct ofputil_table_stats *stats)
 {
-    strcpy(features->name, "classifier");
-
     if (stats) {
         int i;
 
@@ -3209,7 +3256,6 @@ bundle_remove(struct ofport *port_)
 static void
 send_pdu_cb(void *port_, const void *pdu, size_t pdu_size)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 10);
     struct ofport_dpif *port = port_;
     struct eth_addr ea;
     int error;
@@ -3227,7 +3273,8 @@ send_pdu_cb(void *port_, const void *pdu, size_t pdu_size)
         ofproto_dpif_send_packet(port, false, &packet);
         dp_packet_uninit(&packet);
     } else {
-        VLOG_ERR_RL(&rl, "port %s: cannot obtain Ethernet address of iface "
+        static struct vlog_rate_limit rll = VLOG_RATE_LIMIT_INIT(1, 10);
+        VLOG_ERR_RL(&rll, "port %s: cannot obtain Ethernet address of iface "
                     "%s (%s)", port->bundle->name,
                     netdev_get_name(port->up.netdev), ovs_strerror(error));
     }
@@ -3274,8 +3321,8 @@ bundle_send_learning_packets(struct ofbundle *bundle)
     }
 
     if (n_errors) {
-        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "bond %s: %d errors sending %d gratuitous learning "
+        static struct vlog_rate_limit rll = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rll, "bond %s: %d errors sending %d gratuitous learning "
                      "packets, last error was: %s",
                      bundle->name, n_errors, n_packets, ovs_strerror(error));
     } else {
@@ -3637,11 +3684,10 @@ port_add(struct ofproto *ofproto_, struct netdev *netdev)
     }
 
     dp_port_name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
-    if (!dpif_port_exists(ofproto->backer->dpif, dp_port_name)) {
-        odp_port_t port_no = ODPP_NONE;
-        int error;
 
-        error = dpif_port_add(ofproto->backer->dpif, netdev, &port_no);
+    odp_port_t port_no = ODPP_NONE;
+    int error = dpif_port_add(ofproto->backer->dpif, netdev, &port_no);
+    if (error != EEXIST) {
         if (error) {
             return error;
         }
@@ -4295,8 +4341,8 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
 static void
 report_unsupported_act(const char *action, const char *detail)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-    VLOG_WARN_RL(&rl, "Rejecting %s action because datapath does not support"
+    static struct vlog_rate_limit rll = VLOG_RATE_LIMIT_INIT(1, 5);
+    VLOG_WARN_RL(&rll, "Rejecting %s action because datapath does not support"
                  "%s%s (your kernel module may be out of date)",
                  action, detail ? " " : "", detail ? detail : "");
 }
@@ -4716,6 +4762,162 @@ group_dpif_credit_stats(struct group_dpif *group,
     ovs_mutex_unlock(&group->stats_mutex);
 }
 
+/* Calculate the dp_hash mask needed to provide the least weighted bucket
+ * with at least one hash value and construct a mapping table from masked
+ * dp_hash value to group bucket using the Webster method.
+ * If the caller specifies a non-zero max_hash value, abort and return false
+ * if more hash values would be required. The absolute maximum number of
+ * hash values supported is 256. */
+
+#define MAX_SELECT_GROUP_HASH_VALUES 256
+
+static bool
+group_setup_dp_hash_table(struct group_dpif *group, size_t max_hash)
+{
+    struct ofputil_bucket *bucket;
+    uint32_t n_buckets = group->up.n_buckets;
+    uint64_t total_weight = 0;
+    uint16_t min_weight = UINT16_MAX;
+    struct webster {
+        struct ofputil_bucket *bucket;
+        uint32_t divisor;
+        double value;
+        int hits;
+    } *webster;
+
+    if (n_buckets == 0) {
+        VLOG_DBG("  Don't apply dp_hash method without buckets.");
+        return false;
+    }
+
+    webster = xcalloc(n_buckets, sizeof(struct webster));
+    int i = 0;
+    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        if (bucket->weight > 0 && bucket->weight < min_weight) {
+            min_weight = bucket->weight;
+        }
+        total_weight += bucket->weight;
+        webster[i].bucket = bucket;
+        webster[i].divisor = 1;
+        webster[i].value = bucket->weight;
+        webster[i].hits = 0;
+        i++;
+    }
+
+    if (total_weight == 0) {
+        VLOG_DBG("  Total weight is zero. No active buckets.");
+        free(webster);
+        return false;
+    }
+    VLOG_DBG("  Minimum weight: %d, total weight: %"PRIu64,
+             min_weight, total_weight);
+
+    uint64_t min_slots = DIV_ROUND_UP(total_weight, min_weight);
+    uint64_t min_slots2 = ROUND_UP_POW2(min_slots);
+    uint64_t n_hash = MAX(16, min_slots2);
+    if (n_hash > MAX_SELECT_GROUP_HASH_VALUES ||
+        (max_hash != 0 && n_hash > max_hash)) {
+        VLOG_DBG("  Too many hash values required: %"PRIu64, n_hash);
+        return false;
+    }
+
+    VLOG_DBG("  Using %"PRIu64" hash values:", n_hash);
+    group->hash_mask = n_hash - 1;
+    if (group->hash_map) {
+        free(group->hash_map);
+    }
+    group->hash_map = xcalloc(n_hash, sizeof(struct ofputil_bucket *));
+
+    /* Use Webster method to distribute hash values over buckets. */
+    for (int hash = 0; hash < n_hash; hash++) {
+        struct webster *winner = &webster[0];
+        for (i = 1; i < n_buckets; i++) {
+            if (webster[i].value > winner->value) {
+                winner = &webster[i];
+            }
+        }
+        winner->hits++;
+        winner->divisor += 2;
+        winner->value = (double) winner->bucket->weight / winner->divisor;
+        group->hash_map[hash] = winner->bucket;
+    }
+
+    i = 0;
+    LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        double target = (n_hash * bucket->weight) / (double) total_weight;
+        VLOG_DBG("  Bucket %d: weight=%d, target=%.2f hits=%d",
+                 bucket->bucket_id, bucket->weight,
+                 target, webster[i].hits);
+        i++;
+    }
+
+    free(webster);
+    return true;
+}
+
+static void
+group_set_selection_method(struct group_dpif *group)
+{
+    const struct ofputil_group_props *props = &group->up.props;
+    const char *selection_method = props->selection_method;
+
+    VLOG_DBG("Constructing select group %"PRIu32, group->up.group_id);
+    if (selection_method[0] == '\0') {
+        VLOG_DBG("No selection method specified. Trying dp_hash.");
+        /* If the controller has not specified a selection method, check if
+         * the dp_hash selection method with max 64 hash values is appropriate
+         * for the given bucket configuration. */
+        if (group_setup_dp_hash_table(group, 64)) {
+            /* Use dp_hash selection method with symmetric L4 hash. */
+            group->selection_method = SEL_METHOD_DP_HASH;
+            group->hash_alg = OVS_HASH_ALG_SYM_L4;
+            group->hash_basis = 0;
+            VLOG_DBG("Use dp_hash with %d hash values using algorithm %d.",
+                     group->hash_mask + 1, group->hash_alg);
+        } else {
+            /* Fall back to original default hashing in slow path. */
+            VLOG_DBG("Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else if (!strcmp(selection_method, "dp_hash")) {
+        VLOG_DBG("Selection method specified: dp_hash.");
+        /* Try to use dp_hash if possible at all. */
+        if (group_setup_dp_hash_table(group, 0)) {
+            group->selection_method = SEL_METHOD_DP_HASH;
+            group->hash_alg = props->selection_method_param >> 32;
+            if (group->hash_alg >= __OVS_HASH_MAX) {
+                VLOG_DBG("Invalid dp_hash algorithm %d. "
+                         "Defaulting to OVS_HASH_ALG_L4", group->hash_alg);
+                group->hash_alg = OVS_HASH_ALG_L4;
+            }
+            group->hash_basis = (uint32_t) props->selection_method_param;
+            VLOG_DBG("Use dp_hash with %d hash values using algorithm %d.",
+                     group->hash_mask + 1, group->hash_alg);
+        } else {
+            /* Fall back to original default hashing in slow path. */
+            VLOG_DBG("Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else if (!strcmp(selection_method, "hash")) {
+        VLOG_DBG("Selection method specified: hash.");
+        if (props->fields.values_size > 0) {
+            /* Controller has specified hash fields. */
+            struct ds s = DS_EMPTY_INITIALIZER;
+            oxm_format_field_array(&s, &props->fields);
+            VLOG_DBG("Hash fields: %s", ds_cstr(&s));
+            ds_destroy(&s);
+            group->selection_method = SEL_METHOD_HASH;
+        } else {
+            /* No hash fields. Fall back to original default hashing. */
+            VLOG_DBG("No hash fields. Falling back to default hash method.");
+            group->selection_method = SEL_METHOD_DEFAULT;
+        }
+    } else {
+        /* Parsing of groups should ensure this never happens */
+        OVS_NOT_REACHED();
+    }
+}
+
 static enum ofperr
 group_construct(struct ofgroup *group_)
 {
@@ -4724,6 +4926,10 @@ group_construct(struct ofgroup *group_)
     ovs_mutex_init_adaptive(&group->stats_mutex);
     ovs_mutex_lock(&group->stats_mutex);
     group_construct_stats(group);
+    group->hash_map = NULL;
+    if (group->up.type == OFPGT11_SELECT) {
+        group_set_selection_method(group);
+    }
     ovs_mutex_unlock(&group->stats_mutex);
     return 0;
 }
@@ -4733,6 +4939,10 @@ group_destruct(struct ofgroup *group_)
 {
     struct group_dpif *group = group_dpif_cast(group_);
     ovs_mutex_destroy(&group->stats_mutex);
+    if (group->hash_map) {
+        free(group->hash_map);
+        group->hash_map = NULL;
+    }
 }
 
 static enum ofperr
@@ -5038,6 +5248,69 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+ofproto_unixctl_fdb_stats_clear(struct unixctl_conn *conn, int argc,
+                                const char *argv[], void *aux OVS_UNUSED)
+{
+    struct ofproto_dpif *ofproto;
+
+    if (argc > 1) {
+        ofproto = ofproto_dpif_lookup_by_name(argv[1]);
+        if (!ofproto) {
+            unixctl_command_reply_error(conn, "no such bridge");
+            return;
+        }
+        ovs_rwlock_wrlock(&ofproto->ml->rwlock);
+        mac_learning_clear_statistics(ofproto->ml);
+        ovs_rwlock_unlock(&ofproto->ml->rwlock);
+    } else {
+        HMAP_FOR_EACH (ofproto, all_ofproto_dpifs_by_name_node,
+                       &all_ofproto_dpifs_by_name) {
+            ovs_rwlock_wrlock(&ofproto->ml->rwlock);
+            mac_learning_clear_statistics(ofproto->ml);
+            ovs_rwlock_unlock(&ofproto->ml->rwlock);
+        }
+    }
+
+    unixctl_command_reply(conn, "statistics successfully cleared");
+}
+
+static void
+ofproto_unixctl_fdb_stats_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                               const char *argv[], void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    const struct ofproto_dpif *ofproto;
+    ofproto = ofproto_dpif_lookup_by_name(argv[1]);
+    if (!ofproto) {
+        unixctl_command_reply_error(conn, "no such bridge");
+        return;
+    }
+
+    ds_put_format(&ds, "Statistics for bridge \"%s\":\n", argv[1]);
+    ovs_rwlock_rdlock(&ofproto->ml->rwlock);
+
+    ds_put_format(&ds, "  Current/maximum MAC entries in the table: %"
+                  PRIuSIZE"/%"PRIuSIZE"\n",
+                  hmap_count(&ofproto->ml->table), ofproto->ml->max_entries);
+    ds_put_format(&ds,
+                  "  Total number of learned MAC entries     : %"PRIu64"\n",
+                  ofproto->ml->total_learned);
+    ds_put_format(&ds,
+                  "  Total number of expired MAC entries     : %"PRIu64"\n",
+                  ofproto->ml->total_expired);
+    ds_put_format(&ds,
+                  "  Total number of evicted MAC entries     : %"PRIu64"\n",
+                  ofproto->ml->total_evicted);
+    ds_put_format(&ds,
+                  "  Total number of port moved MAC entries  : %"PRIu64"\n",
+                  ofproto->ml->total_moved);
+
+    ovs_rwlock_unlock(&ofproto->ml->rwlock);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
+}
+
+static void
 ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
                                     int argc OVS_UNUSED,
                                     const char *argv[],
@@ -5238,8 +5511,6 @@ dpif_set_support(struct dpif_backer_support *rt_support,
 #undef ODP_SUPPORT_FIELD
 
     if (!name) {
-        struct shash_node *node;
-
         SHASH_FOR_EACH (node, &all_fields) {
             display_support_field(node->name, node->data, ds);
         }
@@ -5318,7 +5589,7 @@ dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
             continue;
         }
 
-        ds_put_format(ds, "\t%s:\n", ofproto->up.name);
+        ds_put_format(ds, "  %s:\n", ofproto->up.name);
 
         ports = shash_sort(&ofproto->up.port_by_name);
         for (j = 0; j < shash_count(&ofproto->up.port_by_name); j++) {
@@ -5327,7 +5598,7 @@ dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
             struct smap config;
             odp_port_t odp_port;
 
-            ds_put_format(ds, "\t\t%s %u/", netdev_get_name(ofport->netdev),
+            ds_put_format(ds, "    %s %u/", netdev_get_name(ofport->netdev),
                           ofport->ofp_port);
 
             odp_port = ofp_port_to_odp_port(ofproto, ofport->ofp_port);
@@ -5529,6 +5800,10 @@ ofproto_unixctl_init(void)
                              ofproto_unixctl_fdb_flush, NULL);
     unixctl_command_register("fdb/show", "bridge", 1, 1,
                              ofproto_unixctl_fdb_show, NULL);
+    unixctl_command_register("fdb/stats-clear", "[bridge]", 0, 1,
+                             ofproto_unixctl_fdb_stats_clear, NULL);
+    unixctl_command_register("fdb/stats-show", "bridge", 1, 1,
+                             ofproto_unixctl_fdb_stats_show, NULL);
     unixctl_command_register("mdb/flush", "[bridge]", 0, 1,
                              ofproto_unixctl_mcast_snooping_flush, NULL);
     unixctl_command_register("mdb/show", "bridge", 1, 1,
@@ -5539,7 +5814,8 @@ ofproto_unixctl_init(void)
                              NULL);
     unixctl_command_register("dpif/show-dp-features", "bridge", 1, 1,
                              ofproto_unixctl_dpif_show_dp_features, NULL);
-    unixctl_command_register("dpif/dump-flows", "[-m] [--names | --no-nmaes] bridge", 1, INT_MAX,
+    unixctl_command_register("dpif/dump-flows",
+                             "[-m] [--names | --no-names] bridge", 1, INT_MAX,
                              ofproto_unixctl_dpif_dump_flows, NULL);
     unixctl_command_register("dpif/set-dp-features", "bridge", 1, 3 ,
                              ofproto_unixctl_dpif_set_dp_features, NULL);
@@ -5583,9 +5859,11 @@ odp_port_to_ofp_port(const struct ofproto_dpif *ofproto, odp_port_t odp_port)
     }
 }
 
+/* 'match' is non-const to allow for temporary modifications.  Any changes are
+ * restored before returning. */
 int
 ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
-                               const struct match *match, int priority,
+                               struct match *match, int priority,
                                uint16_t idle_timeout,
                                const struct ofpbuf *ofpacts,
                                struct rule **rulep)
@@ -5596,7 +5874,6 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
 
     fm = (struct ofputil_flow_mod) {
         .buffer_id = UINT32_MAX,
-        .match = *match,
         .priority = priority,
         .table_id = TBL_INTERNAL,
         .command = OFPFC_ADD,
@@ -5605,8 +5882,10 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
         .ofpacts = ofpacts->data,
         .ofpacts_len = ofpacts->size,
     };
-
+    minimatch_init(&fm.match, match);
     error = ofproto_flow_mod(&ofproto->up, &fm);
+    minimatch_destroy(&fm.match);
+
     if (error) {
         VLOG_ERR_RL(&rl, "failed to add internal flow (%s)",
                     ofperr_to_string(error));
@@ -5616,8 +5895,7 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
 
     rule = rule_dpif_lookup_in_table(ofproto,
                                      ofproto_dpif_get_tables_version(ofproto),
-                                     TBL_INTERNAL, &fm.match.flow,
-                                     &fm.match.wc);
+                                     TBL_INTERNAL, &match->flow, &match->wc);
     if (rule) {
         *rulep = &rule->up;
     } else {
@@ -5635,7 +5913,6 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
 
     fm = (struct ofputil_flow_mod) {
         .buffer_id = UINT32_MAX,
-        .match = *match,
         .priority = priority,
         .table_id = TBL_INTERNAL,
         .out_port = OFPP_ANY,
@@ -5643,8 +5920,10 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
         .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
         .command = OFPFC_DELETE_STRICT,
     };
-
+    minimatch_init(&fm.match, match);
     error = ofproto_flow_mod(&ofproto->up, &fm);
+    minimatch_destroy(&fm.match);
+
     if (error) {
         VLOG_ERR_RL(&rl, "failed to delete internal flow (%s)",
                     ofperr_to_string(error));
@@ -5680,7 +5959,7 @@ meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
         }
     }
 
-    switch (dpif_meter_set(ofproto->backer->dpif, meter_id, config)) {
+    switch (dpif_meter_set(ofproto->backer->dpif, *meter_id, config)) {
     case 0:
         return 0;
     case EFBIG: /* meter_id out of range */

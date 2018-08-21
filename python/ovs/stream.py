@@ -191,8 +191,15 @@ class Stream(object):
         if error:
             return error, None
         else:
-            status = ovs.socket_util.check_connection_completion(sock)
-            return 0, cls(sock, name, status)
+            err = ovs.socket_util.check_connection_completion(sock)
+            if err == errno.EAGAIN or err == errno.EINPROGRESS:
+                status = errno.EAGAIN
+                err = 0
+            elif err == 0:
+                status = 0
+            else:
+                status = err
+            return err, cls(sock, name, status)
 
     @staticmethod
     def _open(suffix, dscp):
@@ -383,11 +390,8 @@ class Stream(object):
         elif len(buf) == 0:
             return 0
 
-        # Python 3 has separate types for strings and bytes.  We must have
-        # bytes here.
-        if six.PY3 and not isinstance(buf, bytes):
-            buf = bytes(buf, 'utf-8')
-        elif six.PY2:
+        # We must have bytes for sending.
+        if isinstance(buf, six.text_type):
             buf = buf.encode('utf-8')
 
         if sys.platform == 'win32' and self.socket is None:
@@ -705,8 +709,8 @@ def usage(name):
     return """
 Active %s connection methods:
   unix:FILE               Unix domain socket named FILE
-  tcp:IP:PORT             TCP socket to IP with port no of PORT
-  ssl:IP:PORT             SSL socket to IP with port no of PORT
+  tcp:HOST:PORT           TCP socket to HOST with port no of PORT
+  ssl:HOST:PORT           SSL socket to HOST with port no of PORT
 
 Passive %s connection methods:
   punix:FILE              Listen on Unix domain socket FILE""" % (name, name)

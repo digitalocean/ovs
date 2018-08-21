@@ -72,6 +72,7 @@ PYCOV_CLEAN_FILES = build-aux/check-structs,cover
 EXTRA_DIST = \
 	AUTHORS.rst \
 	CONTRIBUTING.rst \
+	LICENSE \
 	MAINTAINERS.rst \
 	README.rst \
 	NOTICE \
@@ -82,6 +83,10 @@ EXTRA_DIST = \
 	.travis/osx-prepare.sh \
 	appveyor.yml \
 	boot.sh \
+	poc/builders/Vagrantfile \
+	poc/playbook-centos-builder.yml \
+	poc/playbook-fedora-builder.yml \
+	poc/playbook-ubuntu-builder.yml \
 	$(MAN_FRAGMENTS) \
 	$(MAN_ROOTS) \
 	Vagrantfile \
@@ -194,6 +199,7 @@ dist-hook-git: distfiles
 	  (cat distfiles; sed 's|^|datapath/|' datapath/distfiles) | \
 	    LC_ALL=C sort -u > all-distfiles; \
 	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' | \
+	    grep -v '\.gitattributes$$' | \
 	    LC_ALL=C sort -u > all-gitfiles; \
 	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
 	  if test -s missing-distfiles; then \
@@ -290,7 +296,7 @@ check-endian:
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
 	  (cd $(srcdir) && git --no-pager grep -l -E \
 	   -e 'BIG_ENDIAN|LITTLE_ENDIAN' --and --not -e 'BYTE_ORDER' | \
-	  $(EGREP) -v '^datapath/'); \
+	  $(EGREP) -v '^datapath/|^include/sparse/rte_'); \
 	then \
 	  echo "See above for list of files that misuse LITTLE""_ENDIAN"; \
 	  echo "or BIG""_ENDIAN.  Please use WORDS_BIGENDIAN instead."; \
@@ -308,6 +314,21 @@ check-echo-n:
 	  exit 1; \
 	fi
 .PHONY: check-echo-n
+
+ALL_LOCAL += check-tabs
+check-tabs:
+	@cd $(srcdir); \
+	if test -e .git && (git --version) >/dev/null 2>&1 && \
+	  grep -ln "^	" \
+	    `git ls-files \
+	      | grep -v -f build-aux/initial-tab-whitelist` /dev/null \
+	      | $(EGREP) -v ':[ 	]*/?\*'; \
+	then \
+	  echo "See above for files that use tabs for indentation."; \
+	  echo "Please use spaces instead."; \
+	  exit 1; \
+	fi
+.PHONY: check-tabs
 
 ALL_LOCAL += thread-safety-check
 thread-safety-check:
@@ -401,14 +422,30 @@ CLEANFILES += manpage-dep-check
 
 if VSTUDIO_DDK
 ALL_LOCAL += ovsext
+ARCH = x64
 ovsext: datapath-windows/ovsext.sln $(srcdir)/datapath-windows/include/OvsDpInterface.h
-	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
-	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+if VSTUDIO_WIN8
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
+if VSTUDIO_WIN8_1
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
+if VSTUDIO_WIN10
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Build /property:Configuration="Win10$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
+
 
 CLEAN_LOCAL += ovsext_clean
 ovsext_clean: datapath-windows/ovsext.sln
-	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
-	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)"
+if VSTUDIO_WIN8
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
+if VSTUDIO_WIN8_1
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win8.1$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
+if VSTUDIO_WIN10
+	MSBuild.exe //nologo //maxcpucount datapath-windows/ovsext.sln /target:Clean /property:Configuration="Win10$(VSTUDIO_CONFIG)" /property:Version="$(PACKAGE_VERSION)" //p:Platform=$(ARCH)
+endif
 endif
 .PHONY: ovsext
 

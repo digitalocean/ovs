@@ -45,10 +45,12 @@
 #include "odp-netlink.h"
 #include "openflow/openflow.h"
 #include "packets.h"
+#include "openvswitch/ofp-print.h"
 #include "openvswitch/poll-loop.h"
 #include "seq.h"
 #include "openvswitch/shash.h"
 #include "smap.h"
+#include "socket-util.h"
 #include "sset.h"
 #include "svec.h"
 #include "openvswitch/vlog.h"
@@ -694,11 +696,12 @@ netdev_rxq_close(struct netdev_rxq *rx)
  * Returns EAGAIN immediately if no packet is ready to be received or another
  * positive errno value if an error was encountered. */
 int
-netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *batch)
+netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *batch,
+                int *qfill)
 {
     int retval;
 
-    retval = rx->netdev->netdev_class->rxq_recv(rx, batch);
+    retval = rx->netdev->netdev_class->rxq_recv(rx, batch, qfill);
     if (!retval) {
         COVERAGE_INC(netdev_received);
     } else {
@@ -854,8 +857,8 @@ netdev_push_header(const struct netdev *netdev,
                    const struct ovs_action_push_tnl *data)
 {
     struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH (packet, batch) {
-        netdev->netdev_class->push_header(packet, data);
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        netdev->netdev_class->push_header(netdev, packet, data);
         pkt_metadata_init(&packet->md, data->out_port);
     }
 
@@ -949,7 +952,7 @@ netdev_set_mtu(struct netdev *netdev, int mtu)
 
     error = class->set_mtu ? class->set_mtu(netdev, mtu) : EOPNOTSUPP;
     if (error && error != EOPNOTSUPP) {
-        VLOG_DBG_RL(&rl, "failed to set MTU for network device %s: %s",
+        VLOG_WARN_RL(&rl, "failed to set MTU for network device %s: %s",
                      netdev_get_name(netdev), ovs_strerror(error));
     }
 
@@ -1095,6 +1098,40 @@ netdev_set_advertisements(struct netdev *netdev,
             : EOPNOTSUPP);
 }
 
+static const char *
+netdev_feature_to_name(uint32_t bit)
+{
+    enum netdev_features f = bit;
+
+    switch (f) {
+    case NETDEV_F_10MB_HD:    return "10MB-HD";
+    case NETDEV_F_10MB_FD:    return "10MB-FD";
+    case NETDEV_F_100MB_HD:   return "100MB-HD";
+    case NETDEV_F_100MB_FD:   return "100MB-FD";
+    case NETDEV_F_1GB_HD:     return "1GB-HD";
+    case NETDEV_F_1GB_FD:     return "1GB-FD";
+    case NETDEV_F_10GB_FD:    return "10GB-FD";
+    case NETDEV_F_40GB_FD:    return "40GB-FD";
+    case NETDEV_F_100GB_FD:   return "100GB-FD";
+    case NETDEV_F_1TB_FD:     return "1TB-FD";
+    case NETDEV_F_OTHER:      return "OTHER";
+    case NETDEV_F_COPPER:     return "COPPER";
+    case NETDEV_F_FIBER:      return "FIBER";
+    case NETDEV_F_AUTONEG:    return "AUTO_NEG";
+    case NETDEV_F_PAUSE:      return "AUTO_PAUSE";
+    case NETDEV_F_PAUSE_ASYM: return "AUTO_PAUSE_ASYM";
+    }
+
+    return NULL;
+}
+
+void
+netdev_features_format(struct ds *s, enum netdev_features features)
+{
+    ofp_print_bit_names(s, features, netdev_feature_to_name, ' ');
+    ds_put_char(s, '\n');
+}
+
 /* Assigns 'addr' as 'netdev''s IPv4 address and 'mask' as its netmask.  If
  * 'addr' is INADDR_ANY, 'netdev''s IPv4 address is cleared.  Returns a
  * positive errno value. */
@@ -1106,39 +1143,74 @@ netdev_set_in4(struct netdev *netdev, struct in_addr addr, struct in_addr mask)
             : EOPNOTSUPP);
 }
 
-/* Obtains ad IPv4 address from device name and save the address in
- * in4.  Returns 0 if successful, otherwise a positive errno value.
- */
+static int
+netdev_get_addresses_by_name(const char *device_name,
+                             struct in6_addr **addrsp, int *n_addrsp)
+{
+    struct netdev *netdev;
+    int error = netdev_open(device_name, NULL, &netdev);
+    if (error) {
+        *addrsp = NULL;
+        *n_addrsp = 0;
+        return error;
+    }
+
+    struct in6_addr *masks;
+    error = netdev_get_addr_list(netdev, addrsp, &masks, n_addrsp);
+    netdev_close(netdev);
+    free(masks);
+    return error;
+}
+
+/* Obtains an IPv4 address from 'device_name' and save the address in '*in4'.
+ * Returns 0 if successful, otherwise a positive errno value. */
 int
 netdev_get_in4_by_name(const char *device_name, struct in_addr *in4)
 {
-    struct in6_addr *mask, *addr6;
-    int err, n_in6, i;
-    struct netdev *dev;
+    struct in6_addr *addrs;
+    int n;
+    int error = netdev_get_addresses_by_name(device_name, &addrs, &n);
 
-    err = netdev_open(device_name, NULL, &dev);
-    if (err) {
-        return err;
-    }
-
-    err = netdev_get_addr_list(dev, &addr6, &mask, &n_in6);
-    if (err) {
-        goto out;
-    }
-
-    for (i = 0; i < n_in6; i++) {
-        if (IN6_IS_ADDR_V4MAPPED(&addr6[i])) {
-            in4->s_addr = in6_addr_get_mapped_ipv4(&addr6[i]);
-            goto out;
+    in4->s_addr = 0;
+    if (!error) {
+        error = ENOENT;
+        for (int i = 0; i < n; i++) {
+            if (IN6_IS_ADDR_V4MAPPED(&addrs[i])) {
+                in4->s_addr = in6_addr_get_mapped_ipv4(&addrs[i]);
+                error = 0;
+                break;
+            }
         }
     }
-    err = -ENOENT;
-out:
-    free(addr6);
-    free(mask);
-    netdev_close(dev);
-    return err;
+    free(addrs);
 
+    return error;
+}
+
+/* Obtains an IPv4 or IPv6 address from 'device_name' and save the address in
+ * '*in6', representing IPv4 addresses as v6-mapped.  Returns 0 if successful,
+ * otherwise a positive errno value. */
+int
+netdev_get_ip_by_name(const char *device_name, struct in6_addr *in6)
+{
+    struct in6_addr *addrs;
+    int n;
+    int error = netdev_get_addresses_by_name(device_name, &addrs, &n);
+
+    *in6 = in6addr_any;
+    if (!error) {
+        error = ENOENT;
+        for (int i = 0; i < n; i++) {
+            if (!in6_is_lla(&addrs[i])) {
+                *in6 = addrs[i];
+                error = 0;
+                break;
+            }
+        }
+    }
+    free(addrs);
+
+    return error;
 }
 
 /* Adds 'router' as a default IP gateway for the TCP/IP stack that corresponds
@@ -1967,19 +2039,36 @@ netdev_get_addrs(const char dev[], struct in6_addr **paddr,
     struct in6_addr *addr_array, *mask_array;
     const struct ifaddrs *ifa;
     int cnt = 0, i = 0;
+    int retries = 3;
 
     ovs_mutex_lock(&if_addr_list_lock);
     if (!if_addr_list) {
         int err;
 
+retry:
         err = getifaddrs(&if_addr_list);
         if (err) {
             ovs_mutex_unlock(&if_addr_list_lock);
             return -err;
         }
+        retries--;
     }
 
     for (ifa = if_addr_list; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_name) {
+            if (retries) {
+                /* Older versions of glibc have a bug on race condition with
+                 * address addition which may cause one of the returned
+                 * ifa_name values to be NULL. In such case, we know that we've
+                 * got an inconsistent dump. Retry but beware of an endless
+                 * loop. */
+                freeifaddrs(if_addr_list);
+                goto retry;
+            } else {
+                VLOG_WARN("Proceeding with an inconsistent dump of "
+                          "interfaces from the kernel. Some may be missing");
+            }
+        }
         if (ifa->ifa_addr && ifa->ifa_name && ifa->ifa_netmask) {
             int family;
 
@@ -1999,29 +2088,13 @@ netdev_get_addrs(const char dev[], struct in6_addr **paddr,
     addr_array = xzalloc(sizeof *addr_array * cnt);
     mask_array = xzalloc(sizeof *mask_array * cnt);
     for (ifa = if_addr_list; ifa; ifa = ifa->ifa_next) {
-        int family;
-
-        if (!ifa->ifa_name || !ifa->ifa_addr || !ifa->ifa_netmask
-            || strncmp(ifa->ifa_name, dev, IFNAMSIZ)) {
-            continue;
-        }
-
-        family = ifa->ifa_addr->sa_family;
-        if (family == AF_INET) {
-            const struct sockaddr_in *sin;
-
-            sin = ALIGNED_CAST(const struct sockaddr_in *, ifa->ifa_addr);
-            in6_addr_set_mapped_ipv4(&addr_array[i], sin->sin_addr.s_addr);
-            sin = ALIGNED_CAST(const struct sockaddr_in *, ifa->ifa_netmask);
-            in6_addr_set_mapped_ipv4(&mask_array[i], sin->sin_addr.s_addr);
-            i++;
-        } else if (family == AF_INET6) {
-            const struct sockaddr_in6 *sin6;
-
-            sin6 = ALIGNED_CAST(const struct sockaddr_in6 *, ifa->ifa_addr);
-            memcpy(&addr_array[i], &sin6->sin6_addr, sizeof *addr_array);
-            sin6 = ALIGNED_CAST(const struct sockaddr_in6 *, ifa->ifa_netmask);
-            memcpy(&mask_array[i], &sin6->sin6_addr, sizeof *mask_array);
+        if (ifa->ifa_name
+            && ifa->ifa_addr
+            && ifa->ifa_netmask
+            && !strncmp(ifa->ifa_name, dev, IFNAMSIZ)
+            && sa_is_ip(ifa->ifa_addr)) {
+            addr_array[i] = sa_get_address(ifa->ifa_addr);
+            mask_array[i] = sa_get_address(ifa->ifa_netmask);
             i++;
         }
     }
@@ -2106,14 +2179,14 @@ netdev_flow_dump_destroy(struct netdev_flow_dump *dump)
 bool
 netdev_flow_dump_next(struct netdev_flow_dump *dump, struct match *match,
                       struct nlattr **actions, struct dpif_flow_stats *stats,
-                      ovs_u128 *ufid, struct ofpbuf *rbuffer,
-                      struct ofpbuf *wbuffer)
+                      struct dpif_flow_attrs *attrs, ovs_u128 *ufid,
+                      struct ofpbuf *rbuffer, struct ofpbuf *wbuffer)
 {
     const struct netdev_class *class = dump->netdev->netdev_class;
 
     return (class->flow_dump_next
-            ? class->flow_dump_next(dump, match, actions, stats, ufid,
-                                    rbuffer, wbuffer)
+            ? class->flow_dump_next(dump, match, actions, stats, attrs,
+                                    ufid, rbuffer, wbuffer)
             : false);
 }
 
@@ -2134,12 +2207,13 @@ netdev_flow_put(struct netdev *netdev, struct match *match,
 int
 netdev_flow_get(struct netdev *netdev, struct match *match,
                 struct nlattr **actions, const ovs_u128 *ufid,
-                struct dpif_flow_stats *stats, struct ofpbuf *buf)
+                struct dpif_flow_stats *stats,
+                struct dpif_flow_attrs *attrs, struct ofpbuf *buf)
 {
     const struct netdev_class *class = netdev->netdev_class;
 
     return (class->flow_get
-            ? class->flow_get(netdev, match, actions, ufid, stats, buf)
+            ? class->flow_get(netdev, match, actions, ufid, stats, attrs, buf)
             : EOPNOTSUPP);
 }
 
@@ -2166,6 +2240,16 @@ netdev_init_flow_api(struct netdev *netdev)
     return (class->init_flow_api
             ? class->init_flow_api(netdev)
             : EOPNOTSUPP);
+}
+
+uint32_t
+netdev_get_block_id(struct netdev *netdev)
+{
+    const struct netdev_class *class = netdev->netdev_class;
+
+    return (class->get_block_id
+            ? class->get_block_id(netdev)
+            : 0);
 }
 
 bool
@@ -2374,7 +2458,8 @@ netdev_ports_flow_del(const struct dpif_class *dpif_class,
 int
 netdev_ports_flow_get(const struct dpif_class *dpif_class, struct match *match,
                       struct nlattr **actions, const ovs_u128 *ufid,
-                      struct dpif_flow_stats *stats, struct ofpbuf *buf)
+                      struct dpif_flow_stats *stats,
+                      struct dpif_flow_attrs *attrs, struct ofpbuf *buf)
 {
     struct port_to_netdev_data *data;
 
@@ -2382,7 +2467,7 @@ netdev_ports_flow_get(const struct dpif_class *dpif_class, struct match *match,
     HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class
             && !netdev_flow_get(data->netdev, match, actions,
-                                ufid, stats, buf)) {
+                                ufid, stats, attrs, buf)) {
             ovs_mutex_unlock(&netdev_hmap_mutex);
             return 0;
         }

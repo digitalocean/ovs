@@ -59,6 +59,8 @@ void ctl_init__(const struct ovsdb_idl_class *, const struct ctl_table_class *,
                 const struct cmd_show_table *cmd_show_tables,
                 void (*ctl_exit_func)(int status));
 char *ctl_default_db(void);
+void ctl_error(struct ctl_context *, const char *, ...)
+OVS_PRINTF_FORMAT(2, 3);
 OVS_NO_RETURN void ctl_fatal(const char *, ...) OVS_PRINTF_FORMAT(1, 2);
 
 /* *ctl command syntax structure, to be defined by each command implementation.
@@ -155,7 +157,7 @@ struct ctl_command {
     struct table *table;
 };
 
-bool ctl_might_write_to_db(char **argv);
+bool ctl_might_write_to_db(const struct ctl_command *, size_t n);
 const char *ctl_get_db_cmd_usage(void);
 
 const char *ctl_list_db_tables_usage(void);
@@ -164,9 +166,9 @@ void ctl_print_options(const struct option *);
 void ctl_add_cmd_options(struct option **, size_t *n_options_p,
                          size_t *allocated_options_p, int opt_val);
 void ctl_register_commands(const struct ctl_command_syntax *);
-struct ctl_command *ctl_parse_commands(int argc, char *argv[],
-                                       struct shash *local_options,
-                                       size_t *n_commandsp);
+char * OVS_WARN_UNUSED_RESULT ctl_parse_commands(
+    int argc, char *argv[], struct shash *local_options,
+    struct ctl_command **commandsp, size_t *n_commandsp);
 
 /* Sometimes, it is desirable to print the table with weak reference to
  * rows in a 'cmd_show_table' table.  In that case, the 'weak_ref_table'
@@ -197,7 +199,7 @@ struct weak_ref_table {
 struct cmd_show_table {
     const struct ovsdb_idl_table_class *table;
     const struct ovsdb_idl_column *name_column;
-    const struct ovsdb_idl_column *columns[3]; /* Seems like a good number. */
+    const struct ovsdb_idl_column *columns[4]; /* Seems like a good number. */
     const struct weak_ref_table wref_table;
 };
 
@@ -222,6 +224,7 @@ struct ctl_context {
     struct shash options;
 
     /* Modifiable state. */
+    char *error;
     struct ds output;
     struct table *table;
     struct ovsdb_idl *idl;
@@ -231,7 +234,7 @@ struct ctl_context {
     /* For implementation with a cache of the contents of the database,
      * this function will be called when the database is changed and the
      * change makes the cache no longer valid. */
-    void (*invalidate_cache)(struct ctl_context *);
+    void (*invalidate_cache_cb)(struct ctl_context *);
 
     /* A command may set this member to true if some prerequisite is not met
      * and the caller should wait for something to change and then retry. */
@@ -269,13 +272,11 @@ struct ctl_table_class {
     struct ctl_row_id row_ids[4];
 };
 
-const struct ovsdb_idl_row *ctl_get_row(struct ctl_context *,
-                                        const struct ovsdb_idl_table_class *,
-                                        const char *record_id,
-                                        bool must_exist);
+char *ctl_get_row(struct ctl_context *, const struct ovsdb_idl_table_class *,
+                  const char *record_id, bool must_exist,
+                  const struct ovsdb_idl_row **);
 
-void ctl_set_column(const char *table_name,
-                    const struct ovsdb_idl_row *, const char *arg,
-                    struct ovsdb_symbol_table *);
+char *ctl_set_column(const char *table_name, const struct ovsdb_idl_row *,
+                     const char *arg, struct ovsdb_symbol_table *);
 
 #endif /* db-ctl-base.h */

@@ -54,8 +54,11 @@
     <xi:include href="lib/ssl.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h2>Other Options</h2>
-
-    <xi:include href="lib/common.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+    <xi:include href="lib/unixctl.xml"
+     xmlns:xi="http://www.w3.org/2003/XInclude"/>
+    <h3></h3>
+    <xi:include href="lib/common.xml"
+     xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h1>Runtime Management Commands</h1>
     <p>
@@ -237,17 +240,19 @@
     <p>
       This table prepares flows for possible stateful load balancing processing
       in ingress table <code>LB</code> and <code>Stateful</code>.  It contains
-      a priority-0 flow that simply moves traffic to the next table.  If load
-      balancing rules with virtual IP addresses (and ports) are configured in
-      <code>OVN_Northbound</code> database for a logical switch datapath, a
-      priority-100 flow is added for each configured virtual IP address
-      <var>VIP</var>. For IPv4 <var>VIPs</var>, the match is <code>ip
-      &amp;&amp; ip4.dst == <var>VIP</var></code>.  For IPv6 <var>VIPs</var>,
-      the match is <code>ip &amp;&amp; ip6.dst == <var>VIP</var></code>. The
-      flow sets an action <code>reg0[0] = 1; next;</code> to act as a
-      hint for table <code>Pre-stateful</code> to send IP packets to the
-      connection tracker for packet de-fragmentation before eventually
-      advancing to ingress table <code>LB</code>.
+      a priority-0 flow that simply moves traffic to the next table. Moreover
+      it contains a priority-110 flow to move IPv6 Neighbor Discovery traffic
+      to the next table. If load balancing rules with virtual IP addresses
+      (and ports) are configured in <code>OVN_Northbound</code> database for a
+      logical switch datapath, a priority-100 flow is added for each configured
+      virtual IP address <var>VIP</var>. For IPv4 <var>VIPs</var>, the match is
+      <code>ip &amp;&amp; ip4.dst == <var>VIP</var></code>. For IPv6
+      <var>VIPs</var>, the match is <code>ip &amp;&amp;
+      ip6.dst == <var>VIP</var></code>. The flow sets an action
+      <code>reg0[0] = 1; next;</code> to act as a hint for table
+      <code>Pre-stateful</code> to send IP packets to the connection tracker
+      for packet de-fragmentation before eventually advancing to ingress table
+      <code>LB</code>.
     </p>
 
     <h3>Ingress Table 5: Pre-stateful</h3>
@@ -344,18 +349,20 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 7: <code>from-lport</code> QoS marking</h3>
+    <h3>Ingress Table 7: <code>from-lport</code> QoS Marking</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
-      <code>QoS</code> table in the <code>OVN_Northbound</code> database
-      for the <code>from-lport</code> direction.
+      <code>QoS</code> table with the <code>action</code> column set in
+      the <code>OVN_Northbound</code> database for the
+      <code>from-lport</code> direction.
     </p>
 
     <ul>
       <li>
-        For every qos_rules for every logical switch a flow will be added at
-        priorities mentioned in the QoS table.
+        For every qos_rules entry in a logical switch with DSCP marking
+        enabled, a flow will be added at the priority mentioned in the
+        QoS table.
       </li>
 
       <li>
@@ -364,19 +371,20 @@
       </li>
     </ul>
 
-    <h3>Ingress Table 8: <code>from-lport</code> QoS meter</h3>
+    <h3>Ingress Table 8: <code>from-lport</code> QoS Meter</h3>
 
     <p>
       Logical flows in this table closely reproduce those in the
-      <code>QoS</code> table <code>bandwidth</code> column in the
-      <code>OVN_Northbound</code> database for the <code>from-lport</code>
-      direction.
+      <code>QoS</code> table with the  <code>bandwidth</code> column set
+      in the <code>OVN_Northbound</code> database for the
+      <code>from-lport</code> direction.
     </p>
 
     <ul>
       <li>
-        For every qos_rules for every logical switch a flow will be added at
-        priorities mentioned in the QoS table.
+        For every qos_rules entry in a logical switch with metering
+        enabled, a flow will be added at the priorirty mentioned in the
+        QoS table.
       </li>
 
       <li>
@@ -863,10 +871,12 @@ output;
     <p>
       This table is similar to ingress table <code>Pre-LB</code>.  It
       contains a priority-0 flow that simply moves traffic to the next table.
-      If any load balancing rules exist for the datapath, a priority-100 flow
-      is added with a match of <code>ip</code> and action of <code>reg0[0] = 1;
-       next;</code> to act as a hint for table <code>Pre-stateful</code> to
-      send IP packets to the connection tracker for packet de-fragmentation.
+      Moreover it contains a priority-110 flow to move IPv6 Neighbor Discovery
+      traffic to the next table. If any load balancing rules exist for the
+      datapath, a priority-100 flow is added with a match of <code>ip</code>
+      and action of <code>reg0[0] = 1; next;</code> to act as a hint for
+      table <code>Pre-stateful</code> to send IP packets to the connection
+      tracker for packet de-fragmentation.
     </p>
 
     <h3>Egress Table 1: <code>to-lport</code> Pre-ACLs</h3>
@@ -894,29 +904,8 @@ output;
       <code>to-lport</code> ACLs.
     </p>
 
-    <h3>Egress Table 5: <code>to-lport</code> QoS marking</h3>
-
     <p>
-      This is similar to ingress table <code>QoS marking</code> except for
-      <code>to-lport</code> qos rules.
-    </p>
-
-    <h3>Egress Table 6: <code>to-lport</code> QoS meter</h3>
-
-    <p>
-      This is similar to ingress table <code>QoS meter</code> except for
-      <code>to-lport</code> qos rules.
-    </p>
-
-    <h3>Egress Table 7: Stateful</h3>
-
-    <p>
-      This is similar to ingress table <code>Stateful</code> except that
-      there are no rules added for load balancing new connections.
-    </p>
-
-    <p>
-      Also the following flows are added.
+      In addition, the following flows are added.
     </p>
     <ul>
       <li>
@@ -933,6 +922,27 @@ output;
         <code>Ingress Table 15:DNS responses</code>.
       </li>
     </ul>
+
+    <h3>Egress Table 5: <code>to-lport</code> QoS Marking</h3>
+
+    <p>
+      This is similar to ingress table <code>QoS marking</code> except
+      they apply to <code>to-lport</code> QoS rules.
+    </p>
+
+    <h3>Egress Table 6: <code>to-lport</code> QoS Meter</h3>
+
+    <p>
+      This is similar to ingress table <code>QoS meter</code> except
+      they apply to <code>to-lport</code> QoS rules.
+    </p>
+
+    <h3>Egress Table 7: Stateful</h3>
+
+    <p>
+      This is similar to ingress table <code>Stateful</code> except that
+      there are no rules added for load balancing new connections.
+    </p>
 
     <h3>Egress Table 8: Egress Port Security - IP</h3>
 
@@ -1307,49 +1317,41 @@ nd_na {
         <p>
           UDP port unreachable.  Priority-80 flows generate ICMP port
           unreachable messages in reply to UDP datagrams directed to the
-          router's IP address.  The logical router doesn't accept any UDP
-          traffic so it always generates such a reply.
+          router's IP address, except in the special case of gateways,
+          which accept traffic directed to a router IP for load balancing
+          and NAT purposes.
         </p>
 
         <p>
           These flows should not match IP fragments with nonzero offset.
-        </p>
-
-        <p>
-          Details TBD.  Not yet implemented.
         </p>
       </li>
 
       <li>
         <p>
-          TCP reset.  Priority-80 flows generate TCP reset messages in reply to
-          TCP datagrams directed to the router's IP address.  The logical
-          router doesn't accept any TCP traffic so it always generates such a
-          reply.
+          TCP reset.  Priority-80 flows generate TCP reset messages in reply
+          to TCP datagrams directed to the router's IP address, except in
+          the special case of gateways, which accept traffic directed to a
+          router IP for load balancing and NAT purposes.
         </p>
 
         <p>
           These flows should not match IP fragments with nonzero offset.
-        </p>
-
-        <p>
-          Details TBD.  Not yet implemented.
         </p>
       </li>
 
       <li>
         <p>
-          Protocol unreachable.  Priority-70 flows generate ICMP protocol
-          unreachable messages in reply to packets directed to the router's IP
-          address on IP protocols other than UDP, TCP, and ICMP.
+          Protocol or address unreachable. Priority-70 flows generate ICMP
+          protocol or address unreachable messages for IPv4 and IPv6
+          respectively in reply to packets directed to the router's IP
+          address on IP protocols other than UDP, TCP, and ICMP, except in the
+          special case of gateways, which accept traffic directed to a router
+          IP for load balancing purposes.
         </p>
 
         <p>
           These flows should not match IP fragments with nonzero offset.
-        </p>
-
-        <p>
-          Details TBD.  Not yet implemented.
         </p>
       </li>
 
@@ -1385,7 +1387,8 @@ nd_na {
           address is <var>A</var>, a priority-40 flow with match <code>inport
           == <var>P</var> &amp;&amp; ip.ttl == {0, 1} &amp;&amp;
           !ip.later_frag</code> matches packets whose TTL has expired, with the
-          following actions to send an ICMP time exceeded reply:
+          following actions to send an ICMP time exceeded reply for IPv4 and
+          IPv6 respectively:
         </p>
 
         <pre>
@@ -1397,11 +1400,16 @@ icmp4 {
     ip.ttl = 255;
     next;
 };
-        </pre>
 
-        <p>
-          Not yet implemented.
-        </p>
+icmp6 {
+    icmp6.type = 3; /* Time exceeded. */
+    icmp6.code = 0;  /* TTL exceeded in transit. */
+    ip6.dst = ip6.src;
+    ip6.src = <var>A</var>;
+    ip.ttl = 255;
+    next;
+};
+        </pre>
       </li>
 
       <li>

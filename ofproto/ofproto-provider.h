@@ -42,8 +42,13 @@
 #include "ofproto/ofproto.h"
 #include "openvswitch/list.h"
 #include "openvswitch/ofp-actions.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofp-errors.h"
+#include "openvswitch/ofp-flow.h"
+#include "openvswitch/ofp-group.h"
+#include "openvswitch/ofp-meter.h"
+#include "openvswitch/ofp-port.h"
+#include "openvswitch/ofp-switch.h"
+#include "openvswitch/ofp-table.h"
 #include "ovs-atomic.h"
 #include "ovs-rcu.h"
 #include "ovs-thread.h"
@@ -56,6 +61,7 @@
 
 struct match;
 struct ofputil_flow_mod;
+struct ofputil_packet_in_private;
 struct bfd_cfg;
 struct meter;
 struct ofoperation;
@@ -566,7 +572,7 @@ struct ofgroup {
     const struct ovs_list buckets;    /* Contains "struct ofputil_bucket"s. */
     const uint32_t n_buckets;
 
-    const struct ofputil_group_props props;
+    struct ofputil_group_props props;
 
     struct rule_collection rules OVS_GUARDED;   /* Referring rules. */
 };
@@ -1193,7 +1199,7 @@ struct ofproto_class {
      *
      * If this function is NULL then table 0 is always chosen. */
     enum ofperr (*rule_choose_table)(const struct ofproto *ofproto,
-                                     const struct match *match,
+                                     const struct minimatch *match,
                                      uint8_t *table_idp);
 
     /* Life-cycle functions for a "struct rule".

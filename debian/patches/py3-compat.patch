@@ -1,84 +1,29 @@
-From 2ebfe3580b8a8d6fe94b0e597cb9a5db2d7d9686 Mon Sep 17 00:00:00 2001
+From 9f2edcde382b2de1f2b49c8fbfb0497385395a8c Mon Sep 17 00:00:00 2001
 From: James Page <james.page@ubuntu.com>
 Date: Thu, 8 Feb 2018 09:46:46 +0000
 Subject: [PATCH] Python 3 support
 
-Misc fixes to python based tooling for compatibility with
+Misc fixes to Python based tooling for compatibility with
 Python 2 and 3.
 
-If Python 3 is detected, prefer PYTHON3 for tool execution during
-package build and for use in python based tools.
+Signed-off-by: James Page <james.page@ubuntu.com>
 ---
- Makefile.am                      | 21 +++++++++++++++------
- ovn/utilities/ovn-detrace.in     | 20 +++++++++++---------
- python/ovstest/rpcserver.py      | 16 ++++------------
+ ovn/utilities/ovn-detrace.in     | 20 ++++++++--------
+ python/ovstest/rpcserver.py      | 16 ++++---------
  python/ovstest/tcp.py            |  4 ++--
  python/ovstest/util.py           |  4 +---
- python/ovstest/vswitch.py        |  5 ++++-
- utilities/bugtool/ovs-bugtool.in | 22 +++++++++++-----------
- utilities/ovs-check-dead-ifs.in  |  8 +++++---
- utilities/ovs-dpctl-top.in       | 18 ++++++++++--------
- utilities/ovs-l3ping.in          | 12 +++++++-----
- utilities/ovs-parse-backtrace.in | 14 ++++++++------
- utilities/ovs-tcpdump.in         |  4 +++-
- utilities/ovs-tcpundump.in       | 14 ++++++++------
- utilities/ovs-test.in            | 39 +++++++++++++++++++++------------------
- utilities/ovs-vlan-test.in       | 25 ++++++++++++++-----------
- 15 files changed, 124 insertions(+), 102 deletions(-)
+ python/ovstest/vswitch.py        |  5 +++-
+ utilities/bugtool/ovs-bugtool.in | 22 +++++++++---------
+ utilities/ovs-check-dead-ifs.in  |  8 ++++---
+ utilities/ovs-dpctl-top.in       | 18 ++++++++-------
+ utilities/ovs-l3ping.in          | 12 ++++++----
+ utilities/ovs-parse-backtrace.in | 14 +++++++-----
+ utilities/ovs-tcpdump.in         |  2 ++
+ utilities/ovs-tcpundump.in       |  2 ++
+ utilities/ovs-test.in            | 39 +++++++++++++++++---------------
+ utilities/ovs-vlan-test.in       | 25 +++++++++++---------
+ 14 files changed, 102 insertions(+), 89 deletions(-)
 
---- a/Makefile.am
-+++ b/Makefile.am
-@@ -53,6 +53,15 @@ psep=";"
- else
- psep=":"
- endif
-+
-+# If Python 3 is present, default python tooling
-+# to use PYTHON3 for execution.
-+if HAVE_PYTHON3
-+PYTHON_EXEC = $(PYTHON3)
-+else
-+PYTHON_EXEC = $(PYTHON)
-+endif
-+
- # PYTHONDONTWRITEBYTECODE=yes keeps Python from creating .pyc and .pyo
- # files.  Creating .py[co] works OK for any given version of Open
- # vSwitch, but it causes trouble if you switch from a version with
-@@ -60,7 +69,7 @@ endif
- # foo/__init__.pyc will cause Python to ignore foo.py.
- run_python = \
- 	PYTHONPATH=$(top_srcdir)/python$(psep)$$PYTHONPATH \
--	PYTHONDONTWRITEBYTECODE=yes $(PYTHON)
-+	PYTHONDONTWRITEBYTECODE=yes $(PYTHON_EXEC)
- 
- ALL_LOCAL =
- BUILT_SOURCES =
-@@ -140,13 +149,13 @@ ro_shell = printf '\043 Generated automa
- 
- SUFFIXES += .in
- .in:
--	$(AM_V_GEN)PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/soexpand.py -I$(srcdir) < $< | \
--	  $(PYTHON) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
-+	$(AM_V_GEN)PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON_EXEC) $(srcdir)/build-aux/soexpand.py -I$(srcdir) < $< | \
-+	  $(PYTHON_EXEC) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
- 	  sed \
- 	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
- 	    -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
- 	    -e 's,[@]DBDIR[@],$(DBDIR),g' \
--	    -e 's,[@]PYTHON[@],$(PYTHON),g' \
-+	    -e 's,[@]PYTHON[@],$(PYTHON_EXEC),g' \
- 	    -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
- 	    -e 's,[@]VERSION[@],$(VERSION),g' \
- 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
-@@ -170,7 +179,7 @@ SUFFIXES += .xml
- 	  PKIDIR='$(PKIDIR)' \
- 	  LOGDIR='$(LOGDIR)' \
- 	  DBDIR='$(DBDIR)' \
--	  PYTHON='$(PYTHON)' \
-+	  PYTHON='$(PYTHON_EXEC)' \
- 	  RUNDIR='$(RUNDIR)' \
- 	  VERSION='$(VERSION)' \
- 	  localstatedir='$(localstatedir)' \
 --- a/ovn/utilities/ovn-detrace.in
 +++ b/ovn/utilities/ovn-detrace.in
 @@ -14,6 +14,8 @@
@@ -149,7 +94,7 @@ package build and for use in python based tools.
              ovnsb_db = value
          elif key in ['--ovnnb']:
 @@ -196,7 +198,7 @@ def main():
-                 print_lflow_nb_hint(lflow, "\t\t* ", ovsdb_ovnnb)
+                 print_lflow_nb_hint(lflow, "    * ", ovsdb_ovnnb)
                  cookie = None
  
 -        print line.strip()
@@ -546,15 +491,6 @@ package build and for use in python based tools.
  import fcntl
  
  import os
-@@ -62,7 +64,7 @@ def _install_tap_linux(tap_name, mtu_val
-     TUNSETIFF = 0x400454CA  # This is derived by printf() of TUNSETIFF
-     TUNSETOWNER = TUNSETIFF + 2
- 
--    tapdev_fd = open('/dev/net/tun', 'rw')
-+    tapdev_fd = open('/dev/net/tun', 'w')
-     ifr = struct.pack('16sH', tap_name, IFF_TAP | IFF_NO_PI)
-     fcntl.ioctl(tapdev_fd, TUNSETIFF, ifr)
-     fcntl.ioctl(tapdev_fd, TUNSETOWNER, os.getegid())
 --- a/utilities/ovs-tcpundump.in
 +++ b/utilities/ovs-tcpundump.in
 @@ -14,6 +14,8 @@
@@ -566,56 +502,6 @@ package build and for use in python based tools.
  import getopt
  import re
  import sys
-@@ -21,7 +23,7 @@ import sys
- argv0 = sys.argv[0]
- 
- def usage():
--    print """\
-+    print("""\
- %(argv0)s: print "tcpdump -xx" output as hex
- usage: %(argv0)s < FILE
- where FILE is output from "tcpdump -xx".
-@@ -29,14 +31,14 @@ where FILE is output from "tcpdump -xx".
- The following options are also available:
-   -h, --help                  display this help message
-   -V, --version               display version information\
--""" % {'argv0': argv0}
-+""" % {'argv0': argv0})
-     sys.exit(0)
- 
- if __name__ == "__main__":
-     try:
-         options, args = getopt.gnu_getopt(sys.argv[1:], 'hV',
-                                           ['help', 'version'])
--    except getopt.GetoptError, geo:
-+    except getopt.GetoptError as geo:
-         sys.stderr.write("%s: %s\n" % (argv0, geo.msg))
-         sys.exit(1)
- 
-@@ -44,7 +46,7 @@ if __name__ == "__main__":
-         if key in ['-h', '--help']:
-             usage()
-         elif key in ['-V', '--version']:
--            print "ovs-tcpundump (Open vSwitch) @VERSION@"
-+            print("ovs-tcpundump (Open vSwitch) @VERSION@")
-         else:
-             sys.exit(0)
- 
-@@ -63,12 +65,12 @@ if __name__ == "__main__":
-         m = regex.match(line)
-         if m is None or int(m.group(1), 16) == 0:
-             if packet != '':
--                print packet
-+                print(packet)
-             packet = ''
-         if m:
-             packet += re.sub(r'\s', '', m.group(2), 0)
-     if packet != '':
--        print packet
-+        print(packet)
- 
- # Local variables:
- # mode: python
 --- a/utilities/ovs-test.in
 +++ b/utilities/ovs-test.in
 @@ -16,6 +16,8 @@
@@ -832,3 +718,65 @@ package build and for use in python based tools.
          print_safe('%s: %s\n' % (sys.argv[0], geo.msg))
          return 1
  
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -53,6 +53,15 @@ psep=";"
+ else
+ psep=":"
+ endif
++
++# If Python 3 is present, default python tooling
++# to use PYTHON3 for execution.
++if HAVE_PYTHON3
++PYTHON_EXEC = $(PYTHON3)
++else
++PYTHON_EXEC = $(PYTHON)
++endif
++
+ # PYTHONDONTWRITEBYTECODE=yes keeps Python from creating .pyc and .pyo
+ # files.  Creating .py[co] works OK for any given version of Open
+ # vSwitch, but it causes trouble if you switch from a version with
+@@ -60,7 +69,7 @@ endif
+ # foo/__init__.pyc will cause Python to ignore foo.py.
+ run_python = \
+ 	PYTHONPATH=$(top_srcdir)/python$(psep)$$PYTHONPATH \
+-	PYTHONDONTWRITEBYTECODE=yes $(PYTHON)
++	PYTHONDONTWRITEBYTECODE=yes $(PYTHON_EXEC)
+ 
+ ALL_LOCAL =
+ BUILT_SOURCES =
+@@ -145,13 +154,13 @@ ro_shell = printf '\043 Generated automa
+ 
+ SUFFIXES += .in
+ .in:
+-	$(AM_V_GEN)PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/soexpand.py -I$(srcdir) < $< | \
+-	  $(PYTHON) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
++	$(AM_V_GEN)PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON_EXEC) $(srcdir)/build-aux/soexpand.py -I$(srcdir) < $< | \
++	  $(PYTHON_EXEC) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
+ 	  sed \
+ 	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
+ 	    -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
+ 	    -e 's,[@]DBDIR[@],$(DBDIR),g' \
+-	    -e 's,[@]PYTHON[@],$(PYTHON),g' \
++	    -e 's,[@]PYTHON[@],$(PYTHON_EXEC),g' \
+ 	    -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
+ 	    -e 's,[@]VERSION[@],$(VERSION),g' \
+ 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
+@@ -175,7 +184,7 @@ SUFFIXES += .xml
+ 	  PKIDIR='$(PKIDIR)' \
+ 	  LOGDIR='$(LOGDIR)' \
+ 	  DBDIR='$(DBDIR)' \
+-	  PYTHON='$(PYTHON)' \
++	  PYTHON='$(PYTHON_EXEC)' \
+ 	  RUNDIR='$(RUNDIR)' \
+ 	  VERSION='$(VERSION)' \
+ 	  localstatedir='$(localstatedir)' \
+@@ -411,7 +420,7 @@ CLEANFILES += flake8-check
+ 
+ include $(srcdir)/manpages.mk
+ $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py python/build/soutil.py
+-	@PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/sodepends.py -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
++	@PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON_EXEC) $(srcdir)/build-aux/sodepends.py -I. -I$(srcdir) $(MAN_ROOTS) >$(@F).tmp
+ 	@if cmp -s $(@F).tmp $@; then \
+ 	  touch $@; \
+ 	  rm -f $(@F).tmp; \

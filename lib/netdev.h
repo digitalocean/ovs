@@ -127,6 +127,18 @@ struct netdev_tunnel_config {
     bool csum;
     bool dont_fragment;
     enum netdev_pt_mode pt_mode;
+
+    bool set_seq;
+    uint32_t seqno;
+    uint32_t erspan_idx;
+    uint8_t erspan_ver;
+    uint8_t erspan_dir;
+    uint8_t erspan_hwid;
+
+    bool erspan_ver_flow;
+    bool erspan_idx_flow;
+    bool erspan_dir_flow;
+    bool erspan_hwid_flow;
 };
 
 void netdev_run(void);
@@ -175,7 +187,8 @@ void netdev_rxq_close(struct netdev_rxq *);
 const char *netdev_rxq_get_name(const struct netdev_rxq *);
 int netdev_rxq_get_queue_id(const struct netdev_rxq *);
 
-int netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *);
+int netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *,
+                    int *qfill);
 void netdev_rxq_wait(struct netdev_rxq *);
 int netdev_rxq_drain(struct netdev_rxq *);
 
@@ -188,6 +201,12 @@ void netdev_send_wait(struct netdev *, int qid);
 struct offload_info {
     const struct dpif_class *dpif_class;
     ovs_be16 tp_dst_port; /* Destination port for tunnel in SET action */
+
+    /*
+     * The flow mark id assigened to the flow. If any pkts hit the flow,
+     * it will be in the pkt meta data.
+     */
+    uint32_t flow_mark;
 };
 struct dpif_class;
 struct netdev_flow_dump;
@@ -196,17 +215,18 @@ int netdev_flow_dump_create(struct netdev *, struct netdev_flow_dump **dump);
 int netdev_flow_dump_destroy(struct netdev_flow_dump *);
 bool netdev_flow_dump_next(struct netdev_flow_dump *, struct match *,
                           struct nlattr **actions, struct dpif_flow_stats *,
-                          ovs_u128 *ufid, struct ofpbuf *rbuffer,
-                          struct ofpbuf *wbuffer);
+                          struct dpif_flow_attrs *, ovs_u128 *ufid,
+                          struct ofpbuf *rbuffer, struct ofpbuf *wbuffer);
 int netdev_flow_put(struct netdev *, struct match *, struct nlattr *actions,
                     size_t actions_len, const ovs_u128 *,
                     struct offload_info *, struct dpif_flow_stats *);
 int netdev_flow_get(struct netdev *, struct match *, struct nlattr **actions,
                     const ovs_u128 *, struct dpif_flow_stats *,
-                    struct ofpbuf *wbuffer);
+                    struct dpif_flow_attrs *, struct ofpbuf *wbuffer);
 int netdev_flow_del(struct netdev *, const ovs_u128 *,
                     struct dpif_flow_stats *);
 int netdev_init_flow_api(struct netdev *);
+uint32_t netdev_get_block_id(struct netdev *);
 bool netdev_is_flow_api_enabled(void);
 void netdev_set_flow_api_enabled(const struct smap *ovs_other_config);
 
@@ -226,6 +246,7 @@ int netdev_ports_flow_get(const struct dpif_class *, struct match *match,
                           struct nlattr **actions,
                           const ovs_u128 *ufid,
                           struct dpif_flow_stats *stats,
+                          struct dpif_flow_attrs *attrs,
                           struct ofpbuf *buf);
 
 /* native tunnel APIs */
@@ -282,6 +303,7 @@ void netdev_restore_flags(struct netdev_saved_flags *);
 /* TCP/IP stack interface. */
 int netdev_set_in4(struct netdev *, struct in_addr addr, struct in_addr mask);
 int netdev_get_in4_by_name(const char *device_name, struct in_addr *in4);
+int netdev_get_ip_by_name(const char *device_name, struct in6_addr *);
 int netdev_get_addr_list(const struct netdev *netdev, struct in6_addr **addr,
                          struct in6_addr **mask, int *n_in6);
 

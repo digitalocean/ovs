@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.9.2, bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.10.0, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -90,8 +90,9 @@ OVS_CHECK_NETLINK
 OVS_CHECK_OPENSSL
 OVS_CHECK_LIBCAPNG
 OVS_CHECK_LOGDIR
-OVS_CHECK_PYTHON
+OVS_CHECK_PYTHON2
 OVS_CHECK_PYTHON3
+OVS_CHECK_PYTHON
 OVS_CHECK_FLAKE8
 OVS_CHECK_SPHINX
 OVS_CHECK_DOT
@@ -108,7 +109,8 @@ AC_CHECK_MEMBERS([struct sockaddr_in6.sin6_scope_id], [], [],
 #include <sys/types.h>
 #include <netinet/in.h>]])
 AC_CHECK_FUNCS([mlockall strnlen getloadavg statvfs getmntent_r sendmmsg clock_gettime])
-AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h linux/if_ether.h stdatomic.h])
+AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h linux/if_ether.h])
+AC_CHECK_HEADERS([linux/net_namespace.h stdatomic.h])
 AC_CHECK_HEADERS([net/if_mib.h], [], [], [[#include <sys/types.h>
 #include <net/if.h>]])
 
@@ -134,6 +136,7 @@ OVS_CHECK_LINUX_HOST
 OVS_LIBTOOL_VERSIONS
 OVS_CHECK_CXX
 AX_FUNC_POSIX_MEMALIGN
+OVS_CHECK_UNBOUND
 
 OVS_CHECK_INCLUDE_NEXT([stdio.h string.h])
 AC_CONFIG_FILES([
@@ -168,6 +171,8 @@ OVS_ENABLE_OPTION([-Wbool-compare])
 OVS_ENABLE_OPTION([-Wshift-negative-value])
 OVS_ENABLE_OPTION([-Wduplicated-cond])
 OVS_ENABLE_OPTION([-Qunused-arguments])
+OVS_ENABLE_OPTION([-Wshadow])
+OVS_ENABLE_OPTION([-Wno-null-pointer-arithmetic])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused], [HAVE_WNO_UNUSED])
 OVS_CONDITIONAL_CC_OPTION([-Wno-unused-parameter], [HAVE_WNO_UNUSED_PARAMETER])
 OVS_ENABLE_WERROR

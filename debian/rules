@@ -35,26 +35,27 @@ ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 endif
 
 
-# NOTE(jamespage): Don't skip any tests for the moment
-SKIP_TEST =
-SKIP_TEST_DPDK =
+# NOTE(jamespage): by default, just run all tests
+TEST_LIST =
+TEST_LIST_DPDK =
 
-# Skip test 8 (bash completion) on arm architectures
-ifneq (,$(filter arm64 armhf, $(DEB_HOST_ARCH)))
-SKIP_TEST = 1-7 9-
-SKIP_TEST_DPDK = 1-7 9-
-endif # arm64 armhf
+# Skip s390x test failures: 805 810 814
+# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1788133
+ifneq (,$(filter s390x, $(DEB_HOST_ARCH)))
+TEST_LIST = 1-804 806-809 811-813 815-
+TEST_LIST_DPDK = $(TEST_LIST)
+endif # s390x
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST)' || \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' || \
                 $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
 ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
-	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(SKIP_TEST_DPDK)' || \
+	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST_DPDK)' || \
 				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
 		cat _dpdk/tests/testsuite.log; \

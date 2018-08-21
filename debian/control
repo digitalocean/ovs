@@ -19,15 +19,18 @@ Build-Depends:
  libpcap-dev [amd64 i386 ppc64el arm64],
  libssl-dev,
  libtool,
+ libunbound-dev,
  openssl,
  pkg-config,
  procps,
  python-all-dev (>= 2.6.6-3~),
  python-setuptools,
  python-six,
+ python-sortedcontainers,
  python3-all-dev,
  python3-setuptools,
  python3-six,
+ python3-sortedcontainers,
  python3-sphinx,
 Standards-Version: 3.9.8
 Homepage: http://openvswitch.org/

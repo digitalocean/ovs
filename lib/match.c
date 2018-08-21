@@ -21,7 +21,8 @@
 #include "byte-order.h"
 #include "colors.h"
 #include "openvswitch/dynamic-string.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/meta-flow.h"
+#include "openvswitch/ofp-port.h"
 #include "packets.h"
 #include "tun-metadata.h"
 #include "openvswitch/nsh.h"
@@ -316,6 +317,61 @@ void
 match_set_tun_gbp_flags(struct match *match, uint8_t flags)
 {
     match_set_tun_gbp_flags_masked(match, flags, UINT8_MAX);
+}
+
+void
+match_set_tun_erspan_ver_masked(struct match *match, uint8_t ver, uint8_t mask)
+{
+    match->wc.masks.tunnel.erspan_ver = ver;
+    match->flow.tunnel.erspan_ver = ver & mask;
+}
+
+void
+match_set_tun_erspan_ver(struct match *match, uint8_t ver)
+{
+    match_set_tun_erspan_ver_masked(match, ver, UINT8_MAX);
+}
+
+void
+match_set_tun_erspan_idx_masked(struct match *match, uint32_t erspan_idx,
+                                uint32_t mask)
+{
+    match->wc.masks.tunnel.erspan_idx = mask;
+    match->flow.tunnel.erspan_idx = erspan_idx & mask;
+}
+
+void
+match_set_tun_erspan_idx(struct match *match, uint32_t erspan_idx)
+{
+    match_set_tun_erspan_idx_masked(match, erspan_idx, UINT32_MAX);
+}
+
+void
+match_set_tun_erspan_dir_masked(struct match *match, uint8_t dir,
+                                uint8_t mask)
+{
+    match->wc.masks.tunnel.erspan_dir = dir;
+    match->flow.tunnel.erspan_dir = dir & mask;
+}
+
+void
+match_set_tun_erspan_dir(struct match *match, uint8_t dir)
+{
+    match_set_tun_erspan_dir_masked(match, dir, UINT8_MAX);
+}
+
+void
+match_set_tun_erspan_hwid_masked(struct match *match, uint8_t hwid,
+                                 uint8_t mask)
+{
+    match->wc.masks.tunnel.erspan_hwid = hwid;
+    match->flow.tunnel.erspan_hwid = hwid & mask;
+}
+
+void
+match_set_tun_erspan_hwid(struct match *match, uint8_t hwid)
+{
+    match_set_tun_erspan_hwid_masked(match, hwid, UINT8_MAX);
 }
 
 void
@@ -890,6 +946,13 @@ match_set_nw_ttl(struct match *match, uint8_t nw_ttl)
 }
 
 void
+match_set_nw_tos_masked(struct match *match, uint8_t nw_tos, uint8_t mask)
+{
+    match->flow.nw_tos = nw_tos & mask;
+    match->wc.masks.nw_tos = mask;
+}
+
+void
 match_set_nw_ttl_masked(struct match *match, uint8_t nw_ttl, uint8_t mask)
 {
     match->flow.nw_ttl = nw_ttl & mask;
@@ -1231,6 +1294,18 @@ format_flow_tunnel(struct ds *s, const struct match *match)
     if (wc->masks.tunnel.ip_ttl) {
         ds_put_format(s, "tun_ttl=%"PRIu8",", tnl->ip_ttl);
     }
+    if (wc->masks.tunnel.erspan_ver) {
+        ds_put_format(s, "tun_erspan_ver=%"PRIu8",", tnl->erspan_ver);
+    }
+    if (wc->masks.tunnel.erspan_idx && tnl->erspan_ver == 1) {
+       ds_put_format(s, "tun_erspan_idx=%#"PRIx32",", tnl->erspan_idx); 
+    }
+    if (wc->masks.tunnel.erspan_dir && tnl->erspan_ver == 2) {
+        ds_put_format(s, "tun_erspan_dir=%"PRIu8",", tnl->erspan_dir);
+    }
+    if (wc->masks.tunnel.erspan_hwid && tnl->erspan_ver == 2) {
+        ds_put_format(s, "tun_erspan_hwid=%#"PRIx8",", tnl->erspan_hwid);
+    }
     if (wc->masks.tunnel.flags & FLOW_TNL_F_MASK) {
         format_flags_masked(s, "tun_flags", flow_tun_flag_to_string,
                             tnl->flags & FLOW_TNL_F_MASK,
@@ -1302,7 +1377,7 @@ match_format(const struct match *match,
     bool is_megaflow = false;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "%spriority=%s%d,",
@@ -1662,6 +1737,17 @@ minimatch_init(struct minimatch *dst, const struct match *src)
     miniflow_alloc(dst->flows, 2, &tmp);
     miniflow_init(dst->flow, &src->flow);
     minimask_init(dst->mask, &src->wc);
+
+    dst->tun_md = tun_metadata_allocation_clone(&src->tun_md);
+}
+
+/* Initializes 'match' as a "catch-all" match that matches every packet. */
+void
+minimatch_init_catchall(struct minimatch *match)
+{
+    match->flows[0] = xcalloc(2, sizeof *match->flow);
+    match->flows[1] = match->flows[0] + 1;
+    match->tun_md = NULL;
 }
 
 /* Initializes 'dst' as a copy of 'src'.  The caller must eventually free 'dst'
@@ -1676,6 +1762,7 @@ minimatch_clone(struct minimatch *dst, const struct minimatch *src)
            miniflow_get_values(src->flow), data_size);
     memcpy(miniflow_values(&dst->mask->masks),
            miniflow_get_values(&src->mask->masks), data_size);
+    dst->tun_md = tun_metadata_allocation_clone(src->tun_md);
 }
 
 /* Initializes 'dst' with the data in 'src', destroying 'src'.  The caller must
@@ -1685,6 +1772,7 @@ minimatch_move(struct minimatch *dst, struct minimatch *src)
 {
     dst->flow = src->flow;
     dst->mask = src->mask;
+    dst->tun_md = src->tun_md;
 }
 
 /* Frees any memory owned by 'match'.  Does not free the storage in which
@@ -1693,6 +1781,7 @@ void
 minimatch_destroy(struct minimatch *match)
 {
     free(match->flow);
+    free(match->tun_md);
 }
 
 /* Initializes 'dst' as a copy of 'src'. */
@@ -1701,7 +1790,7 @@ minimatch_expand(const struct minimatch *src, struct match *dst)
 {
     miniflow_expand(src->flow, &dst->flow);
     minimask_expand(src->mask, &dst->wc);
-    memset(&dst->tun_md, 0, sizeof dst->tun_md);
+    tun_metadata_allocation_copy(&dst->tun_md, src->tun_md);
 }
 
 /* Returns true if 'a' and 'b' match the same packets, false otherwise.  */
@@ -1710,6 +1799,16 @@ minimatch_equal(const struct minimatch *a, const struct minimatch *b)
 {
     return minimask_equal(a->mask, b->mask)
         && miniflow_equal(a->flow, b->flow);
+}
+
+/* Returns a hash value for the flow and wildcards in 'match', starting from
+ * 'basis'. */
+uint32_t
+minimatch_hash(const struct minimatch *match, uint32_t basis)
+{
+    size_t n_values = miniflow_n_values(match->flow);
+    size_t flow_size = sizeof *match->flow + MINIFLOW_VALUES_SIZE(n_values);
+    return hash_bytes(match->flow, 2 * flow_size, basis);
 }
 
 /* Returns true if 'target' satisifies 'match', that is, if each bit for which
@@ -1764,4 +1863,29 @@ minimatch_to_string(const struct minimatch *match,
 
     minimatch_expand(match, &megamatch);
     return match_to_string(&megamatch, port_map, priority);
+}
+
+static bool
+minimatch_has_default_recirc_id(const struct minimatch *m)
+{
+    uint32_t flow_recirc_id = miniflow_get_recirc_id(m->flow);
+    uint32_t mask_recirc_id = miniflow_get_recirc_id(&m->mask->masks);
+    return flow_recirc_id == 0 && (mask_recirc_id == UINT32_MAX ||
+                                   mask_recirc_id == 0);
+}
+
+static bool
+minimatch_has_default_dp_hash(const struct minimatch *m)
+{
+    return (!miniflow_get_dp_hash(m->flow)
+            && !miniflow_get_dp_hash(&m->mask->masks));
+}
+
+/* Return true if the hidden fields of the match are set to the default values.
+ * The default values equals to those set up by match_init_hidden_fields(). */
+bool
+minimatch_has_default_hidden_fields(const struct minimatch *m)
+{
+    return (minimatch_has_default_recirc_id(m)
+            && minimatch_has_default_dp_hash(m));
 }

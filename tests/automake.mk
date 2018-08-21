@@ -5,10 +5,12 @@ EXTRA_DIST += \
 	$(SYSTEM_KMOD_TESTSUITE_AT) \
 	$(SYSTEM_USERSPACE_TESTSUITE_AT) \
 	$(SYSTEM_OFFLOADS_TESTSUITE_AT) \
+	$(SYSTEM_DPDK_TESTSUITE_AT) \
 	$(TESTSUITE) \
 	$(SYSTEM_KMOD_TESTSUITE) \
 	$(SYSTEM_USERSPACE_TESTSUITE) \
 	$(SYSTEM_OFFLOADS_TESTSUITE) \
+	$(SYSTEM_DPDK_TESTSUITE) \
 	tests/atlocal.in \
 	$(srcdir)/package.m4 \
 	$(srcdir)/tests/testsuite \
@@ -128,6 +130,12 @@ SYSTEM_OFFLOADS_TESTSUITE_AT = \
 	tests/system-offloads-traffic.at \
 	tests/system-offloads-testsuite.at
 
+SYSTEM_DPDK_TESTSUITE_AT = \
+	tests/system-common-macros.at \
+	tests/system-dpdk-macros.at \
+	tests/system-dpdk-testsuite.at \
+	tests/system-dpdk.at
+
 check_SCRIPTS += tests/atlocal
 
 TESTSUITE = $(srcdir)/tests/testsuite
@@ -135,13 +143,14 @@ TESTSUITE_PATCH = $(srcdir)/tests/testsuite.patch
 SYSTEM_KMOD_TESTSUITE = $(srcdir)/tests/system-kmod-testsuite
 SYSTEM_USERSPACE_TESTSUITE = $(srcdir)/tests/system-userspace-testsuite
 SYSTEM_OFFLOADS_TESTSUITE = $(srcdir)/tests/system-offloads-testsuite
+SYSTEM_DPDK_TESTSUITE = $(srcdir)/tests/system-dpdk-testsuite
 DISTCLEANFILES += tests/atconfig tests/atlocal
 
-AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
+AUTOTEST_PATH = utilities:vswitchd:ovsdb:vtep:tests:$(PTHREAD_WIN32_DIR_DLL):$(SSL_DIR):ovn/controller-vtep:ovn/northd:ovn/utilities:ovn/controller
 
 check-local:
 	set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
-	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" -j1 --recheck)
 
 # Python Coverage support.
 # Requires coverage.py http://nedbatchelder.com/code/coverage/.
@@ -169,7 +178,7 @@ GENHTML_OPTS = -q --branch-coverage --num-spaces 4
 check-lcov: all $(check_DATA) clean-lcov
 	find . -name '*.gcda' | xargs -n1 rm -f
 	-set $(SHELL) '$(TESTSUITE)' -C tests AUTOTEST_PATH=$(AUTOTEST_PATH) $(TESTSUITEFLAGS); \
-	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" -j1 --recheck)
 	$(MKDIR_P) tests/lcov
 	lcov $(LCOV_OPTS) -o tests/lcov/coverage.info
 	genhtml $(GENHTML_OPTS) -o tests/lcov tests/lcov/coverage.info
@@ -224,6 +233,13 @@ check-kernel-valgrind: all $(valgrind_wrappers) $(check_DATA)
 	@echo '----------------------------------------------------------------------'
 	@echo 'Valgrind output can be found in tests/system-kmod-testsuite.dir/*/valgrind.*'
 	@echo '----------------------------------------------------------------------'
+check-userspace-valgrind: all $(valgrind_wrappers) $(check_DATA)
+	set $(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests VALGRIND='$(VALGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS) -j1; \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+	@echo
+	@echo '----------------------------------------------------------------------'
+	@echo 'Valgrind output can be found in tests/system-userspace-testsuite.dir/*/valgrind.*'
+	@echo '----------------------------------------------------------------------'
 check-helgrind: all $(valgrind_wrappers) $(check_DATA)
 	-$(SHELL) '$(TESTSUITE)' -C tests CHECK_VALGRIND=true VALGRIND='$(HELGRIND)' AUTOTEST_PATH='tests/valgrind:$(AUTOTEST_PATH)' -d $(TESTSUITEFLAGS)
 
@@ -258,6 +274,10 @@ check-offloads: all
 	set $(SHELL) '$(SYSTEM_OFFLOADS_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
+check-dpdk: all
+	set $(SHELL) '$(SYSTEM_DPDK_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
+	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
+
 clean-local:
 	test ! -f '$(TESTSUITE)' || $(SHELL) '$(TESTSUITE)' -C tests --clean
 
@@ -283,6 +303,10 @@ $(SYSTEM_USERSPACE_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_USERSP
 	$(AM_V_at)mv $@.tmp $@
 
 $(SYSTEM_OFFLOADS_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_OFFLOADS_TESTSUITE_AT) $(COMMON_MACROS_AT)
+	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
+	$(AM_V_at)mv $@.tmp $@
+
+$(SYSTEM_DPDK_TESTSUITE): package.m4 $(SYSTEM_TESTSUITE_AT) $(SYSTEM_DPDK_TESTSUITE_AT) $(COMMON_MACROS_AT)
 	$(AM_V_GEN)$(AUTOTEST) -I '$(srcdir)' -o $@.tmp $@.at
 	$(AM_V_at)mv $@.tmp $@
 
@@ -365,7 +389,8 @@ tests_ovstest_SOURCES = \
 	tests/test-uuid.c \
 	tests/test-bitmap.c \
 	tests/test-vconn.c \
-	tests/test-aa.c
+	tests/test-aa.c \
+	tests/test-stopwatch.c
 
 if !WIN32
 tests_ovstest_SOURCES += \
@@ -396,11 +421,14 @@ CHECK_PYFILES = \
 	tests/test-l7.py \
 	tests/test-ovsdb.py \
 	tests/test-reconnect.py \
+	tests/test-stream.py \
 	tests/MockXenAPI.py \
 	tests/test-unix-socket.py \
 	tests/test-unixctl.py \
 	tests/test-vlog.py \
-	tests/uuidfilt.py
+	tests/uuidfilt.py \
+	tests/sendpkt.py
+
 EXTRA_DIST += $(CHECK_PYFILES)
 PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
 

@@ -331,25 +331,28 @@ bridge("br0")
 -------------
  0. ip,in_port=1, priority 32768
     group:100
-    encap(nsh(md_type=1))
-    set_field:0x1234->nsh_spi
-    set_field:0x11223344->nsh_c1
-    group:200
-    encap(nsh(md_type=1))
-    set_field:0x5678->nsh_spi
-    set_field:0x55667788->nsh_c1
-    group:300
-    encap(ethernet)
-    set_field:11:22:33:44:55:66->eth_dst
-    output:3
+    bucket 0
+            encap(nsh(md_type=1))
+            set_field:0x1234->nsh_spi
+            set_field:0x11223344->nsh_c1
+            group:200
+            bucket 0
+                    encap(nsh(md_type=1))
+                    set_field:0x5678->nsh_spi
+                    set_field:0x55667788->nsh_c1
+                    group:300
+                    bucket 0
+                            encap(ethernet)
+                            set_field:11:22:33:44:55:66->eth_dst
+                            output:3
 
-bridge("br0")
--------------
- 0. in_port=4,dl_type=0x894f,nsh_mdtype=1,nsh_spi=0x5678,nsh_c1=0x55667788, priority 32768
-    decap()
-    goto_table:1
- 1. packet_type=(1,0x894f),nsh_mdtype=1,nsh_spi=0x5678,nsh_c1=0x55667788, priority 32768
-    decap()
+                        bridge("br0")
+                        -------------
+                         0. in_port=4,dl_type=0x894f,nsh_mdtype=1,nsh_spi=0x5678,nsh_c1=0x55667788, priority 32768
+                            decap()
+                            goto_table:1
+                         1. packet_type=(1,0x894f),nsh_mdtype=1,nsh_spi=0x5678,nsh_c1=0x55667788, priority 32768
+                            decap()
 
 Final flow: unchanged
 Megaflow: recirc_id=0,eth,ip,in_port=1,dl_dst=66:77:88:99:aa:bb,nw_frag=no
@@ -626,38 +629,36 @@ AT_CHECK([
 #N3_DPPORT=$(ovs-appctl dpif/show | grep "n3 30" | sed 's|.*/\([[0-9]]*\):.*|\1|')
 
 ### Verify datapath configuration
-AT_CHECK([
-    ovs-appctl dpif/show | grep -v hit | sed 's/\t/    /g'
-], [0], [dnl
-    br-in1:
-        br-in1 65534/101: (dummy-internal)
-        n1 10/4: (dummy)
-        vxlangpe12 1020/4789: (vxlan: packet_type=ptap, remote_ip=10.0.0.2)
-        vxlangpe13 1030/4789: (vxlan: packet_type=ptap, remote_ip=10.0.0.3)
-    br-in2:
-        br-in2 65534/102: (dummy-internal)
-        n2 20/5: (dummy)
-        vxlangpe21 2010/4789: (vxlan: packet_type=ptap, remote_ip=20.0.0.1)
-        vxlangpe23 2030/4789: (vxlan: packet_type=ptap, remote_ip=20.0.0.3)
-    br-in3:
-        br-in3 65534/103: (dummy-internal)
-        n3 30/6: (dummy)
-        vxlangpe31 3010/4789: (vxlan: packet_type=ptap, remote_ip=30.0.0.1)
-        vxlangpe32 3020/4789: (vxlan: packet_type=ptap, remote_ip=30.0.0.2)
-    br-p1:
-        br-p1 65534/1: (dummy-internal)
-        p1-0 2/none: (patch: peer=p0-1)
-    br-p2:
-        br-p2 65534/2: (dummy-internal)
-        p2-0 2/none: (patch: peer=p0-2)
-    br-p3:
-        br-p3 65534/3: (dummy-internal)
-        p3-0 2/none: (patch: peer=p0-3)
-    br0:
-        br0 65534/100: (dummy-internal)
-        p0-1 10/none: (patch: peer=p1-0)
-        p0-2 20/none: (patch: peer=p2-0)
-        p0-3 30/none: (patch: peer=p3-0)
+AT_CHECK([ovs-appctl dpif/show | grep -v hit], [0], [dnl
+  br-in1:
+    br-in1 65534/101: (dummy-internal)
+    n1 10/4: (dummy)
+    vxlangpe12 1020/4789: (vxlan: packet_type=ptap, remote_ip=10.0.0.2)
+    vxlangpe13 1030/4789: (vxlan: packet_type=ptap, remote_ip=10.0.0.3)
+  br-in2:
+    br-in2 65534/102: (dummy-internal)
+    n2 20/5: (dummy)
+    vxlangpe21 2010/4789: (vxlan: packet_type=ptap, remote_ip=20.0.0.1)
+    vxlangpe23 2030/4789: (vxlan: packet_type=ptap, remote_ip=20.0.0.3)
+  br-in3:
+    br-in3 65534/103: (dummy-internal)
+    n3 30/6: (dummy)
+    vxlangpe31 3010/4789: (vxlan: packet_type=ptap, remote_ip=30.0.0.1)
+    vxlangpe32 3020/4789: (vxlan: packet_type=ptap, remote_ip=30.0.0.2)
+  br-p1:
+    br-p1 65534/1: (dummy-internal)
+    p1-0 2/none: (patch: peer=p0-1)
+  br-p2:
+    br-p2 65534/2: (dummy-internal)
+    p2-0 2/none: (patch: peer=p0-2)
+  br-p3:
+    br-p3 65534/3: (dummy-internal)
+    p3-0 2/none: (patch: peer=p0-3)
+  br0:
+    br0 65534/100: (dummy-internal)
+    p0-1 10/none: (patch: peer=p1-0)
+    p0-2 20/none: (patch: peer=p2-0)
+    p0-3 30/none: (patch: peer=p3-0)
 ])
 
 ### Setup SFC flow configuration

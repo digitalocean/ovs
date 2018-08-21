@@ -29,10 +29,12 @@ This document describes how to build and install Open vSwitch using a DPDK
 datapath. Open vSwitch can use the DPDK library to operate entirely in
 userspace.
 
-.. seealso::
+.. important::
 
     The :doc:`releases FAQ </faq/releases>` lists support for the required
-    versions of DPDK for each version of Open vSwitch.
+    versions of DPDK for each version of Open vSwitch. If building OVS and
+    DPDK outside of the master build tree users should consult this list
+    first.
 
 Build requirements
 ------------------
@@ -40,7 +42,7 @@ Build requirements
 In addition to the requirements described in :doc:`general`, building Open
 vSwitch with DPDK will require the following:
 
-- DPDK 17.11.2
+- DPDK 17.11.3
 
 - A `DPDK supported NIC`_
 
@@ -69,9 +71,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-17.11.2.tar.xz
-       $ tar xf dpdk-17.11.2.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-stable-17.11.2
+       $ wget http://fast.dpdk.org/rel/dpdk-17.11.3.tar.xz
+       $ tar xf dpdk-17.11.3.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-stable-17.11.3
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library
@@ -170,6 +172,12 @@ Mount the hugepages, if not already mounted by default::
 
     $ mount -t hugetlbfs none /dev/hugepages``
 
+.. note::
+
+   The amount of hugepage memory required can be affected by various
+   aspects of the datapath and device configuration. Refer to
+   :doc:`/topics/dpdk/memory` for more details.
+
 .. _dpdk-vfio:
 
 Setup DPDK devices using VFIO
@@ -208,7 +216,8 @@ Open vSwitch should be started as described in :doc:`general` with the
 exception of ovs-vswitchd, which requires some special configuration to enable
 DPDK functionality. DPDK configuration arguments can be passed to ovs-vswitchd
 via the ``other_config`` column of the ``Open_vSwitch`` table. At a minimum,
-the ``dpdk-init`` option must be set to ``true``. For example::
+the ``dpdk-init`` option must be set to either ``true`` or ``try``.
+For example::
 
     $ export PATH=$PATH:/usr/local/share/openvswitch/scripts
     $ export DB_SOCK=/usr/local/var/run/openvswitch/db.sock
@@ -219,8 +228,12 @@ There are many other configuration options, the most important of which are
 listed below. Defaults will be provided for all values not explicitly set.
 
 ``dpdk-init``
-  Specifies whether OVS should initialize and support DPDK ports. This is a
-  boolean, and defaults to false.
+  Specifies whether OVS should initialize and support DPDK ports. This field
+  can either be ``true`` or ``try``.
+  A value of ``true`` will cause the ovs-vswitchd process to abort on
+  initialization failure.
+  A value of ``try`` will imply that the ovs-vswitchd process should
+  continue running even if the EAL initialization fails.
 
 ``dpdk-lcore-mask``
   Specifies the CPU cores on which dpdk lcore threads should be spawned and
@@ -228,7 +241,8 @@ listed below. Defaults will be provided for all values not explicitly set.
 
 ``dpdk-socket-mem``
   Comma separated list of memory to pre-allocate from hugepages on specific
-  sockets.
+  sockets. If not specified, 1024 MB will be set for each numa node by
+  default.
 
 ``dpdk-hugepage-dir``
   Directory where hugetlbfs is mounted
@@ -256,6 +270,22 @@ See the section ``Performance Tuning`` for important DPDK customizations.
 
 Validating
 ----------
+
+DPDK support can be confirmed by validating the ``dpdk_initialized`` boolean
+value from the ovsdb.  A value of ``true`` means that the DPDK EAL
+initialization succeeded::
+
+  $ ovs-vsctl get Open_vSwitch . dpdk_initialized
+  true
+
+Additionally, the library version linked to ovs-vswitchd can be confirmed
+with either the ovs-vswitchd logs, or by running either of the commands::
+
+  $ ovs-vswitchd --version
+  ovs-vswitchd (Open vSwitch) 2.9.0
+  DPDK 17.11.0
+  $ ovs-vsctl get Open_vSwitch . dpdk_version
+  "DPDK 17.11.0"
 
 At this point you can use ovs-vsctl to set up bridges and other Open vSwitch
 features. Seeing as we've configured the DPDK datapath, we will use DPDK-type
@@ -395,7 +425,7 @@ Compiler Optimizations
 
 The default compiler optimization level is ``-O2``. Changing this to more
 aggressive compiler optimization such as ``-O3 -march=native`` with
-gcc (verified on 5.3.1) can produce performance gains though not siginificant.
+gcc (verified on 5.3.1) can produce performance gains though not significant.
 ``-march=native`` will produce optimized code on local machine and should be
 used when software compilation is done on Testbed.
 
@@ -627,30 +657,6 @@ level:
 The average number of packets per output batch can be checked in PMD stats::
 
     $ ovs-appctl dpif-netdev/pmd-stats-show
-
-Link State Change (LSC) detection configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-There are two methods to get the information when Link State Change (LSC)
-happens on a network interface: by polling or interrupt.
-
-Configuring the lsc detection mode has no direct effect on OVS itself,
-instead it configures the NIC how it should handle link state changes.
-Processing the link state update request triggered by OVS takes less time
-using interrupt mode, since the NIC updates its link state in the
-background, while in polling mode the link state has to be fetched from
-the firmware every time to fulfil this request.
-
-Note that not all PMD drivers support LSC interrupts.
-
-The default configuration is polling mode. To set interrupt mode, option
-``dpdk-lsc-interrupt`` has to be set to ``true``.
-
-Command to set interrupt mode for a specific interface::
-    $ ovs-vsctl set interface <iface_name> options:dpdk-lsc-interrupt=true
-
-Command to set polling mode for a specific interface::
-    $ ovs-vsctl set interface <iface_name> options:dpdk-lsc-interrupt=false
 
 Limitations
 ------------

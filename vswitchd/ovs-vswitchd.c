@@ -37,6 +37,9 @@
 #include "netdev.h"
 #include "openflow/openflow.h"
 #include "ovsdb-idl.h"
+#include "ovs-rcu.h"
+#include "ovs-router.h"
+#include "ovs-thread.h"
 #include "openvswitch/poll-loop.h"
 #include "simap.h"
 #include "stream-ssl.h"
@@ -48,6 +51,7 @@
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
 #include "lib/vswitch-idl.h"
+#include "lib/dns-resolve.h"
 
 VLOG_DEFINE_THIS_MODULE(vswitchd);
 
@@ -76,7 +80,9 @@ main(int argc, char *argv[])
     int retval;
 
     set_program_name(argv[0]);
+    ovsthread_id_init();
 
+    dns_resolve_init(true);
     ovs_cmdl_proctitle_init(argc, argv);
     service_start(&argc, &argv);
     remote = parse_options(argc, argv, &unixctl_path);
@@ -135,6 +141,9 @@ main(int argc, char *argv[])
     bridge_exit(cleanup);
     unixctl_server_destroy(unixctl);
     service_stop();
+    vlog_disable_async();
+    ovsrcu_exit();
+    dns_resolve_destroy();
 
     return 0;
 }
@@ -216,6 +225,7 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
 
         case OPT_DISABLE_SYSTEM:
             dp_blacklist_provider("system");
+            ovs_router_disable_system_routing_table();
             break;
 
         case '?':

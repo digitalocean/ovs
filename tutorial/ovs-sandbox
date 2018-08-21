@@ -71,6 +71,8 @@ ovn=false
 ovnsb_schema=
 ovnnb_schema=
 ovn_rbac=true
+n_northds=1
+n_controllers=1
 nbdb_model=standalone
 nbdb_servers=3
 sbdb_model=backup
@@ -129,6 +131,7 @@ General options:
 OVN options:
   -o, --ovn            enable OVN
   --no-ovn-rbac        disable role-based access control for OVN
+  --n-northds=NUMBER   run NUMBER copies of northd (default: 1)
   --nbdb-model=standalone|backup|clustered    northbound database model
   --nbdb-servers=N     number of servers in nbdb cluster (default: 3)
   --sbdb-model=standalone|backup|clustered    southbound database model
@@ -203,6 +206,18 @@ EOF
             ;;
         --no-ovn-rbac)
             ovn_rbac=false
+            ;;
+        --n-northd*=*)
+            n_northds=$optarg
+            ;;
+        --n-northd*)
+            prev=n_northds
+            ;;
+        --n-controller*=*)
+            n_controllers=$optarg
+            ;;
+        --n-controller*)
+            prev=n_controllers
             ;;
         --nbdb-s*=*)
             nbdb_servers=$optarg
@@ -378,11 +393,15 @@ if $ovn; then
         $OVS_PKI -B 1024 init
         $OVS_PKI -B 1024 req+sign ovnsb switch
         $OVS_PKI -B 1024 req+sign ovnnb switch
-        $OVS_PKI -B 1024 -u req+sign chassis-1 switch
+        for i in $(seq $n_controllers); do
+            $OVS_PKI -B 1024 -u req+sign chassis-$i switch
+        done
     fi
 fi
-rungdb $gdb_ovsdb $gdb_ovsdb_ex ovsdb-server --detach --no-chdir --pidfile -vconsole:off --log-file \
-    --remote=punix:"$sandbox"/db.sock $ovsdb_server_args
+rungdb $gdb_ovsdb $gdb_ovsdb_ex ovsdb-server --detach --no-chdir --pidfile -vconsole:off --log-file -vsyslog:off \
+       --remote=punix:"$sandbox"/db.sock \
+       --remote=db:Open_vSwitch,Open_vSwitch,manager_options \
+       $ovsdb_server_args
 if $ovn; then
     ovn_start_db() {
         local db=$1 model=$2 servers=$3 schema=$4
@@ -409,6 +428,7 @@ if $ovn; then
             local i=$1; shift
             rungdb $gdb_ovsdb $gdb_ovsdb_ex ovsdb-server --detach --no-chdir \
                    --pidfile=$db$i.pid -vconsole:off --log-file=$db$i.log \
+                   -vsyslog:off \
                    --remote=db:$schema_name,${DB}_Global,connections \
                    --private-key=db:$schema_name,SSL,private_key \
                    --certificate=db:$schema_name,SSL,certificate \
@@ -481,7 +501,7 @@ fi
 run ovs-vsctl --no-wait -- init
 
 # Start ovs-vswitchd.
-rungdb $gdb_vswitchd $gdb_vswitchd_ex ovs-vswitchd --detach --no-chdir --pidfile -vconsole:off --log-file \
+rungdb $gdb_vswitchd $gdb_vswitchd_ex ovs-vswitchd --detach --no-chdir --pidfile -vconsole:off --log-file -vsyslog:off \
     --enable-dummy=$dummy -vvconn -vnetdev_dummy
 
 if $ovn; then
@@ -508,14 +528,24 @@ if $ovn; then
         ovs-vsctl set open . external-ids:ovn-remote=$OVN_SB_DB
         OVN_CTRLR_PKI=""
     fi
-    rungdb $gdb_ovn_northd $gdb_ovn_northd_ex ovn-northd --detach \
-        --no-chdir --pidfile -vconsole:off --log-file \
-        --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB"
-    rungdb $gdb_ovn_controller $gdb_ovn_controller_ex ovn-controller \
-        $OVN_CTRLR_PKI --detach --no-chdir --pidfile -vconsole:off --log-file
+    for i in $(seq $n_northds); do
+        if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
+        rungdb $gdb_ovn_northd $gdb_ovn_northd_ex ovn-northd --detach \
+               --no-chdir --pidfile=ovn-northd${inst}.pid -vconsole:off \
+               --log-file=ovn-northd${inst}.log -vsyslog:off \
+               --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB"
+    done
+    for i in $(seq $n_controllers); do
+        if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
+        rungdb $gdb_ovn_controller $gdb_ovn_controller_ex ovn-controller \
+               $OVN_CTRLR_PKI --detach --no-chdir -vsyslog:off \
+               --log-file=ovn-controller${inst}.log \
+               --pidfile=ovn-controller${inst}.pid -vconsole:off
+    done
     rungdb $gdb_ovn_controller_vtep $gdb_ovn_controller_vtep_ex \
         ovn-controller-vtep --detach --no-chdir --pidfile -vconsole:off \
-        $OVN_CTRLR_PKI --log-file --ovnsb-db=unix:"$sandbox"/ovnsb_db.sock
+        $OVN_CTRLR_PKI --log-file -vsyslog:off \
+        --ovnsb-db=unix:"$sandbox"/ovnsb_db.sock
 fi
 
 cat <<EOF

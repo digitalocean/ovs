@@ -239,9 +239,7 @@ static void copy_skb_metadata(struct sk_buff *to, struct sk_buff *from)
 	to->priority = from->priority;
 	to->mark = from->mark;
 	to->vlan_tci = from->vlan_tci;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	to->vlan_proto = from->vlan_proto;
-#endif
 	skb_copy_secmark(to, from);
 }
 
@@ -564,12 +562,6 @@ static int __try_to_segment(struct sk_buff *skb, bool csum_partial,
 
 static int try_to_segment(struct sk_buff *skb)
 {
-#ifdef SKIP_ZERO_COPY
-	/* coalesce_skb() since does not generate frag-list no need to
-	 * linearize it here.
-	 */
-	return 0;
-#else
 	struct stthdr *stth = stt_hdr(skb);
 	bool csum_partial = !!(stth->flags & STT_CSUM_PARTIAL);
 	bool ipv4 = !!(stth->flags & STT_PROTO_IPV4);
@@ -577,7 +569,6 @@ static int try_to_segment(struct sk_buff *skb)
 	int l4_offset = stth->l4_offset;
 
 	return __try_to_segment(skb, csum_partial, ipv4, tcp, l4_offset);
-#endif
 }
 
 static int segment_skb(struct sk_buff **headp, bool csum_partial,
@@ -762,10 +753,8 @@ static int stt_can_offload(struct sk_buff *skb, __be16 l3_proto, u8 l4_proto)
 	if (skb->len + STT_HEADER_LEN + sizeof(struct iphdr) > 65535)
 		return 0;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	if (skb_vlan_tag_present(skb) && skb->vlan_proto != htons(ETH_P_8021Q))
 		return 0;
-#endif
 	return 1;
 }
 
@@ -792,7 +781,6 @@ static struct sk_buff *handle_offloads(struct sk_buff *skb, int min_headroom)
 {
 	int err;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	if (skb_vlan_tag_present(skb) && skb->vlan_proto != htons(ETH_P_8021Q)) {
 
 		min_headroom += VLAN_HLEN;
@@ -812,7 +800,6 @@ static struct sk_buff *handle_offloads(struct sk_buff *skb, int min_headroom)
 			goto error;
 		}
 	}
-#endif
 
 	if (skb_is_gso(skb)) {
 		struct sk_buff *nskb;

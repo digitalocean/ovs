@@ -32,9 +32,11 @@
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-packet.h"
 #include "openvswitch/ofp-parse.h"
+#include "openvswitch/ofp-port.h"
 #include "openvswitch/ofp-prop.h"
+#include "openvswitch/ofp-table.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "unaligned.h"
@@ -417,8 +419,7 @@ static void *ofpact_put_raw(struct ofpbuf *, enum ofp_version,
                             enum ofp_raw_action_type, uint64_t arg);
 
 static char *OVS_WARN_UNUSED_RESULT ofpacts_parse(
-    char *str, const struct ofputil_port_map *,
-    struct ofpbuf *ofpacts, enum ofputil_protocol *usable_protocols,
+    char *str, const struct ofpact_parse_params *pp,
     bool allow_instructions, enum ofpact_type outer_action);
 static enum ofperr ofpacts_pull_openflow_actions__(
     struct ofpbuf *openflow, unsigned int actions_len,
@@ -426,8 +427,7 @@ static enum ofperr ofpacts_pull_openflow_actions__(
     struct ofpbuf *ofpacts, enum ofpact_type outer_action,
     const struct vl_mff_map *vl_mff_map, uint64_t *ofpacts_tlv_bitmap);
 static char * OVS_WARN_UNUSED_RESULT ofpacts_parse_copy(
-    const char *s_, const struct ofputil_port_map *, struct ofpbuf *ofpacts,
-    enum ofputil_protocol *usable_protocols,
+    const char *s_, const struct ofpact_parse_params *pp,
     bool allow_instructions, enum ofpact_type outer_action);
 
 /* Returns the ofpact following 'ofpact', except that if 'ofpact' contains
@@ -607,16 +607,16 @@ encode_OUTPUT(const struct ofpact_output *output,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_truncate_subfield(struct ofpact_output_trunc *output_trunc,
-                        const char *arg_,
-                        const struct ofputil_port_map *port_map)
+parse_truncate_subfield(const char *arg_,
+                        const struct ofpact_parse_params *pp,
+                        struct ofpact_output_trunc *output_trunc)
 {
     char *key, *value;
     char *arg = CONST_CAST(char *, arg_);
 
     while (ofputil_parse_key_value(&arg, &key, &value)) {
         if (!strcmp(key, "port")) {
-            if (!ofputil_port_from_string(value, port_map,
+            if (!ofputil_port_from_string(value, pp->port_map,
                                           &output_trunc->port)) {
                 return xasprintf("output to unknown truncate port: %s",
                                   value);
@@ -643,21 +643,18 @@ parse_truncate_subfield(struct ofpact_output_trunc *output_trunc,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_OUTPUT(const char *arg,
-             const struct ofputil_port_map *port_map,
-             struct ofpbuf *ofpacts,
-             enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_OUTPUT(const char *arg, const struct ofpact_parse_params *pp)
 {
     if (strstr(arg, "port") && strstr(arg, "max_len")) {
         struct ofpact_output_trunc *output_trunc;
 
-        output_trunc = ofpact_put_OUTPUT_TRUNC(ofpacts);
-        return parse_truncate_subfield(output_trunc, arg, port_map);
+        output_trunc = ofpact_put_OUTPUT_TRUNC(pp->ofpacts);
+        return parse_truncate_subfield(arg, pp, output_trunc);
     }
 
     ofp_port_t port;
-    if (ofputil_port_from_string(arg, port_map, &port)) {
-        struct ofpact_output *output = ofpact_put_OUTPUT(ofpacts);
+    if (ofputil_port_from_string(arg, pp->port_map, &port)) {
+        struct ofpact_output *output = ofpact_put_OUTPUT(pp->ofpacts);
         output->port = port;
         output->max_len = output->port == OFPP_CONTROLLER ? UINT16_MAX : 0;
         return NULL;
@@ -668,7 +665,7 @@ parse_OUTPUT(const char *arg,
     if (!error) {
         struct ofpact_output_reg *output_reg;
 
-        output_reg = ofpact_put_OUTPUT_REG(ofpacts);
+        output_reg = ofpact_put_OUTPUT_REG(pp->ofpacts);
         output_reg->max_len = UINT16_MAX;
         output_reg->src = src;
         return NULL;
@@ -680,14 +677,14 @@ parse_OUTPUT(const char *arg,
 
 static void
 format_OUTPUT(const struct ofpact_output *a,
-              const struct ofputil_port_map *port_map, struct ds *s)
+              const struct ofpact_format_params *fp)
 {
     if (ofp_to_u16(a->port) < ofp_to_u16(OFPP_MAX)) {
-        ds_put_format(s, "%soutput:%s", colors.special, colors.end);
+        ds_put_format(fp->s, "%soutput:%s", colors.special, colors.end);
     }
-    ofputil_format_port(a->port, port_map, s);
+    ofputil_format_port(a->port, fp->port_map, fp->s);
     if (a->port == OFPP_CONTROLLER) {
-        ds_put_format(s, ":%"PRIu16, a->max_len);
+        ds_put_format(fp->s, ":%"PRIu16, a->max_len);
     }
 }
 
@@ -710,20 +707,16 @@ encode_GROUP(const struct ofpact_group *group,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_GROUP(char *arg,
-            const struct ofputil_port_map *port_map OVS_UNUSED,
-            struct ofpbuf *ofpacts,
-            enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_GROUP(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_u32(arg, &ofpact_put_GROUP(ofpacts)->group_id);
+    return str_to_u32(arg, &ofpact_put_GROUP(pp->ofpacts)->group_id);
 }
 
 static void
 format_GROUP(const struct ofpact_group *a,
-             const struct ofputil_port_map *port_map OVS_UNUSED,
-             struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sgroup:%s%"PRIu32,
+    ds_put_format(fp->s, "%sgroup:%s%"PRIu32,
                   colors.special, colors.end, a->group_id);
 }
 
@@ -761,6 +754,7 @@ enum nx_action_controller2_prop_type {
     NXAC2PT_REASON,             /* uint8_t reason (OFPR_*), default 0. */
     NXAC2PT_USERDATA,           /* Data to copy into NXPINT_USERDATA. */
     NXAC2PT_PAUSE,              /* Flag to pause pipeline to resume later. */
+    NXAC2PT_METER_ID,           /* ovs_b32 meter (default NX_CTLR_NO_METER). */
 };
 
 /* The action structure for NXAST_CONTROLLER2 is "struct ext_action_header",
@@ -778,6 +772,7 @@ decode_NXAST_RAW_CONTROLLER(const struct nx_action_controller *nac,
     oc->max_len = ntohs(nac->max_len);
     oc->controller_id = ntohs(nac->controller_id);
     oc->reason = nac->reason;
+    oc->meter_id = NX_CTLR_NO_METER;
     ofpact_finish_CONTROLLER(out, &oc);
 
     return 0;
@@ -797,6 +792,7 @@ decode_NXAST_RAW_CONTROLLER2(const struct ext_action_header *eah,
     oc->ofpact.raw = NXAST_RAW_CONTROLLER2;
     oc->max_len = UINT16_MAX;
     oc->reason = OFPR_ACTION;
+    oc->meter_id = NX_CTLR_NO_METER;
 
     struct ofpbuf properties;
     ofpbuf_use_const(&properties, eah, ntohs(eah->len));
@@ -838,6 +834,10 @@ decode_NXAST_RAW_CONTROLLER2(const struct ext_action_header *eah,
             oc->pause = true;
             break;
 
+        case NXAC2PT_METER_ID:
+            error = ofpprop_parse_u32(&payload, &oc->meter_id);
+            break;
+
         default:
             error = OFPPROP_UNKNOWN(false, "NXAST_RAW_CONTROLLER2", type);
             break;
@@ -859,6 +859,7 @@ encode_CONTROLLER(const struct ofpact_controller *controller,
 {
     if (controller->userdata_len
         || controller->pause
+        || controller->meter_id != NX_CTLR_NO_METER
         || controller->ofpact.raw == NXAST_RAW_CONTROLLER2) {
         size_t start_ofs = out->size;
         put_NXAST_CONTROLLER2(out);
@@ -879,6 +880,9 @@ encode_CONTROLLER(const struct ofpact_controller *controller,
         if (controller->pause) {
             ofpprop_put_flag(out, NXAC2PT_PAUSE);
         }
+        if (controller->meter_id != NX_CTLR_NO_METER) {
+            ofpprop_put_u32(out, NXAC2PT_METER_ID, controller->meter_id);
+        }
         pad_ofpat(out, start_ofs);
     } else {
         struct nx_action_controller *nac;
@@ -891,14 +895,12 @@ encode_CONTROLLER(const struct ofpact_controller *controller,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_CONTROLLER(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_CONTROLLER(char *arg, const struct ofpact_parse_params *pp)
 {
     enum ofp_packet_in_reason reason = OFPR_ACTION;
     uint16_t controller_id = 0;
     uint16_t max_len = UINT16_MAX;
+    uint32_t meter_id = NX_CTLR_NO_METER;
     const char *userdata = NULL;
     bool pause = false;
 
@@ -931,6 +933,11 @@ parse_CONTROLLER(char *arg,
                 userdata = value;
             } else if (!strcmp(name, "pause")) {
                 pause = true;
+            } else if (!strcmp(name, "meter_id")) {
+                char *error = str_to_u32(value, &meter_id);
+                if (error) {
+                    return error;
+                }
             } else {
                 return xasprintf("unknown key \"%s\" parsing controller "
                                  "action", name);
@@ -938,33 +945,35 @@ parse_CONTROLLER(char *arg,
         }
     }
 
-    if (reason == OFPR_ACTION && controller_id == 0 && !userdata && !pause) {
+    if (reason == OFPR_ACTION && controller_id == 0 && !userdata && !pause
+        && meter_id == NX_CTLR_NO_METER) {
         struct ofpact_output *output;
 
-        output = ofpact_put_OUTPUT(ofpacts);
+        output = ofpact_put_OUTPUT(pp->ofpacts);
         output->port = OFPP_CONTROLLER;
         output->max_len = max_len;
     } else {
         struct ofpact_controller *controller;
 
-        controller = ofpact_put_CONTROLLER(ofpacts);
+        controller = ofpact_put_CONTROLLER(pp->ofpacts);
         controller->max_len = max_len;
         controller->reason = reason;
         controller->controller_id = controller_id;
         controller->pause = pause;
+        controller->meter_id = meter_id;
 
         if (userdata) {
-            size_t start_ofs = ofpacts->size;
-            const char *end = ofpbuf_put_hex(ofpacts, userdata, NULL);
+            size_t start_ofs = pp->ofpacts->size;
+            const char *end = ofpbuf_put_hex(pp->ofpacts, userdata, NULL);
             if (*end) {
                 return xstrdup("bad hex digit in `controller' "
                                "action `userdata'");
             }
-            size_t userdata_len = ofpacts->size - start_ofs;
-            controller = ofpacts->header;
+            size_t userdata_len = pp->ofpacts->size - start_ofs;
+            controller = pp->ofpacts->header;
             controller->userdata_len = userdata_len;
         }
-        ofpact_finish_CONTROLLER(ofpacts, &controller);
+        ofpact_finish_CONTROLLER(pp->ofpacts, &controller);
     }
 
     return NULL;
@@ -983,42 +992,45 @@ format_hex_arg(struct ds *s, const uint8_t *data, size_t len)
 
 static void
 format_CONTROLLER(const struct ofpact_controller *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
     if (a->reason == OFPR_ACTION && !a->controller_id && !a->userdata_len
-        && !a->pause) {
-        ds_put_format(s, "%sCONTROLLER:%s%"PRIu16,
+        && !a->pause && a->meter_id == NX_CTLR_NO_METER) {
+        ds_put_format(fp->s, "%sCONTROLLER:%s%"PRIu16,
                       colors.special, colors.end, a->max_len);
     } else {
         enum ofp_packet_in_reason reason = a->reason;
 
-        ds_put_format(s, "%scontroller(%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%scontroller(%s", colors.paren, colors.end);
         if (reason != OFPR_ACTION) {
             char reasonbuf[OFPUTIL_PACKET_IN_REASON_BUFSIZE];
 
-            ds_put_format(s, "%sreason=%s%s,", colors.param, colors.end,
+            ds_put_format(fp->s, "%sreason=%s%s,", colors.param, colors.end,
                           ofputil_packet_in_reason_to_string(
                               reason, reasonbuf, sizeof reasonbuf));
         }
         if (a->max_len != UINT16_MAX) {
-            ds_put_format(s, "%smax_len=%s%"PRIu16",",
+            ds_put_format(fp->s, "%smax_len=%s%"PRIu16",",
                           colors.param, colors.end, a->max_len);
         }
         if (a->controller_id != 0) {
-            ds_put_format(s, "%sid=%s%"PRIu16",",
+            ds_put_format(fp->s, "%sid=%s%"PRIu16",",
                           colors.param, colors.end, a->controller_id);
         }
         if (a->userdata_len) {
-            ds_put_format(s, "%suserdata=%s", colors.param, colors.end);
-            format_hex_arg(s, a->userdata, a->userdata_len);
-            ds_put_char(s, ',');
+            ds_put_format(fp->s, "%suserdata=%s", colors.param, colors.end);
+            format_hex_arg(fp->s, a->userdata, a->userdata_len);
+            ds_put_char(fp->s, ',');
         }
         if (a->pause) {
-            ds_put_format(s, "%spause%s,", colors.value, colors.end);
+            ds_put_format(fp->s, "%spause%s,", colors.value, colors.end);
         }
-        ds_chomp(s, ',');
-        ds_put_format(s, "%s)%s", colors.paren, colors.end);
+        if (a->meter_id != NX_CTLR_NO_METER) {
+            ds_put_format(fp->s, "%smeter_id=%s%"PRIu32",",
+                          colors.param, colors.end, a->meter_id);
+        }
+        ds_chomp(fp->s, ',');
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
     }
 }
 
@@ -1074,10 +1086,7 @@ encode_ENQUEUE(const struct ofpact_enqueue *enqueue,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_ENQUEUE(char *arg,
-              const struct ofputil_port_map *port_map,
-              struct ofpbuf *ofpacts,
-              enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_ENQUEUE(char *arg, const struct ofpact_parse_params *pp)
 {
     char *sp = NULL;
     char *port = strtok_r(arg, ":q,", &sp);
@@ -1089,8 +1098,8 @@ parse_ENQUEUE(char *arg,
                        "\"enqueue(PORT,QUEUE)\"");
     }
 
-    enqueue = ofpact_put_ENQUEUE(ofpacts);
-    if (!ofputil_port_from_string(port, port_map, &enqueue->port)) {
+    enqueue = ofpact_put_ENQUEUE(pp->ofpacts);
+    if (!ofputil_port_from_string(port, pp->port_map, &enqueue->port)) {
         return xasprintf("%s: enqueue to unknown port", port);
     }
     return str_to_u32(queue, &enqueue->queue);
@@ -1098,11 +1107,11 @@ parse_ENQUEUE(char *arg,
 
 static void
 format_ENQUEUE(const struct ofpact_enqueue *a,
-               const struct ofputil_port_map *port_map, struct ds *s)
+               const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%senqueue:%s", colors.param, colors.end);
-    ofputil_format_port(a->port, port_map, s);
-    ds_put_format(s, ":%"PRIu32, a->queue);
+    ds_put_format(fp->s, "%senqueue:%s", colors.param, colors.end);
+    ofputil_format_port(a->port, fp->port_map, fp->s);
+    ds_put_format(fp->s, ":%"PRIu32, a->queue);
 }
 
 /* Action structure for NXAST_OUTPUT_REG.
@@ -1245,21 +1254,17 @@ encode_OUTPUT_REG(const struct ofpact_output_reg *output_reg,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_OUTPUT_REG(const char *arg,
-                 const struct ofputil_port_map *port_map,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_OUTPUT_REG(const char *arg, const struct ofpact_parse_params *pp)
 {
-    return parse_OUTPUT(arg, port_map, ofpacts, usable_protocols);
+    return parse_OUTPUT(arg, pp);
 }
 
 static void
 format_OUTPUT_REG(const struct ofpact_output_reg *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%soutput:%s", colors.special, colors.end);
-    mf_format_subfield(&a->src, s);
+    ds_put_format(fp->s, "%soutput:%s", colors.special, colors.end);
+    mf_format_subfield(&a->src, fp->s);
 }
 
 /* Action structure for NXAST_BUNDLE and NXAST_BUNDLE_LOAD.
@@ -1336,7 +1341,7 @@ decode_bundle(bool load, const struct nx_action_bundle *nab,
               const struct vl_mff_map *vl_mff_map, uint64_t *tlv_bitmap,
               struct ofpbuf *ofpacts)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    static struct vlog_rate_limit rll = VLOG_RATE_LIMIT_INIT(1, 5);
     struct ofpact_bundle *bundle;
     uint32_t slave_type;
     size_t slaves_size, i;
@@ -1353,20 +1358,20 @@ decode_bundle(bool load, const struct nx_action_bundle *nab,
 
     error = OFPERR_OFPBAC_BAD_ARGUMENT;
     if (!flow_hash_fields_valid(bundle->fields)) {
-        VLOG_WARN_RL(&rl, "unsupported fields %d", (int) bundle->fields);
+        VLOG_WARN_RL(&rll, "unsupported fields %d", (int) bundle->fields);
     } else if (bundle->n_slaves > BUNDLE_MAX_SLAVES) {
-        VLOG_WARN_RL(&rl, "too many slaves");
+        VLOG_WARN_RL(&rll, "too many slaves");
     } else if (bundle->algorithm != NX_BD_ALG_HRW
                && bundle->algorithm != NX_BD_ALG_ACTIVE_BACKUP) {
-        VLOG_WARN_RL(&rl, "unsupported algorithm %d", (int) bundle->algorithm);
+        VLOG_WARN_RL(&rll, "unsupported algorithm %d", (int) bundle->algorithm);
     } else if (slave_type != mf_nxm_header(MFF_IN_PORT)) {
-        VLOG_WARN_RL(&rl, "unsupported slave type %"PRIu32, slave_type);
+        VLOG_WARN_RL(&rll, "unsupported slave type %"PRIu32, slave_type);
     } else {
         error = 0;
     }
 
     if (!is_all_zeros(nab->zero, sizeof nab->zero)) {
-        VLOG_WARN_RL(&rl, "reserved field is nonzero");
+        VLOG_WARN_RL(&rll, "reserved field is nonzero");
         error = OFPERR_OFPBAC_BAD_ARGUMENT;
     }
 
@@ -1380,30 +1385,31 @@ decode_bundle(bool load, const struct nx_action_bundle *nab,
         }
 
         if (bundle->dst.n_bits < 16) {
-            VLOG_WARN_RL(&rl, "bundle_load action requires at least 16 bit "
+            VLOG_WARN_RL(&rll, "bundle_load action requires at least 16 bit "
                          "destination.");
             error = OFPERR_OFPBAC_BAD_ARGUMENT;
         }
     } else {
         if (nab->ofs_nbits || nab->dst) {
-            VLOG_WARN_RL(&rl, "bundle action has nonzero reserved fields");
+            VLOG_WARN_RL(&rll, "bundle action has nonzero reserved fields");
             error = OFPERR_OFPBAC_BAD_ARGUMENT;
         }
     }
 
     if (slaves_size < bundle->n_slaves * sizeof(ovs_be16)) {
-        VLOG_WARN_RL(&rl, "Nicira action %s only has %"PRIuSIZE" bytes "
+        VLOG_WARN_RL(&rll, "Nicira action %s only has %"PRIuSIZE" bytes "
                      "allocated for slaves.  %"PRIuSIZE" bytes are required "
                      "for %u slaves.",
                      load ? "bundle_load" : "bundle", slaves_size,
                      bundle->n_slaves * sizeof(ovs_be16), bundle->n_slaves);
         error = OFPERR_OFPBAC_BAD_LEN;
-    }
-
-    for (i = 0; i < bundle->n_slaves; i++) {
-        ofp_port_t ofp_port = u16_to_ofp(ntohs(((ovs_be16 *)(nab + 1))[i]));
-        ofpbuf_put(ofpacts, &ofp_port, sizeof ofp_port);
-        bundle = ofpacts->header;
+    } else {
+        for (i = 0; i < bundle->n_slaves; i++) {
+            ofp_port_t ofp_port
+                = u16_to_ofp(ntohs(((ovs_be16 *)(nab + 1))[i]));
+            ofpbuf_put(ofpacts, &ofp_port, sizeof ofp_port);
+            bundle = ofpacts->header;
+        }
     }
 
     ofpact_finish_BUNDLE(ofpacts, &bundle);
@@ -1462,25 +1468,22 @@ encode_BUNDLE(const struct ofpact_bundle *bundle,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_BUNDLE(const char *arg, const struct ofputil_port_map *port_map,
-             struct ofpbuf *ofpacts,
-             enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_BUNDLE(const char *arg, const struct ofpact_parse_params *pp)
 {
-    return bundle_parse(arg, port_map, ofpacts);
+    return bundle_parse(arg, pp->port_map, pp->ofpacts);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_bundle_load(const char *arg, const struct ofputil_port_map *port_map,
-                  struct ofpbuf *ofpacts)
+parse_bundle_load(const char *arg, const struct ofpact_parse_params *pp)
 {
-    return bundle_parse_load(arg, port_map, ofpacts);
+    return bundle_parse_load(arg, pp->port_map, pp->ofpacts);
 }
 
 static void
 format_BUNDLE(const struct ofpact_bundle *a,
-              const struct ofputil_port_map *port_map, struct ds *s)
+              const struct ofpact_format_params *fp)
 {
-    bundle_format(a, port_map, s);
+    bundle_format(a, fp->port_map, fp->s);
 }
 
 /* Set VLAN actions. */
@@ -1538,8 +1541,8 @@ encode_SET_VLAN_VID(const struct ofpact_vlan_vid *vlan_vid,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_set_vlan_vid(char *arg,
-                   struct ofpbuf *ofpacts, bool push_vlan_if_needed)
+parse_set_vlan_vid(char *arg, bool push_vlan_if_needed,
+                   const struct ofpact_parse_params *pp)
 {
     struct ofpact_vlan_vid *vlan_vid;
     uint16_t vid;
@@ -1553,27 +1556,23 @@ parse_set_vlan_vid(char *arg,
     if (vid & ~VLAN_VID_MASK) {
         return xasprintf("%s: not a valid VLAN VID", arg);
     }
-    vlan_vid = ofpact_put_SET_VLAN_VID(ofpacts);
+    vlan_vid = ofpact_put_SET_VLAN_VID(pp->ofpacts);
     vlan_vid->vlan_vid = vid;
     vlan_vid->push_vlan_if_needed = push_vlan_if_needed;
     return NULL;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_VLAN_VID(char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_VLAN_VID(char *arg, const struct ofpact_parse_params *pp)
 {
-    return parse_set_vlan_vid(arg, ofpacts, false);
+    return parse_set_vlan_vid(arg, false, pp);
 }
 
 static void
 format_SET_VLAN_VID(const struct ofpact_vlan_vid *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%s%s:%s%"PRIu16, colors.param,
+    ds_put_format(fp->s, "%s%s:%s%"PRIu16, colors.param,
                   a->push_vlan_if_needed ? "mod_vlan_vid" : "set_vlan_vid",
                   colors.end, a->vlan_vid);
 }
@@ -1633,8 +1632,8 @@ encode_SET_VLAN_PCP(const struct ofpact_vlan_pcp *vlan_pcp,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_set_vlan_pcp(char *arg,
-                   struct ofpbuf *ofpacts, bool push_vlan_if_needed)
+parse_set_vlan_pcp(char *arg, bool push_vlan_if_needed,
+                   const struct ofpact_parse_params *pp)
 {
     struct ofpact_vlan_pcp *vlan_pcp;
     uint8_t pcp;
@@ -1648,27 +1647,23 @@ parse_set_vlan_pcp(char *arg,
     if (pcp & ~7) {
         return xasprintf("%s: not a valid VLAN PCP", arg);
     }
-    vlan_pcp = ofpact_put_SET_VLAN_PCP(ofpacts);
+    vlan_pcp = ofpact_put_SET_VLAN_PCP(pp->ofpacts);
     vlan_pcp->vlan_pcp = pcp;
     vlan_pcp->push_vlan_if_needed = push_vlan_if_needed;
     return NULL;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_VLAN_PCP(char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_VLAN_PCP(char *arg, const struct ofpact_parse_params *pp)
 {
-    return parse_set_vlan_pcp(arg, ofpacts, false);
+    return parse_set_vlan_pcp(arg, false, pp);
 }
 
 static void
 format_SET_VLAN_PCP(const struct ofpact_vlan_pcp *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%s%s:%s%"PRIu8, colors.param,
+    ds_put_format(fp->s, "%s%s:%s%"PRIu8, colors.param,
                   a->push_vlan_if_needed ? "mod_vlan_pcp" : "set_vlan_pcp",
                   colors.end, a->vlan_pcp);
 }
@@ -1701,28 +1696,24 @@ encode_STRIP_VLAN(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_STRIP_VLAN(char *arg OVS_UNUSED,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_STRIP_VLAN(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_STRIP_VLAN(ofpacts)->ofpact.raw = OFPAT_RAW10_STRIP_VLAN;
+    ofpact_put_STRIP_VLAN(pp->ofpacts)->ofpact.raw = OFPAT_RAW10_STRIP_VLAN;
     return NULL;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_pop_vlan(struct ofpbuf *ofpacts)
+parse_pop_vlan(const struct ofpact_parse_params *pp)
 {
-    ofpact_put_STRIP_VLAN(ofpacts)->ofpact.raw = OFPAT_RAW11_POP_VLAN;
+    ofpact_put_STRIP_VLAN(pp->ofpacts)->ofpact.raw = OFPAT_RAW11_POP_VLAN;
     return NULL;
 }
 
 static void
 format_STRIP_VLAN(const struct ofpact_null *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, (a->ofpact.raw == OFPAT_RAW11_POP_VLAN
+    ds_put_format(fp->s, (a->ofpact.raw == OFPAT_RAW11_POP_VLAN
                     ? "%spop_vlan%s"
                     : "%sstrip_vlan%s"),
                   colors.value, colors.end);
@@ -1757,16 +1748,13 @@ encode_PUSH_VLAN(const struct ofpact_push_vlan *push_vlan,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_PUSH_VLAN(char *arg,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_PUSH_VLAN(char *arg, const struct ofpact_parse_params *pp)
 {
     struct ofpact_push_vlan *push_vlan;
     uint16_t ethertype;
     char *error;
 
-    *usable_protocols &= OFPUTIL_P_OF11_UP;
+    *pp->usable_protocols &= OFPUTIL_P_OF11_UP;
     error = str_to_u16(arg, "ethertype", &ethertype);
     if (error) {
         return error;
@@ -1775,17 +1763,16 @@ parse_PUSH_VLAN(char *arg,
     if (!eth_type_vlan(htons(ethertype))) {
         return xasprintf("%s: not a valid VLAN ethertype", arg);
     }
-    push_vlan = ofpact_put_PUSH_VLAN(ofpacts);
+    push_vlan = ofpact_put_PUSH_VLAN(pp->ofpacts);
     push_vlan->ethertype = htons(ethertype);
     return NULL;
 }
 
 static void
 format_PUSH_VLAN(const struct ofpact_push_vlan *push_vlan,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%spush_vlan:%s%#"PRIx16,
+    ds_put_format(fp->s, "%spush_vlan:%s%#"PRIx16,
                   colors.param, colors.end, ntohs(push_vlan->ethertype));
 }
 
@@ -1851,38 +1838,30 @@ encode_SET_ETH_DST(const struct ofpact_mac *mac,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_ETH_SRC(char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_ETH_SRC(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_mac(arg, &ofpact_put_SET_ETH_SRC(ofpacts)->mac);
+    return str_to_mac(arg, &ofpact_put_SET_ETH_SRC(pp->ofpacts)->mac);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_ETH_DST(char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_ETH_DST(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_mac(arg, &ofpact_put_SET_ETH_DST(ofpacts)->mac);
+    return str_to_mac(arg, &ofpact_put_SET_ETH_DST(pp->ofpacts)->mac);
 }
 
 static void
 format_SET_ETH_SRC(const struct ofpact_mac *a,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_dl_src:%s"ETH_ADDR_FMT,
+    ds_put_format(fp->s, "%smod_dl_src:%s"ETH_ADDR_FMT,
                   colors.param, colors.end, ETH_ADDR_ARGS(a->mac));
 }
 
 static void
 format_SET_ETH_DST(const struct ofpact_mac *a,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_dl_dst:%s"ETH_ADDR_FMT,
+    ds_put_format(fp->s, "%smod_dl_dst:%s"ETH_ADDR_FMT,
                   colors.param, colors.end, ETH_ADDR_ARGS(a->mac));
 }
 
@@ -1937,38 +1916,30 @@ encode_SET_IPV4_DST(const struct ofpact_ipv4 *ipv4,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_IPV4_SRC(char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_IPV4_SRC(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_ip(arg, &ofpact_put_SET_IPV4_SRC(ofpacts)->ipv4);
+    return str_to_ip(arg, &ofpact_put_SET_IPV4_SRC(pp->ofpacts)->ipv4);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_IPV4_DST(char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_IPV4_DST(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_ip(arg, &ofpact_put_SET_IPV4_DST(ofpacts)->ipv4);
+    return str_to_ip(arg, &ofpact_put_SET_IPV4_DST(pp->ofpacts)->ipv4);
 }
 
 static void
 format_SET_IPV4_SRC(const struct ofpact_ipv4 *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_nw_src:%s"IP_FMT,
+    ds_put_format(fp->s, "%smod_nw_src:%s"IP_FMT,
                   colors.param, colors.end, IP_ARGS(a->ipv4));
 }
 
 static void
 format_SET_IPV4_DST(const struct ofpact_ipv4 *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_nw_dst:%s"IP_FMT,
+    ds_put_format(fp->s, "%smod_nw_dst:%s"IP_FMT,
                   colors.param, colors.end, IP_ARGS(a->ipv4));
 }
 
@@ -1999,10 +1970,8 @@ encode_SET_IP_DSCP(const struct ofpact_dscp *dscp,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_IP_DSCP(char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_IP_DSCP(char *arg, const struct ofpact_parse_params *pp)
+
 {
     uint8_t tos;
     char *error;
@@ -2015,16 +1984,16 @@ parse_SET_IP_DSCP(char *arg,
     if (tos & ~IP_DSCP_MASK) {
         return xasprintf("%s: not a valid TOS", arg);
     }
-    ofpact_put_SET_IP_DSCP(ofpacts)->dscp = tos;
+    ofpact_put_SET_IP_DSCP(pp->ofpacts)->dscp = tos;
     return NULL;
 }
 
 static void
 format_SET_IP_DSCP(const struct ofpact_dscp *a,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_nw_tos:%s%d", colors.param, colors.end, a->dscp);
+    ds_put_format(fp->s, "%smod_nw_tos:%s%d",
+                  colors.param, colors.end, a->dscp);
 }
 
 /* Set IPv4/v6 ECN actions. */
@@ -2059,10 +2028,7 @@ encode_SET_IP_ECN(const struct ofpact_ecn *ip_ecn,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_IP_ECN(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_IP_ECN(char *arg, const struct ofpact_parse_params *pp)
 {
     uint8_t ecn;
     char *error;
@@ -2075,16 +2041,15 @@ parse_SET_IP_ECN(char *arg,
     if (ecn & ~IP_ECN_MASK) {
         return xasprintf("%s: not a valid ECN", arg);
     }
-    ofpact_put_SET_IP_ECN(ofpacts)->ecn = ecn;
+    ofpact_put_SET_IP_ECN(pp->ofpacts)->ecn = ecn;
     return NULL;
 }
 
 static void
 format_SET_IP_ECN(const struct ofpact_ecn *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_nw_ecn:%s%d",
+    ds_put_format(fp->s, "%smod_nw_ecn:%s%d",
                   colors.param, colors.end, a->ecn);
 }
 
@@ -2113,10 +2078,8 @@ encode_SET_IP_TTL(const struct ofpact_ip_ttl *ttl,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_IP_TTL(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_IP_TTL(char *arg, const struct ofpact_parse_params *pp)
+
 {
     uint8_t ttl;
     char *error;
@@ -2126,16 +2089,16 @@ parse_SET_IP_TTL(char *arg,
         return error;
     }
 
-    ofpact_put_SET_IP_TTL(ofpacts)->ttl = ttl;
+    ofpact_put_SET_IP_TTL(pp->ofpacts)->ttl = ttl;
     return NULL;
 }
 
 static void
 format_SET_IP_TTL(const struct ofpact_ip_ttl *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_nw_ttl:%s%d", colors.param, colors.end, a->ttl);
+    ds_put_format(fp->s, "%smod_nw_ttl:%s%d",
+                  colors.param, colors.end, a->ttl);
 }
 
 /* Set TCP/UDP/SCTP port actions. */
@@ -2200,39 +2163,33 @@ encode_SET_L4_DST_PORT(const struct ofpact_l4_port *l4_port,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_L4_SRC_PORT(char *arg,
-                      const struct ofputil_port_map *port_map OVS_UNUSED,
-                      struct ofpbuf *ofpacts,
-                      enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_L4_SRC_PORT(char *arg, const struct ofpact_parse_params *pp)
 {
     return str_to_u16(arg, "source port",
-                      &ofpact_put_SET_L4_SRC_PORT(ofpacts)->port);
+                      &ofpact_put_SET_L4_SRC_PORT(pp->ofpacts)->port);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_L4_DST_PORT(char *arg,
-                      const struct ofputil_port_map *port_map OVS_UNUSED,
-                      struct ofpbuf *ofpacts,
-                      enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_L4_DST_PORT(char *arg, const struct ofpact_parse_params *pp)
 {
     return str_to_u16(arg, "destination port",
-                      &ofpact_put_SET_L4_DST_PORT(ofpacts)->port);
+                      &ofpact_put_SET_L4_DST_PORT(pp->ofpacts)->port);
 }
 
 static void
 format_SET_L4_SRC_PORT(const struct ofpact_l4_port *a,
-                       const struct ofputil_port_map *port_map OVS_UNUSED,
-                       struct ds *s)
+                       const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_tp_src:%s%d", colors.param, colors.end, a->port);
+    ds_put_format(fp->s, "%smod_tp_src:%s%d",
+                  colors.param, colors.end, a->port);
 }
 
 static void
 format_SET_L4_DST_PORT(const struct ofpact_l4_port *a,
-                       const struct ofputil_port_map *port_map OVS_UNUSED,
-                       struct ds *s)
+                       const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smod_tp_dst:%s%d", colors.param, colors.end, a->port);
+    ds_put_format(fp->s, "%smod_tp_dst:%s%d",
+                  colors.param, colors.end, a->port);
 }
 
 /* Action structure for OFPAT_COPY_FIELD. */
@@ -2520,21 +2477,17 @@ encode_REG_MOVE(const struct ofpact_reg_move *move,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_REG_MOVE(const char *arg,
-               const struct ofputil_port_map *port_map OVS_UNUSED,
-               struct ofpbuf *ofpacts,
-               enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_REG_MOVE(const char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_reg_move *move = ofpact_put_REG_MOVE(ofpacts);
+    struct ofpact_reg_move *move = ofpact_put_REG_MOVE(pp->ofpacts);
     return nxm_parse_reg_move(move, arg);
 }
 
 static void
 format_REG_MOVE(const struct ofpact_reg_move *a,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ds *s)
+                const struct ofpact_format_params *fp)
 {
-    nxm_format_reg_move(a, s);
+    nxm_format_reg_move(a, fp->s);
 }
 
 /* Action structure for OFPAT12_SET_FIELD. */
@@ -3027,14 +2980,12 @@ set_field_split_str(char *arg, char **key, char **value, char **delim)
 }
 
 /* Parses a "set_field" action with argument 'arg', appending the parsed
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-set_field_parse__(char *arg, const struct ofputil_port_map *port_map,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols)
+set_field_parse__(char *arg, const struct ofpact_parse_params *pp)
 {
     char *value;
     char *delim;
@@ -3057,7 +3008,7 @@ set_field_parse__(char *arg, const struct ofputil_port_map *port_map,
     }
 
     delim[0] = '\0';
-    error = mf_parse(mf, value, port_map, &sf_value, &sf_mask);
+    error = mf_parse(mf, value, pp->port_map, &sf_value, &sf_mask);
     if (error) {
         return error;
     }
@@ -3066,30 +3017,28 @@ set_field_parse__(char *arg, const struct ofputil_port_map *port_map,
         return xasprintf("%s is not a valid value for field %s", value, key);
     }
 
-    *usable_protocols &= mf->usable_protocols_exact;
+    *pp->usable_protocols &= mf->usable_protocols_exact;
 
-    ofpact_put_set_field(ofpacts, mf, &sf_value, &sf_mask);
+    ofpact_put_set_field(pp->ofpacts, mf, &sf_value, &sf_mask);
     return NULL;
 }
 
 /* Parses 'arg' as the argument to a "set_field" action, and appends such an
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_FIELD(const char *arg, const struct ofputil_port_map *port_map,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols)
+parse_SET_FIELD(const char *arg, const struct ofpact_parse_params *pp)
 {
     char *copy = xstrdup(arg);
-    char *error = set_field_parse__(copy, port_map, ofpacts, usable_protocols);
+    char *error = set_field_parse__(copy, pp);
     free(copy);
     return error;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_reg_load(char *arg, struct ofpbuf *ofpacts)
+parse_reg_load(char *arg, const struct ofpact_parse_params *pp)
 {
     struct mf_subfield dst;
     char *key, *value_str;
@@ -3123,8 +3072,8 @@ parse_reg_load(char *arg, struct ofpbuf *ofpacts)
         return error;
     }
 
-    struct ofpact_set_field *sf = ofpact_put_reg_load(ofpacts, dst.field, NULL,
-                                                      NULL);
+    struct ofpact_set_field *sf = ofpact_put_reg_load(pp->ofpacts, dst.field,
+                                                      NULL, NULL);
 
     bitwise_copy(&value, dst.field->n_bytes, 0, sf->value,
                  dst.field->n_bytes, dst.ofs, dst.n_bits);
@@ -3135,8 +3084,7 @@ parse_reg_load(char *arg, struct ofpbuf *ofpacts)
 
 static void
 format_SET_FIELD(const struct ofpact_set_field *a,
-                 const struct ofputil_port_map *port_map,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
     if (a->ofpact.raw == NXAST_RAW_REG_LOAD) {
         struct mf_subfield dst;
@@ -3144,17 +3092,18 @@ format_SET_FIELD(const struct ofpact_set_field *a,
 
         dst.ofs = dst.n_bits = 0;
         while (next_load_segment(a, &dst, &value)) {
-            ds_put_format(s, "%sload:%s%#"PRIx64"%s->%s",
+            ds_put_format(fp->s, "%sload:%s%#"PRIx64"%s->%s",
                           colors.special, colors.end, value,
                           colors.special, colors.end);
-            mf_format_subfield(&dst, s);
-            ds_put_char(s, ',');
+            mf_format_subfield(&dst, fp->s);
+            ds_put_char(fp->s, ',');
         }
-        ds_chomp(s, ',');
+        ds_chomp(fp->s, ',');
     } else {
-        ds_put_format(s, "%sset_field:%s", colors.special, colors.end);
-        mf_format(a->field, a->value, ofpact_set_field_mask(a), port_map, s);
-        ds_put_format(s, "%s->%s%s",
+        ds_put_format(fp->s, "%sset_field:%s", colors.special, colors.end);
+        mf_format(a->field, a->value, ofpact_set_field_mask(a),
+                  fp->port_map, fp->s);
+        ds_put_format(fp->s, "%s->%s%s",
                       colors.special, colors.end, a->field->name);
     }
 }
@@ -3319,37 +3268,29 @@ encode_STACK_POP(const struct ofpact_stack *stack,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_STACK_PUSH(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_STACK_PUSH(char *arg, const struct ofpact_parse_params *pp)
 {
-    return nxm_parse_stack_action(ofpact_put_STACK_PUSH(ofpacts), arg);
+    return nxm_parse_stack_action(ofpact_put_STACK_PUSH(pp->ofpacts), arg);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_STACK_POP(char *arg,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_STACK_POP(char *arg, const struct ofpact_parse_params *pp)
 {
-    return nxm_parse_stack_action(ofpact_put_STACK_POP(ofpacts), arg);
+    return nxm_parse_stack_action(ofpact_put_STACK_POP(pp->ofpacts), arg);
 }
 
 static void
 format_STACK_PUSH(const struct ofpact_stack *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    nxm_format_stack_push(a, s);
+    nxm_format_stack_push(a, fp->s);
 }
 
 static void
 format_STACK_POP(const struct ofpact_stack *a,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    nxm_format_stack_pop(a, s);
+    nxm_format_stack_pop(a, fp->s);
 }
 
 /* Action structure for NXAST_DEC_TTL_CNT_IDS.
@@ -3457,66 +3398,62 @@ encode_DEC_TTL(const struct ofpact_cnt_ids *dec_ttl,
 }
 
 static void
-parse_noargs_dec_ttl(struct ofpbuf *ofpacts)
+parse_noargs_dec_ttl(const struct ofpact_parse_params *pp)
 {
     struct ofpact_cnt_ids *ids;
     uint16_t id = 0;
 
-    ofpact_put_DEC_TTL(ofpacts);
-    ofpbuf_put(ofpacts, &id, sizeof id);
-    ids = ofpacts->header;
+    ofpact_put_DEC_TTL(pp->ofpacts);
+    ofpbuf_put(pp->ofpacts, &id, sizeof id);
+    ids = pp->ofpacts->header;
     ids->n_controllers++;
-    ofpact_finish_DEC_TTL(ofpacts, &ids);
+    ofpact_finish_DEC_TTL(pp->ofpacts, &ids);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DEC_TTL(char *arg,
-              const struct ofputil_port_map *port_map OVS_UNUSED,
-              struct ofpbuf *ofpacts,
-              enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DEC_TTL(char *arg, const struct ofpact_parse_params *pp)
 {
     if (*arg == '\0') {
-        parse_noargs_dec_ttl(ofpacts);
+        parse_noargs_dec_ttl(pp);
     } else {
         struct ofpact_cnt_ids *ids;
         char *cntr;
 
-        ids = ofpact_put_DEC_TTL(ofpacts);
+        ids = ofpact_put_DEC_TTL(pp->ofpacts);
         ids->ofpact.raw = NXAST_RAW_DEC_TTL_CNT_IDS;
         for (cntr = strtok_r(arg, ", ", &arg); cntr != NULL;
              cntr = strtok_r(NULL, ", ", &arg)) {
             uint16_t id = atoi(cntr);
 
-            ofpbuf_put(ofpacts, &id, sizeof id);
-            ids = ofpacts->header;
+            ofpbuf_put(pp->ofpacts, &id, sizeof id);
+            ids = pp->ofpacts->header;
             ids->n_controllers++;
         }
         if (!ids->n_controllers) {
             return xstrdup("dec_ttl_cnt_ids: expected at least one controller "
                            "id.");
         }
-        ofpact_finish_DEC_TTL(ofpacts, &ids);
+        ofpact_finish_DEC_TTL(pp->ofpacts, &ids);
     }
     return NULL;
 }
 
 static void
 format_DEC_TTL(const struct ofpact_cnt_ids *a,
-               const struct ofputil_port_map *port_map OVS_UNUSED,
-               struct ds *s)
+               const struct ofpact_format_params *fp)
 {
     size_t i;
 
-    ds_put_format(s, "%sdec_ttl%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%sdec_ttl%s", colors.paren, colors.end);
     if (a->ofpact.raw == NXAST_RAW_DEC_TTL_CNT_IDS) {
-        ds_put_format(s, "%s(%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%s(%s", colors.paren, colors.end);
         for (i = 0; i < a->n_controllers; i++) {
             if (i) {
-                ds_put_cstr(s, ",");
+                ds_put_cstr(fp->s, ",");
             }
-            ds_put_format(s, "%"PRIu16, a->cnt_ids[i]);
+            ds_put_format(fp->s, "%"PRIu16, a->cnt_ids[i]);
         }
-        ds_put_format(s, "%s)%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
     }
 }
 
@@ -3544,12 +3481,10 @@ encode_SET_MPLS_LABEL(const struct ofpact_mpls_label *label,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_MPLS_LABEL(char *arg,
-                     const struct ofputil_port_map *port_map OVS_UNUSED,
-                     struct ofpbuf *ofpacts,
-                     enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_MPLS_LABEL(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_mpls_label *mpls_label = ofpact_put_SET_MPLS_LABEL(ofpacts);
+    struct ofpact_mpls_label *mpls_label
+        = ofpact_put_SET_MPLS_LABEL(pp->ofpacts);
     if (*arg == '\0') {
         return xstrdup("set_mpls_label: expected label.");
     }
@@ -3560,10 +3495,9 @@ parse_SET_MPLS_LABEL(char *arg,
 
 static void
 format_SET_MPLS_LABEL(const struct ofpact_mpls_label *a,
-                      const struct ofputil_port_map *port_map OVS_UNUSED,
-                      struct ds *s)
+                      const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sset_mpls_label(%s%"PRIu32"%s)%s",
+    ds_put_format(fp->s, "%sset_mpls_label(%s%"PRIu32"%s)%s",
                   colors.paren, colors.end, ntohl(a->label),
                   colors.paren, colors.end);
 }
@@ -3591,12 +3525,9 @@ encode_SET_MPLS_TC(const struct ofpact_mpls_tc *tc,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_MPLS_TC(char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_MPLS_TC(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_mpls_tc *mpls_tc = ofpact_put_SET_MPLS_TC(ofpacts);
+    struct ofpact_mpls_tc *mpls_tc = ofpact_put_SET_MPLS_TC(pp->ofpacts);
 
     if (*arg == '\0') {
         return xstrdup("set_mpls_tc: expected tc.");
@@ -3608,10 +3539,9 @@ parse_SET_MPLS_TC(char *arg,
 
 static void
 format_SET_MPLS_TC(const struct ofpact_mpls_tc *a,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sset_mpls_ttl(%s%"PRIu8"%s)%s",
+    ds_put_format(fp->s, "%sset_mpls_ttl(%s%"PRIu8"%s)%s",
                   colors.paren, colors.end, a->tc,
                   colors.paren, colors.end);
 }
@@ -3635,17 +3565,14 @@ encode_SET_MPLS_TTL(const struct ofpact_mpls_ttl *ttl,
 }
 
 /* Parses 'arg' as the argument to a "set_mpls_ttl" action, and appends such an
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_MPLS_TTL(char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_MPLS_TTL(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_mpls_ttl *mpls_ttl = ofpact_put_SET_MPLS_TTL(ofpacts);
+    struct ofpact_mpls_ttl *mpls_ttl = ofpact_put_SET_MPLS_TTL(pp->ofpacts);
 
     if (*arg == '\0') {
         return xstrdup("set_mpls_ttl: expected ttl.");
@@ -3657,10 +3584,9 @@ parse_SET_MPLS_TTL(char *arg,
 
 static void
 format_SET_MPLS_TTL(const struct ofpact_mpls_ttl *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sset_mpls_ttl(%s%"PRIu8"%s)%s",
+    ds_put_format(fp->s, "%sset_mpls_ttl(%s%"PRIu8"%s)%s",
                   colors.paren, colors.end, a->ttl,
                   colors.paren, colors.end);
 }
@@ -3682,21 +3608,17 @@ encode_DEC_MPLS_TTL(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DEC_MPLS_TTL(char *arg OVS_UNUSED,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DEC_MPLS_TTL(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_DEC_MPLS_TTL(ofpacts);
+    ofpact_put_DEC_MPLS_TTL(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_DEC_MPLS_TTL(const struct ofpact_null *a OVS_UNUSED,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sdec_mpls_ttl%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%sdec_mpls_ttl%s", colors.value, colors.end);
 }
 
 /* Push MPLS label action. */
@@ -3725,27 +3647,23 @@ encode_PUSH_MPLS(const struct ofpact_push_mpls *push_mpls,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_PUSH_MPLS(char *arg,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_PUSH_MPLS(char *arg, const struct ofpact_parse_params *pp)
 {
     uint16_t ethertype;
     char *error;
 
     error = str_to_u16(arg, "push_mpls", &ethertype);
     if (!error) {
-        ofpact_put_PUSH_MPLS(ofpacts)->ethertype = htons(ethertype);
+        ofpact_put_PUSH_MPLS(pp->ofpacts)->ethertype = htons(ethertype);
     }
     return error;
 }
 
 static void
 format_PUSH_MPLS(const struct ofpact_push_mpls *a,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%spush_mpls:%s0x%04"PRIx16,
+    ds_put_format(fp->s, "%spush_mpls:%s0x%04"PRIx16,
                   colors.param, colors.end, ntohs(a->ethertype));
 }
 
@@ -3768,27 +3686,23 @@ encode_POP_MPLS(const struct ofpact_pop_mpls *pop_mpls,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_POP_MPLS(char *arg,
-               const struct ofputil_port_map *port_map OVS_UNUSED,
-               struct ofpbuf *ofpacts,
-               enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_POP_MPLS(char *arg, const struct ofpact_parse_params *pp)
 {
     uint16_t ethertype;
     char *error;
 
     error = str_to_u16(arg, "pop_mpls", &ethertype);
     if (!error) {
-        ofpact_put_POP_MPLS(ofpacts)->ethertype = htons(ethertype);
+        ofpact_put_POP_MPLS(pp->ofpacts)->ethertype = htons(ethertype);
     }
     return error;
 }
 
 static void
 format_POP_MPLS(const struct ofpact_pop_mpls *a,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ds *s)
+                const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%spop_mpls:%s0x%04"PRIx16,
+    ds_put_format(fp->s, "%spop_mpls:%s0x%04"PRIx16,
                   colors.param, colors.end, ntohs(a->ethertype));
 }
 
@@ -3835,31 +3749,27 @@ encode_SET_TUNNEL(const struct ofpact_tunnel *tunnel,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_set_tunnel(char *arg, struct ofpbuf *ofpacts,
-                 enum ofp_raw_action_type raw)
+parse_set_tunnel(char *arg, enum ofp_raw_action_type raw,
+                 const struct ofpact_parse_params *pp)
 {
     struct ofpact_tunnel *tunnel;
 
-    tunnel = ofpact_put_SET_TUNNEL(ofpacts);
+    tunnel = ofpact_put_SET_TUNNEL(pp->ofpacts);
     tunnel->ofpact.raw = raw;
     return str_to_u64(arg, &tunnel->tun_id);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_TUNNEL(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_TUNNEL(char *arg, const struct ofpact_parse_params *pp)
 {
-    return parse_set_tunnel(arg, ofpacts, NXAST_RAW_SET_TUNNEL);
+    return parse_set_tunnel(arg, NXAST_RAW_SET_TUNNEL, pp);
 }
 
 static void
 format_SET_TUNNEL(const struct ofpact_tunnel *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sset_tunnel%s:%s%#"PRIx64, colors.param,
+    ds_put_format(fp->s, "%sset_tunnel%s:%s%#"PRIx64, colors.param,
                   (a->tun_id > UINT32_MAX
                    || a->ofpact.raw == NXAST_RAW_SET_TUNNEL64 ? "64" : ""),
                   colors.end, a->tun_id);
@@ -3884,20 +3794,16 @@ encode_SET_QUEUE(const struct ofpact_queue *queue,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_SET_QUEUE(char *arg,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SET_QUEUE(char *arg, const struct ofpact_parse_params *pp)
 {
-    return str_to_u32(arg, &ofpact_put_SET_QUEUE(ofpacts)->queue_id);
+    return str_to_u32(arg, &ofpact_put_SET_QUEUE(pp->ofpacts)->queue_id);
 }
 
 static void
 format_SET_QUEUE(const struct ofpact_queue *a,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sset_queue:%s%"PRIu32,
+    ds_put_format(fp->s, "%sset_queue:%s%"PRIu32,
                   colors.param, colors.end, a->queue_id);
 }
 
@@ -3919,20 +3825,17 @@ encode_POP_QUEUE(const struct ofpact_null *null OVS_UNUSED,
 
 static char * OVS_WARN_UNUSED_RESULT
 parse_POP_QUEUE(const char *arg OVS_UNUSED,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+                const struct ofpact_parse_params *pp)
 {
-    ofpact_put_POP_QUEUE(ofpacts);
+    ofpact_put_POP_QUEUE(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_POP_QUEUE(const struct ofpact_null *a OVS_UNUSED,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%spop_queue%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%spop_queue%s", colors.value, colors.end);
 }
 
 /* Action structure for NXAST_FIN_TIMEOUT.
@@ -3993,12 +3896,9 @@ encode_FIN_TIMEOUT(const struct ofpact_fin_timeout *fin_timeout,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_FIN_TIMEOUT(char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_FIN_TIMEOUT(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_fin_timeout *oft = ofpact_put_FIN_TIMEOUT(ofpacts);
+    struct ofpact_fin_timeout *oft = ofpact_put_FIN_TIMEOUT(pp->ofpacts);
     char *key, *value;
 
     while (ofputil_parse_key_value(&arg, &key, &value)) {
@@ -4022,20 +3922,19 @@ parse_FIN_TIMEOUT(char *arg,
 
 static void
 format_FIN_TIMEOUT(const struct ofpact_fin_timeout *a,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sfin_timeout(%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%sfin_timeout(%s", colors.paren, colors.end);
     if (a->fin_idle_timeout) {
-        ds_put_format(s, "%sidle_timeout=%s%"PRIu16",",
+        ds_put_format(fp->s, "%sidle_timeout=%s%"PRIu16",",
                       colors.param, colors.end, a->fin_idle_timeout);
     }
     if (a->fin_hard_timeout) {
-        ds_put_format(s, "%shard_timeout=%s%"PRIu16",",
+        ds_put_format(fp->s, "%shard_timeout=%s%"PRIu16",",
                       colors.param, colors.end, a->fin_hard_timeout);
     }
-    ds_chomp(s, ',');
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_chomp(fp->s, ',');
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* Action structure for NXAST_ENCAP */
@@ -4149,10 +4048,7 @@ parse_ed_props(const uint16_t prop_class, char **arg, int *n_props, struct ofpbu
  */
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_ENCAP(char *arg,
-            const struct ofputil_port_map *port_map OVS_UNUSED,
-            struct ofpbuf *out,
-            enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_ENCAP(char *arg, const struct ofpact_parse_params *pp)
 {
     struct ofpact_encap *encap;
     char *key, *value, *str;
@@ -4160,7 +4056,7 @@ parse_ENCAP(char *arg,
     uint16_t prop_class;
     int n_props = 0;
 
-    encap = ofpact_put_ENCAP(out);
+    encap = ofpact_put_ENCAP(pp->ofpacts);
     encap->hdr_size = 0;
     /* Parse encap header type. */
     str = arg;
@@ -4174,14 +4070,14 @@ parse_ENCAP(char *arg,
         return xasprintf("Invalid encap prop class: %s", key);
     }
     /* Parse encap properties. */
-    error = parse_ed_props(prop_class, &value, &n_props, out);
+    error = parse_ed_props(prop_class, &value, &n_props, pp->ofpacts);
     if (error != NULL) {
         return error;
     }
-    /* ofbuf out may have been re-allocated. */
-    encap = out->header;
+    /* ofpbuf may have been re-allocated. */
+    encap = pp->ofpacts->header;
     encap->n_props = n_props;
-    ofpact_finish_ENCAP(out, &encap);
+    ofpact_finish_ENCAP(pp->ofpacts, &encap);
     return NULL;
 }
 
@@ -4221,17 +4117,16 @@ format_ed_props(struct ds *s, uint16_t n_props,
 
 static void
 format_ENCAP(const struct ofpact_encap *a,
-             const struct ofputil_port_map *port_map OVS_UNUSED,
-             struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sencap(%s", colors.paren, colors.end);
-    ds_put_format(s, "%s", format_encap_pkt_type(a->new_pkt_type));
+    ds_put_format(fp->s, "%sencap(%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%s", format_encap_pkt_type(a->new_pkt_type));
     if (a->n_props > 0) {
-        ds_put_format(s, "%s(%s", colors.paren, colors.end);
-        format_ed_props(s, a->n_props, a->props);
-        ds_put_format(s, "%s)%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%s(%s", colors.paren, colors.end);
+        format_ed_props(fp->s, a->n_props, a->props);
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
     }
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* Action structure for NXAST_DECAP */
@@ -4281,17 +4176,14 @@ encode_DECAP(const struct ofpact_decap *decap,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DECAP(char *arg,
-            const struct ofputil_port_map *port_map OVS_UNUSED,
-            struct ofpbuf *ofpacts,
-            enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DECAP(char *arg, const struct ofpact_parse_params *pp)
 {
     struct ofpact_decap *decap;
     char *key, *value, *pos;
     char *error = NULL;
     uint16_t ns, type;
 
-    decap = ofpact_put_DECAP(ofpacts);
+    decap = ofpact_put_DECAP(pp->ofpacts);
     /* Default next packet_type is PT_USE_NEXT_PROTO. */
     decap->new_pkt_type = htonl(PT_USE_NEXT_PROTO);
 
@@ -4328,16 +4220,15 @@ parse_DECAP(char *arg,
 
 static void
 format_DECAP(const struct ofpact_decap *a,
-             const struct ofputil_port_map *port_map OVS_UNUSED,
-             struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sdecap(%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%sdecap(%s", colors.paren, colors.end);
     if (a->new_pkt_type != htonl(PT_USE_NEXT_PROTO)) {
-        ds_put_format(s, "packet_type(ns=%"PRIu16",id=%#"PRIx16")",
+        ds_put_format(fp->s, "packet_type(ns=%"PRIu16",id=%#"PRIx16")",
                       pt_ns(a->new_pkt_type),
                       pt_ns_type(a->new_pkt_type));
     }
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* Action dec_nsh_ttl */
@@ -4357,20 +4248,17 @@ encode_DEC_NSH_TTL(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DEC_NSH_TTL(char *arg OVS_UNUSED,
-           const struct ofputil_port_map *port_map OVS_UNUSED,
-           struct ofpbuf *ofpacts,
-           enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DEC_NSH_TTL(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_DEC_NSH_TTL(ofpacts);
+    ofpact_put_DEC_NSH_TTL(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_DEC_NSH_TTL(const struct ofpact_null *a OVS_UNUSED,
-            const struct ofputil_port_map *port_map OVS_UNUSED, struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sdec_nsh_ttl%s", colors.special, colors.end);
+    ds_put_format(fp->s, "%sdec_nsh_ttl%s", colors.special, colors.end);
 }
 
 
@@ -4517,19 +4405,16 @@ encode_RESUBMIT(const struct ofpact_resubmit *resubmit,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_RESUBMIT(char *arg,
-               const struct ofputil_port_map *port_map,
-               struct ofpbuf *ofpacts,
-               enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_RESUBMIT(char *arg, const struct ofpact_parse_params *pp)
 {
     struct ofpact_resubmit *resubmit;
     char *in_port_s, *table_s, *ct_s;
 
-    resubmit = ofpact_put_RESUBMIT(ofpacts);
+    resubmit = ofpact_put_RESUBMIT(pp->ofpacts);
 
     in_port_s = strsep(&arg, ",");
     if (in_port_s && in_port_s[0]) {
-        if (!ofputil_port_from_string(in_port_s, port_map,
+        if (!ofputil_port_from_string(in_port_s, pp->port_map,
                                       &resubmit->in_port)) {
             return xasprintf("%s: resubmit to unknown port", in_port_s);
         }
@@ -4539,14 +4424,10 @@ parse_RESUBMIT(char *arg,
 
     table_s = strsep(&arg, ",");
     if (table_s && table_s[0]) {
-        uint32_t table_id = 0;
-        char *error;
-
-        error = str_to_u32(table_s, &table_id);
-        if (error) {
-            return error;
+        if (!ofputil_table_from_string(table_s, pp->table_map,
+                                       &resubmit->table_id)) {
+            return xasprintf("%s: resubmit to unknown table", table_s);
         }
-        resubmit->table_id = table_id;
     } else {
         resubmit->table_id = 255;
     }
@@ -4570,24 +4451,24 @@ parse_RESUBMIT(char *arg,
 
 static void
 format_RESUBMIT(const struct ofpact_resubmit *a,
-                const struct ofputil_port_map *port_map, struct ds *s)
+                const struct ofpact_format_params *fp)
 {
     if (a->in_port != OFPP_IN_PORT && a->table_id == 255) {
-        ds_put_format(s, "%sresubmit:%s", colors.special, colors.end);
-        ofputil_format_port(a->in_port, port_map, s);
+        ds_put_format(fp->s, "%sresubmit:%s", colors.special, colors.end);
+        ofputil_format_port(a->in_port, fp->port_map, fp->s);
     } else {
-        ds_put_format(s, "%sresubmit(%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%sresubmit(%s", colors.paren, colors.end);
         if (a->in_port != OFPP_IN_PORT) {
-            ofputil_format_port(a->in_port, port_map, s);
+            ofputil_format_port(a->in_port, fp->port_map, fp->s);
         }
-        ds_put_char(s, ',');
+        ds_put_char(fp->s, ',');
         if (a->table_id != 255) {
-            ds_put_format(s, "%"PRIu8, a->table_id);
+            ofputil_format_table(a->table_id, fp->table_map, fp->s);
         }
         if (a->with_ct_orig) {
-            ds_put_cstr(s, ",ct");
+            ds_put_cstr(fp->s, ",ct");
         }
-        ds_put_format(s, "%s)%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
     }
 }
 
@@ -4883,7 +4764,7 @@ learn_min_len(uint16_t header)
         min_len += sizeof(ovs_be32); /* src_field */
         min_len += sizeof(ovs_be16); /* src_ofs */
     } else {
-        min_len += DIV_ROUND_UP(n_bits, 16);
+        min_len += 2 * DIV_ROUND_UP(n_bits, 16);
     }
     if (dst_type == NX_LEARN_DST_MATCH ||
         dst_type == NX_LEARN_DST_LOAD) {
@@ -5163,18 +5044,16 @@ encode_LEARN(const struct ofpact_learn *learn,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_LEARN(char *arg, const struct ofputil_port_map *port_map,
-            struct ofpbuf *ofpacts,
-            enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_LEARN(char *arg, const struct ofpact_parse_params *pp)
 {
-    return learn_parse(arg, port_map, ofpacts);
+    return learn_parse(arg, pp->port_map, pp->table_map, pp->ofpacts);
 }
 
 static void
 format_LEARN(const struct ofpact_learn *a,
-             const struct ofputil_port_map *port_map, struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    learn_format(a, port_map, s);
+    learn_format(a, fp->port_map, fp->table_map, fp->s);
 }
 
 /* Action structure for NXAST_CONJUNCTION. */
@@ -5227,20 +5106,16 @@ encode_CONJUNCTION(const struct ofpact_conjunction *oc,
 
 static void
 format_CONJUNCTION(const struct ofpact_conjunction *oc,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ds *s)
+                   const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sconjunction(%s%"PRIu32",%d/%"PRIu8"%s)%s",
+    ds_put_format(fp->s, "%sconjunction(%s%"PRIu32",%d/%"PRIu8"%s)%s",
                   colors.paren, colors.end,
                   oc->id, oc->clause + 1, oc->n_clauses,
                   colors.paren, colors.end);
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_CONJUNCTION(const char *arg,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ofpbuf *ofpacts,
-                  enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_CONJUNCTION(const char *arg, const struct ofpact_parse_params *pp)
 {
     uint8_t n_clauses;
     uint8_t clause;
@@ -5263,7 +5138,7 @@ parse_CONJUNCTION(const char *arg,
                        "number of clauses");
     }
 
-    add_conjunction(ofpacts, id, clause - 1, n_clauses);
+    add_conjunction(pp->ofpacts, id, clause - 1, n_clauses);
     return NULL;
 }
 
@@ -5382,20 +5257,16 @@ encode_MULTIPATH(const struct ofpact_multipath *mp,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_MULTIPATH(const char *arg,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_MULTIPATH(const char *arg, const struct ofpact_parse_params *pp)
 {
-    return multipath_parse(ofpact_put_MULTIPATH(ofpacts), arg);
+    return multipath_parse(ofpact_put_MULTIPATH(pp->ofpacts), arg);
 }
 
 static void
 format_MULTIPATH(const struct ofpact_multipath *a,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ds *s)
+                 const struct ofpact_format_params *fp)
 {
-    multipath_format(a, s);
+    multipath_format(a, fp->s);
 }
 
 /* Action structure for NXAST_NOTE.
@@ -5449,30 +5320,27 @@ encode_NOTE(const struct ofpact_note *note,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_NOTE(const char *arg,
-           const struct ofputil_port_map *port_map OVS_UNUSED,
-           struct ofpbuf *ofpacts,
-           enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_NOTE(const char *arg, const struct ofpact_parse_params *pp)
 {
-    size_t start_ofs = ofpacts->size;
-    ofpact_put_NOTE(ofpacts);
-    arg = ofpbuf_put_hex(ofpacts, arg, NULL);
+    size_t start_ofs = pp->ofpacts->size;
+    ofpact_put_NOTE(pp->ofpacts);
+    arg = ofpbuf_put_hex(pp->ofpacts, arg, NULL);
     if (arg[0]) {
         return xstrdup("bad hex digit in `note' argument");
     }
-    struct ofpact_note *note = ofpbuf_at_assert(ofpacts, start_ofs,
+    struct ofpact_note *note = ofpbuf_at_assert(pp->ofpacts, start_ofs,
                                                 sizeof *note);
-    note->length = ofpacts->size - (start_ofs + sizeof *note);
-    ofpact_finish_NOTE(ofpacts, &note);
+    note->length = pp->ofpacts->size - (start_ofs + sizeof *note);
+    ofpact_finish_NOTE(pp->ofpacts, &note);
     return NULL;
 }
 
 static void
 format_NOTE(const struct ofpact_note *a,
-            const struct ofputil_port_map *port_map OVS_UNUSED, struct ds *s)
+            const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%snote:%s", colors.param, colors.end);
-    format_hex_arg(s, a->data, a->length);
+    ds_put_format(fp->s, "%snote:%s", colors.param, colors.end);
+    format_hex_arg(fp->s, a->data, a->length);
 }
 
 /* Exit action. */
@@ -5492,20 +5360,17 @@ encode_EXIT(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_EXIT(char *arg OVS_UNUSED,
-           const struct ofputil_port_map *port_map OVS_UNUSED,
-           struct ofpbuf *ofpacts,
-           enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_EXIT(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_EXIT(ofpacts);
+    ofpact_put_EXIT(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_EXIT(const struct ofpact_null *a OVS_UNUSED,
-            const struct ofputil_port_map *port_map OVS_UNUSED, struct ds *s)
+            const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sexit%s", colors.special, colors.end);
+    ds_put_format(fp->s, "%sexit%s", colors.special, colors.end);
 }
 
 /* Unroll xlate action. */
@@ -5520,22 +5385,20 @@ encode_UNROLL_XLATE(const struct ofpact_unroll_xlate *unroll OVS_UNUSED,
 
 static char * OVS_WARN_UNUSED_RESULT
 parse_UNROLL_XLATE(char *arg OVS_UNUSED,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts OVS_UNUSED,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+                   const struct ofpact_parse_params *pp OVS_UNUSED)
 {
     OVS_NOT_REACHED();
 }
 
 static void
 format_UNROLL_XLATE(const struct ofpact_unroll_xlate *a,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sunroll_xlate(%s%stable=%s%"PRIu8
-                  ", %scookie=%s%"PRIu64"%s)%s",
+    ds_put_format(fp->s, "%sunroll_xlate(%s%stable=%s",
                   colors.paren,   colors.end,
-                  colors.special, colors.end, a->rule_table_id,
+                  colors.special, colors.end);
+    ofputil_format_table(a->rule_table_id, fp->table_map, fp->s);
+    ds_put_format(fp->s, ", %scookie=%s%"PRIu64"%s)%s",
                   colors.param,   colors.end, ntohll(a->rule_cookie),
                   colors.paren,   colors.end);
 }
@@ -5587,33 +5450,30 @@ encode_CLONE(const struct ofpact_nest *clone,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_CLONE(char *arg, const struct ofputil_port_map *port_map,
-            struct ofpbuf *ofpacts,
-            enum ofputil_protocol *usable_protocols)
+parse_CLONE(char *arg, const struct ofpact_parse_params *pp)
 {
-    const size_t clone_offset = ofpacts_pull(ofpacts);
-    struct ofpact_nest *clone = ofpact_put_CLONE(ofpacts);
+    const size_t clone_offset = ofpacts_pull(pp->ofpacts);
+    struct ofpact_nest *clone = ofpact_put_CLONE(pp->ofpacts);
     char *error;
 
-    ofpbuf_pull(ofpacts, sizeof *clone);
-    error = ofpacts_parse_copy(arg, port_map, ofpacts,
-                               usable_protocols, false, 0);
+    ofpbuf_pull(pp->ofpacts, sizeof *clone);
+    error = ofpacts_parse_copy(arg, pp, false, 0);
     /* header points to the action list */
-    ofpacts->header = ofpbuf_push_uninit(ofpacts, sizeof *clone);
-    clone = ofpacts->header;
+    pp->ofpacts->header = ofpbuf_push_uninit(pp->ofpacts, sizeof *clone);
+    clone = pp->ofpacts->header;
 
-    ofpact_finish_CLONE(ofpacts, &clone);
-    ofpbuf_push_uninit(ofpacts, clone_offset);
+    ofpact_finish_CLONE(pp->ofpacts, &clone);
+    ofpbuf_push_uninit(pp->ofpacts, clone_offset);
     return error;
 }
 
 static void
 format_CLONE(const struct ofpact_nest *a,
-             const struct ofputil_port_map *port_map, struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sclone(%s", colors.paren, colors.end);
-    ofpacts_format(a->actions, ofpact_nest_get_action_len(a), port_map, s);
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%sclone(%s", colors.paren, colors.end);
+    ofpacts_format(a->actions, ofpact_nest_get_action_len(a), fp);
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* Action structure for NXAST_SAMPLE.
@@ -5766,16 +5626,14 @@ encode_SAMPLE(const struct ofpact_sample *sample,
 }
 
 /* Parses 'arg' as the argument to a "sample" action, and appends such an
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-parse_SAMPLE(char *arg, const struct ofputil_port_map *port_map,
-             struct ofpbuf *ofpacts,
-             enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_SAMPLE(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_sample *os = ofpact_put_SAMPLE(ofpacts);
+    struct ofpact_sample *os = ofpact_put_SAMPLE(pp->ofpacts);
     os->sampling_port = OFPP_NONE;
     os->direction = NX_ACTION_SAMPLE_DEFAULT;
 
@@ -5795,7 +5653,7 @@ parse_SAMPLE(char *arg, const struct ofputil_port_map *port_map,
         } else if (!strcmp(key, "obs_point_id")) {
             error = str_to_u32(value, &os->obs_point_id);
         } else if (!strcmp(key, "sampling_port")) {
-            if (!ofputil_port_from_string(value, port_map,
+            if (!ofputil_port_from_string(value, pp->port_map,
                                           &os->sampling_port)) {
                 error = xasprintf("%s: unknown port", value);
             }
@@ -5820,9 +5678,9 @@ parse_SAMPLE(char *arg, const struct ofputil_port_map *port_map,
 
 static void
 format_SAMPLE(const struct ofpact_sample *a,
-              const struct ofputil_port_map *port_map, struct ds *s)
+              const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%ssample(%s%sprobability=%s%"PRIu16
+    ds_put_format(fp->s, "%ssample(%s%sprobability=%s%"PRIu16
                   ",%scollector_set_id=%s%"PRIu32
                   ",%sobs_domain_id=%s%"PRIu32
                   ",%sobs_point_id=%s%"PRIu32,
@@ -5832,15 +5690,15 @@ format_SAMPLE(const struct ofpact_sample *a,
                   colors.param, colors.end, a->obs_domain_id,
                   colors.param, colors.end, a->obs_point_id);
     if (a->sampling_port != OFPP_NONE) {
-        ds_put_format(s, ",%ssampling_port=%s", colors.param, colors.end);
-        ofputil_format_port(a->sampling_port, port_map, s);
+        ds_put_format(fp->s, ",%ssampling_port=%s", colors.param, colors.end);
+        ofputil_format_port(a->sampling_port, fp->port_map, fp->s);
     }
     if (a->direction == NX_ACTION_SAMPLE_INGRESS) {
-        ds_put_format(s, ",%singress%s", colors.param, colors.end);
+        ds_put_format(fp->s, ",%singress%s", colors.param, colors.end);
     } else if (a->direction == NX_ACTION_SAMPLE_EGRESS) {
-        ds_put_format(s, ",%segress%s", colors.param, colors.end);
+        ds_put_format(fp->s, ",%segress%s", colors.param, colors.end);
     }
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* debug instructions. */
@@ -5873,21 +5731,17 @@ encode_DEBUG_RECIRC(const struct ofpact_null *n OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DEBUG_RECIRC(char *arg OVS_UNUSED,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DEBUG_RECIRC(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_DEBUG_RECIRC(ofpacts);
+    ofpact_put_DEBUG_RECIRC(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_DEBUG_RECIRC(const struct ofpact_null *a OVS_UNUSED,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sdebug_recirc%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%sdebug_recirc%s", colors.value, colors.end);
 }
 
 static enum ofperr
@@ -5910,21 +5764,17 @@ encode_DEBUG_SLOW(const struct ofpact_null *n OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_DEBUG_SLOW(char *arg OVS_UNUSED,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_DEBUG_SLOW(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_DEBUG_SLOW(ofpacts);
+    ofpact_put_DEBUG_SLOW(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_DEBUG_SLOW(const struct ofpact_null *a OVS_UNUSED,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sdebug_slow%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%sdebug_slow%s", colors.value, colors.end);
 }
 
 /* Action structure for NXAST_CT.
@@ -6187,25 +6037,22 @@ encode_CT(const struct ofpact_conntrack *conntrack,
 }
 
 static char *OVS_WARN_UNUSED_RESULT
-parse_NAT(char *arg, const struct ofputil_port_map *port_map OVS_UNUSED,
-          struct ofpbuf *, enum ofputil_protocol * OVS_UNUSED);
+parse_NAT(char *arg, const struct ofpact_parse_params *pp);
 
 /* Parses 'arg' as the argument to a "ct" action, and appends such an
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-parse_CT(char *arg, const struct ofputil_port_map *port_map,
-         struct ofpbuf *ofpacts,
-         enum ofputil_protocol *usable_protocols)
+parse_CT(char *arg, const struct ofpact_parse_params *pp)
 {
-    const size_t ct_offset = ofpacts_pull(ofpacts);
+    const size_t ct_offset = ofpacts_pull(pp->ofpacts);
     struct ofpact_conntrack *oc;
     char *error = NULL;
     char *key, *value;
 
-    oc = ofpact_put_CT(ofpacts);
+    oc = ofpact_put_CT(pp->ofpacts);
     oc->flags = 0;
     oc->recirc_table = NX_CT_RECIRC_NONE;
     while (ofputil_parse_key_value(&arg, &key, &value)) {
@@ -6214,8 +6061,10 @@ parse_CT(char *arg, const struct ofputil_port_map *port_map,
         } else if (!strcmp(key, "force")) {
             oc->flags |= NX_CT_F_FORCE;
         } else if (!strcmp(key, "table")) {
-            error = str_to_u8(value, "recirc_table", &oc->recirc_table);
-            if (!error && oc->recirc_table == NX_CT_RECIRC_NONE) {
+            if (!ofputil_table_from_string(value, pp->table_map,
+                                           &oc->recirc_table)) {
+                error = xasprintf("unknown table %s", value);
+            } else if (oc->recirc_table == NX_CT_RECIRC_NONE) {
                 error = xasprintf("invalid table %#"PRIx8, oc->recirc_table);
             }
         } else if (!strcmp(key, "zone")) {
@@ -6231,26 +6080,27 @@ parse_CT(char *arg, const struct ofputil_port_map *port_map,
         } else if (!strcmp(key, "alg")) {
             error = str_to_connhelper(value, &oc->alg);
         } else if (!strcmp(key, "nat")) {
-            const size_t nat_offset = ofpacts_pull(ofpacts);
+            const size_t nat_offset = ofpacts_pull(pp->ofpacts);
 
-            error = parse_NAT(value, port_map, ofpacts, usable_protocols);
+            error = parse_NAT(value, pp);
             /* Update CT action pointer and length. */
-            ofpacts->header = ofpbuf_push_uninit(ofpacts, nat_offset);
-            oc = ofpacts->header;
+            pp->ofpacts->header = ofpbuf_push_uninit(pp->ofpacts, nat_offset);
+            oc = pp->ofpacts->header;
         } else if (!strcmp(key, "exec")) {
             /* Hide existing actions from ofpacts_parse_copy(), so the
              * nesting can be handled transparently. */
             enum ofputil_protocol usable_protocols2;
-            const size_t exec_offset = ofpacts_pull(ofpacts);
+            const size_t exec_offset = ofpacts_pull(pp->ofpacts);
 
             /* Initializes 'usable_protocol2', fold it back to
              * '*usable_protocols' afterwards, so that we do not lose
              * restrictions already in there. */
-            error = ofpacts_parse_copy(value, port_map, ofpacts,
-                                       &usable_protocols2, false, OFPACT_CT);
-            *usable_protocols &= usable_protocols2;
-            ofpacts->header = ofpbuf_push_uninit(ofpacts, exec_offset);
-            oc = ofpacts->header;
+            struct ofpact_parse_params pp2 = *pp;
+            pp2.usable_protocols = &usable_protocols2;
+            error = ofpacts_parse_copy(value, &pp2, false, OFPACT_CT);
+            *pp->usable_protocols &= usable_protocols2;
+            pp->ofpacts->header = ofpbuf_push_uninit(pp->ofpacts, exec_offset);
+            oc = pp->ofpacts->header;
         } else {
             error = xasprintf("invalid argument to \"ct\" action: `%s'", key);
         }
@@ -6261,8 +6111,8 @@ parse_CT(char *arg, const struct ofputil_port_map *port_map,
     if (!error && oc->flags & NX_CT_F_FORCE && !(oc->flags & NX_CT_F_COMMIT)) {
         error = xasprintf("\"force\" flag requires \"commit\" flag.");
     }
-    ofpact_finish_CT(ofpacts, &oc);
-    ofpbuf_push_uninit(ofpacts, ct_offset);
+    ofpact_finish_CT(pp->ofpacts, &oc);
+    ofpbuf_push_uninit(pp->ofpacts, ct_offset);
     return error;
 }
 
@@ -6286,31 +6136,30 @@ format_alg(int port, struct ds *s)
 }
 
 static void format_NAT(const struct ofpact_nat *,
-                       const struct ofputil_port_map *port_map,
-                       struct ds *ds);
+                       const struct ofpact_format_params *fp);
 
 static void
 format_CT(const struct ofpact_conntrack *a,
-          const struct ofputil_port_map *port_map,
-          struct ds *s)
+          const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sct(%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%sct(%s", colors.paren, colors.end);
     if (a->flags & NX_CT_F_COMMIT) {
-        ds_put_format(s, "%scommit%s,", colors.value, colors.end);
+        ds_put_format(fp->s, "%scommit%s,", colors.value, colors.end);
     }
     if (a->flags & NX_CT_F_FORCE) {
-        ds_put_format(s, "%sforce%s,", colors.value, colors.end);
+        ds_put_format(fp->s, "%sforce%s,", colors.value, colors.end);
     }
     if (a->recirc_table != NX_CT_RECIRC_NONE) {
-        ds_put_format(s, "%stable=%s%"PRIu8",",
-                      colors.special, colors.end, a->recirc_table);
+        ds_put_format(fp->s, "%stable=%s", colors.special, colors.end);
+        ofputil_format_table(a->recirc_table, fp->table_map, fp->s);
+        ds_put_char(fp->s, ',');
     }
     if (a->zone_src.field) {
-        ds_put_format(s, "%szone=%s", colors.param, colors.end);
-        mf_format_subfield(&a->zone_src, s);
-        ds_put_char(s, ',');
+        ds_put_format(fp->s, "%szone=%s", colors.param, colors.end);
+        mf_format_subfield(&a->zone_src, fp->s);
+        ds_put_char(fp->s, ',');
     } else if (a->zone_imm) {
-        ds_put_format(s, "%szone=%s%"PRIu16",",
+        ds_put_format(fp->s, "%szone=%s%"PRIu16",",
                       colors.param, colors.end, a->zone_imm);
     }
     /* If the first action is a NAT action, format it outside of the 'exec'
@@ -6318,19 +6167,19 @@ format_CT(const struct ofpact_conntrack *a,
     const struct ofpact *action = a->actions;
     size_t actions_len = ofpact_ct_get_action_len(a);
     if (actions_len && action->type == OFPACT_NAT) {
-        format_NAT(ofpact_get_NAT(action), port_map, s);
-        ds_put_char(s, ',');
+        format_NAT(ofpact_get_NAT(action), fp);
+        ds_put_char(fp->s, ',');
         actions_len -= OFPACT_ALIGN(action->len);
         action = ofpact_next(action);
     }
     if (actions_len) {
-        ds_put_format(s, "%sexec(%s", colors.paren, colors.end);
-        ofpacts_format(action, actions_len, port_map, s);
-        ds_put_format(s, "%s),%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%sexec(%s", colors.paren, colors.end);
+        ofpacts_format(action, actions_len, fp);
+        ds_put_format(fp->s, "%s),%s", colors.paren, colors.end);
     }
-    format_alg(a->alg, s);
-    ds_chomp(s, ',');
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    format_alg(a->alg, fp->s);
+    ds_chomp(fp->s, ',');
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* ct_clear action. */
@@ -6351,21 +6200,17 @@ encode_CT_CLEAR(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_CT_CLEAR(char *arg OVS_UNUSED,
-               const struct ofputil_port_map *port_map OVS_UNUSED,
-               struct ofpbuf *ofpacts,
-               enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_CT_CLEAR(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_CT_CLEAR(ofpacts);
+    ofpact_put_CT_CLEAR(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_CT_CLEAR(const struct ofpact_null *a OVS_UNUSED,
-                const struct ofputil_port_map *port_map OVS_UNUSED,
-                struct ds *s)
+                const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sct_clear%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%sct_clear%s", colors.value, colors.end);
 }
 
 /* NAT action. */
@@ -6547,64 +6392,62 @@ decode_NXAST_RAW_NAT(const struct nx_action_nat *nan,
 }
 
 static void
-format_NAT(const struct ofpact_nat *a,
-           const struct ofputil_port_map *port_map OVS_UNUSED,
-           struct ds *ds)
+format_NAT(const struct ofpact_nat *a, const struct ofpact_format_params *fp)
 {
-    ds_put_format(ds, "%snat%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%snat%s", colors.paren, colors.end);
 
     if (a->flags & (NX_NAT_F_SRC | NX_NAT_F_DST)) {
-        ds_put_format(ds, "%s(%s", colors.paren, colors.end);
-        ds_put_format(ds, a->flags & NX_NAT_F_SRC ? "%ssrc%s" : "%sdst%s",
+        ds_put_format(fp->s, "%s(%s", colors.paren, colors.end);
+        ds_put_format(fp->s, a->flags & NX_NAT_F_SRC ? "%ssrc%s" : "%sdst%s",
                       colors.param, colors.end);
 
         if (a->range_af != AF_UNSPEC) {
-            ds_put_format(ds, "%s=%s", colors.param, colors.end);
+            ds_put_format(fp->s, "%s=%s", colors.param, colors.end);
 
             if (a->range_af == AF_INET) {
-                ds_put_format(ds, IP_FMT, IP_ARGS(a->range.addr.ipv4.min));
+                ds_put_format(fp->s, IP_FMT, IP_ARGS(a->range.addr.ipv4.min));
 
                 if (a->range.addr.ipv4.max
                     && a->range.addr.ipv4.max != a->range.addr.ipv4.min) {
-                    ds_put_format(ds, "-"IP_FMT,
+                    ds_put_format(fp->s, "-"IP_FMT,
                                   IP_ARGS(a->range.addr.ipv4.max));
                 }
             } else if (a->range_af == AF_INET6) {
-                ipv6_format_addr_bracket(&a->range.addr.ipv6.min, ds,
+                ipv6_format_addr_bracket(&a->range.addr.ipv6.min, fp->s,
                                         a->range.proto.min);
 
                 if (!ipv6_mask_is_any(&a->range.addr.ipv6.max)
                     && memcmp(&a->range.addr.ipv6.max, &a->range.addr.ipv6.min,
                               sizeof(struct in6_addr)) != 0) {
-                    ds_put_char(ds, '-');
-                    ipv6_format_addr_bracket(&a->range.addr.ipv6.max, ds,
+                    ds_put_char(fp->s, '-');
+                    ipv6_format_addr_bracket(&a->range.addr.ipv6.max, fp->s,
                                             a->range.proto.min);
                 }
             }
             if (a->range.proto.min) {
-                ds_put_char(ds, ':');
-                ds_put_format(ds, "%"PRIu16, a->range.proto.min);
+                ds_put_char(fp->s, ':');
+                ds_put_format(fp->s, "%"PRIu16, a->range.proto.min);
 
                 if (a->range.proto.max
                     && a->range.proto.max != a->range.proto.min) {
-                    ds_put_format(ds, "-%"PRIu16, a->range.proto.max);
+                    ds_put_format(fp->s, "-%"PRIu16, a->range.proto.max);
                 }
             }
-            ds_put_char(ds, ',');
+            ds_put_char(fp->s, ',');
 
             if (a->flags & NX_NAT_F_PERSISTENT) {
-                ds_put_format(ds, "%spersistent%s,",
+                ds_put_format(fp->s, "%spersistent%s,",
                               colors.value, colors.end);
             }
             if (a->flags & NX_NAT_F_PROTO_HASH) {
-                ds_put_format(ds, "%shash%s,", colors.value, colors.end);
+                ds_put_format(fp->s, "%shash%s,", colors.value, colors.end);
             }
             if (a->flags & NX_NAT_F_PROTO_RANDOM) {
-                ds_put_format(ds, "%srandom%s,", colors.value, colors.end);
+                ds_put_format(fp->s, "%srandom%s,", colors.value, colors.end);
             }
         }
-        ds_chomp(ds, ',');
-        ds_put_format(ds, "%s)%s", colors.paren, colors.end);
+        ds_chomp(fp->s, ',');
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
     }
 }
 
@@ -6668,17 +6511,14 @@ error:
 
 
 /* Parses 'arg' as the argument to a "nat" action, and appends such an
- * action to 'ofpacts'.
+ * action to 'pp->ofpacts'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 static char * OVS_WARN_UNUSED_RESULT
-parse_NAT(char *arg,
-          const struct ofputil_port_map *port_map OVS_UNUSED,
-          struct ofpbuf *ofpacts,
-          enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_NAT(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_nat *on = ofpact_put_NAT(ofpacts);
+    struct ofpact_nat *on = ofpact_put_NAT(pp->ofpacts);
     char *key, *value;
 
     on->flags = 0;
@@ -6766,9 +6606,7 @@ encode_OUTPUT_TRUNC(const struct ofpact_output_trunc *output_trunc,
 
 static char * OVS_WARN_UNUSED_RESULT
 parse_OUTPUT_TRUNC(const char *arg,
-                   const struct ofputil_port_map *port_map OVS_UNUSED,
-                   struct ofpbuf *ofpacts OVS_UNUSED,
-                   enum ofputil_protocol *usable_protocols OVS_UNUSED)
+                   const struct ofpact_parse_params *pp OVS_UNUSED)
 {
     /* Disable output_trunc parsing.  Expose as output(port=N,max_len=M) and
      * reuse parse_OUTPUT to parse output_trunc action. */
@@ -6777,11 +6615,11 @@ parse_OUTPUT_TRUNC(const char *arg,
 
 static void
 format_OUTPUT_TRUNC(const struct ofpact_output_trunc *a,
-                    const struct ofputil_port_map *port_map, struct ds *s)
+                    const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%soutput%s(port=", colors.special, colors.end);
-    ofputil_format_port(a->port, port_map, s);
-    ds_put_format(s, ",max_len=%"PRIu32")", a->max_len);
+    ds_put_format(fp->s, "%soutput%s(port=", colors.special, colors.end);
+    ofputil_format_port(a->port, fp->port_map, fp->s);
+    ds_put_format(fp->s, ",max_len=%"PRIu32")", a->max_len);
 }
 
 
@@ -6797,21 +6635,17 @@ encode_METER(const struct ofpact_meter *meter,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_METER(char *arg,
-            const struct ofputil_port_map *port_map OVS_UNUSED,
-            struct ofpbuf *ofpacts,
-            enum ofputil_protocol *usable_protocols)
+parse_METER(char *arg, const struct ofpact_parse_params *pp)
 {
-    *usable_protocols &= OFPUTIL_P_OF13_UP;
-    return str_to_u32(arg, &ofpact_put_METER(ofpacts)->meter_id);
+    *pp->usable_protocols &= OFPUTIL_P_OF13_UP;
+    return str_to_u32(arg, &ofpact_put_METER(pp->ofpacts)->meter_id);
 }
 
 static void
 format_METER(const struct ofpact_meter *a,
-             const struct ofputil_port_map *port_map OVS_UNUSED,
-             struct ds *s)
+             const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%smeter:%s%"PRIu32,
+    ds_put_format(fp->s, "%smeter:%s%"PRIu32,
                   colors.param, colors.end, a->meter_id);
 }
 
@@ -6828,21 +6662,17 @@ encode_CLEAR_ACTIONS(const struct ofpact_null *null OVS_UNUSED,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_CLEAR_ACTIONS(char *arg OVS_UNUSED,
-                    const struct ofputil_port_map *port_map OVS_UNUSED,
-                    struct ofpbuf *ofpacts,
-                    enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_CLEAR_ACTIONS(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
 {
-    ofpact_put_CLEAR_ACTIONS(ofpacts);
+    ofpact_put_CLEAR_ACTIONS(pp->ofpacts);
     return NULL;
 }
 
 static void
 format_CLEAR_ACTIONS(const struct ofpact_null *a OVS_UNUSED,
-                     const struct ofputil_port_map *port_map OVS_UNUSED,
-                     struct ds *s)
+                     const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sclear_actions%s", colors.value, colors.end);
+    ds_put_format(fp->s, "%sclear_actions%s", colors.value, colors.end);
 }
 
 /* Write-Actions instruction. */
@@ -6863,17 +6693,15 @@ encode_WRITE_ACTIONS(const struct ofpact_nest *actions,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_WRITE_ACTIONS(char *arg, const struct ofputil_port_map *port_map,
-                    struct ofpbuf *ofpacts,
-                    enum ofputil_protocol *usable_protocols)
+parse_WRITE_ACTIONS(char *arg, const struct ofpact_parse_params *pp)
 {
-    size_t ofs = ofpacts_pull(ofpacts);
+    size_t ofs = ofpacts_pull(pp->ofpacts);
     struct ofpact_nest *on;
     char *error;
 
     /* Add a Write-Actions instruction and then pull it off. */
-    ofpact_put(ofpacts, OFPACT_WRITE_ACTIONS, sizeof *on);
-    ofpbuf_pull(ofpacts, sizeof *on);
+    ofpact_put(pp->ofpacts, OFPACT_WRITE_ACTIONS, sizeof *on);
+    ofpbuf_pull(pp->ofpacts, sizeof *on);
 
     /* Parse nested actions.
      *
@@ -6882,26 +6710,25 @@ parse_WRITE_ACTIONS(char *arg, const struct ofputil_port_map *port_map,
      * that it doesn't actually include the nested actions.  That means that
      * ofpacts_parse() would reject them as being part of an Apply-Actions that
      * follows a Write-Actions, which is an invalid order.  */
-    error = ofpacts_parse(arg, port_map, ofpacts, usable_protocols, false,
-                          OFPACT_WRITE_ACTIONS);
+    error = ofpacts_parse(arg, pp, false, OFPACT_WRITE_ACTIONS);
 
     /* Put the Write-Actions back on and update its length. */
-    on = ofpbuf_push_uninit(ofpacts, sizeof *on);
-    on->ofpact.len = ofpacts->size;
+    on = ofpbuf_push_uninit(pp->ofpacts, sizeof *on);
+    on->ofpact.len = pp->ofpacts->size;
 
     /* Put any previous actions or instructions back on. */
-    ofpbuf_push_uninit(ofpacts, ofs);
+    ofpbuf_push_uninit(pp->ofpacts, ofs);
 
     return error;
 }
 
 static void
 format_WRITE_ACTIONS(const struct ofpact_nest *a,
-                     const struct ofputil_port_map *port_map, struct ds *s)
+                     const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%swrite_actions(%s", colors.paren, colors.end);
-    ofpacts_format(a->actions, ofpact_nest_get_action_len(a), port_map, s);
-    ds_put_format(s, "%s)%s", colors.paren, colors.end);
+    ds_put_format(fp->s, "%swrite_actions(%s", colors.paren, colors.end);
+    ofpacts_format(a->actions, ofpact_nest_get_action_len(a), fp);
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
 }
 
 /* Action structure for NXAST_WRITE_METADATA.
@@ -6956,17 +6783,14 @@ encode_WRITE_METADATA(const struct ofpact_metadata *metadata,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_WRITE_METADATA(char *arg,
-                     const struct ofputil_port_map *port_map OVS_UNUSED,
-                     struct ofpbuf *ofpacts,
-                     enum ofputil_protocol *usable_protocols)
+parse_WRITE_METADATA(char *arg, const struct ofpact_parse_params *pp)
 {
     struct ofpact_metadata *om;
     char *mask = strchr(arg, '/');
 
-    *usable_protocols &= OFPUTIL_P_NXM_OF11_UP;
+    *pp->usable_protocols &= OFPUTIL_P_NXM_OF11_UP;
 
-    om = ofpact_put_WRITE_METADATA(ofpacts);
+    om = ofpact_put_WRITE_METADATA(pp->ofpacts);
     if (mask) {
         char *error;
 
@@ -6984,13 +6808,12 @@ parse_WRITE_METADATA(char *arg,
 
 static void
 format_WRITE_METADATA(const struct ofpact_metadata *a,
-                      const struct ofputil_port_map *port_map OVS_UNUSED,
-                      struct ds *s)
+                      const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%swrite_metadata:%s%#"PRIx64,
+    ds_put_format(fp->s, "%swrite_metadata:%s%#"PRIx64,
                   colors.param, colors.end, ntohll(a->metadata));
     if (a->mask != OVS_BE64_MAX) {
-        ds_put_format(s, "/%#"PRIx64, ntohll(a->mask));
+        ds_put_format(fp->s, "/%#"PRIx64, ntohll(a->mask));
     }
 }
 
@@ -7016,26 +6839,21 @@ encode_GOTO_TABLE(const struct ofpact_goto_table *goto_table,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_GOTO_TABLE(char *arg,
-                 const struct ofputil_port_map *port_map OVS_UNUSED,
-                 struct ofpbuf *ofpacts,
-                 enum ofputil_protocol *usable_protocols OVS_UNUSED)
+parse_GOTO_TABLE(char *arg, const struct ofpact_parse_params *pp)
 {
-    struct ofpact_goto_table *ogt = ofpact_put_GOTO_TABLE(ofpacts);
-    char *table_s = strsep(&arg, ",");
-    if (!table_s || !table_s[0]) {
-        return xstrdup("instruction goto-table needs table id");
+    struct ofpact_goto_table *ogt = ofpact_put_GOTO_TABLE(pp->ofpacts);
+    if (!ofputil_table_from_string(arg, pp->table_map, &ogt->table_id)) {
+        return xasprintf("unknown table \"%s\"", arg);
     }
-    return str_to_u8(table_s, "table", &ogt->table_id);
+    return NULL;
 }
 
 static void
 format_GOTO_TABLE(const struct ofpact_goto_table *a,
-                  const struct ofputil_port_map *port_map OVS_UNUSED,
-                  struct ds *s)
+                  const struct ofpact_format_params *fp)
 {
-    ds_put_format(s, "%sgoto_table:%s%"PRIu8,
-                  colors.param, colors.end, a->table_id);
+    ds_put_format(fp->s, "%sgoto_table:%s", colors.param, colors.end);
+    ofputil_format_table(a->table_id, fp->table_map, fp->s);
 }
 
 static void
@@ -7092,6 +6910,7 @@ ofpacts_pull_openflow_actions__(struct ofpbuf *openflow,
                                 uint64_t *ofpacts_tlv_bitmap)
 {
     const struct ofp_action_header *actions;
+    void *orig_data = ofpacts->data;
     size_t orig_size = ofpacts->size;
     enum ofperr error;
 
@@ -7111,14 +6930,17 @@ ofpacts_pull_openflow_actions__(struct ofpbuf *openflow,
 
     error = ofpacts_decode(actions, actions_len, version, vl_mff_map,
                            ofpacts_tlv_bitmap, ofpacts);
-    if (error) {
-        ofpacts->size = orig_size;
-        return error;
+    if (!error) {
+        error = ofpacts_verify(ofpacts->data, ofpacts->size, allowed_ovsinsts,
+                               outer_action);
     }
-
-    error = ofpacts_verify(ofpacts->data, ofpacts->size, allowed_ovsinsts,
-                           outer_action);
     if (error) {
+        /* Back out changes to 'ofpacts'.  (Normally, decoding would only
+         * append to 'ofpacts', so that one would expect only to need to
+         * restore 'ofpacts->size', but some action parsing temporarily pulls
+         * off data from the start of 'ofpacts' and may not properly re-push it
+         * on error paths.) */
+        ofpacts->data = orig_data;
         ofpacts->size = orig_size;
     }
     return error;
@@ -7162,17 +6984,77 @@ ofpacts_pull_openflow_actions(struct ofpbuf *openflow,
                                            ofpacts_tlv_bitmap);
 }
 
-/* OpenFlow 1.1 actions. */
+/* OpenFlow 1.1 action sets. */
 
+/* Append ofpact 'a' onto the tail of 'out' */
+static void
+ofpact_copy(struct ofpbuf *out, const struct ofpact *a)
+{
+    ofpbuf_put(out, a, OFPACT_ALIGN(a->len));
+}
 
-/* True if an action sets the value of a field
- * in a way that is compatibile with the action set.
- * The field can be set via either a set or a move action.
- * False otherwise. */
-static bool
-ofpact_is_set_or_move_action(const struct ofpact *a)
+/* The order in which actions in an action set get executed.  This is only for
+ * the actions where only the last instance added is used. */
+#define ACTION_SET_ORDER                        \
+    SLOT(OFPACT_STRIP_VLAN)                     \
+    SLOT(OFPACT_POP_MPLS)                       \
+    SLOT(OFPACT_DECAP)                          \
+    SLOT(OFPACT_ENCAP)                          \
+    SLOT(OFPACT_PUSH_MPLS)                      \
+    SLOT(OFPACT_PUSH_VLAN)                      \
+    SLOT(OFPACT_DEC_TTL)                        \
+    SLOT(OFPACT_DEC_MPLS_TTL)                   \
+    SLOT(OFPACT_DEC_NSH_TTL)
+
+/* Priority for "final actions" in an action set.  An action set only gets
+ * executed at all if at least one of these actions is present.  If more than
+ * one is present, then only the one later in this list is executed (and if
+ * more than one of a given type, the one later in the action set). */
+#define ACTION_SET_FINAL_PRIORITY               \
+    FINAL(OFPACT_CT)                            \
+    FINAL(OFPACT_CT_CLEAR)                      \
+    FINAL(OFPACT_RESUBMIT)                      \
+    FINAL(OFPACT_OUTPUT)                        \
+    FINAL(OFPACT_GROUP)
+
+enum action_set_class {
+    /* Actions that individually can usefully appear only once in an action
+     * set.  If they do appear more than once, then only the last instance is
+     * honored. */
+#define SLOT(OFPACT) ACTION_SLOT_##OFPACT,
+    ACTION_SET_ORDER
+#undef SLOT
+
+    /* Final actions. */
+#define FINAL(OFPACT) ACTION_SLOT_##OFPACT,
+    ACTION_SET_FINAL_PRIORITY
+#undef FINAL
+
+    /* Actions that can appear in an action set more than once and are executed
+     * in order. */
+    ACTION_SLOT_SET_OR_MOVE,
+
+    /* Actions that shouldn't appear in the action set at all. */
+    ACTION_SLOT_INVALID
+};
+
+/* Count the action set slots. */
+#define SLOT(OFPACT) +1
+enum { N_ACTION_SLOTS = ACTION_SET_ORDER };
+#undef SLOT
+
+static enum action_set_class
+action_set_classify(const struct ofpact *a)
 {
     switch (a->type) {
+#define SLOT(OFPACT) case OFPACT: return ACTION_SLOT_##OFPACT;
+        ACTION_SET_ORDER
+#undef SLOT
+
+#define FINAL(OFPACT) case OFPACT: return ACTION_SLOT_##OFPACT;
+        ACTION_SET_FINAL_PRIORITY
+#undef FINAL
+
     case OFPACT_SET_FIELD:
     case OFPACT_REG_MOVE:
     case OFPACT_SET_ETH_DST:
@@ -7191,47 +7073,35 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
     case OFPACT_SET_TUNNEL:
     case OFPACT_SET_VLAN_PCP:
     case OFPACT_SET_VLAN_VID:
-        return true;
+        return ACTION_SLOT_SET_OR_MOVE;
+
     case OFPACT_BUNDLE:
     case OFPACT_CLEAR_ACTIONS:
-    case OFPACT_CT:
-    case OFPACT_CT_CLEAR:
     case OFPACT_CLONE:
     case OFPACT_NAT:
     case OFPACT_CONTROLLER:
-    case OFPACT_DEC_MPLS_TTL:
-    case OFPACT_DEC_TTL:
     case OFPACT_ENQUEUE:
     case OFPACT_EXIT:
     case OFPACT_UNROLL_XLATE:
     case OFPACT_FIN_TIMEOUT:
     case OFPACT_GOTO_TABLE:
-    case OFPACT_GROUP:
     case OFPACT_LEARN:
     case OFPACT_CONJUNCTION:
     case OFPACT_METER:
     case OFPACT_MULTIPATH:
     case OFPACT_NOTE:
-    case OFPACT_OUTPUT:
     case OFPACT_OUTPUT_REG:
     case OFPACT_OUTPUT_TRUNC:
-    case OFPACT_POP_MPLS:
     case OFPACT_POP_QUEUE:
-    case OFPACT_PUSH_MPLS:
-    case OFPACT_PUSH_VLAN:
-    case OFPACT_RESUBMIT:
     case OFPACT_SAMPLE:
     case OFPACT_STACK_POP:
     case OFPACT_STACK_PUSH:
-    case OFPACT_STRIP_VLAN:
     case OFPACT_WRITE_ACTIONS:
     case OFPACT_WRITE_METADATA:
     case OFPACT_DEBUG_RECIRC:
     case OFPACT_DEBUG_SLOW:
-    case OFPACT_ENCAP:
-    case OFPACT_DECAP:
-    case OFPACT_DEC_NSH_TTL:
-        return false;
+        return ACTION_SLOT_INVALID;
+
     default:
         OVS_NOT_REACHED();
     }
@@ -7242,119 +7112,7 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
 static bool
 ofpact_is_allowed_in_actions_set(const struct ofpact *a)
 {
-    switch (a->type) {
-    case OFPACT_DEC_MPLS_TTL:
-    case OFPACT_DEC_TTL:
-    case OFPACT_GROUP:
-    case OFPACT_OUTPUT:
-    case OFPACT_OUTPUT_TRUNC:
-    case OFPACT_POP_MPLS:
-    case OFPACT_PUSH_MPLS:
-    case OFPACT_PUSH_VLAN:
-    case OFPACT_REG_MOVE:
-    case OFPACT_SET_FIELD:
-    case OFPACT_SET_ETH_DST:
-    case OFPACT_SET_ETH_SRC:
-    case OFPACT_SET_IP_DSCP:
-    case OFPACT_SET_IP_ECN:
-    case OFPACT_SET_IP_TTL:
-    case OFPACT_SET_IPV4_DST:
-    case OFPACT_SET_IPV4_SRC:
-    case OFPACT_SET_L4_DST_PORT:
-    case OFPACT_SET_L4_SRC_PORT:
-    case OFPACT_SET_MPLS_LABEL:
-    case OFPACT_SET_MPLS_TC:
-    case OFPACT_SET_MPLS_TTL:
-    case OFPACT_SET_QUEUE:
-    case OFPACT_SET_TUNNEL:
-    case OFPACT_SET_VLAN_PCP:
-    case OFPACT_SET_VLAN_VID:
-    case OFPACT_STRIP_VLAN:
-    case OFPACT_ENCAP:
-    case OFPACT_DECAP:
-    case OFPACT_DEC_NSH_TTL:
-        return true;
-
-    /* In general these actions are excluded because they are not part of
-     * the OpenFlow specification nor map to actions that are defined in
-     * the specification.  Thus the order in which they should be applied
-     * in the action set is undefined. */
-    case OFPACT_BUNDLE:
-    case OFPACT_CLONE:
-    case OFPACT_CONTROLLER:
-    case OFPACT_CT:
-    case OFPACT_CT_CLEAR:
-    case OFPACT_NAT:
-    case OFPACT_ENQUEUE:
-    case OFPACT_EXIT:
-    case OFPACT_UNROLL_XLATE:
-    case OFPACT_FIN_TIMEOUT:
-    case OFPACT_LEARN:
-    case OFPACT_CONJUNCTION:
-    case OFPACT_MULTIPATH:
-    case OFPACT_NOTE:
-    case OFPACT_OUTPUT_REG:
-    case OFPACT_POP_QUEUE:
-    case OFPACT_RESUBMIT:
-    case OFPACT_SAMPLE:
-    case OFPACT_STACK_POP:
-    case OFPACT_STACK_PUSH:
-    case OFPACT_DEBUG_RECIRC:
-    case OFPACT_DEBUG_SLOW:
-
-    /* The action set may only include actions and thus
-     * may not include any instructions */
-    case OFPACT_CLEAR_ACTIONS:
-    case OFPACT_GOTO_TABLE:
-    case OFPACT_METER:
-    case OFPACT_WRITE_ACTIONS:
-    case OFPACT_WRITE_METADATA:
-        return false;
-    default:
-        OVS_NOT_REACHED();
-    }
-}
-
-/* Append ofpact 'a' onto the tail of 'out' */
-static void
-ofpact_copy(struct ofpbuf *out, const struct ofpact *a)
-{
-    ofpbuf_put(out, a, OFPACT_ALIGN(a->len));
-}
-
-/* Copies the last ofpact whose type is 'filter' from 'in' to 'out'. */
-static bool
-ofpacts_copy_last(struct ofpbuf *out, const struct ofpbuf *in,
-                  enum ofpact_type filter)
-{
-    const struct ofpact *target;
-    const struct ofpact *a;
-
-    target = NULL;
-    OFPACT_FOR_EACH (a, in->data, in->size) {
-        if (a->type == filter) {
-            target = a;
-        }
-    }
-    if (target) {
-        ofpact_copy(out, target);
-    }
-    return target != NULL;
-}
-
-/* Append all ofpacts, for which 'filter' returns true, from 'in' to 'out'.
- * The order of appended ofpacts is preserved between 'in' and 'out' */
-static void
-ofpacts_copy_all(struct ofpbuf *out, const struct ofpbuf *in,
-                 bool (*filter)(const struct ofpact *))
-{
-    const struct ofpact *a;
-
-    OFPACT_FOR_EACH (a, in->data, in->size) {
-        if (filter(a)) {
-            ofpact_copy(out, a);
-        }
-    }
+    return action_set_classify(a) != ACTION_SLOT_INVALID;
 }
 
 /* Reads 'action_set', which contains ofpacts accumulated by
@@ -7378,32 +7136,41 @@ void
 ofpacts_execute_action_set(struct ofpbuf *action_list,
                            const struct ofpbuf *action_set)
 {
-    /* The OpenFlow spec "Action Set" section specifies this order. */
-    ofpacts_copy_last(action_list, action_set, OFPACT_STRIP_VLAN);
-    ofpacts_copy_last(action_list, action_set, OFPACT_POP_MPLS);
-    ofpacts_copy_last(action_list, action_set, OFPACT_DECAP);
-    ofpacts_copy_last(action_list, action_set, OFPACT_ENCAP);
-    ofpacts_copy_last(action_list, action_set, OFPACT_PUSH_MPLS);
-    ofpacts_copy_last(action_list, action_set, OFPACT_PUSH_VLAN);
-    ofpacts_copy_last(action_list, action_set, OFPACT_DEC_TTL);
-    ofpacts_copy_last(action_list, action_set, OFPACT_DEC_MPLS_TTL);
-    ofpacts_copy_last(action_list, action_set, OFPACT_DEC_NSH_TTL);
-    ofpacts_copy_all(action_list, action_set, ofpact_is_set_or_move_action);
-    ofpacts_copy_last(action_list, action_set, OFPACT_SET_QUEUE);
+    const struct ofpact *slots[N_ACTION_SLOTS] = {NULL, };
 
-    /* If both OFPACT_GROUP and OFPACT_OUTPUT are present, OpenFlow says that
-     * we should execute only OFPACT_GROUP.
-     *
-     * If neither OFPACT_GROUP nor OFPACT_OUTPUT is present, then we can drop
-     * all the actions because there's no point in modifying a packet that will
-     * not be sent anywhere. */
-    if (!ofpacts_copy_last(action_list, action_set, OFPACT_GROUP) &&
-        !ofpacts_copy_last(action_list, action_set, OFPACT_OUTPUT) &&
-        !ofpacts_copy_last(action_list, action_set, OFPACT_RESUBMIT) &&
-        !ofpacts_copy_last(action_list, action_set, OFPACT_CT_CLEAR) &&
-        !ofpacts_copy_last(action_list, action_set, OFPACT_CT)) {
-        ofpbuf_clear(action_list);
+    struct ofpbuf set_or_move;
+    ofpbuf_init(&set_or_move, 0);
+
+    const struct ofpact *final_action = NULL;
+    enum action_set_class final_class = 0;
+
+    const struct ofpact *cursor;
+    OFPACT_FOR_EACH (cursor, action_set->data, action_set->size) {
+        int class = action_set_classify(cursor);
+        if (class < N_ACTION_SLOTS) {
+            slots[class] = cursor;
+        } else if (class < ACTION_SLOT_SET_OR_MOVE) {
+            if (class >= final_class) {
+                final_action = cursor;
+                final_class = class;
+            }
+        } else if (class == ACTION_SLOT_SET_OR_MOVE) {
+            ofpact_copy(&set_or_move, cursor);
+        } else {
+            ovs_assert(class == ACTION_SLOT_INVALID);
+        }
     }
+
+    if (final_action) {
+        for (int i = 0; i < N_ACTION_SLOTS; i++) {
+            if (slots[i]) {
+                ofpact_copy(action_list, slots[i]);
+            }
+        }
+        ofpbuf_put(action_list, set_or_move.data, set_or_move.size);
+        ofpact_copy(action_list, final_action);
+    }
+    ofpbuf_uninit(&set_or_move);
 }
 
 
@@ -8781,10 +8548,12 @@ ofpacts_equal_stringwise(const struct ofpact *a, size_t a_len,
                          const struct ofpact *b, size_t b_len)
 {
     struct ds a_s = DS_EMPTY_INITIALIZER;
-    struct ds b_s = DS_EMPTY_INITIALIZER;
+    struct ofpact_format_params a_fp = { .s = &a_s };
+    ofpacts_format(a, a_len, &a_fp);
 
-    ofpacts_format(a, a_len, NULL, &a_s);
-    ofpacts_format(b, b_len, NULL, &b_s);
+    struct ds b_s = DS_EMPTY_INITIALIZER;
+    struct ofpact_format_params b_fp = { .s = &b_s };
+    ofpacts_format(b, b_len, &b_fp);
 
     bool equal = !strcmp(ds_cstr(&a_s), ds_cstr(&b_s));
 
@@ -8822,13 +8591,12 @@ ofpacts_get_meter(const struct ofpact ofpacts[], size_t ofpacts_len)
 
 static void
 ofpact_format(const struct ofpact *a,
-              const struct ofputil_port_map *port_map, struct ds *s)
+              const struct ofpact_format_params *fp)
 {
     switch (a->type) {
 #define OFPACT(ENUM, STRUCT, MEMBER, NAME)                              \
         case OFPACT_##ENUM:                                             \
-            format_##ENUM(ALIGNED_CAST(const struct STRUCT *, a),       \
-                          port_map, s);                               \
+            format_##ENUM(ALIGNED_CAST(const struct STRUCT *, a), fp);  \
             break;
         OFPACTS
 #undef OFPACT
@@ -8838,23 +8606,23 @@ ofpact_format(const struct ofpact *a,
 }
 
 /* Appends a string representing the 'ofpacts_len' bytes of ofpacts in
- * 'ofpacts' to 'string'.  If 'port_map' is nonnull, uses it to translate
- * port numbers to names in output. */
+ * 'ofpacts' to 'fp->s'.  If 'port_map' is nonnull, uses it to translate port
+ * numbers to names in output. */
 void
 ofpacts_format(const struct ofpact *ofpacts, size_t ofpacts_len,
-               const struct ofputil_port_map *port_map, struct ds *string)
+               const struct ofpact_format_params *fp)
 {
     if (!ofpacts_len) {
-        ds_put_format(string, "%sdrop%s", colors.drop, colors.end);
+        ds_put_format(fp->s, "%sdrop%s", colors.drop, colors.end);
     } else {
         const struct ofpact *a;
 
         OFPACT_FOR_EACH (a, ofpacts, ofpacts_len) {
             if (a != ofpacts) {
-                ds_put_char(string, ',');
+                ds_put_char(fp->s, ',');
             }
 
-            ofpact_format(a, port_map, string);
+            ofpact_format(a, fp);
         }
     }
 }
@@ -8908,13 +8676,12 @@ ofpact_finish(struct ofpbuf *ofpacts, struct ofpact *ofpact)
 
 static char * OVS_WARN_UNUSED_RESULT
 ofpact_parse(enum ofpact_type type, char *value,
-             const struct ofputil_port_map *port_map, struct ofpbuf *ofpacts,
-             enum ofputil_protocol *usable_protocols)
+             const struct ofpact_parse_params *pp)
 {
     switch (type) {
 #define OFPACT(ENUM, STRUCT, MEMBER, NAME)                              \
         case OFPACT_##ENUM:                                             \
-            return parse_##ENUM(value, port_map, ofpacts, usable_protocols);
+            return parse_##ENUM(value, pp);
         OFPACTS
 #undef OFPACT
     default:
@@ -8944,9 +8711,7 @@ ofpact_type_from_name(const char *name, enum ofpact_type *type)
  * If 'outer_action' is specified, indicates that the actions being parsed
  * are nested within another action of the type specified in 'outer_action'. */
 static char * OVS_WARN_UNUSED_RESULT
-ofpacts_parse__(char *str, const struct ofputil_port_map *port_map,
-                struct ofpbuf *ofpacts,
-                enum ofputil_protocol *usable_protocols,
+ofpacts_parse__(char *str, const struct ofpact_parse_params *pp,
                 bool allow_instructions, enum ofpact_type outer_action)
 {
     int prev_inst = -1;
@@ -8963,31 +8728,28 @@ ofpacts_parse__(char *str, const struct ofputil_port_map *port_map,
         ofp_port_t port;
 
         if (ofpact_type_from_name(key, &type)) {
-            error = ofpact_parse(type, value, port_map,
-                                 ofpacts, usable_protocols);
+            error = ofpact_parse(type, value, pp);
             inst = ovs_instruction_type_from_ofpact_type(type);
         } else if (!strcasecmp(key, "mod_vlan_vid")) {
-            error = parse_set_vlan_vid(value, ofpacts, true);
+            error = parse_set_vlan_vid(value, true, pp);
         } else if (!strcasecmp(key, "mod_vlan_pcp")) {
-            error = parse_set_vlan_pcp(value, ofpacts, true);
+            error = parse_set_vlan_pcp(value, true, pp);
         } else if (!strcasecmp(key, "set_nw_ttl")) {
-            error = parse_SET_IP_TTL(value, port_map,
-                                     ofpacts, usable_protocols);
+            error = parse_SET_IP_TTL(value, pp);
         } else if (!strcasecmp(key, "pop_vlan")) {
-            error = parse_pop_vlan(ofpacts);
+            error = parse_pop_vlan(pp);
         } else if (!strcasecmp(key, "set_tunnel64")) {
-            error = parse_set_tunnel(value, ofpacts,
-                                     NXAST_RAW_SET_TUNNEL64);
+            error = parse_set_tunnel(value, NXAST_RAW_SET_TUNNEL64, pp);
         } else if (!strcasecmp(key, "load")) {
-            error = parse_reg_load(value, ofpacts);
+            error = parse_reg_load(value, pp);
         } else if (!strcasecmp(key, "bundle_load")) {
-            error = parse_bundle_load(value, port_map, ofpacts);
+            error = parse_bundle_load(value, pp);
         } else if (!strcasecmp(key, "drop")) {
             drop = true;
         } else if (!strcasecmp(key, "apply_actions")) {
             return xstrdup("apply_actions is the default instruction");
-        } else if (ofputil_port_from_string(key, port_map, &port)) {
-            ofpact_put_OUTPUT(ofpacts)->port = port;
+        } else if (ofputil_port_from_string(key, pp->port_map, &port)) {
+            ofpact_put_OUTPUT(pp->ofpacts)->port = port;
         } else {
             return xasprintf("unknown action %s", key);
         }
@@ -9014,12 +8776,12 @@ ofpacts_parse__(char *str, const struct ofputil_port_map *port_map,
         prev_inst = inst;
     }
 
-    if (drop && ofpacts->size) {
+    if (drop && pp->ofpacts->size) {
         return xstrdup("\"drop\" must not be accompanied by any other action "
                        "or instruction");
     }
 
-    retval = ofpacts_verify(ofpacts->data, ofpacts->size,
+    retval = ofpacts_verify(pp->ofpacts->data, pp->ofpacts->size,
                             (allow_instructions
                              ? (1u << N_OVS_INSTRUCTIONS) - 1
                              : 1u << OVSINST_OFPIT11_APPLY_ACTIONS),
@@ -9032,32 +8794,27 @@ ofpacts_parse__(char *str, const struct ofputil_port_map *port_map,
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-ofpacts_parse(char *str, const struct ofputil_port_map *port_map,
-              struct ofpbuf *ofpacts, enum ofputil_protocol *usable_protocols,
+ofpacts_parse(char *str, const struct ofpact_parse_params *pp,
               bool allow_instructions, enum ofpact_type outer_action)
 {
-    uint32_t orig_size = ofpacts->size;
-    char *error = ofpacts_parse__(str, port_map, ofpacts, usable_protocols,
-                                  allow_instructions, outer_action);
+    uint32_t orig_size = pp->ofpacts->size;
+    char *error = ofpacts_parse__(str, pp, allow_instructions, outer_action);
     if (error) {
-        ofpacts->size = orig_size;
+        pp->ofpacts->size = orig_size;
     }
     return error;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-ofpacts_parse_copy(const char *s_, const struct ofputil_port_map *port_map,
-                   struct ofpbuf *ofpacts,
-                   enum ofputil_protocol *usable_protocols,
+ofpacts_parse_copy(const char *s_, const struct ofpact_parse_params *pp,
                    bool allow_instructions, enum ofpact_type outer_action)
 {
     char *error, *s;
 
-    *usable_protocols = OFPUTIL_P_ANY;
+    *pp->usable_protocols = OFPUTIL_P_ANY;
 
     s = xstrdup(s_);
-    error = ofpacts_parse(s, port_map, ofpacts, usable_protocols,
-                          allow_instructions, outer_action);
+    error = ofpacts_parse(s, pp, allow_instructions, outer_action);
     free(s);
 
     return error;
@@ -9070,12 +8827,9 @@ ofpacts_parse_copy(const char *s_, const struct ofputil_port_map *port_map,
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 char * OVS_WARN_UNUSED_RESULT
-ofpacts_parse_actions(const char *s, const struct ofputil_port_map *port_map,
-                      struct ofpbuf *ofpacts,
-                      enum ofputil_protocol *usable_protocols)
+ofpacts_parse_actions(const char *s, const struct ofpact_parse_params *pp)
 {
-    return ofpacts_parse_copy(s, port_map, ofpacts, usable_protocols,
-                              false, 0);
+    return ofpacts_parse_copy(s, pp, false, 0);
 }
 
 /* Parses 's' as a set of OpenFlow instructions and appends the instructions to
@@ -9084,12 +8838,9 @@ ofpacts_parse_actions(const char *s, const struct ofputil_port_map *port_map,
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 char * OVS_WARN_UNUSED_RESULT
-ofpacts_parse_instructions(const char *s,
-                           const struct ofputil_port_map *port_map,
-                           struct ofpbuf *ofpacts,
-                           enum ofputil_protocol *usable_protocols)
+ofpacts_parse_instructions(const char *s, const struct ofpact_parse_params *pp)
 {
-    return ofpacts_parse_copy(s, port_map, ofpacts, usable_protocols, true, 0);
+    return ofpacts_parse_copy(s, pp, true, 0);
 }
 
 const char *
@@ -9179,7 +8930,8 @@ ofpact_hdrs_equal(const struct ofpact_hdrs *a,
 static uint32_t
 ofpact_hdrs_hash(const struct ofpact_hdrs *hdrs)
 {
-    return hash_2words(hdrs->vendor, (hdrs->type << 16) | hdrs->ofp_version);
+    return hash_2words(hdrs->vendor,
+                       ((uint32_t) hdrs->type << 16) | hdrs->ofp_version);
 }
 
 #include "ofp-actions.inc2"

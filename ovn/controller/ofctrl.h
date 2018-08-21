@@ -22,12 +22,12 @@
 #include "openvswitch/meta-flow.h"
 #include "ovsdb-idl.h"
 
-struct controller_ctx;
 struct ovn_extend_table;
 struct hmap;
 struct match;
 struct ofpbuf;
 struct ovsrec_bridge;
+struct sbrec_meter_table;
 struct shash;
 
 /* Interface for OVN main loop. */
@@ -37,7 +37,7 @@ enum mf_field_id ofctrl_run(const struct ovsrec_bridge *br_int,
                             struct shash *pending_ct_zones);
 bool ofctrl_can_put(void);
 void ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
-                int64_t nb_cfg);
+                const struct sbrec_meter_table *meter_table, int64_t nb_cfg);
 void ofctrl_wait(void);
 void ofctrl_destroy(void);
 int64_t ofctrl_get_cur_cfg(void);
@@ -47,13 +47,12 @@ struct ovn_flow *ofctrl_dup_flow(struct ovn_flow *source);
 void ofctrl_ct_flush_zone(uint16_t zone_id);
 
 char *ofctrl_inject_pkt(const struct ovsrec_bridge *br_int,
-                        const char *flow_s, const struct shash *addr_sets);
+                        const char *flow_s, const struct shash *addr_sets,
+                        const struct shash *port_groups);
 
 /* Flow table interfaces to the rest of ovn-controller. */
 void ofctrl_add_flow(struct hmap *desired_flows, uint8_t table_id,
                      uint16_t priority, uint64_t cookie,
                      const struct match *, const struct ofpbuf *ofpacts);
-
-void ofctrl_flow_table_clear(void);
 
 #endif /* ovn/ofctrl.h */

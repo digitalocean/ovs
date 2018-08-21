@@ -131,6 +131,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/meta-flow.c \
 	lib/multipath.c \
 	lib/multipath.h \
+	lib/namemap.c \
 	lib/netdev-dpdk.h \
 	lib/netdev-dummy.c \
 	lib/netdev-provider.h \
@@ -142,6 +143,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/netflow.h \
 	lib/netlink.c \
 	lib/netlink.h \
+	lib/netnsid.h \
 	lib/nx-match.c \
 	lib/nx-match.h \
 	lib/object-collection.c \
@@ -151,12 +153,26 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/odp-util.c \
 	lib/odp-util.h \
 	lib/ofp-actions.c \
+	lib/ofp-bundle.c \
+	lib/ofp-connection.c \
 	lib/ofp-ed-props.c \
 	lib/ofp-errors.c \
+	lib/ofp-flow.c \
+	lib/ofp-group.c \
+	lib/ofp-ipfix.c \
+	lib/ofp-match.c \
+	lib/ofp-meter.c \
+	lib/ofp-monitor.c \
 	lib/ofp-msgs.c \
+	lib/ofp-packet.c \
 	lib/ofp-parse.c \
+	lib/ofp-port.c \
 	lib/ofp-print.c \
 	lib/ofp-prop.c \
+	lib/ofp-protocol.c \
+	lib/ofp-queue.c \
+	lib/ofp-switch.c \
+	lib/ofp-table.c \
 	lib/ofp-util.c \
 	lib/ofp-version-opt.h \
 	lib/ofp-version-opt.c \
@@ -203,12 +219,16 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovsdb-session.h \
 	lib/ovsdb-types.c \
 	lib/ovsdb-types.h \
+	lib/ox-stat.c \
+	lib/ox-stat.h \
 	lib/packets.c \
 	lib/packets.h \
 	lib/pcap-file.c \
 	lib/pcap-file.h \
 	lib/perf-counter.h \
 	lib/perf-counter.c \
+	lib/stopwatch.h \
+	lib/stopwatch.c \
 	lib/poll-loop.c \
 	lib/process.c \
 	lib/process.h \
@@ -430,18 +450,26 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/route-table-bsd.c
 endif
 
+.PHONY: generate-dhparams-c
 if HAVE_OPENSSL
-lib_libopenvswitch_la_SOURCES += lib/stream-ssl.c
-nodist_lib_libopenvswitch_la_SOURCES += lib/dhparams.c
-lib/dhparams.c: lib/dh1024.pem lib/dh2048.pem lib/dh4096.pem
-	$(AM_V_GEN)(echo '#include "lib/dhparams.h"' &&                 \
-	 openssl dhparam -C -in $(srcdir)/lib/dh1024.pem -noout &&	\
-	 openssl dhparam -C -in $(srcdir)/lib/dh2048.pem -noout &&	\
-	 openssl dhparam -C -in $(srcdir)/lib/dh4096.pem -noout)	\
-	| sed 's/\(get_dh[0-9]*\)()/\1(void)/' > lib/dhparams.c.tmp &&  \
+lib_libopenvswitch_la_SOURCES += lib/stream-ssl.c lib/dhparams.c
+
+# Manually regenerates lib/dhparams.c.  Not normally necessary since
+# lib/dhparams.c is part of the repository and doesn't normally need
+# updates.
+generate-dhparams-c:
+	$(AM_V_GEN)cd $(srcdir) && \
+	build-aux/generate-dhparams-c > lib/dhparams.c.tmp && \
 	mv lib/dhparams.c.tmp lib/dhparams.c
 else
 lib_libopenvswitch_la_SOURCES += lib/stream-nossl.c
+endif
+
+lib_libopenvswitch_la_SOURCES += lib/dns-resolve.h
+if HAVE_UNBOUND
+lib_libopenvswitch_la_SOURCES += lib/dns-resolve.c
+else
+lib_libopenvswitch_la_SOURCES += lib/dns-resolve-stub.c
 endif
 
 pkgconfig_DATA += \
@@ -458,8 +486,10 @@ EXTRA_DIST += \
 	lib/db-ctl-base.xml \
 	lib/ssl.xml \
 	lib/ssl-bootstrap.xml \
+	lib/ssl-peer-ca-cert.xml \
 	lib/table.xml \
-	lib/vlog.xml
+	lib/vlog.xml \
+	lib/unixctl.xml
 
 MAN_FRAGMENTS += \
 	lib/colors.man \
@@ -472,6 +502,7 @@ MAN_FRAGMENTS += \
 	lib/dpctl.man \
 	lib/memory-unixctl.man \
 	lib/netdev-dpdk-unixctl.man \
+	lib/dpif-netdev-unixctl.man \
 	lib/ofp-version.man \
 	lib/ovs.tmac \
 	lib/service.man \

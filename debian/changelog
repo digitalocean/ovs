@@ -1,3 +1,16 @@
+openvswitch (2.10.0-0ubuntu1) cosmic; urgency=medium
+
+  * d/control: Add BD on python{3}-sortedcontainers.
+  * d/watch: Update for upstream website changes.
+  * New upstream release.
+  * d/p/py3-compat.patch: Rebased on latest upstream review.
+  * d/rules: Disable tests 805,810,814 on s390x.
+  * d/rules: Rename SKIP_TEST -> TEST_LIST.
+  * d/rules: Re-enable all tests on arm64/armhf.
+  * d/control: Add libunbound-dev to BD's.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 21 Aug 2018 12:35:19 +0100
+
 openvswitch (2.9.2-0ubuntu1) cosmic; urgency=medium
 
   * Switch openvswitch-* packages to use Python 3 (LP: #1735377):

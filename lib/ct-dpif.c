@@ -164,6 +164,36 @@ ct_dpif_get_nconns(struct dpif *dpif, uint32_t *nconns)
             : EOPNOTSUPP);
 }
 
+int
+ct_dpif_set_limits(struct dpif *dpif, const uint32_t *default_limit,
+                   const struct ovs_list *zone_limits)
+{
+    return (dpif->dpif_class->ct_set_limits
+            ? dpif->dpif_class->ct_set_limits(dpif, default_limit,
+                                              zone_limits)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_get_limits(struct dpif *dpif, uint32_t *default_limit,
+                   const struct ovs_list *zone_limits_in,
+                   struct ovs_list *zone_limits_out)
+{
+    return (dpif->dpif_class->ct_get_limits
+            ? dpif->dpif_class->ct_get_limits(dpif, default_limit,
+                                              zone_limits_in,
+                                              zone_limits_out)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_del_limits(struct dpif *dpif, const struct ovs_list *zone_limits)
+{
+    return (dpif->dpif_class->ct_del_limits
+            ? dpif->dpif_class->ct_del_limits(dpif, zone_limits)
+            : EOPNOTSUPP);
+}
+
 void
 ct_dpif_entry_uninit(struct ct_dpif_entry *entry)
 {
@@ -566,4 +596,93 @@ error_with_msg:
 error:
     free(copy);
     return false;
+}
+
+void
+ct_dpif_push_zone_limit(struct ovs_list *zone_limits, uint16_t zone,
+                        uint32_t limit, uint32_t count)
+{
+    struct ct_dpif_zone_limit *zone_limit = xmalloc(sizeof *zone_limit);
+    zone_limit->zone = zone;
+    zone_limit->limit = limit;
+    zone_limit->count = count;
+    ovs_list_push_back(zone_limits, &zone_limit->node);
+}
+
+void
+ct_dpif_free_zone_limits(struct ovs_list *zone_limits)
+{
+    while (!ovs_list_is_empty(zone_limits)) {
+        struct ovs_list *entry = ovs_list_pop_front(zone_limits);
+        struct ct_dpif_zone_limit *cdzl;
+        cdzl = CONTAINER_OF(entry, struct ct_dpif_zone_limit, node);
+        free(cdzl);
+    }
+}
+
+/* Parses a specification of a conntrack zone limit from 's' into '*pzone'
+ * and '*plimit'.  Returns true on success.  Otherwise, returns false and
+ * and puts the error message in 'ds'. */
+bool
+ct_dpif_parse_zone_limit_tuple(const char *s, uint16_t *pzone,
+                               uint32_t *plimit, struct ds *ds)
+{
+    char *pos, *key, *value, *copy, *err;
+    bool parsed_limit = false, parsed_zone = false;
+
+    pos = copy = xstrdup(s);
+    while (ofputil_parse_key_value(&pos, &key, &value)) {
+        if (!*value) {
+            ds_put_format(ds, "field %s missing value", key);
+            goto error;
+        }
+
+        if (!strcmp(key, "zone")) {
+            err = str_to_u16(value, key, pzone);
+            if (err) {
+                free(err);
+                goto error_with_msg;
+            }
+            parsed_zone = true;
+        }  else if (!strcmp(key, "limit")) {
+            err = str_to_u32(value, plimit);
+            if (err) {
+                free(err);
+                goto error_with_msg;
+            }
+            parsed_limit = true;
+        } else {
+            ds_put_format(ds, "invalid zone limit field: %s", key);
+            goto error;
+        }
+    }
+
+    if (!parsed_zone || !parsed_limit) {
+        ds_put_format(ds, "failed to parse zone limit");
+        goto error;
+    }
+
+    free(copy);
+    return true;
+
+error_with_msg:
+    ds_put_format(ds, "failed to parse field %s", key);
+error:
+    free(copy);
+    return false;
+}
+
+void
+ct_dpif_format_zone_limits(uint32_t default_limit,
+                           const struct ovs_list *zone_limits, struct ds *ds)
+{
+    struct ct_dpif_zone_limit *zone_limit;
+
+    ds_put_format(ds, "default limit=%"PRIu32, default_limit);
+
+    LIST_FOR_EACH (zone_limit, node, zone_limits) {
+        ds_put_format(ds, "\nzone=%"PRIu16, zone_limit->zone);
+        ds_put_format(ds, ",limit=%"PRIu32, zone_limit->limit);
+        ds_put_format(ds, ",count=%"PRIu32, zone_limit->count);
+    }
 }

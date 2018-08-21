@@ -198,10 +198,7 @@ odp_set_sctp(struct dp_packet *packet, const struct ovs_key_sctp *key,
 static void
 odp_set_tunnel_action(const struct nlattr *a, struct flow_tnl *tun_key)
 {
-    enum odp_key_fitness fitness;
-
-    fitness = odp_tun_key_from_attr(a, tun_key);
-    ovs_assert(fitness != ODP_FIT_ERROR);
+    ovs_assert(odp_tun_key_from_attr(a, tun_key) != ODP_FIT_ERROR);
 }
 
 static void
@@ -693,8 +690,12 @@ requires_datapath_assistance(const struct nlattr *a)
  * Some actions (e.g. output actions) can only be executed by a datapath.  This
  * function implements those actions by passing the action and the packets to
  * 'dp_execute_action' (along with 'dp').  If 'dp_execute_action' is passed a
- * true 'may_steal' parameter then it may possibly modify and must definitely
- * free the packets passed into it, otherwise it must leave them unchanged. */
+ * true 'steal' parameter then it must definitely free the packets passed into
+ * it.  The packet can be modified whether 'steal' is false or true.  If a
+ * packet is removed from the batch, then the fate of the packet is determined
+ * by the code that does this removal, irrespective of the value of 'steal'.
+ * Otherwise, if the packet is not removed from the batch and 'steal' is false
+ * then the packet could either be cloned or not. */
 void
 odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     const struct nlattr *actions, size_t actions_len,
@@ -712,9 +713,9 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             if (dp_execute_action) {
                 /* Allow 'dp_execute_action' to steal the packet data if we do
                  * not need it any more. */
-                bool may_steal = steal && last_action;
+                bool should_steal = steal && last_action;
 
-                dp_execute_action(dp, batch, a, may_steal);
+                dp_execute_action(dp, batch, a, should_steal);
 
                 if (last_action || batch->count == 0) {
                     /* We do not need to free the packets.
@@ -729,18 +730,20 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         }
 
         switch ((enum ovs_action_attr) type) {
+
         case OVS_ACTION_ATTR_HASH: {
             const struct ovs_action_hash *hash_act = nl_attr_get(a);
 
-            /* Calculate a hash value directly.  This might not match the
+            /* Calculate a hash value directly. This might not match the
              * value computed by the datapath, but it is much less expensive,
              * and the current use case (bonding) does not require a strict
              * match to work properly. */
-            if (hash_act->hash_alg == OVS_HASH_ALG_L4) {
+            switch (hash_act->hash_alg) {
+            case OVS_HASH_ALG_L4: {
                 struct flow flow;
                 uint32_t hash;
 
-                DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                     /* RSS hash can be used here instead of 5tuple for
                      * performance reasons. */
                     if (dp_packet_rss_valid(packet)) {
@@ -752,7 +755,22 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     }
                     packet->md.dp_hash = hash;
                 }
-            } else {
+                break;
+            }
+            case OVS_HASH_ALG_SYM_L4: {
+                struct flow flow;
+                uint32_t hash;
+
+                DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+                    flow_extract(packet, &flow);
+                    hash = flow_hash_symmetric_l3l4(&flow,
+                                                    hash_act->hash_basis,
+                                                    false);
+                    packet->md.dp_hash = hash;
+                }
+                break;
+            }
+            default:
                 /* Assert on unknown hash algorithm.  */
                 OVS_NOT_REACHED();
             }
@@ -762,14 +780,14 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_PUSH_VLAN: {
             const struct ovs_action_push_vlan *vlan = nl_attr_get(a);
 
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 eth_push_vlan(packet, vlan->vlan_tpid, vlan->vlan_tci);
             }
             break;
         }
 
         case OVS_ACTION_ATTR_POP_VLAN:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 eth_pop_vlan(packet);
             }
             break;
@@ -777,32 +795,32 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_PUSH_MPLS: {
             const struct ovs_action_push_mpls *mpls = nl_attr_get(a);
 
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 push_mpls(packet, mpls->mpls_ethertype, mpls->mpls_lse);
             }
             break;
          }
 
         case OVS_ACTION_ATTR_POP_MPLS:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 pop_mpls(packet, nl_attr_get_be16(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SET:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 odp_execute_set_action(packet, nl_attr_get(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SET_MASKED:
-            DP_PACKET_BATCH_FOR_EACH(packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
                 odp_execute_masked_set_action(packet, nl_attr_get(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SAMPLE:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 odp_execute_sample(dp, packet, steal && last_action, a,
                                    dp_execute_action);
             }
@@ -819,7 +837,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                         nl_attr_get_unspec(a, sizeof *trunc);
 
             batch->trunc = true;
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 dp_packet_set_cutlen(packet, trunc->max_len);
             }
             break;
@@ -840,7 +858,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_PUSH_ETH: {
             const struct ovs_action_push_eth *eth = nl_attr_get(a);
 
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 push_eth(packet, &eth->addresses.eth_dst,
                          &eth->addresses.eth_src);
             }
@@ -848,7 +866,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         }
 
         case OVS_ACTION_ATTR_POP_ETH:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 pop_eth(packet);
             }
             break;
@@ -858,7 +876,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             struct nsh_hdr *nsh_hdr = ALIGNED_CAST(struct nsh_hdr *, buffer);
             nsh_reset_ver_flags_ttl_len(nsh_hdr);
             odp_nsh_hdr_from_attr(nl_attr_get(a), nsh_hdr, NSH_HDR_MAX_LEN);
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 push_nsh(packet, nsh_hdr);
             }
             break;
@@ -877,7 +895,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             break;
         }
         case OVS_ACTION_ATTR_CT_CLEAR:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 conntrack_clear(packet);
             }
             break;

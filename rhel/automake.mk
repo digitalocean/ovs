@@ -15,9 +15,8 @@ EXTRA_DIST += \
 	rhel/etc_sysconfig_network-scripts_ifup-ovs \
 	rhel/openvswitch-dkms.spec \
 	rhel/openvswitch-dkms.spec.in \
-	rhel/openvswitch-kmod-rhel6.spec \
-	rhel/openvswitch-kmod-rhel6.spec.in \
-	rhel/openvswitch-kmod.files \
+	rhel/kmod-openvswitch-rhel6.spec \
+	rhel/kmod-openvswitch-rhel6.spec.in \
 	rhel/openvswitch-kmod-fedora.spec \
 	rhel/openvswitch-kmod-fedora.spec.in \
 	rhel/openvswitch.spec \
@@ -27,6 +26,7 @@ EXTRA_DIST += \
 	rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
 	rhel/usr_share_openvswitch_scripts_sysconfig.template \
 	rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
+	rhel/usr_share_openvswitch_scripts_ovs-kmod-manage.sh \
 	rhel/usr_lib_udev_rules.d_91-vfio.rules \
 	rhel/usr_lib_systemd_system_openvswitch.service \
 	rhel/usr_lib_systemd_system_ovsdb-server.service \
@@ -48,7 +48,7 @@ update_rhel_spec = \
 $(srcdir)/rhel/openvswitch-dkms.spec: rhel/openvswitch-dkms.spec.in $(top_builddir)/config.status
 	$(update_rhel_spec)
 
-$(srcdir)/rhel/openvswitch-kmod-rhel6.spec: rhel/openvswitch-kmod-rhel6.spec.in $(top_builddir)/config.status
+$(srcdir)/rhel/kmod-openvswitch-rhel6.spec: rhel/kmod-openvswitch-rhel6.spec.in $(top_builddir)/config.status
 	$(update_rhel_spec)
 
 $(srcdir)/rhel/openvswitch-kmod-fedora.spec: rhel/openvswitch-kmod-fedora.spec.in $(top_builddir)/config.status

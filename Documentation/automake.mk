@@ -27,18 +27,28 @@ DOC_SOURCE = \
 	Documentation/tutorials/ovs-advanced.rst \
 	Documentation/tutorials/ovn-openstack.rst \
 	Documentation/tutorials/ovn-sandbox.rst \
+	Documentation/tutorials/ovs-conntrack.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/bonding.rst \
 	Documentation/topics/idl-compound-indexes.rst \
 	Documentation/topics/datapath.rst \
 	Documentation/topics/design.rst \
 	Documentation/topics/dpdk/index.rst \
+	Documentation/topics/dpdk/bridge.rst \
+	Documentation/topics/dpdk/jumbo-frames.rst \
+	Documentation/topics/dpdk/memory.rst \
+	Documentation/topics/dpdk/pdump.rst \
+	Documentation/topics/dpdk/phy.rst \
+	Documentation/topics/dpdk/pmd.rst \
+	Documentation/topics/dpdk/qos.rst \
 	Documentation/topics/dpdk/ring.rst \
+	Documentation/topics/dpdk/vdev.rst \
 	Documentation/topics/dpdk/vhost-user.rst \
 	Documentation/topics/testing.rst \
 	Documentation/topics/high-availability.rst \
 	Documentation/topics/integration.rst \
 	Documentation/topics/language-bindings.rst \
+	Documentation/topics/networking-namespaces.rst \
 	Documentation/topics/openflow.rst \
 	Documentation/topics/ovn-news-2.8.rst \
 	Documentation/topics/ovsdb-replication.rst \
@@ -74,6 +84,7 @@ DOC_SOURCE = \
 	Documentation/faq/general.rst \
 	Documentation/faq/issues.rst \
 	Documentation/faq/openflow.rst \
+	Documentation/faq/ovn.rst \
 	Documentation/faq/qos.rst \
 	Documentation/faq/releases.rst \
 	Documentation/faq/terminology.rst \
@@ -100,7 +111,7 @@ DOC_SOURCE = \
 	Documentation/internals/contributing/libopenvswitch-abi.rst \
 	Documentation/internals/contributing/submitting-patches.rst \
 	Documentation/requirements.txt \
-	$(addprefix Documentation/ref/,$(RST_MANPAGES))
+	$(addprefix Documentation/ref/,$(RST_MANPAGES) $(RST_MANPAGES_NOINST))
 FLAKE8_PYFILES += Documentation/conf.py
 EXTRA_DIST += $(DOC_SOURCE)
 
@@ -150,6 +161,11 @@ RST_MANPAGES = \
 	ovsdb.5.rst \
 	ovsdb.7.rst
 
+# rST formatted manpages that we don't want to install because they
+# document stuff that only works with a build tree, not with an
+# installed OVS.
+RST_MANPAGES_NOINST = ovs-sim.1.rst
+
 # The GNU standards say that these variables should control
 # installation directories for manpages in each section.  Automake
 # will define them for us only if it sees that a manpage in the
@@ -191,7 +207,7 @@ INSTALL_DATA_LOCAL += install-man-rst
 if HAVE_SPHINX
 install-man-rst: docs-check
 	@$(set_mandirs); \
-	for rst in $(RST_MANPAGES); do \
+	for rst in $(RST_MANPAGES) $(EXTRA_RST_MANPAGES); do \
 	    $(extract_stem_and_section); \
 	    echo " $(MKDIR_P) '$(DESTDIR)'\"$$mandir\""; \
 	    $(MKDIR_P) '$(DESTDIR)'"$$mandir"; \

@@ -844,7 +844,8 @@ static int vxlan_build_skb(struct sk_buff *skb, struct dst_entry *dst,
 	if (unlikely(err))
 		goto out_free;
 
-	skb = vlan_hwaccel_push_inside(skb);
+	if (skb_vlan_tag_present(skb))
+		skb = __vlan_hwaccel_push_inside(skb);
 	if (WARN_ON(!skb))
 		return -ENOMEM;
 
@@ -1244,9 +1245,15 @@ netdev_tx_t rpl_vxlan_xmit(struct sk_buff *skb)
 EXPORT_SYMBOL_GPL(rpl_vxlan_xmit);
 
 /* Walk the forwarding table and purge stale entries */
+#ifdef HAVE_INIT_TIMER_DEFERRABLE
 static void vxlan_cleanup(unsigned long arg)
 {
 	struct vxlan_dev *vxlan = (struct vxlan_dev *) arg;
+#else
+static void vxlan_cleanup(struct timer_list *t)
+{
+       struct vxlan_dev *vxlan = from_timer(vxlan, t, age_timer);
+#endif
 	unsigned long next_timer = jiffies + FDB_AGE_INTERVAL;
 	unsigned int h;
 
@@ -1556,7 +1563,11 @@ static void vxlan_setup(struct net_device *dev)
 	eth_hw_addr_random(dev);
 	ether_setup(dev);
 
+#ifndef HAVE_NEEDS_FREE_NETDEV
 	dev->destructor = free_netdev;
+#else
+	dev->needs_free_netdev = true;
+#endif
 	SET_NETDEV_DEVTYPE(dev, &vxlan_type);
 
 	dev->features	|= NETIF_F_LLTX;
@@ -1577,9 +1588,13 @@ static void vxlan_setup(struct net_device *dev)
 	INIT_LIST_HEAD(&vxlan->next);
 	spin_lock_init(&vxlan->hash_lock);
 
+#ifdef HAVE_INIT_TIMER_DEFERRABLE
 	init_timer_deferrable(&vxlan->age_timer);
 	vxlan->age_timer.function = vxlan_cleanup;
 	vxlan->age_timer.data = (unsigned long) vxlan;
+#else
+	timer_setup(&vxlan->age_timer, vxlan_cleanup, TIMER_DEFERRABLE);
+#endif
 
 	vxlan->cfg.dst_port = htons(vxlan_port);
 
@@ -1636,7 +1651,12 @@ static const struct nla_policy vxlan_policy[IFLA_VXLAN_MAX + 1] = {
 	[IFLA_VXLAN_REMCSUM_NOPARTIAL]	= { .type = NLA_FLAG },
 };
 
+#ifdef HAVE_EXT_ACK_IN_RTNL_LINKOPS
+static int vxlan_validate(struct nlattr *tb[], struct nlattr *data[],
+			  struct netlink_ext_ack *extack)
+#else
 static int vxlan_validate(struct nlattr *tb[], struct nlattr *data[])
+#endif
 {
 	if (tb[IFLA_ADDRESS]) {
 		if (nla_len(tb[IFLA_ADDRESS]) != ETH_ALEN) {
@@ -1955,8 +1975,14 @@ static int vxlan_dev_configure(struct net *src_net, struct net_device *dev,
 	return 0;
 }
 
+#ifdef HAVE_EXT_ACK_IN_RTNL_LINKOPS
+static int vxlan_newlink(struct net *src_net, struct net_device *dev,
+			 struct nlattr *tb[], struct nlattr *data[],
+			 struct netlink_ext_ack *extack)
+#else
 static int vxlan_newlink(struct net *src_net, struct net_device *dev,
 			 struct nlattr *tb[], struct nlattr *data[])
+#endif
 {
 	pr_info("unsupported operation\n");
 	return -EINVAL;

@@ -3,7 +3,8 @@
 
 PLIST_ENTRY ovsNatTable = NULL;
 PLIST_ENTRY ovsUnNatTable = NULL;
-
+static NDIS_SPIN_LOCK ovsCtNatLock;
+static ULONG ovsNatEntries;
 /*
  *---------------------------------------------------------------------------
  * OvsHashNatKey
@@ -93,26 +94,25 @@ NTSTATUS OvsNatInit()
         sizeof(LIST_ENTRY) * NAT_HASH_TABLE_SIZE,
         OVS_CT_POOL_TAG);
     if (ovsNatTable == NULL) {
-        goto failNoMem;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     ovsUnNatTable = OvsAllocateMemoryWithTag(
         sizeof(LIST_ENTRY) * NAT_HASH_TABLE_SIZE,
         OVS_CT_POOL_TAG);
     if (ovsUnNatTable == NULL) {
-        goto freeNatTable;
+        OvsFreeMemoryWithTag(ovsNatTable, OVS_CT_POOL_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     for (int i = 0; i < NAT_HASH_TABLE_SIZE; i++) {
         InitializeListHead(&ovsNatTable[i]);
         InitializeListHead(&ovsUnNatTable[i]);
     }
-    return STATUS_SUCCESS;
 
-freeNatTable:
-    OvsFreeMemoryWithTag(ovsNatTable, OVS_CT_POOL_TAG);
-failNoMem:
-    return STATUS_INSUFFICIENT_RESOURCES;
+    NdisAllocateSpinLock(&ovsCtNatLock);
+    ovsNatEntries = 0;
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -124,6 +124,11 @@ failNoMem:
 VOID OvsNatFlush(UINT16 zone)
 {
     PLIST_ENTRY link, next;
+    if (!ovsNatEntries) {
+        return;
+    }
+
+    NdisAcquireSpinLock(&ovsCtNatLock);
     for (int i = 0; i < NAT_HASH_TABLE_SIZE; i++) {
         LIST_FORALL_SAFE(&ovsNatTable[i], link, next) {
             POVS_NAT_ENTRY entry =
@@ -134,6 +139,7 @@ VOID OvsNatFlush(UINT16 zone)
             }
         }
     }
+    NdisReleaseSpinLock(&ovsCtNatLock);
 }
 
 /*
@@ -145,12 +151,17 @@ VOID OvsNatFlush(UINT16 zone)
 VOID OvsNatCleanup()
 {
     if (ovsNatTable == NULL) {
+       NdisFreeSpinLock(&ovsCtNatLock);
        return;
     }
+
+    NdisAcquireSpinLock(&ovsCtNatLock);
     OvsFreeMemoryWithTag(ovsNatTable, OVS_CT_POOL_TAG);
     OvsFreeMemoryWithTag(ovsUnNatTable, OVS_CT_POOL_TAG);
     ovsNatTable = NULL;
     ovsUnNatTable = NULL;
+    NdisReleaseSpinLock(&ovsCtNatLock);
+    NdisFreeSpinLock(&ovsCtNatLock);
 }
 
 /*
@@ -170,6 +181,7 @@ OvsNatPacket(OvsForwardingContext *ovsFwdCtx,
 {
     UINT32 natFlag;
     const struct ct_endpoint* endpoint;
+
     /* When it is NAT, only entry->rev_key contains NATTED address;
        When it is unNAT, only entry->key contains the UNNATTED address;*/
     const OVS_CT_KEY *ctKey = reverse ? &entry->key : &entry->rev_key;
@@ -252,10 +264,13 @@ static UINT32 OvsNatHashRange(const OVS_CT_ENTRY *entry, UINT32 basis)
 VOID
 OvsNatAddEntry(OVS_NAT_ENTRY* entry)
 {
+    NdisAcquireSpinLock(&ovsCtNatLock);
     InsertHeadList(OvsNatGetBucket(&entry->key, FALSE),
                    &entry->link);
     InsertHeadList(OvsNatGetBucket(&entry->value, TRUE),
                    &entry->reverseLink);
+    NdisReleaseSpinLock(&ovsCtNatLock);
+    NdisInterlockedIncrement((PLONG)&ovsNatEntries);
 }
 
 /*
@@ -401,21 +416,29 @@ OvsNatLookup(const OVS_CT_KEY *ctKey, BOOLEAN reverse)
     PLIST_ENTRY link;
     POVS_NAT_ENTRY entry;
 
+    if (!ovsNatEntries) {
+        return NULL;
+    }
+
+    NdisAcquireSpinLock(&ovsCtNatLock);
     LIST_FORALL(OvsNatGetBucket(ctKey, reverse), link) {
         if (reverse) {
             entry = CONTAINING_RECORD(link, OVS_NAT_ENTRY, reverseLink);
 
             if (OvsNatKeyAreSame(ctKey, &entry->value)) {
+                NdisReleaseSpinLock(&ovsCtNatLock);
                 return entry;
             }
         } else {
             entry = CONTAINING_RECORD(link, OVS_NAT_ENTRY, link);
 
             if (OvsNatKeyAreSame(ctKey, &entry->key)) {
+                NdisReleaseSpinLock(&ovsCtNatLock);
                 return entry;
             }
         }
     }
+    NdisReleaseSpinLock(&ovsCtNatLock);
     return NULL;
 }
 
@@ -434,6 +457,7 @@ OvsNatDeleteEntry(POVS_NAT_ENTRY entry)
     RemoveEntryList(&entry->link);
     RemoveEntryList(&entry->reverseLink);
     OvsFreeMemoryWithTag(entry, OVS_CT_POOL_TAG);
+    NdisInterlockedDecrement((PLONG)&ovsNatEntries);
 }
 
 /*

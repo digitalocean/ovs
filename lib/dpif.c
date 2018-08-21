@@ -34,7 +34,6 @@
 #include "odp-execute.h"
 #include "odp-util.h"
 #include "openvswitch/ofp-print.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "packets.h"
 #include "openvswitch/poll-loop.h"
@@ -370,7 +369,7 @@ do_open(const char *name, const char *type, bool create, struct dpif **dpifp)
                 netdev_close(netdev);
             } else {
                 VLOG_WARN("could not open netdev %s type %s: %s",
-			  dpif_port.name, dpif_port.type, ovs_strerror(err));
+                          dpif_port.name, dpif_port.type, ovs_strerror(err));
             }
         }
     } else {
@@ -592,8 +591,13 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, odp_port_t *port_nop)
             netdev_ports_insert(netdev, dpif->dpif_class, &dpif_port);
         }
     } else {
-        VLOG_WARN_RL(&error_rl, "%s: failed to add %s as port: %s",
-                     dpif_name(dpif), netdev_name, ovs_strerror(error));
+        if (error != EEXIST) {
+            VLOG_WARN_RL(&error_rl, "%s: failed to add %s as port: %s",
+                         dpif_name(dpif), netdev_name, ovs_strerror(error));
+        } else {
+            /* It's fairly common for upper layers to try to add a duplicate
+             * port, and they know how to handle it properly. */
+        }
         port_no = ODPP_NONE;
     }
     if (port_nop) {
@@ -999,16 +1003,16 @@ dpif_flow_get(struct dpif *dpif,
     struct dpif_op op;
 
     op.type = DPIF_OP_FLOW_GET;
-    op.u.flow_get.key = key;
-    op.u.flow_get.key_len = key_len;
-    op.u.flow_get.ufid = ufid;
-    op.u.flow_get.pmd_id = pmd_id;
-    op.u.flow_get.buffer = buf;
+    op.flow_get.key = key;
+    op.flow_get.key_len = key_len;
+    op.flow_get.ufid = ufid;
+    op.flow_get.pmd_id = pmd_id;
+    op.flow_get.buffer = buf;
 
     memset(flow, 0, sizeof *flow);
-    op.u.flow_get.flow = flow;
-    op.u.flow_get.flow->key = key;
-    op.u.flow_get.flow->key_len = key_len;
+    op.flow_get.flow = flow;
+    op.flow_get.flow->key = key;
+    op.flow_get.flow->key_len = key_len;
 
     opp = &op;
     dpif_operate(dpif, &opp, 1);
@@ -1029,16 +1033,16 @@ dpif_flow_put(struct dpif *dpif, enum dpif_flow_put_flags flags,
     struct dpif_op op;
 
     op.type = DPIF_OP_FLOW_PUT;
-    op.u.flow_put.flags = flags;
-    op.u.flow_put.key = key;
-    op.u.flow_put.key_len = key_len;
-    op.u.flow_put.mask = mask;
-    op.u.flow_put.mask_len = mask_len;
-    op.u.flow_put.actions = actions;
-    op.u.flow_put.actions_len = actions_len;
-    op.u.flow_put.ufid = ufid;
-    op.u.flow_put.pmd_id = pmd_id;
-    op.u.flow_put.stats = stats;
+    op.flow_put.flags = flags;
+    op.flow_put.key = key;
+    op.flow_put.key_len = key_len;
+    op.flow_put.mask = mask;
+    op.flow_put.mask_len = mask_len;
+    op.flow_put.actions = actions;
+    op.flow_put.actions_len = actions_len;
+    op.flow_put.ufid = ufid;
+    op.flow_put.pmd_id = pmd_id;
+    op.flow_put.stats = stats;
 
     opp = &op;
     dpif_operate(dpif, &opp, 1);
@@ -1056,12 +1060,12 @@ dpif_flow_del(struct dpif *dpif,
     struct dpif_op op;
 
     op.type = DPIF_OP_FLOW_DEL;
-    op.u.flow_del.key = key;
-    op.u.flow_del.key_len = key_len;
-    op.u.flow_del.ufid = ufid;
-    op.u.flow_del.pmd_id = pmd_id;
-    op.u.flow_del.stats = stats;
-    op.u.flow_del.terse = false;
+    op.flow_del.key = key;
+    op.flow_del.key_len = key_len;
+    op.flow_del.ufid = ufid;
+    op.flow_del.pmd_id = pmd_id;
+    op.flow_del.stats = stats;
+    op.flow_del.terse = false;
 
     opp = &op;
     dpif_operate(dpif, &opp, 1);
@@ -1163,7 +1167,7 @@ struct dpif_execute_helper_aux {
  * meaningful. */
 static void
 dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
-                       const struct nlattr *action, bool may_steal)
+                       const struct nlattr *action, bool should_steal)
 {
     struct dpif_execute_helper_aux *aux = aux_;
     int type = nl_attr_type(action);
@@ -1177,7 +1181,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
         if (!aux->meter_action) {
             aux->meter_action = action;
         }
-	break;
+        break;
 
     case OVS_ACTION_ATTR_CT:
     case OVS_ACTION_ATTR_OUTPUT:
@@ -1235,7 +1239,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
                         || type == OVS_ACTION_ATTR_TUNNEL_POP
                         || type == OVS_ACTION_ATTR_USERSPACE)) {
             dp_packet_reset_cutlen(packet);
-            if (!may_steal) {
+            if (!should_steal) {
                 packet = clone = dp_packet_clone(packet);
             }
             dp_packet_set_size(packet, dp_packet_size(packet) - cutlen);
@@ -1280,7 +1284,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
-    dp_packet_delete_batch(packets_, may_steal);
+    dp_packet_delete_batch(packets_, should_steal);
 }
 
 /* Executes 'execute' by performing most of the actions in userspace and
@@ -1318,7 +1322,7 @@ dpif_execute(struct dpif *dpif, struct dpif_execute *execute)
         struct dpif_op op;
 
         op.type = DPIF_OP_EXECUTE;
-        op.u.execute = *execute;
+        op.execute = *execute;
 
         opp = &op;
         dpif_operate(dpif, &opp, 1);
@@ -1346,7 +1350,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
             struct dpif_op *op = ops[chunk];
 
             if (op->type == DPIF_OP_EXECUTE
-                && dpif_execute_needs_help(&op->u.execute)) {
+                && dpif_execute_needs_help(&op->execute)) {
                 break;
             }
         }
@@ -1364,7 +1368,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
 
                 switch (op->type) {
                 case DPIF_OP_FLOW_PUT: {
-                    struct dpif_flow_put *put = &op->u.flow_put;
+                    struct dpif_flow_put *put = &op->flow_put;
 
                     COVERAGE_INC(dpif_flow_put);
                     log_flow_put_message(dpif, &this_module, put, error);
@@ -1375,7 +1379,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
                 }
 
                 case DPIF_OP_FLOW_GET: {
-                    struct dpif_flow_get *get = &op->u.flow_get;
+                    struct dpif_flow_get *get = &op->flow_get;
 
                     COVERAGE_INC(dpif_flow_get);
                     if (error) {
@@ -1387,7 +1391,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
                 }
 
                 case DPIF_OP_FLOW_DEL: {
-                    struct dpif_flow_del *del = &op->u.flow_del;
+                    struct dpif_flow_del *del = &op->flow_del;
 
                     COVERAGE_INC(dpif_flow_del);
                     log_flow_del_message(dpif, &this_module, del, error);
@@ -1399,7 +1403,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
 
                 case DPIF_OP_EXECUTE:
                     COVERAGE_INC(dpif_execute);
-                    log_execute_message(dpif, &this_module, &op->u.execute,
+                    log_execute_message(dpif, &this_module, &op->execute,
                                         false, error);
                     break;
                 }
@@ -1412,7 +1416,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops)
             struct dpif_op *op = ops[0];
 
             COVERAGE_INC(dpif_execute);
-            op->error = dpif_execute_with_help(dpif, &op->u.execute);
+            op->error = dpif_execute_with_help(dpif, &op->execute);
             ops++;
             n_ops--;
         }
@@ -1882,27 +1886,41 @@ dpif_meter_get_features(const struct dpif *dpif,
     }
 }
 
-/* Adds or modifies meter identified by 'meter_id' in 'dpif'.  If '*meter_id'
- * is UINT32_MAX, adds a new meter, otherwise modifies an existing meter.
+/* Adds or modifies the meter in 'dpif' with the given 'meter_id' and
+ * the configuration in 'config'.
  *
- * If meter is successfully added, sets '*meter_id' to the new meter's
- * meter number. */
+ * The meter id specified through 'config->meter_id' is ignored. */
 int
-dpif_meter_set(struct dpif *dpif, ofproto_meter_id *meter_id,
+dpif_meter_set(struct dpif *dpif, ofproto_meter_id meter_id,
                struct ofputil_meter_config *config)
 {
-    int error;
-
     COVERAGE_INC(dpif_meter_set);
 
-    error = dpif->dpif_class->meter_set(dpif, meter_id, config);
+    if (!(config->flags & (OFPMF13_KBPS | OFPMF13_PKTPS))) {
+        return EBADF; /* Rate unit type not set. */
+    }
+
+    if ((config->flags & OFPMF13_KBPS) && (config->flags & OFPMF13_PKTPS)) {
+        return EBADF; /* Both rate units may not be set. */
+    }
+
+    if (config->n_bands == 0) {
+        return EINVAL;
+    }
+
+    for (size_t i = 0; i < config->n_bands; i++) {
+        if (config->bands[i].rate == 0) {
+            return EDOM; /* Rate must be non-zero */
+        }
+    }
+
+    int error = dpif->dpif_class->meter_set(dpif, meter_id, config);
     if (!error) {
         VLOG_DBG_RL(&dpmsg_rl, "%s: DPIF meter %"PRIu32" set",
-                    dpif_name(dpif), meter_id->uint32);
+                    dpif_name(dpif), meter_id.uint32);
     } else {
         VLOG_WARN_RL(&error_rl, "%s: failed to set DPIF meter %"PRIu32": %s",
-                     dpif_name(dpif), meter_id->uint32, ovs_strerror(error));
-        meter_id->uint32 = UINT32_MAX;
+                     dpif_name(dpif), meter_id.uint32, ovs_strerror(error));
     }
     return error;
 }
