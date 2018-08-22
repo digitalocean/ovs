@@ -39,13 +39,6 @@ endif
 TEST_LIST =
 TEST_LIST_DPDK =
 
-# Skip s390x test failures: 805 810 814
-# https://bugs.launchpad.net/ubuntu/+source/openvswitch/+bug/1788133
-ifneq (,$(filter s390x, $(DEB_HOST_ARCH)))
-TEST_LIST = 1-804 806-809 811-813 815-
-TEST_LIST_DPDK = $(TEST_LIST)
-endif # s390x
-
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' || \

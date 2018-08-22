@@ -17,10 +17,12 @@ usr/share/man/man5/ovs-vswitchd.conf.db.5
 usr/share/man/man8/ovs-ctl.8
 usr/share/man/man8/ovs-dpctl-top.8
 usr/share/man/man8/ovs-dpctl.8
+usr/share/man/man8/ovs-kmod-ctl.8
 usr/share/man/man8/ovs-tcpdump.8
 usr/share/man/man8/ovs-vsctl.8
 usr/share/man/man8/ovs-vswitchd.8
 usr/share/openvswitch/scripts/ovs-check-dead-ifs
 usr/share/openvswitch/scripts/ovs-ctl
+usr/share/openvswitch/scripts/ovs-kmod-ctl
 usr/share/openvswitch/scripts/ovs-save
 usr/share/openvswitch/vswitch.ovsschema

@@ -1,3 +1,14 @@
+openvswitch (2.10.0-0ubuntu2) cosmic; urgency=medium
+
+  * d/{openvswitch-switch,ovn-common}.install: Add missed scripts and
+    binaries.
+  * d/p/erspan-add-big-endian-bit-fields.patch,tests-Fix-hash-function-
+    dependencies-in-tunnel-ERSPA.patch: Cherry pick upstream fixes for
+    s390x issues (LP: #1788133).
+  * d/rules: Don't skip any tests on s390x.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 22 Aug 2018 09:08:55 +0100
+
 openvswitch (2.10.0-0ubuntu1) cosmic; urgency=medium
 
   * d/control: Add BD on python{3}-sortedcontainers.
