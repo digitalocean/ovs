@@ -1,19 +1,14 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
-# Sample debian/rules that uses debhelper.
-#
-# This file was originally written by Joey Hess and Craig Small.
-# As a special exception, when this file is copied by dh-make into a
-# dh-make output file, you may use that output file without restriction.
-# This special exception was added by Craig Small in version 0.37 of dh-make.
-#
-# Modified to make a template file for a multi-binary package with separated
-# build-arch and build-indep targets  by Bill Allombert 2001
 #export DH_VERBOSE=1
 
-PACKAGE=openvswitch
-PACKAGE_DKMS=openvswitch-datapath-dkms
-include /usr/share/dpkg/pkg-info.mk
+%:
+	dh $@ --with autoreconf,python2,python3,systemd,sphinxdoc
+
+# use --as-needed only if supported by dh-autoreconf (to simplify backporting)
+DH_AS_NEEDED=$(shell dpkg --compare-versions $$(dpkg --status dh-autoreconf | grep Version | cut -d' ' -f2) ge 6 && echo --as-needed)
+override_dh_autoreconf:
+	dh_autoreconf $(DH_AS_NEEDED)
 
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 PARALLEL = -j$(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -21,80 +16,108 @@ else
 PARALLEL =
 endif
 
-%:
-	dh $@ --with autoreconf,python2 --parallel
-
-# use --as-needed only if supported by dh-autoreconf (to simplify backporting)
-DH_AS_NEEDED=$(shell dpkg --compare-versions $$(dpkg --status dh-autoreconf | grep Version | cut -d' ' -f2) ge 6 && echo --as-needed)
-override_dh_autoreconf:
-	dh_autoreconf $(DH_AS_NEEDED)
+PYTHONS:=$(shell pyversions -vr)
+PYTHON3S:=$(shell py3versions -vr)
 
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-ssl --enable-shared $(DATAPATH_CONFIGURE_OPTS)
+	test -d _debian || mkdir _debian
+	cd _debian && ( \
+		test -e Makefile || \
+		../configure --prefix=/usr --localstatedir=/var --enable-ssl \
+					 --sysconfdir=/etc $(DATAPATH_CONFIGURE_OPTS))
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
+	test -d _dpdk || mkdir _dpdk
+	cd _dpdk && ( \
+		test -e Makefile || \
+        ../configure --prefix=/usr --localstatedir=/var --enable-ssl \
+                     --with-dpdk --sysconfdir=/etc \
+					 $(DATAPATH_CONFIGURE_OPTS))
+endif
+
+
+# NOTE(jamespage): by default, just run all tests
+TEST_LIST =
+TEST_LIST_DPDK =
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	if $(MAKE) check TESTSUITEFLAGS='$(PARALLEL)' RECHECK=yes; then :; \
+	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' || \
+                $(MAKE) -C _debian check TESTSUITEFLAGS='--recheck'; then :; \
 	else \
-		cat tests/testsuite.log; \
+		cat _debian/tests/testsuite.log; \
 		exit 1; \
 	fi
-endif
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
+	if $(MAKE) -C _dpdk check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST_DPDK)' || \
+				$(MAKE) -C _dpdk check TESTSUITEFLAGS='--recheck'; then :; \
+	else \
+		cat _dpdk/tests/testsuite.log; \
+		exit 1; \
+	fi
+endif # i386/amd64/ppc64el/arm64
+endif # nocheck
 
 override_dh_auto_build:
-	dh_auto_build -- dist distdir=openvswitch
+	$(MAKE) $(PARALLEL) -C _debian distdir=openvswitch
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
+	$(MAKE) $(PARALLEL) -C _dpdk distdir=openvswitch_dpdk
+endif
 
 override_dh_auto_clean:
-	rm -f python/ovs/*.pyc python/ovs/db/*.pyc
+	find . -name "*.pyc" -delete
 	dh_auto_clean
+	rm -rf _debian _dpdk
 
-override_dh_install-arch:
-	dh_install
-	# openvswitch-switch
-	cp debian/openvswitch-switch.template debian/openvswitch-switch/usr/share/openvswitch/switch/default.template
+override_dh_auto_install:
+	$(MAKE) -C _debian DESTDIR=$(CURDIR)/debian/tmp install
 
-	# ovn-host
-	cp debian/ovn-host.template debian/ovn-host/usr/share/ovn/host/default.template
-
-	# ovn-central
-	cp debian/ovn-central.template debian/ovn-central/usr/share/ovn/central/default.template
-
-override_dh_install-indep:
-	dh_install
-
-	# openvswitch-datapath-source
-	cp debian/rules.modules debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
-	chmod 755 debian/openvswitch-datapath-source/usr/src/modules/openvswitch-datapath/debian/rules
-	cd debian/openvswitch-datapath-source/usr/src && tar -c modules | bzip2 -9 > openvswitch-datapath.tar.bz2 && rm -rf modules
-
-	# openvswitch-datapath-dkms
-	# setup the dirs
-	dh_installdirs -p$(PACKAGE_DKMS) usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM)
-
-	# copy the source
-	cd debian/$(PACKAGE_DKMS)/usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM) && tar xvzf $(CURDIR)/openvswitch.tar.gz && mv openvswitch/* openvswitch/.[a-z]* . && rmdir openvswitch
-
-	# check we can get kernel module names
-	$(MAKE) -C datapath print-build-modules
-
-	# Prepare dkms.conf from the dkms.conf.in template
-	sed "s/__VERSION__/$(DEB_VERSION_UPSTREAM)/g; s/__MODULES__/$(shell $(MAKE) -C datapath print-build-modules | grep -v make)/" debian/dkms.conf.in > debian/$(PACKAGE_DKMS)/usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM)/dkms.conf
-
-	# We don't need the debian folder in there, just upstream sources...
-	rm -rf debian/$(PACKAGE_DKMS)/usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM)/debian
-	# We don't need the rhel stuff in there either
-	rm -rf debian/$(PACKAGE_DKMS)/usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM)/rhel
-	# And we should also clean useless license files, which are already
-	# described in our debian/copyright anyway.
-	rm -f debian/$(PACKAGE_DKMS)/usr/src/$(PACKAGE)-$(DEB_VERSION_UPSTREAM)/xenserver/LICENSE
+override_dh_install:
+	dh_install --list-missing
+	cp debian/openvswitch-switch.default debian/openvswitch-switch/usr/share/openvswitch/switch/default.template
+	mkdir -p $(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch
+	mv $(CURDIR)/debian/openvswitch-switch/usr/sbin/ovs-vswitchd \
+		$(CURDIR)/debian/openvswitch-switch/usr/lib/openvswitch-switch/ovs-vswitchd
+	set -e && for pyvers in $(PYTHONS); do \
+		cd python && python$$pyvers setup.py install --install-layout=deb \
+			--root $(CURDIR)/debian/python-openvswitch; cd ..; \
+	done
+	set -e && for pyvers in $(PYTHON3S); do \
+        cd python && python$$pyvers setup.py install --install-layout=deb \
+            --root $(CURDIR)/debian/python3-openvswitch; cd ..; \
+        mkdir -p $(CURDIR)/debian/openvswitch-test/usr/lib/python$$pyvers/dist-packages/ovstest; \
+        install -v -D python/ovstest/*.py \
+            $(CURDIR)/debian/openvswitch-test/usr/lib/python$$pyvers/dist-packages/ovstest; \
+    done
+ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
+	install -v -D _dpdk/vswitchd/ovs-vswitchd \
+        $(CURDIR)/debian/openvswitch-switch-dpdk/usr/lib/openvswitch-switch-dpdk/ovs-vswitchd-dpdk
+endif
 
 override_dh_installinit:
-	dh_installinit -R
+	dh_installinit --restart-after-upgrade
+	dh_installinit -popenvswitch-switch --name=ovsdb-server --no-start
+	dh_installinit -popenvswitch-switch --name=ovs-vswitchd --no-start
+
+override_dh_systemd_start:
+	dh_systemd_start --restart-after-upgrade
+	dh_systemd_start -popenvswitch-switch --name=ovsdb-server --no-start
+	dh_systemd_start -popenvswitch-switch --name=ovs-vswitchd --no-start
 
 override_dh_strip:
 	dh_strip --dbg-package=openvswitch-dbg
 
-override_dh_usrlocal:
+# Helper target for creating snapshots from upstream git
+DATE=$(shell date +%Y%m%d)
+# Upstream branch to track
+BRANCH=branch-2.9
+VERSION=2.9.0
 
-override_dh_installman:
-	dh_installman --language=C
+get-orig-snapshot:
+	rm -Rf openvswitch-upstream
+	git clone https://github.com/openvswitch/ovs openvswitch-upstream
+	cd openvswitch-upstream && \
+		git checkout $(BRANCH) && \
+		export COMMIT=`git rev-parse --short HEAD` && \
+		git archive --format tgz --prefix=openvswitch-$(VERSION)~git$(DATE).$$COMMIT/ \
+			-o ../../openvswitch_$(VERSION)~git$(DATE).$$COMMIT.orig.tar.gz $(BRANCH)
+	rm -Rf openvswitch-upstream

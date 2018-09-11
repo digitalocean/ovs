@@ -29,8 +29,15 @@ if (ovs_vsctl --version) > /dev/null 2>&1; then :; else
     exit 0
 fi
 
-if /etc/init.d/openvswitch-switch status > /dev/null 2>&1; then :; else
-    /etc/init.d/openvswitch-switch start
+SERVICE_UNIT=/usr/lib/systemd/system/openvswitch-nonetwork.service
+if [ -f $SERVICE_UNIT ] && [ -x /usr/bin/systemctl ]; then
+    if ! systemctl --quiet is-active openvswitch-nonetwork.service; then
+        systemctl start openvswitch-nonetwork.service
+    fi
+else
+    if service openvswitch-switch status > /dev/null 2>&1; then
+        service openvswitch-switch start
+    fi
 fi
 
 if [ "${MODE}" = "start" ]; then
@@ -50,24 +57,24 @@ if [ "${MODE}" = "start" ]; then
                     "${IFACE}" ${IF_OVS_OPTIONS} \
                     ${OVS_EXTRA+-- $OVS_EXTRA}
 
-                ip link set "${IFACE}" up
+                ifconfig "${IFACE}" up
                 ;;
         OVSIntPort)
                 ovs_vsctl -- --may-exist add-port "${IF_OVS_BRIDGE}"\
                     "${IFACE}" ${IF_OVS_OPTIONS} -- set Interface "${IFACE}"\
                     type=internal ${OVS_EXTRA+-- $OVS_EXTRA}
 
-                ip link set "${IFACE}" up
+                ifconfig "${IFACE}" up
                 ;;
         OVSBond)
                 ovs_vsctl -- --fake-iface add-bond "${IF_OVS_BRIDGE}"\
                     "${IFACE}" ${IF_OVS_BONDS} ${IF_OVS_OPTIONS} \
                     ${OVS_EXTRA+-- $OVS_EXTRA}
 
-                ip link set "${IFACE}" up
+                ifconfig "${IFACE}" up
                 for slave in ${IF_OVS_BONDS}
                 do
-                    ip link set "${slave}" up
+                    ifconfig "${slave}" up
                 done
                 ;;
         OVSPatchPort)

@@ -10,6 +10,9 @@
 # Description:       Initializes the Open vSwitch VTEP emulator
 ### END INIT INFO
 
+_SYSTEMCTL_SKIP_REDIRECT=yes
+
+. /lib/lsb/init-functions
 
 # Include defaults if available
 default=/etc/default/openvswitch-vtep

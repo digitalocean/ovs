@@ -20,20 +20,24 @@ set -e
 
 case "$1" in
     configure)
-        DEFAULT=/etc/default/openvswitch-switch
-        TEMPLATE=/usr/share/openvswitch/switch/default.template
-        if ! test -e $DEFAULT; then
-            cp $TEMPLATE $DEFAULT
-        fi
-        # Certain versions of upstream Ubuntu's openvswitch packages (which
-        # are forks) may install upstart files which are incompatible
-        # with the packages generated from this repo. Remove them.
-        if [ -e "/etc/init/openvswitch-switch.conf" ]; then
-            rm /etc/init/openvswitch-switch.conf
-        fi
-        if [ -e "/etc/init/openvswitch-force-reload-kmod.conf" ]; then
-            rm /etc/init/openvswitch-force-reload-kmod.conf
-        fi
+        update-alternatives --install /usr/sbin/ovs-vswitchd ovs-vswitchd \
+            /usr/lib/openvswitch-switch/ovs-vswitchd 100
+        mkdir -p /var/lib/openvswitch
+
+	# Ensure that /etc/openvswitch/conf.db links to /var/lib/openvswitch,
+	# moving an existing file if there is one.
+	#
+	# Ditto for .conf.db.~lock~.
+	for base in conf.db .conf.db.~lock~; do
+	    new=/var/lib/openvswitch/$base
+	    old=/etc/openvswitch/$base
+	    if test -f $old && test ! -e $new; then
+		mv $old $new
+	    fi
+	    if test ! -e $old && test ! -h $old; then
+		ln -s $new $old
+	    fi
+	done
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

@@ -16,7 +16,8 @@ test -x /usr/bin/ovn-northd  || exit 0
 test -x /usr/share/openvswitch/scripts/ovn-ctl || exit 0
 
 _SYSTEMCTL_SKIP_REDIRECT=yes
-SYSTEMCTL_SKIP_REDIRECT=yes
+
+. /lib/lsb/init-functions
 
 . /usr/share/openvswitch/scripts/ovs-lib
 if [ -e /etc/default/ovn-central ]; then
@@ -29,18 +30,12 @@ start () {
     "$@" || exit $?
 }
 
-stop_northd () {
-    set /usr/share/openvswitch/scripts/ovn-ctl ${1-stop_northd}
-    set "$@" $OVN_CTL_OPTS
-    "$@" || exit $?
-}
-
 case $1 in
     start)
         start
         ;;
     stop)
-        stop_northd
+        /usr/share/openvswitch/scripts/ovn-ctl stop_northd
         ;;
     restart)
         start restart_northd
