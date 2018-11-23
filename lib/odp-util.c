@@ -2242,13 +2242,14 @@ parse_odp_action(const char *s, const struct simap *port_names,
                 key->nla_len += size;
                 ofpbuf_put(actions, mask + 1, size);
 
-                /* Add new padding as needed */
-                ofpbuf_put_zeros(actions, NLA_ALIGN(key->nla_len) -
-                                          key->nla_len);
-
                 /* 'actions' may have been reallocated by ofpbuf_put(). */
                 nested = ofpbuf_at_assert(actions, start_ofs, sizeof *nested);
                 nested->nla_type = OVS_ACTION_ATTR_SET_MASKED;
+
+                key = nested + 1;
+                /* Add new padding as needed */
+                ofpbuf_put_zeros(actions, NLA_ALIGN(key->nla_len) -
+                                          key->nla_len);
             }
         }
         ofpbuf_uninit(&maskbuf);
@@ -7260,6 +7261,7 @@ commit_set_ipv6_action(const struct flow *flow, struct flow *base_flow,
     get_ipv6_key(&wc->masks, &mask, true);
     mask.ipv6_proto = 0;        /* Not writeable. */
     mask.ipv6_frag = 0;         /* Not writable. */
+    mask.ipv6_label &= htonl(IPV6_LABEL_MASK); /* Not writable. */
 
     if (flow_tnl_dst_is_set(&base_flow->tunnel) &&
         ((base_flow->nw_tos ^ flow->nw_tos) & IP_ECN_MASK) == 0) {

@@ -106,6 +106,9 @@ override_dh_systemd_start:
 override_dh_strip:
 	dh_strip --dbg-package=openvswitch-dbg
 
+override_dh_python3:
+	dh_python3 --shebang=/usr/bin/python3
+
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track

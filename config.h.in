@@ -38,6 +38,9 @@
 /* Define to 1 if you have backtrace(3). */
 #undef HAVE_BACKTRACE
 
+/* Define to 1 if you have the <bits/floatn-common.h> header file. */
+#undef HAVE_BITS_FLOATN_COMMON_H
+
 /* Define to 1 if you have the `clock_gettime' function. */
 #undef HAVE_CLOCK_GETTIME
 

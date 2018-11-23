@@ -1,3 +1,12 @@
+openvswitch (2.10.1-0ubuntu1) disco; urgency=medium
+
+  * New upstream release (LP: #1804795).
+  * d/p/erspan-add-big-endian-bit-fields.patch,tests-Fix-hash-function-
+    dependencies-in-tunnel-ERSPA.patch: Drop, included in point release.
+  * d/rules: Set shebang for to /usr/bin/python3.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 23 Nov 2018 12:44:51 +0000
+
 openvswitch (2.10.0-0ubuntu4) disco; urgency=medium
 
   * No-change rebuild against libunbound8

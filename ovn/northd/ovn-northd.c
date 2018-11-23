@@ -4163,7 +4163,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
                 ds_clear(&actions);
                 ds_put_format(&actions,
-                        "nd_na { "
+                        "%s { "
                         "eth.src = %s; "
                         "ip6.src = %s; "
                         "nd.target = %s; "
@@ -4172,6 +4172,8 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                         "flags.loopback = 1; "
                         "output; "
                         "};",
+                        !strcmp(op->nbsp->type, "router") ?
+                            "nd_na_router" : "nd_na",
                         op->lsp_addrs[i].ea_s,
                         op->lsp_addrs[i].ipv6_addrs[j].addr_s,
                         op->lsp_addrs[i].ipv6_addrs[j].addr_s,
@@ -5183,8 +5185,12 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
             ds_clear(&match);
             ds_put_format(&match,
-                          "inport == %s && arp.tpa == %s && arp.op == 1",
-                          op->json_key, op->lrp_networks.ipv4_addrs[i].addr_s);
+                          "inport == %s && arp.spa == %s/%u && arp.tpa == %s"
+                          " && arp.op == 1",
+                          op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen,
+                          op->lrp_networks.ipv4_addrs[i].addr_s);
             if (op->od->l3dgw_port && op == op->od->l3dgw_port
                 && op->od->l3redirect_port) {
                 /* Traffic with eth.src = l3dgw_port->lrp_networks.ea_s
@@ -5198,6 +5204,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
             ds_clear(&actions);
             ds_put_format(&actions,
+                "put_arp(inport, arp.spa, arp.sha); "
                 "eth.dst = eth.src; "
                 "eth.src = %s; "
                 "arp.op = 2; /* ARP reply */ "
@@ -5214,6 +5221,27 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 op->json_key);
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 90,
                           ds_cstr(&match), ds_cstr(&actions));
+        }
+
+        /* Learn from ARP requests that were not directed at us. A typical
+         * use case is GARP request handling.  (A priority-90 flow will
+         * respond to request to us and learn the sender's mac address.) */
+        for (int i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+            ds_clear(&match);
+            ds_put_format(&match,
+                          "inport == %s && arp.spa == %s/%u && arp.op == 1",
+                          op->json_key,
+                          op->lrp_networks.ipv4_addrs[i].network_s,
+                          op->lrp_networks.ipv4_addrs[i].plen);
+            if (op->od->l3dgw_port && op == op->od->l3dgw_port
+                && op->od->l3redirect_port) {
+                ds_put_format(&match, " && is_chassis_resident(%s)",
+                              op->od->l3redirect_port->json_key);
+            }
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 80,
+                          ds_cstr(&match),
+                          "put_arp(inport, arp.spa, arp.sha);");
+
         }
 
         /* A set to hold all load-balancer vips that need ARP responses. */
@@ -7186,7 +7214,8 @@ static struct gen_opts_map supported_dhcp_opts[] = {
     DHCP_OPT_MTU,
     DHCP_OPT_LEASE_TIME,
     DHCP_OPT_T1,
-    DHCP_OPT_T2
+    DHCP_OPT_T2,
+    DHCP_OPT_WPAD,
 };
 
 static struct gen_opts_map supported_dhcpv6_opts[] = {

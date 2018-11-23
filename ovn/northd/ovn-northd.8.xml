@@ -549,13 +549,33 @@ output;
         <p>
           Priority-50 flows that match IPv6 ND neighbor solicitations to
           each known IP address <var>A</var> (and <var>A</var>'s
-          solicited node address) of every logical switch port, and
-          respond with neighbor advertisements directly with
+          solicited node address) of every logical switch port except of type
+          router, and respond with neighbor advertisements directly with
           corresponding Ethernet address <var>E</var>:
         </p>
 
         <pre>
 nd_na {
+    eth.src = <var>E</var>;
+    ip6.src = <var>A</var>;
+    nd.target = <var>A</var>;
+    nd.tll = <var>E</var>;
+    outport = inport;
+    flags.loopback = 1;
+    output;
+};
+        </pre>
+
+        <p>
+          Priority-50 flows that match IPv6 ND neighbor solicitations to
+          each known IP address <var>A</var> (and <var>A</var>'s
+          solicited node address) of logical switch port of type router, and
+          respond with neighbor advertisements directly with
+          corresponding Ethernet address <var>E</var>:
+        </p>
+
+        <pre>
+nd_na_router {
     eth.src = <var>E</var>;
     ip6.src = <var>A</var>;
     nd.target = <var>A</var>;
@@ -1122,15 +1142,21 @@ next;
         </p>
 
         <p>
-          These flows reply to ARP requests for the router's own IP address.
-          For each router port <var>P</var> that owns IP address <var>A</var>
+          These flows reply to ARP requests for the router's own IP address
+          and populates mac binding table of the logical router port.
+          The ARP requests are handled only if the requestor's IP belongs
+          to the same subnets of the logical router port.
+          For each router port <var>P</var> that owns IP address <var>A</var>,
+          which belongs to subnet <var>S</var> with prefix length <var>L</var>,
           and Ethernet address <var>E</var>, a priority-90 flow matches
-          <code>inport == <var>P</var> &amp;&amp; arp.op == 1 &amp;&amp;
-          arp.tpa == <var>A</var></code> (ARP request) with the following
-          actions:
+          <code>inport == <var>P</var> &amp;&amp;
+          arp.spa == <var>S</var>/<var>L</var> &amp;&amp; arp.op == 1
+          &amp;&amp; arp.tpa == <var>A</var></code> (ARP request) with the
+          following actions:
         </p>
 
         <pre>
+put_arp(inport, arp.spa, arp.sha);
 eth.dst = eth.src;
 eth.src = <var>E</var>;
 arp.op = 2; /* ARP reply. */
@@ -1152,6 +1178,17 @@ output;
           of multiple ARP responses from different chassis, and allows
           upstream MAC learning to point to the
           <code>redirect-chassis</code>.
+        </p>
+      </li>
+
+      <li>
+        <p>
+          These flows handles ARP requests not for router's own IP address.
+          They use the SPA and SHA to populate the logical router port's
+          mac binding table, with priority 80.  The typical use case of
+          these flows are GARP requests handling.  For the gateway port
+          on a distributed logical router, these flows are only programmed
+          on the gateway port instance on the <code>redirect-chassis</code>.
         </p>
       </li>
 

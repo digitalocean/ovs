@@ -58,7 +58,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 2.10.0
+Version: 2.10.1
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -224,6 +224,7 @@ Docker network plugins for OVN.
         --with-dpdk=$(dirname %{_datadir}/dpdk/*/.config) \
 %endif
         --enable-ssl \
+        --enable-shared \
         --with-pkidir=%{_sharedstatedir}/openvswitch/pki \
 %if 0%{?fedora} > 22 || %{with build_python3}
         PYTHON3=%{__python3} \
@@ -524,6 +525,7 @@ fi
 %{python2_sitelib}/ovstest
 
 %files devel
+%{_libdir}/lib*.so
 %{_libdir}/*.a
 %{_libdir}/*.la
 %{_libdir}/pkgconfig/*.pc
@@ -572,6 +574,7 @@ fi
 %{_bindir}/ovs-testcontroller
 %{_bindir}/ovs-pki
 %{_bindir}/vtep-ctl
+%{_libdir}/lib*.so.*
 %{_sbindir}/ovs-bugtool
 %{_sbindir}/ovs-vswitchd
 %{_sbindir}/ovsdb-server

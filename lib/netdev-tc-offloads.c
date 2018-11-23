@@ -885,6 +885,10 @@ test_key_and_mask(struct match *match)
                         "offloading attribute icmp_code isn't supported");
             return EOPNOTSUPP;
         }
+    } else if (key->dl_type == htons(OFP_DL_TYPE_NOT_ETH_TYPE)) {
+        VLOG_DBG_RL(&rl,
+                    "offloading of non-ethernet packets isn't supported");
+        return EOPNOTSUPP;
     }
 
     if (!is_all_zeros(mask, sizeof *mask)) {
@@ -956,10 +960,12 @@ netdev_tc_flow_put(struct netdev *netdev, struct match *match,
             && (vid_mask || pcp_mask)) {
             if (vid_mask) {
                 flower.key.vlan_id = vlan_tci_to_vid(key->vlans[0].tci);
+                flower.mask.vlan_id = vlan_tci_to_vid(mask->vlans[0].tci);
                 VLOG_DBG_RL(&rl, "vlan_id: %d\n", flower.key.vlan_id);
             }
             if (pcp_mask) {
                 flower.key.vlan_prio = vlan_tci_to_pcp(key->vlans[0].tci);
+                flower.mask.vlan_prio = vlan_tci_to_pcp(mask->vlans[0].tci);
                 VLOG_DBG_RL(&rl, "vlan_prio: %d\n", flower.key.vlan_prio);
             }
             flower.key.encap_eth_type = flower.key.eth_type;

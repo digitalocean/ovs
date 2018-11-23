@@ -70,6 +70,8 @@ struct gen_opts_map {
 #define DHCP_OPT_T1 DHCP_OPTION("T1", 58, "uint32")
 #define DHCP_OPT_T2 DHCP_OPTION("T2", 59, "uint32")
 
+#define DHCP_OPT_WPAD DHCP_OPTION("wpad", 252, "str")
+
 static inline uint32_t
 gen_opt_hash(char *opt_name)
 {
@@ -149,6 +151,7 @@ struct dhcp_opt6_header {
 #define DHCPV6_MSG_TYPE_CONFIRM     4
 #define DHCPV6_MSG_TYPE_REPLY       7
 #define DHCPV6_MSG_TYPE_DECLINE     9
+#define DHCPV6_MSG_TYPE_INFO_REQ    11
 
 
 /* DHCPv6 Option codes */

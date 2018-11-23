@@ -535,9 +535,9 @@ $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am $(srcdir)/Modules.mk $(srcdir)/lin
 	      exit 1;; \
 	  esac; \
 	done; \
-	echo ' cd $(top_srcdir) && $(AUTOMAKE) --foreign datapath/Makefile'; \
+	echo ' cd $(top_srcdir) && $(AUTOMAKE) --gnu datapath/Makefile'; \
 	$(am__cd) $(top_srcdir) && \
-	  $(AUTOMAKE) --foreign datapath/Makefile
+	  $(AUTOMAKE) --gnu datapath/Makefile
 Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 	@case '$?' in \
 	  *config.status*) \

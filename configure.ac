@@ -13,7 +13,7 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.10.0, bugs@openvswitch.org)
+AC_INIT(openvswitch, 2.10.1, bugs@openvswitch.org)
 AC_CONFIG_SRCDIR([datapath/datapath.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -110,7 +110,7 @@ AC_CHECK_MEMBERS([struct sockaddr_in6.sin6_scope_id], [], [],
 #include <netinet/in.h>]])
 AC_CHECK_FUNCS([mlockall strnlen getloadavg statvfs getmntent_r sendmmsg clock_gettime])
 AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h linux/if_ether.h])
-AC_CHECK_HEADERS([linux/net_namespace.h stdatomic.h])
+AC_CHECK_HEADERS([linux/net_namespace.h stdatomic.h bits/floatn-common.h])
 AC_CHECK_HEADERS([net/if_mib.h], [], [], [[#include <sys/types.h>
 #include <net/if.h>]])
 
