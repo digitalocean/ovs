@@ -1,1 +1,2 @@
 py3-compat.patch
+connmgr-Fix-vswitchd-abort-when-a-port-is-added.patch

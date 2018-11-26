@@ -1,3 +1,10 @@
+openvswitch (2.10.1-0ubuntu2) disco; urgency=medium
+
+  * d/p/connmgr-Fix-vswitchd-abort-when-a-port-is-added.patch: Cherry
+    pick fix for abort in OF connection manager.
+
+ -- James Page <james.page@ubuntu.com>  Mon, 26 Nov 2018 10:57:06 +0000
+
 openvswitch (2.10.1-0ubuntu1) disco; urgency=medium
 
   * New upstream release (LP: #1804795).
