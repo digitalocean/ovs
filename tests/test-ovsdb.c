@@ -94,9 +94,9 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
+    unsigned int timeout = 0;
 
     for (;;) {
-        unsigned long int timeout;
         int c;
 
         c = getopt_long(argc, argv, short_options, long_options, NULL);
@@ -106,12 +106,8 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
 
         switch (c) {
         case 't':
-            timeout = strtoul(optarg, NULL, 10);
-            if (timeout <= 0) {
-                ovs_fatal(0, "value %s on -t or --timeout is not at least 1",
-                          optarg);
-            } else {
-                time_alarm(timeout);
+            if (!str_to_uint(optarg, 10, &timeout) || !timeout) {
+                ovs_fatal(0, "value %s on -t or --timeout is invalid", optarg);
             }
             break;
 
@@ -142,6 +138,8 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
         }
     }
     free(short_options);
+
+    ctl_timeout_setup(timeout);
 }
 
 static void
@@ -2418,7 +2416,7 @@ do_idl(struct ovs_cmdl_context *ctx)
         struct stream *stream;
 
         error = stream_open_block(jsonrpc_stream_open(ctx->argv[1], &stream,
-                                  DSCP_DEFAULT), &stream);
+                                  DSCP_DEFAULT), -1, &stream);
         if (error) {
             ovs_fatal(error, "failed to connect to \"%s\"", ctx->argv[1]);
         }

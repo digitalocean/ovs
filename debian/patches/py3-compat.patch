@@ -745,7 +745,7 @@ Signed-off-by: James Page <james.page@ubuntu.com>
  
  ALL_LOCAL =
  BUILT_SOURCES =
-@@ -145,13 +154,13 @@ ro_shell = printf '\043 Generated automa
+@@ -147,13 +156,13 @@ ro_shell = printf '\043 Generated automa
  
  SUFFIXES += .in
  .in:
@@ -762,7 +762,7 @@ Signed-off-by: James Page <james.page@ubuntu.com>
  	    -e 's,[@]RUNDIR[@],$(RUNDIR),g' \
  	    -e 's,[@]VERSION[@],$(VERSION),g' \
  	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
-@@ -175,7 +184,7 @@ SUFFIXES += .xml
+@@ -177,7 +186,7 @@ SUFFIXES += .xml
  	  PKIDIR='$(PKIDIR)' \
  	  LOGDIR='$(LOGDIR)' \
  	  DBDIR='$(DBDIR)' \
@@ -771,7 +771,7 @@ Signed-off-by: James Page <james.page@ubuntu.com>
  	  RUNDIR='$(RUNDIR)' \
  	  VERSION='$(VERSION)' \
  	  localstatedir='$(localstatedir)' \
-@@ -411,7 +420,7 @@ CLEANFILES += flake8-check
+@@ -414,7 +423,7 @@ CLEANFILES += flake8-check
  
  include $(srcdir)/manpages.mk
  $(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py python/build/soutil.py

@@ -409,7 +409,7 @@ unixctl_server_wait(struct unixctl_server *server)
     pstream_wait(server->listener);
     LIST_FOR_EACH (conn, node, &server->conns) {
         jsonrpc_wait(conn->rpc);
-        if (!jsonrpc_get_backlog(conn->rpc)) {
+        if (!jsonrpc_get_backlog(conn->rpc) && !conn->request_id) {
             jsonrpc_recv_wait(conn->rpc);
         }
     }
@@ -426,7 +426,7 @@ unixctl_server_destroy(struct unixctl_server *server)
             kill_connection(conn);
         }
 
-        free (server->path);
+        free(server->path);
         pstream_close(server->listener);
         free(server);
     }
@@ -460,7 +460,7 @@ unixctl_client_create(const char *path, struct jsonrpc **client)
     *client = NULL;
 
     error = stream_open_block(stream_open(unix_path, &stream, DSCP_DEFAULT),
-                              &stream);
+                              -1, &stream);
     free(unix_path);
     free(abs_path);
 

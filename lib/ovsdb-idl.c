@@ -233,6 +233,7 @@ struct ovsdb_idl {
      * function currently returns then the session has reconnected and the
      * state machine must restart.  */
     struct jsonrpc_session *session; /* Connection to the server. */
+    char *remote;                    /* 'session' remote name. */
     enum ovsdb_idl_state state;      /* Current session state. */
     unsigned int state_seqno;        /* See above. */
     struct json *request_id;         /* JSON ID for request awaiting reply. */
@@ -366,18 +367,6 @@ static void ovsdb_idl_add_to_indexes(const struct ovsdb_idl_row *);
 static void ovsdb_idl_remove_from_indexes(const struct ovsdb_idl_row *);
 
 static void
-ovsdb_idl_open_session(struct ovsdb_idl *idl, const char *remote, bool retry)
-{
-    ovs_assert(!idl->data.txn);
-    jsonrpc_session_close(idl->session);
-
-    struct svec remotes = SVEC_EMPTY_INITIALIZER;
-    ovsdb_session_parse_remote(remote, &remotes, &idl->cid);
-    idl->session = jsonrpc_session_open_multiple(&remotes, retry);
-    svec_destroy(&remotes);
-}
-
-static void
 ovsdb_idl_db_init(struct ovsdb_idl_db *db, const struct ovsdb_idl_class *class,
                   struct ovsdb_idl *parent, bool monitor_everything_by_default)
 {
@@ -444,12 +433,37 @@ struct ovsdb_idl *
 ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
                  bool monitor_everything_by_default, bool retry)
 {
+    struct ovsdb_idl *idl = ovsdb_idl_create_unconnected(
+        class, monitor_everything_by_default);
+    ovsdb_idl_set_remote(idl, remote, retry);
+    return idl;
+}
+
+/* Creates and returns a connection to an in-memory replica of the remote
+ * database whose schema is described by 'class'.  (Ordinarily 'class' is
+ * compiled from an OVSDB schema automatically by ovsdb-idlc.)
+ *
+ * Use ovsdb_idl_set_remote() to configure the database to which to connect.
+ * Until a remote is configured, no data can be retrieved.
+ *
+ * If 'monitor_everything_by_default' is true, then everything in the remote
+ * database will be replicated by default.  ovsdb_idl_omit() and
+ * ovsdb_idl_omit_alert() may be used to selectively drop some columns from
+ * monitoring.
+ *
+ * If 'monitor_everything_by_default' is false, then no columns or tables will
+ * be replicated by default.  ovsdb_idl_add_column() and ovsdb_idl_add_table()
+ * must be used to choose some columns or tables to replicate.
+ */
+struct ovsdb_idl *
+ovsdb_idl_create_unconnected(const struct ovsdb_idl_class *class,
+                             bool monitor_everything_by_default)
+{
     struct ovsdb_idl *idl;
 
     idl = xzalloc(sizeof *idl);
     ovsdb_idl_db_init(&idl->server, &serverrec_idl_class, idl, true);
     ovsdb_idl_db_init(&idl->data, class, idl, monitor_everything_by_default);
-    ovsdb_idl_open_session(idl, remote, retry);
     idl->state_seqno = UINT_MAX;
     idl->request_id = NULL;
     idl->leader_only = true;
@@ -471,14 +485,38 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     return idl;
 }
 
-/* Changes the remote and creates a new session. */
+/* Changes the remote and creates a new session.
+ *
+ * If 'retry' is true, the connection to the remote will automatically retry
+ * when it fails.  If 'retry' is false, the connection is one-time. */
 void
-ovsdb_idl_set_remote(struct ovsdb_idl *idl, const char *remote,
-                     bool retry)
+ovsdb_idl_set_remote(struct ovsdb_idl *idl, const char *remote, bool retry)
 {
-    if (idl) {
-        ovsdb_idl_open_session(idl, remote, retry);
-        idl->state_seqno = UINT_MAX;
+    if (idl
+        && ((remote != NULL) != (idl->remote != NULL)
+            || (remote && idl->remote && strcmp(remote, idl->remote)))) {
+        ovs_assert(!idl->data.txn);
+
+        /* Close the old session, if any. */
+        if (idl->session) {
+            jsonrpc_session_close(idl->session);
+            idl->session = NULL;
+
+            free(idl->remote);
+            idl->remote = NULL;
+        }
+
+        /* Open new session, if any. */
+        if (remote) {
+            struct svec remotes = SVEC_EMPTY_INITIALIZER;
+            ovsdb_session_parse_remote(remote, &remotes, &idl->cid);
+            idl->session = jsonrpc_session_open_multiple(&remotes, retry);
+            svec_destroy(&remotes);
+
+            idl->state_seqno = UINT_MAX;
+
+            idl->remote = xstrdup(remote);
+        }
     }
 }
 
@@ -557,10 +595,6 @@ ovsdb_idl_db_clear(struct ovsdb_idl_db *db)
             /* No need to do anything with dst_arcs: some node has those arcs
              * as forward arcs and will destroy them itself. */
 
-            if (!ovs_list_is_empty(&row->track_node)) {
-                ovs_list_remove(&row->track_node);
-            }
-
             ovsdb_idl_row_destroy(row);
         }
     }
@@ -588,7 +622,7 @@ ovsdb_idl_state_to_string(enum ovsdb_idl_state state)
 static void
 ovsdb_idl_retry_at(struct ovsdb_idl *idl, const char *where)
 {
-    if (jsonrpc_session_get_n_remotes(idl->session) > 1) {
+    if (idl->session && jsonrpc_session_get_n_remotes(idl->session) > 1) {
         ovsdb_idl_force_reconnect(idl);
         ovsdb_idl_transition_at(idl, IDL_S_RETRY, where);
     } else {
@@ -601,7 +635,7 @@ ovsdb_idl_transition_at(struct ovsdb_idl *idl, enum ovsdb_idl_state new_state,
                         const char *where)
 {
     VLOG_DBG("%s: %s -> %s at %s",
-             jsonrpc_session_get_name(idl->session),
+             idl->session ? jsonrpc_session_get_name(idl->session) : "void",
              ovsdb_idl_state_to_string(idl->state),
              ovsdb_idl_state_to_string(new_state),
              where);
@@ -619,7 +653,9 @@ ovsdb_idl_send_request(struct ovsdb_idl *idl, struct jsonrpc_msg *request)
 {
     json_destroy(idl->request_id);
     idl->request_id = json_clone(request->id);
-    jsonrpc_session_send(idl->session, request);
+    if (idl->session) {
+        jsonrpc_session_send(idl->session, request);
+    }
 }
 
 static void
@@ -787,6 +823,11 @@ ovsdb_idl_process_msg(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
 void
 ovsdb_idl_run(struct ovsdb_idl *idl)
 {
+    if (!idl->session) {
+        ovsdb_idl_txn_abort_all(idl);
+        return;
+    }
+
     int i;
 
     ovs_assert(!idl->data.txn);
@@ -826,6 +867,9 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
 void
 ovsdb_idl_wait(struct ovsdb_idl *idl)
 {
+    if (!idl->session) {
+        return;
+    }
     jsonrpc_session_wait(idl->session);
     jsonrpc_session_recv_wait(idl->session);
 }
@@ -892,7 +936,9 @@ ovsdb_idl_has_ever_connected(const struct ovsdb_idl *idl)
 void
 ovsdb_idl_enable_reconnect(struct ovsdb_idl *idl)
 {
-    jsonrpc_session_enable_reconnect(idl->session);
+    if (idl->session) {
+        jsonrpc_session_enable_reconnect(idl->session);
+    }
 }
 
 /* Forces 'idl' to drop its connection to the database and reconnect.  In the
@@ -900,7 +946,9 @@ ovsdb_idl_enable_reconnect(struct ovsdb_idl *idl)
 void
 ovsdb_idl_force_reconnect(struct ovsdb_idl *idl)
 {
-    jsonrpc_session_force_reconnect(idl->session);
+    if (idl->session) {
+        jsonrpc_session_force_reconnect(idl->session);
+    }
 }
 
 /* Some IDL users should only write to write-only columns.  Furthermore,
@@ -918,7 +966,7 @@ ovsdb_idl_verify_write_only(struct ovsdb_idl *idl)
 bool
 ovsdb_idl_is_alive(const struct ovsdb_idl *idl)
 {
-    return jsonrpc_session_is_alive(idl->session) &&
+    return idl->session && jsonrpc_session_is_alive(idl->session) &&
            idl->state != IDL_S_ERROR;
 }
 
@@ -936,10 +984,7 @@ ovsdb_idl_is_connected(const struct ovsdb_idl *idl)
 int
 ovsdb_idl_get_last_error(const struct ovsdb_idl *idl)
 {
-    int err;
-
-    err = jsonrpc_session_get_last_error(idl->session);
-
+    int err = idl->session ? jsonrpc_session_get_last_error(idl->session) : 0;
     if (err) {
         return err;
     } else if (idl->state == IDL_S_ERROR) {
@@ -955,7 +1000,9 @@ ovsdb_idl_get_last_error(const struct ovsdb_idl *idl)
 void
 ovsdb_idl_set_probe_interval(const struct ovsdb_idl *idl, int probe_interval)
 {
-    jsonrpc_session_set_probe_interval(idl->session, probe_interval);
+    if (idl->session) {
+        jsonrpc_session_set_probe_interval(idl->session, probe_interval);
+    }
 }
 
 static size_t
@@ -2303,6 +2350,27 @@ ovsdb_idl_process_update2(struct ovsdb_idl_table *table,
     return true;
 }
 
+/* Recursively add rows to tracked change lists for current row
+ * and the rows that reference this row. */
+static void
+add_tracked_change_for_references(struct ovsdb_idl_row *row)
+{
+    if (ovs_list_is_empty(&row->track_node) &&
+            ovsdb_idl_track_is_set(row->table)) {
+        ovs_list_push_back(&row->table->track_list,
+                           &row->track_node);
+        row->change_seqno[OVSDB_IDL_CHANGE_MODIFY]
+            = row->table->change_seqno[OVSDB_IDL_CHANGE_MODIFY]
+            = row->table->db->change_seqno + 1;
+
+        const struct ovsdb_idl_arc *arc;
+        LIST_FOR_EACH (arc, dst_node, &row->dst_arcs) {
+            add_tracked_change_for_references(arc->src);
+        }
+    }
+}
+
+
 /* Returns true if a column with mode OVSDB_IDL_MODE_RW changed, false
  * otherwise.
  *
@@ -2366,11 +2434,7 @@ ovsdb_idl_row_change__(struct ovsdb_idl_row *row, const struct json *row_json,
                         = row->table->change_seqno[change]
                         = row->table->db->change_seqno + 1;
                     if (table->modes[column_idx] & OVSDB_IDL_TRACK) {
-                        if (!ovs_list_is_empty(&row->track_node)) {
-                            ovs_list_remove(&row->track_node);
-                        }
-                        ovs_list_push_back(&row->table->track_list,
-                                       &row->track_node);
+                        add_tracked_change_for_references(row);
                         if (!row->updated) {
                             row->updated = bitmap_allocate(class->n_columns);
                         }
@@ -2834,9 +2898,7 @@ ovsdb_idl_row_clear_arcs(struct ovsdb_idl_row *row, bool destroy_dsts)
     struct ovsdb_idl_arc *arc, *next;
 
     /* Delete all forward arcs.  If 'destroy_dsts', destroy any orphaned rows
-     * that this causes to be unreferenced, if tracking is not enabled.
-     * If tracking is enabled, orphaned nodes are removed from hmap but not
-     * freed.
+     * that this causes to be unreferenced.
      */
     LIST_FOR_EACH_SAFE (arc, next, src_node, &row->src_arcs) {
         ovs_list_remove(&arc->dst_node);
@@ -2914,10 +2976,9 @@ ovsdb_idl_row_destroy(struct ovsdb_idl_row *row)
                 = row->table->change_seqno[OVSDB_IDL_CHANGE_DELETE]
                 = row->table->db->change_seqno + 1;
         }
-        if (!ovs_list_is_empty(&row->track_node)) {
-            ovs_list_remove(&row->track_node);
+        if (ovs_list_is_empty(&row->track_node)) {
+            ovs_list_push_back(&row->table->track_list, &row->track_node);
         }
-        ovs_list_push_back(&row->table->track_list, &row->track_node);
     }
 }
 
@@ -3806,6 +3867,13 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
         goto coverage_out;
     }
 
+    /* If we're still connecting or re-connecting, don't bother sending a
+     * transaction. */
+    if (txn->db->idl->state != IDL_S_MONITORING) {
+        txn->status = TXN_TRY_AGAIN;
+        goto disassemble_out;
+    }
+
     /* If we need a lock but don't have it, give up quickly. */
     if (txn->db->lock_name && !txn->db->has_lock) {
         txn->status = TXN_NOT_LOCKED;
@@ -4038,7 +4106,8 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
     if (!any_updates) {
         txn->status = TXN_UNCHANGED;
         json_destroy(operations);
-    } else if (!jsonrpc_session_send(
+    } else if (txn->db->idl->session
+               && !jsonrpc_session_send(
                    txn->db->idl->session,
                    jsonrpc_create_request(
                        "transact", operations, &txn->request_id))) {
@@ -4617,6 +4686,10 @@ ovsdb_idl_db_txn_process_reply(struct ovsdb_idl_db *db,
                     if (error->type == JSON_STRING) {
                         if (!strcmp(error->string, "timed out")) {
                             soft_errors++;
+                        } else if (!strcmp(error->string,
+                                           "unknown database")) {
+                            ovsdb_idl_retry(db->idl);
+                            soft_errors++;
                         } else if (!strcmp(error->string, "not owner")) {
                             lock_errors++;
                         } else if (!strcmp(error->string, "not allowed")) {
@@ -4738,7 +4811,9 @@ ovsdb_idl_set_lock(struct ovsdb_idl *idl, const char *lock_name)
         if (!msg) {
             break;
         }
-        jsonrpc_session_send(idl->session, msg);
+        if (idl->session) {
+            jsonrpc_session_send(idl->session, msg);
+        }
     }
 }
 

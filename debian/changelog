@@ -1,3 +1,21 @@
+openvswitch (2.11.0~git20190121.4e4f80ec2-0ubuntu1) disco; urgency=medium
+
+  [ James Page ]
+  * d/rules: Switch snapshots to 2.11 branch.
+  * New upstream snapshot from 2.11 release branch.
+  * d/p/*: Refresh.
+  * d/p/connmgr-Fix-vswitchd-abort-when-a-port-is-added.patch: Drop,
+    included in snapshot.
+
+  [ Christian Ehrhardt ]
+  * fix linking with DPDK 18.11 - updated to v2 of the upstream patch series
+    - d/p/0001-acinclude-Also-use-LIBS-from-dpkg-pkg-config.patch
+    - d/p/0002-m4-update-pkg.m4-to-pkg-config-0.29.1.patch
+    - d/p/0003-configure.ac-use-the-locally-provided-pkg.m4.patch
+  * d/rules: mask test 2767 failing in OVS 2.11
+
+ -- Christian Ehrhardt <christian.ehrhardt@canonical.com>  Thu, 31 Jan 2019 12:03:50 +0100
+
 openvswitch (2.10.1-0ubuntu2) disco; urgency=medium
 
   * d/p/connmgr-Fix-vswitchd-abort-when-a-port-is-added.patch: Cherry

@@ -538,16 +538,16 @@ ofproto_unixctl_trace_actions(struct unixctl_conn *conn, int argc,
         unixctl_command_reply_error(conn, "invalid in_port");
         goto exit;
     }
-    if (enforce_consistency) {
-        retval = ofpacts_check_consistency(ofpacts.data, ofpacts.size, &match,
-                                           u16_to_ofp(ofproto->up.max_ports),
-                                           0, ofproto->up.n_tables,
-                                           usable_protocols);
-    } else {
-        retval = ofpacts_check(ofpacts.data, ofpacts.size, &match,
-                               u16_to_ofp(ofproto->up.max_ports), 0,
-                               ofproto->up.n_tables, &usable_protocols);
-    }
+
+    struct ofpact_check_params cp = {
+        .match = &match,
+        .max_ports = u16_to_ofp(ofproto->up.max_ports),
+        .table_id = 0,
+        .n_tables = ofproto->up.n_tables,
+    };
+    retval = ofpacts_check_consistency(
+        ofpacts.data, ofpacts.size,
+        enforce_consistency ? usable_protocols : 0, &cp);
     if (!retval) {
         ovs_mutex_lock(&ofproto_mutex);
         retval = ofproto_check_ofpacts(&ofproto->up, ofpacts.data,
@@ -571,6 +571,76 @@ exit:
     dp_packet_delete(packet);
     ofpbuf_uninit(&ofpacts);
     free_ct_states(&next_ct_states);
+}
+
+static void
+explain_slow_path(enum slow_path_reason slow, struct ds *output)
+{
+    ds_put_cstr(output, "\nThis flow is handled by the userspace "
+                "slow path because it:");
+    for (; slow; slow = zero_rightmost_1bit(slow)) {
+        enum slow_path_reason bit = rightmost_1bit(slow);
+        ds_put_format(output, "\n  - %s.",
+                      slow_path_reason_to_explanation(bit));
+    }
+}
+
+/* Copies ODP actions from 'in' to 'out', dropping OVS_ACTION_ATTR_OUTPUT and
+ * OVS_ACTION_ATTR_RECIRC along the way. */
+static void
+prune_output_actions(const struct ofpbuf *in, struct ofpbuf *out)
+{
+    const struct nlattr *a;
+    unsigned int left;
+    NL_ATTR_FOR_EACH (a, left, in->data, in->size) {
+        if (a->nla_type == OVS_ACTION_ATTR_CLONE) {
+            struct ofpbuf in_nested;
+            nl_attr_get_nested(a, &in_nested);
+
+            size_t ofs = nl_msg_start_nested(out, OVS_ACTION_ATTR_CLONE);
+            prune_output_actions(&in_nested, out);
+            nl_msg_end_nested(out, ofs);
+        } else if (a->nla_type != OVS_ACTION_ATTR_OUTPUT &&
+                   a->nla_type != OVS_ACTION_ATTR_RECIRC) {
+            ofpbuf_put(out, a, NLA_ALIGN(a->nla_len));
+        }
+    }
+}
+
+/* Executes all of the datapath actions, except for any OVS_ACTION_ATTR_OUTPUT
+ * and OVS_ACTION_ATTR_RECIRC actions, in 'actions' on 'packet', which has the
+ * given 'flow', on 'dpif'.  The actions have slow path reason 'slow' (if any).
+ * Appends any error message to 'output'.
+ *
+ * With output and recirculation actions dropped, the only remaining side
+ * effects are from OVS_ACTION_ATTR_USERSPACE actions for executing actions to
+ * send a packet to an OpenFlow controller, IPFIX, NetFlow, and sFlow, etc. */
+static void
+execute_actions_except_outputs(struct dpif *dpif,
+                               const struct dp_packet *packet,
+                               const struct flow *flow,
+                               const struct ofpbuf *actions,
+                               enum slow_path_reason slow,
+                               struct ds *output)
+{
+    struct ofpbuf pruned_actions;
+    ofpbuf_init(&pruned_actions, 0);
+    prune_output_actions(actions, &pruned_actions);
+
+    struct dpif_execute execute = {
+        .actions = pruned_actions.data,
+        .actions_len = pruned_actions.size,
+        .needs_help = (slow & SLOW_ACTION) != 0,
+        .flow = flow,
+        .packet = dp_packet_clone_with_headroom(packet, 2),
+    };
+    int error = dpif_execute(dpif, &execute);
+    if (error) {
+        ds_put_format(output, "\nAction execution failed (%s)\n.",
+                      ovs_strerror(error));
+    }
+    dp_packet_delete(execute.packet);
+    ofpbuf_uninit(&pruned_actions);
 }
 
 static void
@@ -627,22 +697,17 @@ ofproto_trace__(struct ofproto_dpif *ofproto, const struct flow *flow,
         ds_put_format(output,
                       "\nTranslation failed (%s), packet is dropped.\n",
                       xlate_strerror(error));
-    } else if (xout.slow) {
-        enum slow_path_reason slow;
-
-        ds_put_cstr(output, "\nThis flow is handled by the userspace "
-                    "slow path because it:");
-
-        slow = xout.slow;
-        while (slow) {
-            enum slow_path_reason bit = rightmost_1bit(slow);
-
-            ds_put_format(output, "\n  - %s.",
-                          slow_path_reason_to_explanation(bit));
-
-            slow &= ~bit;
+    } else {
+        if (xout.slow) {
+            explain_slow_path(xout.slow, output);
+        }
+        if (packet) {
+            execute_actions_except_outputs(ofproto->backer->dpif, packet,
+                                           &initial_flow, &odp_actions,
+                                           xout.slow, output);
         }
     }
+
 
     xlate_out_uninit(&xout);
     ofpbuf_uninit(&odp_actions);

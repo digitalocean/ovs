@@ -26,6 +26,8 @@
 #include "netlink-socket.h"
 #include "odp-netlink.h"
 #include "openvswitch/ofpbuf.h"
+#include "openvswitch/flow.h"
+#include "openvswitch/tun-metadata.h"
 
 /* For backwards compatability with older kernels */
 #ifndef TC_H_CLSACT
@@ -77,6 +79,7 @@ struct tc_flower_key {
     struct eth_addr dst_mac;
     struct eth_addr src_mac;
 
+    ovs_be32 mpls_lse;
     ovs_be16 tcp_src;
     ovs_be16 tcp_dst;
     ovs_be16 tcp_flags;
@@ -87,10 +90,10 @@ struct tc_flower_key {
     ovs_be16 sctp_src;
     ovs_be16 sctp_dst;
 
-    uint16_t vlan_id;
-    uint8_t vlan_prio;
+    uint16_t vlan_id[FLOW_MAX_VLAN_HEADERS];
+    uint8_t vlan_prio[FLOW_MAX_VLAN_HEADERS];
 
-    ovs_be16 encap_eth_type;
+    ovs_be16 encap_eth_type[FLOW_MAX_VLAN_HEADERS];
 
     uint8_t flags;
     uint8_t ip_ttl;
@@ -104,7 +107,25 @@ struct tc_flower_key {
     struct {
         struct in6_addr ipv6_src;
         struct in6_addr ipv6_dst;
+        uint8_t rewrite_hlimit;
     } ipv6;
+
+    struct {
+        struct {
+            ovs_be32 ipv4_src;
+            ovs_be32 ipv4_dst;
+        } ipv4;
+        struct {
+            struct in6_addr ipv6_src;
+            struct in6_addr ipv6_dst;
+        } ipv6;
+        uint8_t tos;
+        uint8_t ttl;
+        ovs_be16 tp_src;
+        ovs_be16 tp_dst;
+        ovs_be64 id;
+        struct tun_metadata metadata;
+    } tunnel;
 };
 
 enum tc_action_type {
@@ -120,6 +141,7 @@ struct tc_action {
         int ifindex_out;
 
         struct {
+            ovs_be16 vlan_push_tpid;
             uint16_t vlan_push_id;
             uint8_t vlan_push_prio;
         } vlan;
@@ -128,6 +150,9 @@ struct tc_action {
             ovs_be64 id;
             ovs_be16 tp_src;
             ovs_be16 tp_dst;
+            uint8_t tos;
+            uint8_t ttl;
+            uint8_t no_csum;
             struct {
                 ovs_be32 ipv4_src;
                 ovs_be32 ipv4_dst;
@@ -136,6 +161,7 @@ struct tc_action {
                 struct in6_addr ipv6_src;
                 struct in6_addr ipv6_dst;
             } ipv6;
+            struct tun_metadata data;
         } encap;
      };
 
@@ -169,20 +195,7 @@ struct tc_flower {
 
     uint32_t csum_update_flags;
 
-    struct {
-        bool tunnel;
-        struct {
-            ovs_be32 ipv4_src;
-            ovs_be32 ipv4_dst;
-        } ipv4;
-        struct {
-            struct in6_addr ipv6_src;
-            struct in6_addr ipv6_dst;
-        } ipv6;
-        ovs_be64 id;
-        ovs_be16 tp_src;
-        ovs_be16 tp_dst;
-    } tunnel;
+    bool tunnel;
 
     struct tc_cookie act_cookie;
 

@@ -97,6 +97,8 @@ need the following software:
   you want to enable ovs-vswitchd and other utilities to use DNS names when
   specifying OpenFlow and OVSDB remotes. If unbound library is already
   installed, then Open vSwitch will automatically build with support for it.
+  The environment variable OVS_RESOLV_CONF can be used to specify DNS server
+  configuration file (the default file on Linux is /etc/resolv.conf).
 
 On Linux, you may choose to compile the kernel module that comes with the Open
 vSwitch distribution or to use the kernel module built into the Linux kernel
@@ -292,6 +294,13 @@ target machine.
   running make. For example::
 
       $ make EXTRA_CFLAGS="-Wno-error=date-time"
+
+If you are a developer and want to enable Address Sanitizer for debugging
+purposes, at about a 2x runtime cost, you can add
+``-fsanitize=address -fno-omit-frame-pointer -fno-common`` to CFLAGS.  For
+example::
+
+    $ ./configure CFLAGS="-g -O2 -fsanitize=address -fno-omit-frame-pointer -fno-common"
 
 To build the Linux kernel module, so that you can run the kernel-based switch,
 pass the location of the kernel build directory on ``--with-linux``. For

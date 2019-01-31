@@ -137,7 +137,6 @@ struct ofport_dpif {
     struct cfm *cfm;            /* Connectivity Fault Management, if any. */
     struct bfd *bfd;            /* BFD, if any. */
     struct lldp *lldp;          /* lldp, if any. */
-    bool may_enable;            /* May be enabled in bonds. */
     bool is_tunnel;             /* This port is a tunnel. */
     long long int carrier_seq;  /* Carrier status changes. */
     struct ofport_dpif *peer;   /* Peer if patch port. */
@@ -479,7 +478,7 @@ type_run(const char *type)
                                  ofport->rstp_port, ofport->qdscp,
                                  ofport->n_qdscp, ofport->up.pp.config,
                                  ofport->up.pp.state, ofport->is_tunnel,
-                                 ofport->may_enable);
+                                 ofport->up.may_enable);
             }
         }
         xlate_txn_commit();
@@ -1848,7 +1847,6 @@ port_construct(struct ofport *port_)
     port->cfm = NULL;
     port->bfd = NULL;
     port->lldp = NULL;
-    port->may_enable = false;
     port->stp_port = NULL;
     port->stp_state = STP_DISABLED;
     port->rstp_port = NULL;
@@ -2005,16 +2003,6 @@ port_modified(struct ofport *port_)
         bfd_set_netdev(port->bfd, netdev);
     }
 
-    /* Set liveness, unless the link is administratively or
-     * operationally down or link monitoring false */
-    if (!(port->up.pp.config & OFPUTIL_PC_PORT_DOWN) &&
-        !(port->up.pp.state & OFPUTIL_PS_LINK_DOWN) &&
-        port->may_enable) {
-        port->up.pp.state |= OFPUTIL_PS_LIVE;
-    } else {
-        port->up.pp.state &= ~OFPUTIL_PS_LIVE;
-    }
-
     ofproto_dpif_monitor_port_update(port, port->bfd, port->cfm,
                                      port->lldp, &port->up.pp.hw_addr);
 
@@ -2049,6 +2037,7 @@ port_reconfigured(struct ofport *port_, enum ofputil_port_config old_config)
             bundle_update(port->bundle);
         }
     }
+    port_run(port);
 }
 
 static int
@@ -2792,7 +2781,7 @@ set_rstp_port(struct ofport *ofport_,
                   ofport, netdev_get_name(ofport->up.netdev));
     update_rstp_port_state(ofport);
     /* Synchronize operational status. */
-    rstp_port_set_mac_operational(rp, ofport->may_enable);
+    rstp_port_set_mac_operational(rp, ofport->up.may_enable);
 }
 
 static void
@@ -3341,7 +3330,7 @@ bundle_run(struct ofbundle *bundle)
         struct ofport_dpif *port;
 
         LIST_FOR_EACH (port, bundle_node, &bundle->ports) {
-            bond_slave_set_may_enable(bundle->bond, port, port->may_enable);
+            bond_slave_set_may_enable(bundle->bond, port, port->up.may_enable);
         }
 
         if (bond_run(bundle->bond, lacp_status(bundle->lacp))) {
@@ -3571,66 +3560,55 @@ ofport_update_peer(struct ofport_dpif *ofport)
     free(peer_name);
 }
 
+static bool
+may_enable_port(struct ofport_dpif *ofport)
+{
+    /* Carrier must be up. */
+    if (!netdev_get_carrier(ofport->up.netdev)) {
+        return false;
+    }
+
+    /* If CFM or BFD is enabled, then at least one of them must report that the
+     * port is up. */
+    if ((ofport->bfd || ofport->cfm)
+        && !(ofport->cfm
+             && !cfm_get_fault(ofport->cfm)
+             && cfm_get_opup(ofport->cfm) != 0)
+        && !(ofport->bfd
+             && bfd_forwarding(ofport->bfd))) {
+        return false;
+    }
+
+    /* If LACP is enabled, it must report that the link is enabled. */
+    if (ofport->bundle
+        && !lacp_slave_may_enable(ofport->bundle->lacp, ofport)) {
+        return false;
+    }
+
+    return true;
+}
+
 static void
 port_run(struct ofport_dpif *ofport)
 {
     long long int carrier_seq = netdev_get_carrier_resets(ofport->up.netdev);
     bool carrier_changed = carrier_seq != ofport->carrier_seq;
-    bool enable = netdev_get_carrier(ofport->up.netdev);
-    bool cfm_enable = false;
-    bool bfd_enable = false;
-
     ofport->carrier_seq = carrier_seq;
-
-    if (ofport->cfm) {
-        int cfm_opup = cfm_get_opup(ofport->cfm);
-
-        cfm_enable = !cfm_get_fault(ofport->cfm);
-
-        if (cfm_opup >= 0) {
-            cfm_enable = cfm_enable && cfm_opup;
-        }
+    if (carrier_changed && ofport->bundle) {
+        lacp_slave_carrier_changed(ofport->bundle->lacp, ofport);
     }
 
-    if (ofport->bfd) {
-        bfd_enable = bfd_forwarding(ofport->bfd);
-    }
+    bool enable = may_enable_port(ofport);
+    if (ofport->up.may_enable != enable) {
+        ofproto_port_set_enable(&ofport->up, enable);
 
-    if (ofport->bfd || ofport->cfm) {
-        enable = enable && (cfm_enable || bfd_enable);
-    }
-
-    if (ofport->bundle) {
-        enable = enable && lacp_slave_may_enable(ofport->bundle->lacp, ofport);
-        if (carrier_changed) {
-            lacp_slave_carrier_changed(ofport->bundle->lacp, ofport);
-        }
-    }
-
-    if (ofport->may_enable != enable) {
         struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofport->up.ofproto);
-
         ofproto->backer->need_revalidate = REV_PORT_TOGGLED;
 
         if (ofport->rstp_port) {
             rstp_port_set_mac_operational(ofport->rstp_port, enable);
         }
-
-        /* Propagate liveness, unless the link is administratively or
-         * operationally down. */
-        if (!(ofport->up.pp.config & OFPUTIL_PC_PORT_DOWN) &&
-            !(ofport->up.pp.state & OFPUTIL_PS_LINK_DOWN)) {
-            enum ofputil_port_state of_state = ofport->up.pp.state;
-            if (enable) {
-                of_state |= OFPUTIL_PS_LIVE;
-            } else {
-                of_state &= ~OFPUTIL_PS_LIVE;
-            }
-            ofproto_port_set_state(&ofport->up, of_state);
-        }
     }
-
-    ofport->may_enable = enable;
 }
 
 static int
@@ -5962,11 +5940,11 @@ meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
     /* Provider ID unknown. Use backer to allocate a new DP meter */
     if (meter_id->uint32 == UINT32_MAX) {
         if (!ofproto->backer->meter_ids) {
-            return EFBIG; /* Datapath does not support meter.  */
+            return OFPERR_OFPMMFC_OUT_OF_METERS; /* Meters not supported. */
         }
 
         if(!id_pool_alloc_id(ofproto->backer->meter_ids, &meter_id->uint32)) {
-            return ENOMEM; /* Can't allocate a DP meter. */
+            return OFPERR_OFPMMFC_OUT_OF_METERS; /* Can't allocate meter. */
         }
     }
 
@@ -6051,6 +6029,7 @@ const struct ofproto_class ofproto_dpif_class = {
     type_get_memory_usage,
     flush,
     query_tables,
+    NULL,                       /* modify_tables */
     set_tables_version,
     port_alloc,
     port_construct,

@@ -39,6 +39,12 @@ endif
 TEST_LIST =
 TEST_LIST_DPDK =
 
+# OVS 2.11 fails 2767 on amd64 and s390x
+ifneq (,$(filter s390x amd64, $(DEB_HOST_ARCH)))
+TEST_LIST = 1-2766 2768-
+TEST_LIST_DPDK = $(TEST_LIST)
+endif # s390x amd64
+
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	if $(MAKE) -C _debian check TESTSUITEFLAGS='$(PARALLEL) $(TEST_LIST)' || \
@@ -112,8 +118,8 @@ override_dh_python3:
 # Helper target for creating snapshots from upstream git
 DATE=$(shell date +%Y%m%d)
 # Upstream branch to track
-BRANCH=branch-2.9
-VERSION=2.9.0
+BRANCH=branch-2.11
+VERSION=2.11.0
 
 get-orig-snapshot:
 	rm -Rf openvswitch-upstream

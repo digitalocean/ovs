@@ -136,7 +136,7 @@ struct ofputil_tlv_table_mod;
  *       tunnel flags: Any number of the strings "df", "csum", "key", or
  *         "oam" separated by "|".
  *
- *       TCP flags: See the description of tcp_flags in ovs-ofctl(8).
+ *       TCP flags: See the description of tcp_flags in ovs-fields(7).
  *
  *       packet type: A pair of packet type namespace NS and NS_TYPE within
  *       that namespace "(NS,NS_TYPE)". NS and NS_TYPE are formatted in
@@ -274,7 +274,7 @@ enum OVS_PACKED_ENUM mf_field_id {
 
     /* "conj_id".
      *
-     * ID for "conjunction" actions.  Please refer to ovs-ofctl(8)
+     * ID for "conjunction" actions.  Please refer to ovs-fields(7)
      * documentation of "conjunction" for details.
      *
      * Type: be32.
@@ -1912,6 +1912,9 @@ struct mf_bitmap {
     unsigned long bm[BITMAP_N_LONGS(MFF_N_IDS)];
 };
 #define MF_BITMAP_INITIALIZER { { [0] = 0 } }
+
+bool mf_bitmap_is_superset(const struct mf_bitmap *super,
+                           const struct mf_bitmap *sub);
 
 /* Use this macro as CASE_MFF_REGS: in a switch statement to choose all of the
  * MFF_REGn cases. */

@@ -118,7 +118,7 @@ struct netdev_dummy {
 
     struct dummy_packet_conn conn OVS_GUARDED;
 
-    FILE *tx_pcap, *rxq_pcap OVS_GUARDED;
+    struct pcap_file *tx_pcap, *rxq_pcap OVS_GUARDED;
 
     struct in_addr address, netmask;
     struct in6_addr ipv6, ipv6_mask;
@@ -683,7 +683,7 @@ netdev_dummy_construct(struct netdev *netdev_)
     netdev->hwaddr.ea[4] = n >> 8;
     netdev->hwaddr.ea[5] = n;
     netdev->mtu = 1500;
-    netdev->flags = 0;
+    netdev->flags = NETDEV_UP;
     netdev->ifindex = -EOPNOTSUPP;
     netdev->requested_n_rxq = netdev_->n_rxq;
     netdev->requested_n_txq = netdev_->n_txq;
@@ -719,10 +719,10 @@ netdev_dummy_destruct(struct netdev *netdev_)
 
     ovs_mutex_lock(&netdev->mutex);
     if (netdev->rxq_pcap) {
-        fclose(netdev->rxq_pcap);
+        ovs_pcap_close(netdev->rxq_pcap);
     }
     if (netdev->tx_pcap && netdev->tx_pcap != netdev->rxq_pcap) {
-        fclose(netdev->tx_pcap);
+        ovs_pcap_close(netdev->tx_pcap);
     }
     dummy_packet_conn_close(&netdev->conn);
     netdev->conn.type = NONE;
@@ -859,10 +859,10 @@ netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args,
     dummy_packet_conn_set_config(&netdev->conn, args);
 
     if (netdev->rxq_pcap) {
-        fclose(netdev->rxq_pcap);
+        ovs_pcap_close(netdev->rxq_pcap);
     }
     if (netdev->tx_pcap && netdev->tx_pcap != netdev->rxq_pcap) {
-        fclose(netdev->tx_pcap);
+        ovs_pcap_close(netdev->tx_pcap);
     }
     netdev->rxq_pcap = netdev->tx_pcap = NULL;
     pcap = smap_get(args, "pcap");
@@ -1036,8 +1036,7 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch,
     netdev->custom_stats[1].value++;
     ovs_mutex_unlock(&netdev->mutex);
 
-    batch->packets[0] = packet;
-    batch->count = 1;
+    dp_packet_batch_init_packet(batch, packet);
 
     if (qfill) {
         *qfill = -ENOTSUP;
@@ -1091,7 +1090,7 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
         const void *buffer = dp_packet_data(packet);
         size_t size = dp_packet_size(packet);
 
-        if (batch->packets[i]->packet_type != htonl(PT_ETH)) {
+        if (packet->packet_type != htonl(PT_ETH)) {
             error = EPFNOSUPPORT;
             break;
         }
@@ -1144,7 +1143,6 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
 
             dp_packet_use_const(&dp, buffer, size);
             ovs_pcap_write(dev->tx_pcap, &dp);
-            fflush(dev->tx_pcap);
         }
 
         ovs_mutex_unlock(&dev->mutex);
@@ -1393,90 +1391,56 @@ netdev_dummy_update_flags(struct netdev *netdev_,
 
 /* Helper functions. */
 
-#define NETDEV_DUMMY_CLASS(NAME, PMD, RECOFIGURE)               \
-{                                                               \
-    NAME,                                                       \
-    PMD,                        /* is_pmd */                    \
-    NULL,                       /* init */                      \
-    netdev_dummy_run,                                           \
-    netdev_dummy_wait,                                          \
-                                                                \
-    netdev_dummy_alloc,                                         \
-    netdev_dummy_construct,                                     \
-    netdev_dummy_destruct,                                      \
-    netdev_dummy_dealloc,                                       \
-    netdev_dummy_get_config,                                    \
-    netdev_dummy_set_config,                                    \
-    NULL,                       /* get_tunnel_config */         \
-    NULL,                       /* build header */              \
-    NULL,                       /* push header */               \
-    NULL,                       /* pop header */                \
-    netdev_dummy_get_numa_id,                                   \
-    NULL,                       /* set_tx_multiq */             \
-                                                                \
-    netdev_dummy_send,          /* send */                      \
-    NULL,                       /* send_wait */                 \
-                                                                \
-    netdev_dummy_set_etheraddr,                                 \
-    netdev_dummy_get_etheraddr,                                 \
-    netdev_dummy_get_mtu,                                       \
-    netdev_dummy_set_mtu,                                       \
-    netdev_dummy_get_ifindex,                                   \
-    NULL,                       /* get_carrier */               \
-    NULL,                       /* get_carrier_resets */        \
-    NULL,                       /* get_miimon */                \
-    netdev_dummy_get_stats,                                     \
-    netdev_dummy_get_custom_stats,                              \
-                                                                \
-    NULL,                       /* get_features */              \
-    NULL,                       /* set_advertisements */        \
-    NULL,                       /* get_pt_mode */               \
-                                                                \
-    NULL,                       /* set_policing */              \
-    NULL,                       /* get_qos_types */             \
-    NULL,                       /* get_qos_capabilities */      \
-    NULL,                       /* get_qos */                   \
-    NULL,                       /* set_qos */                   \
-    netdev_dummy_get_queue,                                     \
-    NULL,                       /* set_queue */                 \
-    NULL,                       /* delete_queue */              \
-    netdev_dummy_get_queue_stats,                               \
-    netdev_dummy_queue_dump_start,                              \
-    netdev_dummy_queue_dump_next,                               \
-    netdev_dummy_queue_dump_done,                               \
-    netdev_dummy_dump_queue_stats,                              \
-                                                                \
-    NULL,                       /* set_in4 */                   \
-    netdev_dummy_get_addr_list,                                 \
-    NULL,                       /* add_router */                \
-    NULL,                       /* get_next_hop */              \
-    NULL,                       /* get_status */                \
-    NULL,                       /* arp_lookup */                \
-                                                                \
-    netdev_dummy_update_flags,                                  \
-    RECOFIGURE,                                                 \
-                                                                \
-    netdev_dummy_rxq_alloc,                                     \
-    netdev_dummy_rxq_construct,                                 \
-    netdev_dummy_rxq_destruct,                                  \
-    netdev_dummy_rxq_dealloc,                                   \
-    netdev_dummy_rxq_recv,                                      \
-    netdev_dummy_rxq_wait,                                      \
-    netdev_dummy_rxq_drain,                                     \
-                                                                \
-    NO_OFFLOAD_API,                                             \
-    NULL                        /* get_block_id */              \
-}
+#define NETDEV_DUMMY_CLASS_COMMON                       \
+    .run = netdev_dummy_run,                            \
+    .wait = netdev_dummy_wait,                          \
+    .alloc = netdev_dummy_alloc,                        \
+    .construct = netdev_dummy_construct,                \
+    .destruct = netdev_dummy_destruct,                  \
+    .dealloc = netdev_dummy_dealloc,                    \
+    .get_config = netdev_dummy_get_config,              \
+    .set_config = netdev_dummy_set_config,              \
+    .get_numa_id = netdev_dummy_get_numa_id,            \
+    .send = netdev_dummy_send,                          \
+    .set_etheraddr = netdev_dummy_set_etheraddr,        \
+    .get_etheraddr = netdev_dummy_get_etheraddr,        \
+    .get_mtu = netdev_dummy_get_mtu,                    \
+    .set_mtu = netdev_dummy_set_mtu,                    \
+    .get_ifindex = netdev_dummy_get_ifindex,            \
+    .get_stats = netdev_dummy_get_stats,                \
+    .get_custom_stats = netdev_dummy_get_custom_stats,  \
+    .get_queue = netdev_dummy_get_queue,                \
+    .get_queue_stats = netdev_dummy_get_queue_stats,    \
+    .queue_dump_start = netdev_dummy_queue_dump_start,  \
+    .queue_dump_next = netdev_dummy_queue_dump_next,    \
+    .queue_dump_done = netdev_dummy_queue_dump_done,    \
+    .dump_queue_stats = netdev_dummy_dump_queue_stats,  \
+    .get_addr_list = netdev_dummy_get_addr_list,        \
+    .update_flags = netdev_dummy_update_flags,          \
+    .rxq_alloc = netdev_dummy_rxq_alloc,                \
+    .rxq_construct = netdev_dummy_rxq_construct,        \
+    .rxq_destruct = netdev_dummy_rxq_destruct,          \
+    .rxq_dealloc = netdev_dummy_rxq_dealloc,            \
+    .rxq_recv = netdev_dummy_rxq_recv,                  \
+    .rxq_wait = netdev_dummy_rxq_wait,                  \
+    .rxq_drain = netdev_dummy_rxq_drain
 
-static const struct netdev_class dummy_class =
-    NETDEV_DUMMY_CLASS("dummy", false, NULL);
+static const struct netdev_class dummy_class = {
+    NETDEV_DUMMY_CLASS_COMMON,
+    .type = "dummy"
+};
 
-static const struct netdev_class dummy_internal_class =
-    NETDEV_DUMMY_CLASS("dummy-internal", false, NULL);
+static const struct netdev_class dummy_internal_class = {
+    NETDEV_DUMMY_CLASS_COMMON,
+    .type = "dummy-internal"
+};
 
-static const struct netdev_class dummy_pmd_class =
-    NETDEV_DUMMY_CLASS("dummy-pmd", true,
-                       netdev_dummy_reconfigure);
+static const struct netdev_class dummy_pmd_class = {
+    NETDEV_DUMMY_CLASS_COMMON,
+    .type = "dummy-pmd",
+    .is_pmd = true,
+    .reconfigure = netdev_dummy_reconfigure
+};
 
 static void
 pkt_list_delete(struct ovs_list *l)
@@ -1563,7 +1527,6 @@ netdev_dummy_queue_packet(struct netdev_dummy *dummy, struct dp_packet *packet,
 
     if (dummy->rxq_pcap) {
         ovs_pcap_write(dummy->rxq_pcap, packet);
-        fflush(dummy->rxq_pcap);
     }
     prev = NULL;
     LIST_FOR_EACH (rx, node, &dummy->rxes) {

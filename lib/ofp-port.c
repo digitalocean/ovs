@@ -1608,6 +1608,7 @@ parse_intel_port_custom_property(struct ofpbuf *payload,
 
     ops->custom_stats.size = ntohs(custom_stats->stats_array_size);
 
+    netdev_free_custom_stats_counters(&ops->custom_stats);
     ops->custom_stats.counters = xcalloc(ops->custom_stats.size,
                                          sizeof *ops->custom_stats.counters);
 
@@ -1618,6 +1619,7 @@ parse_intel_port_custom_property(struct ofpbuf *payload,
         uint8_t *name_len = ofpbuf_try_pull(payload, sizeof *name_len);
         char *name = name_len ? ofpbuf_try_pull(payload, *name_len) : NULL;
         if (!name_len || !name) {
+            netdev_free_custom_stats_counters(&ops->custom_stats);
             return OFPERR_OFPBPC_BAD_LEN;
         }
 
@@ -1628,34 +1630,13 @@ parse_intel_port_custom_property(struct ofpbuf *payload,
         /* Counter value. */
         ovs_be64 *value = ofpbuf_try_pull(payload, sizeof *value);
         if (!value) {
+            netdev_free_custom_stats_counters(&ops->custom_stats);
             return OFPERR_OFPBPC_BAD_LEN;
         }
         c->value = ntohll(get_unaligned_be64(value));
     }
 
     return 0;
-}
-
-static enum ofperr
-parse_intel_port_stats_property(struct ofpbuf *payload,
-                                uint32_t exp_type,
-                                struct ofputil_port_stats *ops)
-{
-    enum ofperr error;
-
-    switch (exp_type) {
-    case INTEL_PORT_STATS_RFC2819:
-        error = parse_intel_port_stats_rfc2819_property(payload, ops);
-        break;
-    case INTEL_PORT_STATS_CUSTOM:
-        error = parse_intel_port_custom_property(payload, ops);
-        break;
-    default:
-        error = OFPERR_OFPBPC_BAD_EXP_TYPE;
-        break;
-    }
-
-    return error;
 }
 
 static enum ofperr
@@ -1698,6 +1679,7 @@ ofputil_pull_ofp14_port_stats(struct ofputil_port_stats *ops,
 
         error = ofpprop_pull(&properties, &payload, &type);
         if (error) {
+            netdev_free_custom_stats_counters(&ops->custom_stats);
             return error;
         }
         switch (type) {
@@ -1705,14 +1687,10 @@ ofputil_pull_ofp14_port_stats(struct ofputil_port_stats *ops,
             error = parse_ofp14_port_stats_ethernet_property(&payload, ops);
             break;
         case OFPPROP_EXP(INTEL_VENDOR_ID, INTEL_PORT_STATS_RFC2819):
-            error = parse_intel_port_stats_property(&payload,
-                                                    INTEL_PORT_STATS_RFC2819,
-                                                    ops);
+            error = parse_intel_port_stats_rfc2819_property(&payload, ops);
             break;
         case OFPPROP_EXP(INTEL_VENDOR_ID, INTEL_PORT_STATS_CUSTOM):
-            error = parse_intel_port_stats_property(&payload,
-                                                    INTEL_PORT_STATS_CUSTOM,
-                                                    ops);
+            error = parse_intel_port_custom_property(&payload, ops);
             break;
         default:
             error = OFPPROP_UNKNOWN(true, "port stats", type);
@@ -1741,6 +1719,7 @@ ofputil_count_port_stats(const struct ofp_header *oh)
         if (ofputil_decode_port_stats(&ps, &b)) {
             return n;
         }
+        netdev_free_custom_stats_counters(&ps.custom_stats);
     }
 }
 
@@ -1753,7 +1732,10 @@ ofputil_count_port_stats(const struct ofp_header *oh)
  * null and not modify them between calls.
  *
  * Returns 0 if successful, EOF if no replies were left in this 'msg',
- * otherwise a positive errno value. */
+ * otherwise a positive errno value.
+ *
+ * On success, the caller must eventually free ps->custom_stats.counters,
+ * with netdev_free_custom_stats_counters(&ps->custom_stats). */
 int
 ofputil_decode_port_stats(struct ofputil_port_stats *ps, struct ofpbuf *msg)
 {

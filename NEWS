@@ -1,6 +1,47 @@
-v2.10.1 - 19 Oct 2018
---------------------
-   - Bug fixes
+v2.11.0 - xx xxx xxxx
+---------------------
+   - Linux datapath:
+     * Support for the kernel versions 4.16.x and 4.17.x.
+   - OpenFlow:
+     * OFPMP_TABLE_FEATURES_REQUEST can now modify table features.
+   - ovs-ofctl:
+     * "mod-table" command can now change OpenFlow table names.
+   - The environment variable OVS_SYSLOG_METHOD, if set, is now used
+     as the default syslog method.
+   - The environment variable OVS_CTL_TIMEOUT, if set, is now used
+     as the default timeout for control utilities.
+   - ovn:
+     * OVN-SB schema changed: duplicated IP with same Encapsulation type
+       is not allowed any more.  Please refer to
+       Documentation/intro/install/ovn-upgrades.rst for the instructions
+       in case there are problems encountered when upgrading from an earlier
+       version.
+     * New support for IPSEC encrypted tunnels between hypervisors.
+     * ovn-ctl: allow passing user:group ids to the OVN daemons.
+     * IPAM/MACAM:
+       - add the capability to dynamically assign just L2 addresses
+       - add the capability to specify a static ip address and get the L2 one
+         allocated dynamically using the following syntax:
+           ovn-nbctl lsp-set-addresses <port> "dynamic <IP>"
+   - DPDK:
+     * Add support for DPDK 18.11
+     * Add support for port representors.
+   - Userspace datapath:
+     * Add option for simple round-robin based Rxq to PMD assignment.
+       It can be set with pmd-rxq-assign.
+     * Add support for Auto load balancing of PMDs (experimental)
+     * Added new per-port configurable option to manage EMC:
+       'other_config:emc-enable'.
+   - Add 'symmetric_l3' hash function.
+   - OVS now honors 'updelay' and 'downdelay' for bonds with LACP configured.
+   - ovs-vswitchd:
+     * New configuration option "offload-rebalance", that enables dynamic
+       rebalancing of offloaded flows.
+   - The environment variable OVS_RESOLV_CONF, if set, is now used
+     as the DNS server configuration file.
+   - RHEL packaging:
+     * OVN packages are split from OVS packages. A new spec
+       file - ovn-fedora.spec.in is added to generate OVN packages.
 
 
 v2.10.0 - 18 Aug 2018
@@ -61,6 +102,9 @@ v2.10.0 - 18 Aug 2018
        both kernel datapath and userspace datapath.
      * Added port-based and flow-based ERSPAN tunnel port support, added
        OpenFlow rules matching ERSPAN fields. See ovs-fields(7).
+   - ovs-pki
+     * ovs-pki now generates x.509 version 3 certificate. The new format adds
+       subjectAltName field and sets its value the same as common name (CN).
 
 v2.9.0 - 19 Feb 2018
 --------------------

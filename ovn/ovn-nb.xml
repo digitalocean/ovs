@@ -69,6 +69,46 @@
         See <em>External IDs</em> at the beginning of this document.
       </column>
     </group>
+
+    <group title="Common options">
+      <column name="options">
+        This column provides general key/value settings. The supported
+        options are described individually below.
+      </column>
+
+      <group title="Options for configuring BFD">
+        <p>
+          These options apply when <code>ovn-controller</code> configures
+          BFD on tunnels interfaces.
+        </p>
+
+        <column name="options" key="bfd-min-rx">
+          BFD option <code>min-rx</code> value to use when configuring BFD on
+          tunnel interfaces.
+        </column>
+
+        <column name="options" key="bfd-decay-min-rx">
+          BFD option <code>decay-min-rx</code> value to use when configuring
+          BFD on tunnel interfaces.
+        </column>
+
+        <column name="options" key="bfd-min-tx">
+          BFD option <code>min-tx</code> value to use when configuring BFD on
+          tunnel interfaces.
+        </column>
+
+        <column name="options" key="bfd-mult">
+          BFD option <code>mult</code> value to use when configuring BFD on
+          tunnel interfaces.
+        </column>
+      </group>
+
+      <column name="options" key="mac_prefix">
+        Configure a given OUI to be used as prefix when L2 address is
+        dynamically assigned, e.g. <code>00:11:22</code>
+      </column>
+    </group>
+
     <group title="Connection Options">
       <column name="connections">
         Database clients to which the Open vSwitch database server should
@@ -78,6 +118,12 @@
       </column>
       <column name="ssl">
         Global SSL configuration.
+      </column>
+    </group>
+    <group title="Security Configurations">
+      <column name="ipsec">
+        Tunnel encryption configuration. If this column is set to be true, all
+        OVN tunnels will be encrypted with IPsec.
       </column>
     </group>
   </table>
@@ -220,6 +266,11 @@
           <li><code>bef0:1234:a890:5678::</code></li>
           <li><code>8230:5678::</code></li>
         </ul>
+      </column>
+
+      <column name="other_config" key="mac_only" type='{"type": "boolean"}'>
+        Value used to request to assign L2 address only if neither subnet
+        nor ipv6_prefix are specified
       </column>
     </group>
 
@@ -1042,7 +1093,7 @@
       highest-<ref column="priority"/> matching row in this table determines a
       packet's treatment.  If no row matches, packets are allowed by default.
       (Default-deny treatment is possible: add a rule with
-      <ref column="priority"/> 0, <code>0</code> as <ref column="match"/>,
+      <ref column="priority"/> 0, <code>1</code> as <ref column="match"/>,
       and <code>deny</code> as <ref column="action"/>.)
     </p>
 
@@ -1187,7 +1238,7 @@
     </column>
 
     <column name="static_routes">
-      One or more static routes for the router.
+      Zero or more static routes for the router.
     </column>
 
     <column name="enabled">
@@ -1635,6 +1686,49 @@
           chassis to enable high availability.
         </p>
       </column>
+
+      <column name="options" key="reside-on-redirect-chassis">
+        <p>
+          Generally routing is distributed in <code>OVN</code>. The packet
+          from a logical port which needs to be routed hits the router pipeline
+          in the source chassis. For the East-West traffic, the packet is
+          sent directly to the destination chassis. For the outside traffic
+          the packet is sent to the gateway chassis.
+        </p>
+
+        <p>
+          When this option is set, <code>OVN</code> considers this only if
+        </p>
+
+        <ul>
+          <li>
+            The logical router to which this logical router port belongs to
+            has a distributed gateway port.
+          </li>
+
+          <li>
+            The peer's logical switch has a localnet port (representing
+            a VLAN tagged network)
+          </li>
+        </ul>
+
+        <p>
+          When this option is set to <code>true</code>, then the packet
+          which needs to be routed hits the router pipeline in the chassis
+          hosting the distributed gateway router port. The source chassis
+          pushes out this traffic via the localnet port. With this the
+          East-West traffic is no more distributed and will always go through
+          the gateway chassis.
+        </p>
+
+        <p>
+          Without this option set, for any traffic destined to outside from a
+          logical port which belongs to a logical switch with localnet port,
+          the source chassis will send the traffic to the gateway chassis via
+          the tunnel port instead of the localnet port and this could cause MTU
+          issues.
+        </p>
+      </column>
     </group>
 
     <group title="Attachment">
@@ -2067,6 +2161,13 @@
             The DHCPv4 option code for this option is 252. This option is used
             as part of web proxy auto discovery to provide a URL for a web
             proxy.
+          </p>
+        </column>
+
+        <column name="options" key="bootfile_name">
+          <p>
+            The DHCPv4 option code for this option is 67. This option is used
+            to identify a bootfile.
           </p>
         </column>
       </group>

@@ -68,7 +68,7 @@ static enum nbctl_wait_type wait_type = NBCTL_WAIT_NONE;
 static bool force_wait = false;
 
 /* --timeout: Time to wait for a connection to 'db'. */
-static int timeout;
+static unsigned int timeout;
 
 /* Format for table output. */
 static struct table_style table_style = TABLE_STYLE_DEFAULT;
@@ -117,7 +117,7 @@ static char * OVS_WARN_UNUSED_RESULT main_loop(const char *args,
                                                size_t n_commands,
                                                struct ovsdb_idl *idl,
                                                const struct timer *);
-static void server_loop(struct ovsdb_idl *idl);
+static void server_loop(struct ovsdb_idl *idl, int argc, char *argv[]);
 
 int
 main(int argc, char *argv[])
@@ -173,35 +173,31 @@ main(int argc, char *argv[])
     shash_init(&local_options);
     apply_options_direct(parsed_options, n_parsed_options, &local_options);
     free(parsed_options);
-    argc -= optind;
-    argv += optind;
 
     /* Initialize IDL. */
     idl = the_idl = ovsdb_idl_create(db, &nbrec_idl_class, true, false);
     ovsdb_idl_set_leader_only(idl, leader_only);
 
     if (get_detach()) {
-        if (argc != 0) {
+        if (argc != optind) {
             ctl_fatal("non-option arguments not supported with --detach "
                       "(use --help for help)");
         }
-        server_loop(idl);
+        server_loop(idl, argc, argv);
     } else {
         struct ctl_command *commands;
         size_t n_commands;
         char *error;
 
-        error = ctl_parse_commands(argc, argv, &local_options, &commands,
-                                   &n_commands);
+        error = ctl_parse_commands(argc - optind, argv + optind,
+                                   &local_options, &commands, &n_commands);
         if (error) {
             ctl_fatal("%s", error);
         }
         VLOG(ctl_might_write_to_db(commands, n_commands) ? VLL_INFO : VLL_DBG,
              "Called as %s", args);
 
-        if (timeout) {
-            time_alarm(timeout);
-        }
+        ctl_timeout_setup(timeout);
 
         error = run_prerequisites(commands, n_commands, idl);
         if (error) {
@@ -345,8 +341,7 @@ handle_main_loop_option(int opt, const char *arg, bool *handled)
         break;
 
     case 't':
-        timeout = strtoul(arg, NULL, 10);
-        if (timeout < 0) {
+        if (!str_to_uint(arg, 10, &timeout) || !timeout) {
             return xasprintf("value %s on -t or --timeout is invalid", arg);
         }
         break;
@@ -689,6 +684,10 @@ SSL commands:\n\
   del-ssl                     delete the SSL configuration\n\
   set-ssl PRIV-KEY CERT CA-CERT [SSL-PROTOS [SSL-CIPHERS]] \
 set the SSL configuration\n\
+Port group commands:\n\
+  pg-add PG [PORTS]           Create port group PG with optional PORTS\n\
+  pg-set-ports PG PORTS       Set PORTS on port group PG\n\
+  pg-del PG                   Delete port group PG\n\
 \n\
 %s\
 %s\
@@ -1440,6 +1439,74 @@ nbctl_lsp_get_tag(struct ctl_context *ctx)
     }
 }
 
+static char *
+lsp_contains_duplicate_ip(struct lport_addresses *laddrs1,
+                          struct lport_addresses *laddrs2)
+{
+    for (size_t i = 0; i < laddrs1->n_ipv4_addrs; i++) {
+        for (size_t j = 0; j < laddrs2->n_ipv4_addrs; j++) {
+            if (laddrs1->ipv4_addrs[i].addr == laddrs2->ipv4_addrs[j].addr) {
+                return xasprintf("duplicate IPv4 address %s",
+                                 laddrs1->ipv4_addrs[i].addr_s);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < laddrs1->n_ipv6_addrs; i++) {
+        for (size_t j = 0; j < laddrs2->n_ipv6_addrs; j++) {
+            if (IN6_ARE_ADDR_EQUAL(&laddrs1->ipv6_addrs[i].addr,
+                                   &laddrs2->ipv6_addrs[j].addr)) {
+                return xasprintf("duplicate IPv6 address %s",
+                                 laddrs1->ipv6_addrs[i].addr_s);
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static char *
+lsp_contains_duplicates(const struct nbrec_logical_switch *ls,
+                        const struct nbrec_logical_switch_port *lsp,
+                        const char *address)
+{
+    struct lport_addresses laddrs;
+    if (!extract_lsp_addresses(address, &laddrs)) {
+        return NULL;
+    }
+
+    char *sub_error = NULL;
+    for (size_t i = 0; i < ls->n_ports; i++) {
+        struct nbrec_logical_switch_port *lsp_test = ls->ports[i];
+        if (lsp_test == lsp) {
+            continue;
+        }
+        for (size_t j = 0; j < lsp_test->n_addresses; j++) {
+            struct lport_addresses laddrs_test;
+            char *addr = lsp_test->addresses[j];
+            if (is_dynamic_lsp_address(addr)) {
+                addr = lsp_test->dynamic_addresses;
+            }
+            if (extract_lsp_addresses(addr, &laddrs_test)) {
+                sub_error = lsp_contains_duplicate_ip(&laddrs, &laddrs_test);
+                destroy_lport_addresses(&laddrs_test);
+                if (sub_error) {
+                    goto err_out;
+                }
+            }
+        }
+    }
+
+err_out: ;
+    char *error = NULL;
+    if (sub_error) {
+        error = xasprintf("Error on switch %s: %s", ls->name, sub_error);
+        free(sub_error);
+    }
+    destroy_lport_addresses(&laddrs);
+    return error;
+}
+
 static void
 nbctl_lsp_set_addresses(struct ctl_context *ctx)
 {
@@ -1452,18 +1519,34 @@ nbctl_lsp_set_addresses(struct ctl_context *ctx)
         return;
     }
 
+    const struct nbrec_logical_switch *ls;
+    error = lsp_to_ls(ctx->idl, lsp, &ls);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
     int i;
     for (i = 2; i < ctx->argc; i++) {
         struct eth_addr ea;
+        ovs_be32 ip;
 
         if (strcmp(ctx->argv[i], "unknown") && strcmp(ctx->argv[i], "dynamic")
             && strcmp(ctx->argv[i], "router")
             && !ovs_scan(ctx->argv[i], ETH_ADDR_SCAN_FMT,
-                         ETH_ADDR_SCAN_ARGS(ea))) {
+                         ETH_ADDR_SCAN_ARGS(ea))
+            && !ovs_scan(ctx->argv[i], "dynamic "IP_SCAN_FMT,
+                         IP_SCAN_ARGS(&ip))) {
             ctl_error(ctx, "%s: Invalid address format. See ovn-nb(5). "
                       "Hint: An Ethernet address must be "
                       "listed before an IP address, together as a single "
                       "argument.", ctx->argv[i]);
+            return;
+        }
+
+        error = lsp_contains_duplicates(ls, lsp, ctx->argv[i]);
+        if (error) {
+            ctl_error(ctx, "%s", error);
             return;
         }
     }
@@ -2555,7 +2638,7 @@ nbctl_lb_add(struct ctl_context *ctx)
     }
 
     struct sockaddr_storage ss_vip;
-    if (!inet_parse_active(lb_vip, 0, &ss_vip)) {
+    if (!inet_parse_active(lb_vip, 0, &ss_vip, false)) {
         ctl_error(ctx, "%s: should be an IP address (or an IP address "
                   "and a port number with : as a separator).", lb_vip);
         return;
@@ -2585,7 +2668,7 @@ nbctl_lb_add(struct ctl_context *ctx)
         struct sockaddr_storage ss_dst;
 
         if (lb_vip_port) {
-            if (!inet_parse_active(token, -1, &ss_dst)) {
+            if (!inet_parse_active(token, -1, &ss_dst, false)) {
                 ctl_error(ctx, "%s: should be an IP address and a port "
                           "number with : as a separator.", token);
                 goto out;
@@ -2704,7 +2787,7 @@ lb_info_add_smap(const struct nbrec_load_balancer *lb,
             const struct smap_node *node = nodes[i];
 
             struct sockaddr_storage ss;
-            if (!inet_parse_active(node->key, 0, &ss)) {
+            if (!inet_parse_active(node->key, 0, &ss, false)) {
                 continue;
             }
 
@@ -4577,6 +4660,73 @@ cmd_set_ssl(struct ctl_context *ctx)
     nbrec_nb_global_set_ssl(nb_global, ssl);
 }
 
+static char *
+set_ports_on_pg(struct ctl_context *ctx, const struct nbrec_port_group *pg,
+                char **new_ports, size_t num_new_ports)
+{
+    struct nbrec_logical_switch_port **lports;
+    lports = xmalloc(sizeof *lports * num_new_ports);
+
+    size_t i;
+    char *error = NULL;
+    for (i = 0; i < num_new_ports; i++) {
+        const struct nbrec_logical_switch_port *lsp;
+        error = lsp_by_name_or_uuid(ctx, new_ports[i], true, &lsp);
+        if (error) {
+            goto out;
+        }
+        lports[i] = (struct nbrec_logical_switch_port *) lsp;
+    }
+
+    nbrec_port_group_set_ports(pg, lports, num_new_ports);
+
+out:
+    free(lports);
+    return error;
+}
+
+static void
+cmd_pg_add(struct ctl_context *ctx)
+{
+    const struct nbrec_port_group *pg;
+
+    pg = nbrec_port_group_insert(ctx->txn);
+    nbrec_port_group_set_name(pg, ctx->argv[1]);
+    if (ctx->argc > 2) {
+        ctx->error = set_ports_on_pg(ctx, pg, ctx->argv + 2, ctx->argc - 2);
+    }
+}
+
+static void
+cmd_pg_set_ports(struct ctl_context *ctx)
+{
+    const struct nbrec_port_group *pg;
+
+    char *error;
+    error = pg_by_name_or_uuid(ctx, ctx->argv[1], true, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    ctx->error = set_ports_on_pg(ctx, pg, ctx->argv + 2, ctx->argc - 2);
+}
+
+static void
+cmd_pg_del(struct ctl_context *ctx)
+{
+    const struct nbrec_port_group *pg;
+
+    char *error;
+    error = pg_by_name_or_uuid(ctx, ctx->argv[1], true, &pg);
+    if (error) {
+        ctx->error = error;
+        return;
+    }
+
+    nbrec_port_group_delete(pg);
+}
+
 static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_DHCP_OPTIONS].row_ids
     = {{&nbrec_logical_switch_port_col_name, NULL,
@@ -5045,6 +5195,11 @@ static const struct ctl_command_syntax nbctl_commands[] = {
         "PRIVATE-KEY CERTIFICATE CA-CERT [SSL-PROTOS [SSL-CIPHERS]]",
         pre_cmd_set_ssl, cmd_set_ssl, NULL, "--bootstrap", RW},
 
+    /* Port Group Commands */
+    {"pg-add", 1, INT_MAX, "", NULL, cmd_pg_add, NULL, "", RW },
+    {"pg-set-ports", 2, INT_MAX, "", NULL, cmd_pg_set_ports, NULL, "", RW },
+    {"pg-del", 1, 1, "", NULL, cmd_pg_del, NULL, "", RW },
+
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };
 
@@ -5233,6 +5388,7 @@ server_cmd_run(struct unixctl_conn *conn, int argc, const char **argv_,
     }
 
     struct ds output = DS_EMPTY_INITIALIZER;
+    table_format_reset();
     for (struct ctl_command *c = commands; c < &commands[n_commands]; c++) {
         if (c->table) {
             table_format(c->table, &table_style, &output);
@@ -5271,11 +5427,12 @@ server_cmd_init(struct ovsdb_idl *idl, bool *exiting)
 }
 
 static void
-server_loop(struct ovsdb_idl *idl)
+server_loop(struct ovsdb_idl *idl, int argc, char *argv[])
 {
     struct unixctl_server *server = NULL;
     bool exiting = false;
 
+    service_start(&argc, &argv);
     daemonize_start(false);
     int error = unixctl_server_create(unixctl_path, &server);
     if (error) {
@@ -5358,14 +5515,12 @@ nbctl_client(const char *socket_name,
             exit(EXIT_SUCCESS);
 
         case 't':
-            timeout = strtoul(po->arg, NULL, 10);
-            if (timeout < 0) {
+            if (!str_to_uint(po->arg, 10, &timeout) || !timeout) {
                 ctl_fatal("value %s on -t or --timeout is invalid", po->arg);
             }
             break;
 
         VLOG_OPTION_HANDLERS
-        TABLE_OPTION_HANDLERS(&table_style)
 
         case OPT_LOCAL:
         default:
@@ -5383,9 +5538,7 @@ nbctl_client(const char *socket_name,
         svec_add(&args, argv[i]);
     }
 
-    if (timeout) {
-        time_alarm(timeout);
-    }
+    ctl_timeout_setup(timeout);
 
     struct jsonrpc *client;
     int error = unixctl_client_create(socket_name, &client);

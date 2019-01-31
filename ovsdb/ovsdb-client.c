@@ -328,11 +328,11 @@ parse_options(int argc, char *argv[])
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
+    unsigned int timeout = 0;
 
     table_style.format = TF_TABLE;
 
     for (;;) {
-        unsigned long int timeout;
         int c;
 
         c = getopt_long(argc, argv, short_options, long_options, NULL);
@@ -366,12 +366,8 @@ parse_options(int argc, char *argv[])
             break;
 
         case 't':
-            timeout = strtoul(optarg, NULL, 10);
-            if (timeout <= 0) {
-                ovs_fatal(0, "value %s on -t or --timeout is not at least 1",
-                          optarg);
-            } else {
-                time_alarm(timeout);
+            if (!str_to_uint(optarg, 10, &timeout) || !timeout) {
+                ovs_fatal(0, "value %s on -t or --timeout is invalid", optarg);
             }
             break;
 
@@ -395,6 +391,8 @@ parse_options(int argc, char *argv[])
         }
     }
     free(short_options);
+
+    ctl_timeout_setup(timeout);
 }
 
 static void
@@ -500,7 +498,7 @@ open_jsonrpc(const char *server)
     int error;
 
     error = stream_open_block(jsonrpc_stream_open(server, &stream,
-                              DSCP_DEFAULT), &stream);
+                              DSCP_DEFAULT), -1, &stream);
     if (error == EAFNOSUPPORT) {
         struct pstream *pstream;
 
@@ -2328,10 +2326,6 @@ do_wait(struct jsonrpc *rpc_unused OVS_UNUSED,
         const char *database_unused OVS_UNUSED,
         int argc, char *argv[])
 {
-    vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
-    vlog_set_levels_from_string_assert("reconnect:err");
-    vlog_set_levels_from_string_assert("jsonrpc:err");
-
     const char *database = argv[argc - 2];
     const char *state = argv[argc - 1];
 

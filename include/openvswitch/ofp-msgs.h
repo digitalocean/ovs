@@ -45,6 +45,7 @@
 extern "C" {
 #endif
 
+struct hmap;
 struct ovs_list;
 
 /* Raw identifiers for OpenFlow messages.
@@ -274,6 +275,10 @@ enum ofpraw {
     /* OFPT 1.4+ (31): struct ofp14_table_status, uint8_t[8][]. */
     OFPRAW_OFPT14_TABLE_STATUS,
 
+    /* NXT 1.0-1.2 (132): struct ofp14_requestforward, uint8_t[8][]. */
+    OFPRAW_NXT_REQUESTFORWARD,
+    /* ONFT 1.3 (2350): struct ofp14_requestforward, uint8_t[8][]. */
+    OFPRAW_ONFT13_REQUESTFORWARD,
     /* OFPT 1.4+ (32): struct ofp14_requestforward, uint8_t[8][]. */
     OFPRAW_OFPT14_REQUESTFORWARD,
 
@@ -421,7 +426,7 @@ enum ofpraw {
     /* OFPST 1.3+ (11): struct ofp13_meter_features. */
     OFPRAW_OFPST13_METER_FEATURES_REPLY,
 
-    /* OFPST 1.3+ (12): void. */
+    /* OFPST 1.3+ (12): uint8_t[8][]. */
     OFPRAW_OFPST13_TABLE_FEATURES_REQUEST,
 
     /* OFPST 1.3+ (12): struct ofp13_table_features, uint8_t[8][]. */
@@ -645,7 +650,9 @@ enum ofptype {
                                    * OFPRAW_OFPT14_ROLE_STATUS. */
 
     /* Request forwarding by the switch. */
-    OFPTYPE_REQUESTFORWARD,       /* OFPRAW_OFPT14_REQUESTFORWARD. */
+    OFPTYPE_REQUESTFORWARD,       /* OFPRAW_NXT_REQUESTFORWARD.
+                                   * OFPRAW_ONFT13_REQUESTFORWARD.
+                                   * OFPRAW_OFPT14_REQUESTFORWARD. */
 
     /* Asynchronous messages. */
     OFPTYPE_TABLE_STATUS,          /* OFPRAW_OFPT14_TABLE_STATUS. */
@@ -815,9 +822,26 @@ void ofpmp_postappend(struct ovs_list *, size_t start_ofs);
 enum ofp_version ofpmp_version(struct ovs_list *);
 enum ofpraw ofpmp_decode_raw(struct ovs_list *);
 
-/* Decoding multipart replies. */
+/* Decoding multipart messages. */
 uint16_t ofpmp_flags(const struct ofp_header *);
 bool ofpmp_more(const struct ofp_header *);
+
+/* Multipart request assembler.
+ *
+ * OpenFlow 1.3 and later support making multipart requests that span more than
+ * one OpenFlow message.  These functions reassemble such requests.
+ *
+ * A reassembler is simply an hmap.  The following functions manipulate an hmap
+ * used for this purpose. */
+
+void ofpmp_assembler_clear(struct hmap *assembler);
+
+struct ofpbuf *ofpmp_assembler_run(struct hmap *assembler, long long int now)
+    OVS_WARN_UNUSED_RESULT;
+long long int ofpmp_assembler_wait(struct hmap *assembler);
+
+enum ofperr ofpmp_assembler_execute(struct hmap *assembler, struct ofpbuf *msg,
+                                    struct ovs_list *out, long long int now);
 
 #ifdef __cplusplus
 }

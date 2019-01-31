@@ -39,6 +39,7 @@ struct dpif {
     char *full_name;
     uint8_t netflow_engine_type;
     uint8_t netflow_engine_id;
+    long long int current_ms;
 };
 
 void dpif_init(struct dpif *, const struct dpif_class *, const char *name,
@@ -274,9 +275,11 @@ struct dpif_class {
      * If 'terse' is true, then only UID and statistics will
      * be returned in the dump. Otherwise, all fields will be returned.
      *
-     * If 'type' isn't null, dumps only the flows of the given type. */
-    struct dpif_flow_dump *(*flow_dump_create)(const struct dpif *dpif,
-                                               bool terse, char *type);
+     * If 'types' isn't null, dumps only the flows of the passed types. */
+    struct dpif_flow_dump *(*flow_dump_create)(
+        const struct dpif *dpif,
+        bool terse,
+        struct dpif_flow_dump_types *types);
     int (*flow_dump_destroy)(struct dpif_flow_dump *dump);
 
     struct dpif_flow_dump_thread *(*flow_dump_thread_create)(
@@ -285,12 +288,14 @@ struct dpif_class {
 
     int (*flow_dump_next)(struct dpif_flow_dump_thread *thread,
                           struct dpif_flow *flows, int max_flows);
-
     /* Executes each of the 'n_ops' operations in 'ops' on 'dpif', in the order
      * in which they are specified, placing each operation's results in the
      * "output" members documented in comments and the 'error' member of each
-     * dpif_op. */
-    void (*operate)(struct dpif *dpif, struct dpif_op **ops, size_t n_ops);
+     * dpif_op. The offload_type argument tells the provider if 'ops' should
+     * be submitted to to a netdev (only offload) or to the kernel datapath
+     * (never offload) or to both (offload if possible; software fallback). */
+    void (*operate)(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
+                    enum dpif_offload_type offload_type);
 
     /* Enables or disables receiving packets with dpif_recv() for 'dpif'.
      * Turning packet receive off and then back on is allowed to change Netlink

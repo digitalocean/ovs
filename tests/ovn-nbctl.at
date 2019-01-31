@@ -15,7 +15,7 @@ ovn_nbctl_test_start() {
    on_exit "kill `cat ovsdb-server.pid`"
    AS_CASE([$1],
      [daemon],
-       [export OVN_NB_DAEMON=$(ovn-nbctl --pidfile --detach --log-file -vsocket_util:off)
+       [export OVN_NB_DAEMON=$(ovn-nbctl --pidfile --detach --no-chdir --log-file -vsocket_util:off)
         on_exit "kill `cat ovn-nbctl.pid`"],
      [direct], [],
      [*], [AT_FAIL_IF(:)])
@@ -1517,3 +1517,57 @@ AT_CHECK([ovn-nbctl create Port_Group name=pg0], [0], [ignore])
 AT_CHECK([ovn-nbctl get Port_Group pg0 name], [0], [dnl
 "pg0"
 ])])
+
+OVN_NBCTL_TEST([ovn_nbctl_extra_newlines], [extra newlines], [
+dnl This test addresses a specific issue seen when running ovn-nbctl in
+dnl daemon mode. All we have to do is ensure that each time we list database
+dnl information, there is not an extra newline at the beginning of the output.
+AT_CHECK([ovn-nbctl ls-add sw1], [0], [ignore])
+AT_CHECK([ovn-nbctl --columns=name list logical_switch sw1], [0], [dnl
+name                : "sw1"
+])
+AT_CHECK([ovn-nbctl --columns=name list logical_switch sw1], [0], [dnl
+name                : "sw1"
+])])
+
+OVN_NBCTL_TEST([ovn_nbctl_table_formatting], [table formatting], [
+dnl This test addresses a specific issue seen when running ovn-nbctl in
+dnl daemon mode. We need to ensure that table formatting options are honored
+dnl when listing database information.
+AT_CHECK([ovn-nbctl ls-add sw1], [0], [ignore])
+AT_CHECK([ovn-nbctl --bare --columns=name list logical_switch sw1], [0], [dnl
+sw1
+])])
+dnl ---------------------------------------------------------------------
+
+OVN_NBCTL_TEST([ovn_nbctl_port_group_commands], [port group commands], [
+AT_CHECK([ovn-nbctl pg-add pg1], [0], [ignore])
+AT_CHECK([ovn-nbctl --bare --columns=name list port_group pg1], [0],
+[pg1
+])
+
+AT_CHECK([ovn-nbctl pg-del pg1], [0], [ignore])
+AT_CHECK([ovn-nbctl list port_group], [0], [])
+
+AT_CHECK([ovn-nbctl ls-add sw1], [0], [ignore])
+AT_CHECK([ovn-nbctl lsp-add sw1 sw1-p1], [0], [ignore])
+SW1P1=$(ovn-nbctl --bare --columns=_uuid list logical_switch_port sw1-p1)
+AT_CHECK([ovn-nbctl lsp-add sw1 sw1-p2], [0], [ignore])
+SW1P2=$(ovn-nbctl --bare --columns=_uuid list logical_switch_port sw1-p2)
+
+AT_CHECK([ovn-nbctl pg-add pg1 sw1-p1], [0], [ignore])
+AT_CHECK([ovn-nbctl --bare --columns=name list port_group pg1], [0],[dnl
+pg1
+])
+AT_CHECK_UNQUOTED([ovn-nbctl --bare --columns=ports list port_group pg1], [0], [dnl
+$SW1P1
+])
+
+AT_CHECK([ovn-nbctl pg-set-ports pg1 sw1-p2], [0], [ignore])
+AT_CHECK_UNQUOTED([ovn-nbctl --bare --columns=ports list port_group pg1], [0], [dnl
+$SW1P2
+])
+
+AT_CHECK([ovn-nbctl pg-del pg1], [0], [ignore])
+AT_CHECK([ovn-nbctl list port_group], [0], [])
+])

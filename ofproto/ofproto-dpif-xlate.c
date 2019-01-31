@@ -668,10 +668,38 @@ xlate_report_error(const struct xlate_ctx *ctx, const char *format, ...)
     if (ctx->xin->trace) {
         oftrace_report(ctx->xin->trace, OFT_ERROR, ds_cstr(&s));
     } else {
-        ds_put_cstr(&s, " while processing ");
+        ds_put_format(&s, " on bridge %s while processing ",
+                      ctx->xbridge->name);
         flow_format(&s, &ctx->base_flow, NULL);
-        ds_put_format(&s, " on bridge %s", ctx->xbridge->name);
         VLOG_WARN("%s", ds_cstr(&s));
+    }
+    ds_destroy(&s);
+}
+
+/* This is like xlate_report() for messages that should be logged
+   at the info level (even when not tracing). */
+static void OVS_PRINTF_FORMAT(2, 3)
+xlate_report_info(const struct xlate_ctx *ctx, const char *format, ...)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    if (!OVS_UNLIKELY(ctx->xin->trace)
+        && (!ctx->xin->packet || VLOG_DROP_INFO(&rl))) {
+        return;
+    }
+
+    struct ds s = DS_EMPTY_INITIALIZER;
+    va_list args;
+    va_start(args, format);
+    ds_put_format_valist(&s, format, args);
+    va_end(args);
+
+    if (ctx->xin->trace) {
+        oftrace_report(ctx->xin->trace, OFT_WARN, ds_cstr(&s));
+    } else {
+        ds_put_format(&s, " on bridge %s while processing ",
+                      ctx->xbridge->name);
+        flow_format(&s, &ctx->base_flow, NULL);
+        VLOG_INFO("%s", ds_cstr(&s));
     }
     ds_destroy(&s);
 }
@@ -2030,21 +2058,10 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         return;
     }
 
-    if (ctx->xin->resubmit_stats) {
-        mirror_update_stats(xbridge->mbridge, mirrors,
-                            ctx->xin->resubmit_stats->n_packets,
-                            ctx->xin->resubmit_stats->n_bytes);
-    }
-    if (ctx->xin->xcache) {
-        struct xc_entry *entry;
-
-        entry = xlate_cache_add_entry(ctx->xin->xcache, XC_MIRROR);
-        entry->mirror.mbridge = mbridge_ref(xbridge->mbridge);
-        entry->mirror.mirrors = mirrors;
-    }
-
-    /* 'mirrors' is a bit-mask of candidates for mirroring.  Iterate as long as
-     * some candidates remain.  */
+    /* 'mirrors' is a bit-mask of candidates for mirroring.  Iterate through
+     * the candidates, adding the ones that really should be mirrored to
+     * 'used_mirrors', as long as some candidates remain.  */
+    mirror_mask_t used_mirrors = 0;
     while (mirrors) {
         const unsigned long *vlans;
         mirror_mask_t dup_mirrors;
@@ -2067,6 +2084,9 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
             mirrors = zero_rightmost_1bit(mirrors);
             continue;
         }
+
+        /* We sent a packet to this mirror. */
+        used_mirrors |= rightmost_1bit(mirrors);
 
         /* Record the mirror, and the mirrors that output to the same
          * destination, so that we don't mirror to them again.  This must be
@@ -2100,6 +2120,21 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
          * mirrors), so make sure that we don't send duplicates. */
         mirrors &= ~ctx->mirrors;
         ctx->mirror_snaplen = 0;
+    }
+
+    if (used_mirrors) {
+        if (ctx->xin->resubmit_stats) {
+            mirror_update_stats(xbridge->mbridge, used_mirrors,
+                                ctx->xin->resubmit_stats->n_packets,
+                                ctx->xin->resubmit_stats->n_bytes);
+        }
+        if (ctx->xin->xcache) {
+            struct xc_entry *entry;
+
+            entry = xlate_cache_add_entry(ctx->xin->xcache, XC_MIRROR);
+            entry->mirror.mbridge = mbridge_ref(xbridge->mbridge);
+            entry->mirror.mirrors = used_mirrors;
+        }
     }
 }
 
@@ -4500,6 +4535,7 @@ pick_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
      */
     if (ctx->was_mpls) {
         ctx_trigger_freeze(ctx);
+        return NULL;
     }
 
     switch (group->selection_method) {
@@ -5071,7 +5107,7 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
         if (port != ctx->xin->flow.in_port.ofp_port) {
             compose_output_action(ctx, port, NULL, is_last_action, truncate);
         } else {
-            xlate_report(ctx, OFT_WARN, "skipping output to input port");
+            xlate_report_info(ctx, "skipping output to input port");
         }
         break;
     }
@@ -5156,7 +5192,7 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
                 ctx->xout->slow |= SLOW_ACTION;
             }
         } else {
-            xlate_report(ctx, OFT_WARN, "skipping output to input port");
+            xlate_report_info(ctx, "skipping output to input port");
         }
         break;
     }
@@ -7010,9 +7046,7 @@ xlate_wc_init(struct xlate_ctx *ctx)
     /* Some fields we consider to always be examined. */
     WC_MASK_FIELD(ctx->wc, packet_type);
     WC_MASK_FIELD(ctx->wc, in_port);
-    if (is_ethernet(&ctx->xin->flow, NULL)) {
-        WC_MASK_FIELD(ctx->wc, dl_type);
-    }
+    WC_MASK_FIELD(ctx->wc, dl_type);
     if (is_ip_any(&ctx->xin->flow)) {
         WC_MASK_FIELD_MASK(ctx->wc, nw_frag, FLOW_NW_FRAG_MASK);
     }
@@ -7039,12 +7073,14 @@ xlate_wc_finish(struct xlate_ctx *ctx)
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(ctx->wc);
 
-    /* Wildcard ethernet fields if the original packet type was not
-     * Ethernet. */
+    /* Wildcard Ethernet address fields if the original packet type was not
+     * Ethernet.
+     *
+     * (The Ethertype field is used even when the original packet type is not
+     * Ethernet.) */
     if (ctx->xin->upcall_flow->packet_type != htonl(PT_ETH)) {
         ctx->wc->masks.dl_dst = eth_addr_zero;
         ctx->wc->masks.dl_src = eth_addr_zero;
-        ctx->wc->masks.dl_type = 0;
     }
 
     /* ICMPv4 and ICMPv6 have 8-bit "type" and "code" fields.  struct flow

@@ -396,6 +396,17 @@ static void vxlan_notify_add_rx_port(struct vxlan_sock *vs)
 		if (dev->netdev_ops->ndo_add_vxlan_port)
 			dev->netdev_ops->ndo_add_vxlan_port(dev, sa_family,
 					port);
+#elif defined(HAVE_NDO_UDP_TUNNEL_ADD)
+		struct udp_tunnel_info ti;
+		if (vs->flags & VXLAN_F_GPE)
+			ti.type = UDP_TUNNEL_TYPE_VXLAN_GPE;
+		else
+			ti.type = UDP_TUNNEL_TYPE_VXLAN;
+		ti.sa_family = sa_family;
+		ti.port = inet_sk(sk)->inet_sport;
+
+		if (dev->netdev_ops->ndo_udp_tunnel_add)
+			dev->netdev_ops->ndo_udp_tunnel_add(dev, &ti);
 #endif
 	}
 	rcu_read_unlock();
@@ -417,6 +428,17 @@ static void vxlan_notify_del_rx_port(struct vxlan_sock *vs)
 		if (dev->netdev_ops->ndo_del_vxlan_port)
 			dev->netdev_ops->ndo_del_vxlan_port(dev, sa_family,
 					port);
+#elif defined(HAVE_NDO_UDP_TUNNEL_ADD)
+		struct udp_tunnel_info ti;
+		if (vs->flags & VXLAN_F_GPE)
+			ti.type = UDP_TUNNEL_TYPE_VXLAN_GPE;
+		else
+			ti.type = UDP_TUNNEL_TYPE_VXLAN;
+		ti.port = inet_sk(sk)->inet_sport;
+		ti.sa_family = sa_family;
+
+		if (dev->netdev_ops->ndo_udp_tunnel_del)
+			dev->netdev_ops->ndo_udp_tunnel_del(dev, &ti);
 #endif
 	}
 	rcu_read_unlock();
@@ -896,6 +918,7 @@ out_free:
 static struct rtable *vxlan_get_route(struct vxlan_dev *vxlan,
 				      struct sk_buff *skb, int oif, u8 tos,
 				      __be32 daddr, __be32 *saddr,
+				      __be16 dport, __be16 sport,
 				      struct dst_cache *dst_cache,
 				      const struct ip_tunnel_info *info)
 {
@@ -918,6 +941,8 @@ static struct rtable *vxlan_get_route(struct vxlan_dev *vxlan,
 	fl4.flowi4_proto = IPPROTO_UDP;
 	fl4.daddr = daddr;
 	fl4.saddr = *saddr;
+	fl4.fl4_dport = dport;
+	fl4.fl4_sport = sport;
 
 	rt = ip_route_output_key(vxlan->net, &fl4);
 	if (!IS_ERR(rt)) {
@@ -934,6 +959,7 @@ static struct dst_entry *vxlan6_get_route(struct vxlan_dev *vxlan,
 					  __be32 label,
 					  const struct in6_addr *daddr,
 					  struct in6_addr *saddr,
+					  __be16 dport, __be16 sport,
 					  struct dst_cache *dst_cache,
 					  const struct ip_tunnel_info *info)
 {
@@ -961,6 +987,8 @@ static struct dst_entry *vxlan6_get_route(struct vxlan_dev *vxlan,
 	fl6.flowlabel = ip6_make_flowinfo(RT_TOS(tos), label);
 	fl6.flowi6_mark = skb->mark;
 	fl6.flowi6_proto = IPPROTO_UDP;
+	fl6.fl6_dport = dport;
+	fl6.fl6_sport = sport;
 
 #ifdef HAVE_IPV6_DST_LOOKUP_NET
 	err = ipv6_stub->ipv6_dst_lookup(vxlan->net,
@@ -1073,7 +1101,8 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		label = info->key.label;
 		udp_sum = !!(info->key.tun_flags & TUNNEL_CSUM);
 
-		if (info->options_len)
+		if (info->options_len &&
+		    info->key.tun_flags & TUNNEL_VXLAN_OPT)
 			md = ip_tunnel_info_opts(info);
 	} else {
 		md->gbp = skb->mark;
@@ -1090,6 +1119,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 				     rdst ? rdst->remote_ifindex : 0, tos,
 				     dst->sin.sin_addr.s_addr,
 				     &src->sin.sin_addr.s_addr,
+				     dst_port, src_port,
 				     dst_cache, info);
 		if (IS_ERR(rt)) {
 			netdev_dbg(dev, "no route to %pI4\n",
@@ -1149,6 +1179,7 @@ static void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 					rdst ? rdst->remote_ifindex : 0, tos,
 					label, &dst->sin6.sin6_addr,
 					&src->sin6.sin6_addr,
+					dst_port, src_port,
 					dst_cache, info);
 		if (IS_ERR(ndst)) {
 			netdev_dbg(dev, "no route to %pI6\n",
@@ -1445,7 +1476,8 @@ int ovs_vxlan_fill_metadata_dst(struct net_device *dev, struct sk_buff *skb)
 			return -EINVAL;
 		rt = vxlan_get_route(vxlan, skb, 0, info->key.tos,
 				     info->key.u.ipv4.dst,
-				     &info->key.u.ipv4.src, NULL, info);
+				     &info->key.u.ipv4.src,
+				     dport, sport, NULL, info);
 		if (IS_ERR(rt))
 			return PTR_ERR(rt);
 		ip_rt_put(rt);
@@ -1455,7 +1487,8 @@ int ovs_vxlan_fill_metadata_dst(struct net_device *dev, struct sk_buff *skb)
 
 		ndst = vxlan6_get_route(vxlan, skb, 0, info->key.tos,
 					info->key.label, &info->key.u.ipv6.dst,
-					&info->key.u.ipv6.src, NULL, info);
+					&info->key.u.ipv6.src,
+					dport, sport, NULL, info);
 		if (IS_ERR(ndst))
 			return PTR_ERR(ndst);
 		dst_release(ndst);
@@ -1524,9 +1557,9 @@ static struct device_type vxlan_type = {
 	.name = "vxlan",
 };
 
-/* Calls the ndo_add_vxlan_port of the caller in order to
- * supply the listening VXLAN udp ports. Callers are expected
- * to implement the ndo_add_vxlan_port.
+/* Calls the ndo_add_vxlan_port or ndo_udp_tunnel_add of the caller
+ * in order to supply the listening VXLAN udp ports. Callers are
+ * expected to implement the ndo_add_vxlan_port.
  */
 static void vxlan_push_rx_ports(struct net_device *dev)
 {
@@ -1548,6 +1581,30 @@ static void vxlan_push_rx_ports(struct net_device *dev)
 			sa_family = vxlan_get_sk_family(vs);
 			dev->netdev_ops->ndo_add_vxlan_port(dev, sa_family,
 							    port);
+		}
+	}
+	spin_unlock(&vn->sock_lock);
+#elif defined(HAVE_NDO_UDP_TUNNEL_ADD)
+	struct vxlan_sock *vs;
+	struct net *net = dev_net(dev);
+	struct vxlan_net *vn = net_generic(net, vxlan_net_id);
+	unsigned int i;
+
+	if (!dev->netdev_ops->ndo_udp_tunnel_add)
+		return;
+
+	spin_lock(&vn->sock_lock);
+	for (i = 0; i < PORT_HASH_SIZE; ++i) {
+		hlist_for_each_entry_rcu(vs, &vn->sock_list[i], hlist) {
+			struct udp_tunnel_info ti;
+			if (vs->flags & VXLAN_F_GPE)
+				ti.type = UDP_TUNNEL_TYPE_VXLAN_GPE;
+			else
+				ti.type = UDP_TUNNEL_TYPE_VXLAN;
+			ti.port = inet_sk(vs->sock->sk)->inet_sport;
+			ti.sa_family = vxlan_get_sk_family(vs);
+
+			dev->netdev_ops->ndo_udp_tunnel_add(dev, &ti);
 		}
 	}
 	spin_unlock(&vn->sock_lock);

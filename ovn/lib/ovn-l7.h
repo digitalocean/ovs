@@ -70,6 +70,7 @@ struct gen_opts_map {
 #define DHCP_OPT_T1 DHCP_OPTION("T1", 58, "uint32")
 #define DHCP_OPT_T2 DHCP_OPTION("T2", 59, "uint32")
 
+#define DHCP_OPT_BOOTFILE DHCP_OPTION("bootfile_name", 67, "str")
 #define DHCP_OPT_WPAD DHCP_OPTION("wpad", 252, "str")
 
 static inline uint32_t
@@ -137,6 +138,15 @@ dhcp_opts_destroy(struct hmap *dhcp_opts)
 {
     gen_opts_destroy(dhcp_opts);
 }
+
+OVS_PACKED(
+struct dhcp_opt_header {
+    uint8_t code;
+    uint8_t len;
+});
+
+#define DHCP_OPT_PAYLOAD(hdr) \
+    (void *)((char *)hdr + sizeof(struct dhcp_opt_header))
 
 /* Used in the OpenFlow PACKET_IN userdata */
 struct dhcp_opt6_header {

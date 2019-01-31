@@ -253,6 +253,7 @@ parse_options(int argc, char *argv[])
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     uint32_t versions;
     enum ofputil_protocol version_protocols;
+    unsigned int timeout = 0;
 
     /* For now, ovs-ofctl only enables OpenFlow 1.0 by default.  This is
      * because ovs-ofctl implements command such as "add-flow" as raw OpenFlow
@@ -272,7 +273,6 @@ parse_options(int argc, char *argv[])
     set_allowed_ofp_versions("OpenFlow10");
 
     for (;;) {
-        unsigned long int timeout;
         int c;
 
         c = getopt_long(argc, argv, short_options, long_options, NULL);
@@ -282,12 +282,8 @@ parse_options(int argc, char *argv[])
 
         switch (c) {
         case 't':
-            timeout = strtoul(optarg, NULL, 10);
-            if (timeout <= 0) {
-                ovs_fatal(0, "value %s on -t or --timeout is not at least 1",
-                          optarg);
-            } else {
-                time_alarm(timeout);
+            if (!str_to_uint(optarg, 10, &timeout) || !timeout) {
+                ovs_fatal(0, "value %s on -t or --timeout is invalid", optarg);
             }
             break;
 
@@ -392,6 +388,8 @@ parse_options(int argc, char *argv[])
             abort();
         }
     }
+
+    ctl_timeout_setup(timeout);
 
     if (n_criteria) {
         /* Always do a final sort pass based on priority. */
@@ -603,7 +601,7 @@ open_vconn__(const char *name, enum open_target target,
     free(socket_name);
 
     VLOG_DBG("connecting to %s", vconn_get_name(*vconnp));
-    error = vconn_connect_block(*vconnp);
+    error = vconn_connect_block(*vconnp, -1);
     if (error) {
         ovs_fatal(0, "%s: failed to connect to socket (%s)", name,
                   ovs_strerror(error));
@@ -890,6 +888,8 @@ ofctl_dump_table_features(struct ovs_cmdl_context *ctx)
     bool done = false;
 
     struct ofputil_table_features prev;
+    int first_ditto = -1, last_ditto = -1;
+    struct ds s = DS_EMPTY_INITIALIZER;
     int n = 0;
 
     send_openflow_buffer(vconn, request);
@@ -913,9 +913,9 @@ ofctl_dump_table_features(struct ovs_cmdl_context *ctx)
                 done = !ofpmp_more(reply->data);
                 for (;;) {
                     struct ofputil_table_features tf;
-                    int retval;
-
-                    retval = ofputil_decode_table_features(reply, &tf, true);
+                    struct ofpbuf raw_properties;
+                    int retval = ofputil_decode_table_features(
+                        reply, &tf, &raw_properties);
                     if (retval) {
                         if (retval != EOF) {
                             ovs_fatal(0, "decode error: %s",
@@ -924,12 +924,9 @@ ofctl_dump_table_features(struct ovs_cmdl_context *ctx)
                         break;
                     }
 
-                    struct ds s = DS_EMPTY_INITIALIZER;
                     ofputil_table_features_format(
                         &s, &tf, n ? &prev : NULL, NULL, NULL,
-                        tables_to_show(ctx->argv[1]));
-                    puts(ds_cstr(&s));
-                    ds_destroy(&s);
+                        &first_ditto, &last_ditto);
 
                     prev = tf;
                     n++;
@@ -947,6 +944,11 @@ ofctl_dump_table_features(struct ovs_cmdl_context *ctx)
         }
         ofpbuf_delete(reply);
     }
+
+    ofputil_table_features_format_finish(&s, first_ditto, last_ditto);
+    const char *p = ds_cstr(&s);
+    puts(p + (*p == '\n'));
+    ds_destroy(&s);
 
     vconn_close(vconn);
 }
@@ -1205,6 +1207,7 @@ struct table_iterator {
     bool more;
 
     struct ofputil_table_features features;
+    struct ofpbuf raw_properties;
 };
 
 /* Initializes 'ti' to prepare for iterating through all of the tables on the
@@ -1246,7 +1249,7 @@ table_iterator_next(struct table_iterator *ti)
                 ovs_assert(ti->variant == TI_FEATURES);
                 retval = ofputil_decode_table_features(ti->reply,
                                                        &ti->features,
-                                                       true);
+                                                       &ti->raw_properties);
             }
             if (!retval) {
                 return &ti->features;
@@ -2579,15 +2582,94 @@ fetch_table_desc(struct vconn *vconn, struct ofputil_table_mod *tm,
 }
 
 static void
+change_table_name(struct vconn *vconn, uint8_t table_id, const char *new_name)
+{
+    /* Get all tables' features and properties. */
+    struct table {
+        struct ofputil_table_features tf;
+        struct ofpbuf *raw_properties;
+    } *tables[256];
+    memset(tables, 0, sizeof tables);
+
+    struct table_iterator ti;
+    table_iterator_init(&ti, vconn);
+    while (table_iterator_next(&ti)) {
+        struct table *t = tables[ti.features.table_id] = xmalloc(sizeof *t);
+        t->tf = ti.features;
+        t->raw_properties = ofpbuf_clone(&ti.raw_properties);
+    }
+    table_iterator_destroy(&ti);
+
+    /* Change the name for table 'table_id'. */
+    struct table *t = tables[table_id];
+    if (!t) {
+        ovs_fatal(0, "switch does not have table %"PRIu8, table_id);
+    }
+    ovs_strlcpy(t->tf.name, new_name, OFP_MAX_TABLE_NAME_LEN);
+
+    /* Compose the transaction. */
+    enum ofp_version version = vconn_get_version(vconn);
+    struct ovs_list requests = OVS_LIST_INITIALIZER(&requests);
+    struct ofpbuf *tfr = ofputil_encode_table_features_request(version);
+    ovs_list_push_back(&requests, &tfr->list_node);
+    if (version >= OFP15_VERSION) {
+        /* For OpenFlow 1.5, we can use a single OFPTFC15_MODIFY without any
+         * properties. */
+        t->tf.command = OFPTFC15_MODIFY;
+        t->tf.any_properties = false;
+        ofputil_append_table_features(&t->tf, NULL, &requests);
+    } else {
+        /* For OpenFlow 1.3 and 1.4, we have to regurgitate all of the tables
+         * and their properties. */
+        for (size_t i = 0; i < 256; i++) {
+            if (tables[i]) {
+                ofputil_append_table_features(&tables[i]->tf,
+                                              tables[i]->raw_properties,
+                                              &requests);
+            }
+        }
+    }
+
+    /* Transact.
+     *
+     * The reply repeats the entire new configuration of the tables, so we
+     * don't bother printing it unless there's an error. */
+    struct ovs_list replies;
+    struct ofpbuf *reply;
+    vconn_transact_multipart(vconn, &requests, &replies);
+    LIST_FOR_EACH (reply, list_node, &replies) {
+        enum ofptype type;
+        enum ofperr error = ofptype_decode(&type, reply->data);
+        if (error) {
+            ovs_fatal(0, "decode error: %s", ofperr_get_name(error));
+        } else if (type == OFPTYPE_ERROR) {
+            ofp_print(stderr, reply->data, reply->size, NULL, NULL,
+                      verbosity + 1);
+            exit(1);
+        }
+    }
+    ofpbuf_list_delete(&replies);
+
+    /* Clean up. */
+    for (size_t i = 0; i < ARRAY_SIZE(tables); i++) {
+        if (tables[i]) {
+            ofpbuf_delete(tables[i]->raw_properties);
+            free(tables[i]);
+        }
+    }
+}
+
+static void
 ofctl_mod_table(struct ovs_cmdl_context *ctx)
 {
     uint32_t usable_versions;
     struct ofputil_table_mod tm;
+    const char *name;
     struct vconn *vconn;
     char *error;
     int i;
 
-    error = parse_ofp_table_mod(&tm, ctx->argv[2], ctx->argv[3],
+    error = parse_ofp_table_mod(&tm, &name, ctx->argv[2], ctx->argv[3],
                                 tables_to_accept(ctx->argv[1]),
                                 &usable_versions);
     if (error) {
@@ -2605,27 +2687,33 @@ ofctl_mod_table(struct ovs_cmdl_context *ctx)
     mask_allowed_ofp_versions(usable_versions);
     enum ofputil_protocol protocol = open_vconn(ctx->argv[1], &vconn);
 
-    /* For OpenFlow 1.4+, ovs-ofctl mod-table should not affect table-config
-     * properties that the user didn't ask to change, so it is necessary to
-     * restore the current configuration of table-config parameters using
-     * OFPMP14_TABLE_DESC request. */
-    if ((allowed_versions & (1u << OFP14_VERSION)) ||
-        (allowed_versions & (1u << OFP15_VERSION))) {
-        struct ofputil_table_desc td;
+    if (name) {
+        change_table_name(vconn, tm.table_id, name);
+    } else {
+        /* For OpenFlow 1.4+, ovs-ofctl mod-table should not affect
+         * table-config properties that the user didn't ask to change, so it is
+         * necessary to restore the current configuration of table-config
+         * parameters using OFPMP14_TABLE_DESC request. */
+        if (allowed_versions & ((1u << OFP14_VERSION) |
+                                (1u << OFP15_VERSION) |
+                                (1u << OFP16_VERSION))) {
+            struct ofputil_table_desc td;
 
-        if (tm.table_id == OFPTT_ALL) {
-            for (i = 0; i < OFPTT_MAX; i++) {
-                tm.table_id = i;
+            if (tm.table_id == OFPTT_ALL) {
+                for (i = 0; i < OFPTT_MAX; i++) {
+                    tm.table_id = i;
+                    fetch_table_desc(vconn, &tm, &td);
+                    transact_noreply(vconn,
+                                     ofputil_encode_table_mod(&tm, protocol));
+                }
+            } else {
                 fetch_table_desc(vconn, &tm, &td);
-                transact_noreply(vconn,
-                                 ofputil_encode_table_mod(&tm, protocol));
+                transact_noreply(vconn, ofputil_encode_table_mod(&tm,
+                                                                 protocol));
             }
         } else {
-            fetch_table_desc(vconn, &tm, &td);
             transact_noreply(vconn, ofputil_encode_table_mod(&tm, protocol));
         }
-    } else {
-        transact_noreply(vconn, ofputil_encode_table_mod(&tm, protocol));
     }
     vconn_close(vconn);
 }
@@ -2745,12 +2833,12 @@ static void
 ofctl_ofp_parse_pcap(struct ovs_cmdl_context *ctx)
 {
     struct tcp_reader *reader;
-    FILE *file;
+    struct pcap_file *p_file;
     int error;
     bool first;
 
-    file = ovs_pcap_open(ctx->argv[1], "rb");
-    if (!file) {
+    p_file = ovs_pcap_open(ctx->argv[1], "rb");
+    if (!p_file) {
         ovs_fatal(errno, "%s: open failed", ctx->argv[1]);
     }
 
@@ -2761,7 +2849,7 @@ ofctl_ofp_parse_pcap(struct ovs_cmdl_context *ctx)
         long long int when;
         struct flow flow;
 
-        error = ovs_pcap_read(file, &packet, &when);
+        error = ovs_pcap_read(p_file, &packet, &when);
         if (error) {
             break;
         }
@@ -2811,7 +2899,7 @@ ofctl_ofp_parse_pcap(struct ovs_cmdl_context *ctx)
         dp_packet_delete(packet);
     }
     tcp_reader_close(reader);
-    fclose(file);
+    ovs_pcap_close(p_file);
 }
 
 static void
@@ -4252,15 +4340,16 @@ ofctl_parse_actions__(const char *version_s, bool instructions)
                      &of_in, of_in.size, version, NULL, NULL, &ofpacts);
         if (!error && instructions) {
             /* Verify actions, enforce consistency. */
-            enum ofputil_protocol protocol;
-            struct match match;
-
-            memset(&match, 0, sizeof match);
-            protocol = ofputil_protocols_from_ofp_version(version);
-            error = ofpacts_check_consistency(ofpacts.data, ofpacts.size,
-                                              &match, OFPP_MAX,
-                                              table_id ? atoi(table_id) : 0,
-                                              OFPTT_MAX + 1, protocol);
+            struct match match = MATCH_CATCHALL_INITIALIZER;
+            struct ofpact_check_params cp = {
+                .match = &match,
+                .max_ports = OFPP_MAX,
+                .table_id = table_id ? atoi(table_id) : 0,
+                .n_tables = OFPTT_MAX + 1,
+            };
+            error = ofpacts_check_consistency(
+                ofpacts.data, ofpacts.size,
+                ofputil_protocols_from_ofp_version(version), &cp);
         }
         if (error) {
             printf("bad %s %s: %s\n\n",
@@ -4457,7 +4546,7 @@ ofctl_parse_pcap(struct ovs_cmdl_context *ctx)
     int error = 0;
     for (int i = 1; i < ctx->argc; i++) {
         const char *filename = ctx->argv[i];
-        FILE *pcap = ovs_pcap_open(filename, "rb");
+        struct pcap_file *pcap = ovs_pcap_open(filename, "rb");
         if (!pcap) {
             error = errno;
             ovs_error(error, "%s: open failed", filename);
@@ -4483,7 +4572,7 @@ ofctl_parse_pcap(struct ovs_cmdl_context *ctx)
             putchar('\n');
             dp_packet_delete(packet);
         }
-        fclose(pcap);
+        ovs_pcap_close(pcap);
     }
     exit(error);
 }
@@ -4784,8 +4873,10 @@ ofctl_compose_packet(struct ovs_cmdl_context *ctx)
     free(l7);
 
     if (print_pcap) {
-        ovs_pcap_write_header(stdout);
-        ovs_pcap_write(stdout, &p);
+        struct pcap_file *p_file = ovs_pcap_stdout();
+        ovs_pcap_write_header(p_file);
+        ovs_pcap_write(p_file, &p);
+        ovs_pcap_close(p_file);
     } else {
         ovs_hex_dump(stdout, dp_packet_data(&p), dp_packet_size(&p), 0, false);
     }

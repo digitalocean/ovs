@@ -246,6 +246,42 @@ static int dpif_netlink_port_query__(const struct dpif_netlink *dpif,
                                      odp_port_t port_no, const char *port_name,
                                      struct dpif_port *dpif_port);
 
+static int
+create_nl_sock(struct dpif_netlink *dpif OVS_UNUSED, struct nl_sock **socksp)
+    OVS_REQ_WRLOCK(dpif->upcall_lock)
+{
+#ifndef _WIN32
+    return nl_sock_create(NETLINK_GENERIC, socksp);
+#else
+    /* Pick netlink sockets to use in a round-robin fashion from each
+     * handler's pool of sockets. */
+    struct dpif_handler *handler = &dpif->handlers[0];
+    struct dpif_windows_vport_sock *sock_pool = handler->vport_sock_pool;
+    size_t index = handler->last_used_pool_idx;
+
+    /* A pool of sockets is allocated when the handler is initialized. */
+    if (sock_pool == NULL) {
+        *socksp = NULL;
+        return EINVAL;
+    }
+
+    ovs_assert(index < VPORT_SOCK_POOL_SIZE);
+    *socksp = sock_pool[index].nl_sock;
+    ovs_assert(*socksp);
+    index = (index == VPORT_SOCK_POOL_SIZE - 1) ? 0 : index + 1;
+    handler->last_used_pool_idx = index;
+    return 0;
+#endif
+}
+
+static void
+close_nl_sock(struct nl_sock *socksp)
+{
+#ifndef _WIN32
+    nl_sock_destroy(socksp);
+#endif
+}
+
 static struct dpif_netlink *
 dpif_netlink_cast(const struct dpif *dpif)
 {
@@ -716,7 +752,8 @@ dpif_netlink_port_add__(struct dpif_netlink *dpif, const char *name,
     int error = 0;
 
     if (dpif->handlers) {
-        if (nl_sock_create(NETLINK_GENERIC, &socksp)) {
+        error = create_nl_sock(dpif, &socksp);
+        if (error) {
             return error;
         }
     }
@@ -748,7 +785,7 @@ dpif_netlink_port_add__(struct dpif_netlink *dpif, const char *name,
                       dpif_name(&dpif->dpif), *port_nop);
         }
 
-        nl_sock_destroy(socksp);
+        close_nl_sock(socksp);
         goto exit;
     }
 
@@ -763,7 +800,7 @@ dpif_netlink_port_add__(struct dpif_netlink *dpif, const char *name,
         request.dp_ifindex = dpif->dp_ifindex;
         request.port_no = *port_nop;
         dpif_netlink_vport_transact(&request, NULL, NULL);
-        nl_sock_destroy(socksp);
+        close_nl_sock(socksp);
         goto exit;
     }
 
@@ -863,7 +900,7 @@ dpif_netlink_rtnl_port_create_and_add(struct dpif_netlink *dpif,
     name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
     error = dpif_netlink_port_add__(dpif, name, OVS_VPORT_TYPE_NETDEV, NULL,
                                     port_nop);
-    if (error) {
+    if (error && error != EEXIST) {
         dpif_netlink_rtnl_port_destroy(name, netdev_get_type(netdev));
     }
     return error;
@@ -880,7 +917,7 @@ dpif_netlink_port_add(struct dpif *dpif_, struct netdev *netdev,
     if (!ovs_tunnels_out_of_tree) {
         error = dpif_netlink_rtnl_port_create_and_add(dpif, netdev, port_nop);
     }
-    if (error) {
+    if (error && error != EEXIST) {
         error = dpif_netlink_port_add_compat(dpif, netdev, port_nop);
     }
     fat_rwlock_unlock(&dpif->upcall_lock);
@@ -1325,16 +1362,6 @@ dpif_netlink_init_flow_del(struct dpif_netlink *dpif,
                                  del->ufid, del->terse, request);
 }
 
-enum {
-    DUMP_OVS_FLOWS_BIT    = 0,
-    DUMP_NETDEV_FLOWS_BIT = 1,
-};
-
-enum {
-    DUMP_OVS_FLOWS    = (1 << DUMP_OVS_FLOWS_BIT),
-    DUMP_NETDEV_FLOWS = (1 << DUMP_NETDEV_FLOWS_BIT),
-};
-
 struct dpif_netlink_flow_dump {
     struct dpif_flow_dump up;
     struct nl_dump nl_dump;
@@ -1343,7 +1370,7 @@ struct dpif_netlink_flow_dump {
     int netdev_dumps_num;                    /* Number of netdev_flow_dumps */
     struct ovs_mutex netdev_lock;            /* Guards the following. */
     int netdev_current_dump OVS_GUARDED;     /* Shared current dump */
-    int type;                                /* Type of dump */
+    struct dpif_flow_dump_types types;       /* Type of dump */
 };
 
 static struct dpif_netlink_flow_dump *
@@ -1358,7 +1385,7 @@ start_netdev_dump(const struct dpif *dpif_,
 {
     ovs_mutex_init(&dump->netdev_lock);
 
-    if (!(dump->type & DUMP_NETDEV_FLOWS)) {
+    if (!(dump->types.netdev_flows)) {
         dump->netdev_dumps_num = 0;
         dump->netdev_dumps = NULL;
         return;
@@ -1372,24 +1399,21 @@ start_netdev_dump(const struct dpif *dpif_,
     ovs_mutex_unlock(&dump->netdev_lock);
 }
 
-static int
-dpif_netlink_get_dump_type(char *str) {
-    int type = 0;
-
-    if (!str || !strcmp(str, "ovs") || !strcmp(str, "dpctl")) {
-        type |= DUMP_OVS_FLOWS;
+static void
+dpif_netlink_populate_flow_dump_types(struct dpif_netlink_flow_dump *dump,
+                                      struct dpif_flow_dump_types *types)
+{
+    if (!types) {
+        dump->types.ovs_flows = true;
+        dump->types.netdev_flows = true;
+    } else {
+        memcpy(&dump->types, types, sizeof *types);
     }
-    if ((netdev_is_flow_api_enabled() && !str)
-        || (str && (!strcmp(str, "offloaded") || !strcmp(str, "dpctl")))) {
-        type |= DUMP_NETDEV_FLOWS;
-    }
-
-    return type;
 }
 
 static struct dpif_flow_dump *
 dpif_netlink_flow_dump_create(const struct dpif *dpif_, bool terse,
-                              char *type)
+                              struct dpif_flow_dump_types *types)
 {
     const struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct dpif_netlink_flow_dump *dump;
@@ -1399,9 +1423,9 @@ dpif_netlink_flow_dump_create(const struct dpif *dpif_, bool terse,
     dump = xmalloc(sizeof *dump);
     dpif_flow_dump_init(&dump->up, dpif_);
 
-    dump->type = dpif_netlink_get_dump_type(type);
+    dpif_netlink_populate_flow_dump_types(dump, types);
 
-    if (dump->type & DUMP_OVS_FLOWS) {
+    if (dump->types.ovs_flows) {
         dpif_netlink_flow_init(&request);
         request.cmd = OVS_FLOW_CMD_GET;
         request.dp_ifindex = dpif->dp_ifindex;
@@ -1428,7 +1452,7 @@ dpif_netlink_flow_dump_destroy(struct dpif_flow_dump *dump_)
     unsigned int nl_status = 0;
     int dump_status;
 
-    if (dump->type & DUMP_OVS_FLOWS) {
+    if (dump->types.ovs_flows) {
         nl_status = nl_dump_done(&dump->nl_dump);
     }
 
@@ -1572,7 +1596,7 @@ dpif_netlink_netdev_match_to_dpif_flow(struct match *match,
         .flow = &match->flow,
         .mask = &match->wc.masks,
         .support = {
-            .max_vlan_headers = 1,
+            .max_vlan_headers = 2,
         },
     };
     size_t offset;
@@ -1664,7 +1688,7 @@ dpif_netlink_flow_dump_next(struct dpif_flow_dump_thread *thread_,
         }
     }
 
-    if (!(dump->type & DUMP_OVS_FLOWS)) {
+    if (!(dump->types.ovs_flows)) {
         return n_flows;
     }
 
@@ -1967,6 +1991,7 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
     struct netdev *dev;
     struct offload_info info;
     ovs_be16 dst_port = 0;
+    uint8_t csum_on = false;
     int err;
 
     if (put->flags & DPIF_FP_PROBE) {
@@ -2007,12 +2032,16 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
             if (tnl_cfg && tnl_cfg->dst_port != 0) {
                 dst_port = tnl_cfg->dst_port;
             }
+            if (tnl_cfg) {
+                csum_on = tnl_cfg->csum;
+            }
             netdev_close(outdev);
         }
     }
 
     info.dpif_class = dpif_class;
     info.tp_dst_port = dst_port;
+    info.tunnel_csum_on = csum_on;
     err = netdev_flow_put(dev, &match,
                           CONST_CAST(struct nlattr *, put->actions),
                           put->actions_len,
@@ -2038,7 +2067,23 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
 
         VLOG_DBG("added flow");
     } else if (err != EEXIST) {
-        VLOG_ERR_RL(&rl, "failed to offload flow: %s", ovs_strerror(err));
+        struct netdev *oor_netdev = NULL;
+        if (err == ENOSPC && netdev_is_offload_rebalance_policy_enabled()) {
+            /*
+             * We need to set OOR on the input netdev (i.e, 'dev') for the
+             * flow. But if the flow has a tunnel attribute (i.e, decap action,
+             * with a virtual device like a VxLAN interface as its in-port),
+             * then lookup and set OOR on the underlying tunnel (real) netdev.
+             */
+            oor_netdev = flow_get_tunnel_netdev(&match.flow.tunnel);
+            if (!oor_netdev) {
+                /* Not a 'tunnel' flow */
+                oor_netdev = dev;
+            }
+            netdev_set_hw_info(oor_netdev, HW_INFO_TYPE_OOR, true);
+        }
+        VLOG_ERR_RL(&rl, "failed to offload flow: %s: %s", ovs_strerror(err),
+                    (oor_netdev ? oor_netdev->name : dev->name));
     }
 
 out:
@@ -2125,7 +2170,8 @@ dpif_netlink_operate_chunks(struct dpif_netlink *dpif, struct dpif_op **ops,
 }
 
 static void
-dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
+dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops,
+                     enum dpif_offload_type offload_type)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
     struct dpif_op *new_ops[OPERATE_MAX_OPS];
@@ -2133,7 +2179,12 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
     int i = 0;
     int err = 0;
 
-    if (netdev_is_flow_api_enabled()) {
+    if (offload_type == DPIF_OFFLOAD_ALWAYS && !netdev_is_flow_api_enabled()) {
+        VLOG_DBG("Invalid offload_type: %d", offload_type);
+        return;
+    }
+
+    if (offload_type != DPIF_OFFLOAD_NEVER && netdev_is_flow_api_enabled()) {
         while (n_ops > 0) {
             count = 0;
 
@@ -2142,6 +2193,23 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
 
                 err = try_send_to_netdev(dpif, op);
                 if (err && err != EEXIST) {
+                    if (offload_type == DPIF_OFFLOAD_ALWAYS) {
+                        /* We got an error while offloading an op. Since
+                         * OFFLOAD_ALWAYS is specified, we stop further
+                         * processing and return to the caller without
+                         * invoking kernel datapath as fallback. But the
+                         * interface requires us to process all n_ops; so
+                         * return the same error in the remaining ops too.
+                         */
+                        op->error = err;
+                        n_ops--;
+                        while (n_ops > 0) {
+                            op = ops[i++];
+                            op->error = err;
+                            n_ops--;
+                        }
+                        return;
+                    }
                     new_ops[count++] = op;
                 } else {
                     op->error = err;
@@ -2152,7 +2220,7 @@ dpif_netlink_operate(struct dpif *dpif_, struct dpif_op **ops, size_t n_ops)
 
             dpif_netlink_operate_chunks(dpif, new_ops, count);
         }
-    } else {
+    } else if (offload_type != DPIF_OFFLOAD_ALWAYS) {
         dpif_netlink_operate_chunks(dpif, ops, n_ops);
     }
 }
@@ -2248,8 +2316,9 @@ dpif_netlink_refresh_channels(struct dpif_netlink *dpif, uint32_t n_handlers)
         if (port_no >= dpif->uc_array_size
             || !vport_get_pid(dpif, port_no, &upcall_pid)) {
             struct nl_sock *socksp;
+            error = create_nl_sock(dpif, &socksp);
 
-            if (nl_sock_create(NETLINK_GENERIC, &socksp)) {
+            if (error) {
                 goto error;
             }
 

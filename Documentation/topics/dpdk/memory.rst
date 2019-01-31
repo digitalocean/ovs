@@ -130,8 +130,8 @@ Example 3
 
  MTU = 6000 Bytes
  Number of mbufs = 262144
- Mbuf size = 8128 Bytes
- Memory required = 262144 * 8128 = 2130 MB
+ Mbuf size = 7104 Bytes
+ Memory required = 262144 * 7104 = 1862 MB
 
 Example 4
 +++++++++
@@ -203,8 +203,8 @@ Example 2: (1 rxq, 2 PMD, 6000 MTU)
 
  MTU = 6000
  Number of mbufs = (1 * 2048) + (3 * 2048) + (1 * 32) + (16384) = 24608
- Mbuf size = 8128 Bytes
- Memory required = 24608 * 8128 = 200 MB
+ Mbuf size = 7104 Bytes
+ Memory required = 24608 * 7104 = 175 MB
 
 Example 3: (2 rxq, 2 PMD, 9000 MTU)
 +++++++++++++++++++++++++++++++++++

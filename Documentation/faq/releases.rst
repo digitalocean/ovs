@@ -67,7 +67,7 @@ Q: What Linux kernel versions does each Open vSwitch release work with?
     2.7.x        3.10 to 4.9
     2.8.x        3.10 to 4.12
     2.9.x        3.10 to 4.13
-    2.10.x       3.10 to 4.15
+    2.10.x       3.10 to 4.17
     ============ ==============
 
     Open vSwitch userspace should also work with the Linux kernel module built
@@ -114,9 +114,11 @@ Q: Are all features available with all datapaths?
     Tunnel - GRE          3.11           YES            YES       YES
     Tunnel - VXLAN        3.12           YES            YES       YES
     Tunnel - Geneve       3.18           YES            YES       YES
-    Tunnel - GRE-IPv6     NO             NO             YES       NO
+    Tunnel - GRE-IPv6     4.18           YES            YES       NO
     Tunnel - VXLAN-IPv6   4.3            YES            YES       NO
     Tunnel - Geneve-IPv6  4.4            YES            YES       NO
+    Tunnel - ERSPAN       4.18           YES            YES       NO
+    Tunnel - ERSPAN-IPv6  4.18           YES            YES       NO
     QoS - Policing        YES            YES            YES       NO
     QoS - Shaping         YES            YES            NO        NO
     sFlow                 YES            YES            YES       NO
@@ -132,6 +134,10 @@ Q: Are all features available with all datapaths?
 
     * Only a limited set of flow fields is modifiable via the set action by the
       Hyper-V datapath.
+
+    * Userspace datapath support, in some cases, is dependent on the associated
+      interface types.  For example, DPDK interfaces support ingress and egress
+      policing, but not shaping.
 
     The following table lists features that do not *directly* impact an Open
     vSwitch user, e.g. because their absence can be hidden by the ofproto layer
@@ -239,6 +245,7 @@ packaged with Open vSwitch?
     GRE      3.11
     VXLAN    3.12
     Geneve   3.18
+    ERSPAN   4.18
     LISP     not upstream
     STT      not upstream
     ======== ============

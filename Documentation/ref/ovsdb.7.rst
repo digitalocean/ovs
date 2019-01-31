@@ -255,6 +255,9 @@ cluster: transactions not yet replicated to the server will be lost, and
 transactions not yet applied to the cluster may be committed.  Afterward, any
 servers in its former cluster will regard the server to have failed.
 
+Once a server leaves a cluster, it may never rejoin it.  Instead, create a new
+server and join it to the cluster.
+
 The servers in a cluster synchronize data over a cluster management protocol
 that is specific to Open vSwitch; it is not the same as the OVSDB protocol
 specified in RFC 7047.  For this purpose, a server in a cluster is tied to a
@@ -402,7 +405,7 @@ unix:<file>
     way, a client could talk to the wrong instance of a database.  To avoid
     this possibility, add ``cid:<uuid>`` to the list of methods, where <uuid>
     is the cluster ID of the desired database cluster, as printed by
-    ``ovsdb-tool get-cid``.  This feature is optional.
+    ``ovsdb-tool db-cid``.  This feature is optional.
 
 OVSDB supports the following passive connection methods:
 

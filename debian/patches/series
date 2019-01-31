@@ -1,2 +1,4 @@
 py3-compat.patch
-connmgr-Fix-vswitchd-abort-when-a-port-is-added.patch
+0001-acinclude-Also-use-LIBS-from-dpkg-pkg-config.patch
+0002-m4-update-pkg.m4-to-pkg-config-0.29.1.patch
+0003-configure.ac-use-the-locally-provided-pkg.m4.patch
