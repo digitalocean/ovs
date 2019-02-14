@@ -151,10 +151,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 4; then
-       if test "$version" = 4 && test "$patchlevel" -le 17; then
+       if test "$version" = 4 && test "$patchlevel" -le 18; then
           : # Linux 4.x
        else
-          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.17.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.18.x is not supported (please refer to the FAQ for advice)])
        fi
     elif test "$version" = 3 && test "$patchlevel" -ge 10; then
        : # Linux 3.x
@@ -242,7 +242,6 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     esac
 
     DPDK_LIB="-ldpdk"
-    DPDK_EXTRA_LIB=""
 
     ovs_save_CFLAGS="$CFLAGS"
     ovs_save_LDFLAGS="$LDFLAGS"
@@ -255,13 +254,12 @@ AC_DEFUN([OVS_CHECK_DPDK], [
       AC_LANG_PROGRAM(
         [
           #include <rte_config.h>
-#if RTE_LIBRTE_VHOST_NUMA
+#if defined(RTE_LIBRTE_VHOST_NUMA) || defined(RTE_EAL_NUMA_AWARE_HUGEPAGES)
 #error
 #endif
         ], [])
       ], [],
       [AC_SEARCH_LIBS([get_mempolicy],[numa],[],[AC_MSG_ERROR([unable to find libnuma, install the dependency package])])
-       DPDK_EXTRA_LIB="-lnuma"
        AC_DEFINE([VHOST_NUMA], [1], [NUMA Aware vHost support detected in DPDK.])])
 
     AC_COMPILE_IFELSE([
@@ -274,7 +272,6 @@ AC_DEFUN([OVS_CHECK_DPDK], [
         ], [])
       ], [],
       [AC_SEARCH_LIBS([pcap_dump],[pcap],[],[AC_MSG_ERROR([unable to find libpcap, install the dependency package])])
-       DPDK_EXTRA_LIB="-lpcap"
        AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM(
            [
@@ -297,7 +294,6 @@ AC_DEFUN([OVS_CHECK_DPDK], [
         ], [])
       ], [],
       [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])
-       DPDK_EXTRA_LIB="-lmnl"
        AC_DEFINE([DPDK_MNL], [1], [MLX5 PMD detected in DPDK.])])
 
     # On some systems we have to add -ldl to link with dpdk
@@ -310,7 +306,7 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     DPDKLIB_FOUND=false
     save_LIBS=$LIBS
     for extras in "" "-ldl"; do
-        LIBS="$DPDK_LIB $extras $save_LIBS $DPDK_EXTRA_LIB"
+        LIBS="$DPDK_LIB $extras $save_LIBS"
         AC_LINK_IFELSE(
            [AC_LANG_PROGRAM([#include <rte_config.h>
                              #include <rte_eal.h>],
@@ -915,6 +911,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_FIND_PARAM_IFELSE([$KSRC/include/net/ip_tunnels.h],
                         [ip_tunnel_info_opts_set], [flags],
                         [OVS_DEFINE([HAVE_IP_TUNNEL_INFO_OPTS_SET_FLAGS])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/inet_frag.h], [inet_frags],
+                        [rnd],
+                        [OVS_DEFINE([HAVE_INET_FRAGS_RND])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

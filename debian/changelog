@@ -1,3 +1,17 @@
+openvswitch (2.11.0~git20190214.a8a67726e-0ubuntu1) disco; urgency=medium
+
+  [ Christian Ehrhardt ]
+  * d/p/0001-acinclude-Also-use-LIBS-from-dpkg-pkg-config.patch: update to
+    the upstream accepted patch. The changes were unified and thereby drop:
+    - d/p/0002-m4-update-pkg.m4-to-pkg-config-0.29.1.patch
+    - d/p/0003-configure.ac-use-the-locally-provided-pkg.m4.patch
+
+  [ James Page ]
+  * New upstream snapshot from 2.11 release branch.
+  * d/p/*: Refresh/rebase.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 14 Feb 2019 13:12:34 +0000
+
 openvswitch (2.11.0~git20190121.4e4f80ec2-0ubuntu1) disco; urgency=medium
 
   [ James Page ]
