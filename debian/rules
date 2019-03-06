@@ -39,11 +39,12 @@ endif
 TEST_LIST =
 TEST_LIST_DPDK =
 
-# OVS 2.11 fails 2767 on amd64 and s390x
-ifneq (,$(filter s390x amd64, $(DEB_HOST_ARCH)))
-TEST_LIST = 1-2766 2768-
+# OVS 2.11 fails 2768 on amd64 s390x
+# 2768: ovn -- ipam router ports
+ifneq (,$(filter amd64 s390x, $(DEB_HOST_ARCH)))
+TEST_LIST = 1-2767 2769-
 TEST_LIST_DPDK = $(TEST_LIST)
-endif # s390x amd64
+endif # amd64 s390x
 
 override_dh_auto_test:
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))

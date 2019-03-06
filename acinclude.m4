@@ -293,8 +293,43 @@ AC_DEFUN([OVS_CHECK_DPDK], [
 #endif
         ], [])
       ], [],
-      [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])
-       AC_DEFINE([DPDK_MNL], [1], [MLX5 PMD detected in DPDK.])])
+      [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX5_PMD) && !defined(RTE_LIBRTE_MLX5_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([mlx5dv_create_wq],[mlx5],[],[AC_MSG_ERROR([unable to find libmlx5, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX4_PMD) && !defined(RTE_LIBRTE_MLX4_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([mlx4dv_init_obj],[mlx4],[],[AC_MSG_ERROR([unable to find libmlx4, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX5_PMD) && !defined(RTE_LIBRTE_MLX5_DLOPEN_DEPS)
+#error
+#endif
+#if defined(RTE_LIBRTE_MLX4_PMD) && !defined(RTE_LIBRTE_MLX4_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([verbs_init_cq],[ibverbs],[],[AC_MSG_ERROR([unable to find libibverbs, install the dependency package])])])
 
     # On some systems we have to add -ldl to link with dpdk
     #

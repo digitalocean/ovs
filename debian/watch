@@ -1,2 +1,2 @@
 version=4
-http://www.openvswitch.org/download/ http://openvswitch.org/releases/openvswitch-(.*).tar.gz
+http://www.openvswitch.org/download/ https://www.openvswitch.org/releases/openvswitch-(.*).tar.gz

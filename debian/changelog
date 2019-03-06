@@ -1,3 +1,12 @@
+openvswitch (2.11.0-0ubuntu1) disco; urgency=medium
+
+  * d/watch: Update for changes in upstream releases page.
+  * New upstream release, superceeding previous snapshots from 2.11
+    release branch.
+  * d/rules: Skip test 2768 on amd64 and s390x.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 06 Mar 2019 10:11:19 +0000
+
 openvswitch (2.11.0~git20190214.a8a67726e-0ubuntu1) disco; urgency=medium
 
   [ Christian Ehrhardt ]
