@@ -106,9 +106,7 @@ override_dh_installinit:
 	dh_installinit -popenvswitch-switch --name=ovs-vswitchd --no-start
 
 override_dh_systemd_start:
-	dh_systemd_start --restart-after-upgrade
-	dh_systemd_start -popenvswitch-switch --name=ovsdb-server --no-start
-	dh_systemd_start -popenvswitch-switch --name=ovs-vswitchd --no-start
+	dh_systemd_start --restart-after-upgrade -Xovs-vswitchd.service -Xovsdb-server.service
 
 override_dh_strip:
 	dh_strip --dbg-package=openvswitch-dbg
