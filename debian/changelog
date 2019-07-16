@@ -1,3 +1,19 @@
+openvswitch (2.11.1-0ubuntu1) eoan; urgency=medium
+
+  * New upstream point release (LP: #1836709):
+    - d/p/*: Refresh.
+  * d/openvswitch-switch.{install,service,ovsdb-server.service},d/ovs-
+    systemd-reload: Optimize reload of openvswitch-switch to minimize
+    networking downtime (LP: #1823282).
+  * d/openvswitch-switch.{ovs-vswitchd,ovsdb-server}.service: Drop
+    default dependencies and correct network.service ->
+    networking.service, add After: dpdk.service (LP: #1813371).
+  * d/openvswitch-switch{-dpdk}.prerm,postinst: Tidy with case statements,
+    only remove alternatives when package is being removed (LP: #1836713).
+  * d/rules: Refresh TEST_LIST for observed errors for new point release.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 16 Jul 2019 11:19:41 +0100
+
 openvswitch (2.11.0-0ubuntu2) disco; urgency=medium
 
   * d/rules: Skip execution of dh_systemd_start for openvswitch-switch

@@ -353,7 +353,7 @@ conntrack_destroy(struct conntrack *ct)
         struct conntrack_bucket *ctb = &ct->buckets[i];
         struct conn *conn;
 
-        ovs_mutex_destroy(&ctb->cleanup_mutex);
+        ovs_mutex_lock(&ctb->cleanup_mutex);
         ct_lock_lock(&ctb->lock);
         HMAP_FOR_EACH_POP (conn, node, &ctb->connections) {
             if (conn->conn_type == CT_CONN_TYPE_DEFAULT) {
@@ -363,7 +363,9 @@ conntrack_destroy(struct conntrack *ct)
         }
         hmap_destroy(&ctb->connections);
         ct_lock_unlock(&ctb->lock);
+        ovs_mutex_unlock(&ctb->cleanup_mutex);
         ct_lock_destroy(&ctb->lock);
+        ovs_mutex_destroy(&ctb->cleanup_mutex);
     }
     ct_rwlock_wrlock(&ct->resources_lock);
     struct nat_conn_key_node *nat_conn_key_node;
@@ -687,10 +689,9 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
                                  true);
         }
         reverse_pat_packet(pkt, conn);
-        uint32_t icmp6_csum = packet_csum_pseudoheader6(nh6);
         icmp6->icmp6_base.icmp6_cksum = 0;
-        icmp6->icmp6_base.icmp6_cksum = csum_finish(
-            csum_continue(icmp6_csum, icmp6, tail - (char *) icmp6 - pad));
+        icmp6->icmp6_base.icmp6_cksum = packet_csum_upperlayer6(nh6, icmp6,
+            IPPROTO_ICMPV6, tail - (char *) icmp6 - pad);
     }
     pkt->l3_ofs = orig_l3_ofs;
     pkt->l4_ofs = orig_l4_ofs;
@@ -755,6 +756,43 @@ conn_lookup(struct conntrack *ct, const struct conn_key *key, long long now)
     return ctx.conn;
 }
 
+/* Only used when looking up 'CT_CONN_TYPE_DEFAULT' conns. */
+static struct conn *
+conn_lookup_def(const struct conn_key *key,
+                const struct conntrack_bucket *ctb, uint32_t hash)
+    OVS_REQUIRES(ctb->lock)
+{
+    struct conn *conn = NULL;
+
+    HMAP_FOR_EACH_WITH_HASH (conn, node, hash, &ctb->connections) {
+        if (!conn_key_cmp(&conn->key, key)
+            && conn->conn_type == CT_CONN_TYPE_DEFAULT) {
+            break;
+        }
+        if (!conn_key_cmp(&conn->rev_key, key)
+            && conn->conn_type == CT_CONN_TYPE_DEFAULT) {
+            break;
+        }
+    }
+    return conn;
+}
+
+static struct conn *
+conn_lookup_unnat(const struct conn_key *key,
+                  const struct conntrack_bucket *ctb, uint32_t hash)
+    OVS_REQUIRES(ctb->lock)
+{
+    struct conn *conn = NULL;
+
+    HMAP_FOR_EACH_WITH_HASH (conn, node, hash, &ctb->connections) {
+        if (!conn_key_cmp(&conn->key, key)
+            && conn->conn_type == CT_CONN_TYPE_UN_NAT) {
+            break;
+        }
+    }
+    return conn;
+}
+
 static void
 conn_seq_skew_set(struct conntrack *ct, const struct conn_key *key,
                   long long now, int seq_skew, bool seq_skew_dir)
@@ -778,12 +816,13 @@ nat_clean(struct conntrack *ct, struct conn *conn,
     nat_conn_keys_remove(&ct->nat_conn_keys, &conn->rev_key, ct->hash_basis);
     ct_rwlock_unlock(&ct->resources_lock);
     ct_lock_unlock(&ctb->lock);
-    unsigned bucket_rev_conn =
-        hash_to_bucket(conn_key_hash(&conn->rev_key, ct->hash_basis));
+    uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis);
+    unsigned bucket_rev_conn = hash_to_bucket(hash);
     ct_lock_lock(&ct->buckets[bucket_rev_conn].lock);
     ct_rwlock_wrlock(&ct->resources_lock);
-    long long now = time_msec();
-    struct conn *rev_conn = conn_lookup(ct, &conn->rev_key, now);
+    struct conn *rev_conn = conn_lookup_unnat(&conn->rev_key,
+                                              &ct->buckets[bucket_rev_conn],
+                                              hash);
     struct nat_conn_key_node *nat_conn_key_node =
         nat_conn_keys_lookup(&ct->nat_conn_keys, &conn->rev_key,
                              ct->hash_basis);
@@ -825,6 +864,22 @@ conn_clean(struct conntrack *ct, struct conn *conn,
     }
 }
 
+/* Only called for 'CT_CONN_TYPE_DEFAULT' conns; must be called with no
+ * locks held and upon return no locks are held. */
+static void
+conn_clean_safe(struct conntrack *ct, struct conn *conn,
+                struct conntrack_bucket *ctb, uint32_t hash)
+{
+    ovs_mutex_lock(&ctb->cleanup_mutex);
+    ct_lock_lock(&ctb->lock);
+    conn = conn_lookup_def(&conn->key, ctb, hash);
+    if (conn) {
+        conn_clean(ct, conn, ctb);
+    }
+    ct_lock_unlock(&ctb->lock);
+    ovs_mutex_unlock(&ctb->cleanup_mutex);
+}
+
 static bool
 ct_verify_helper(const char *helper, enum ct_alg_ctl_type ct_alg_ctl)
 {
@@ -856,6 +911,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                enum ct_alg_ctl_type ct_alg_ctl)
 {
     struct conn *nc = NULL;
+    struct conn connl;
 
     if (!valid_new(pkt, &ctx->key)) {
         pkt->md.ct_state = CS_INVALID;
@@ -878,9 +934,10 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
         }
 
         unsigned bucket = hash_to_bucket(ctx->hash);
-        nc = new_conn(&ct->buckets[bucket], pkt, &ctx->key, now);
-        ctx->conn = nc;
-        nc->rev_key = nc->key;
+        nc = &connl;
+        memset(nc, 0, sizeof *nc);
+        memcpy(&nc->key, &ctx->key, sizeof nc->key);
+        memcpy(&nc->rev_key, &nc->key, sizeof nc->rev_key);
         conn_key_reverse(&nc->rev_key);
 
         if (ct_verify_helper(helper, ct_alg_ctl)) {
@@ -923,6 +980,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                 ct_rwlock_wrlock(&ct->resources_lock);
                 bool nat_res = nat_select_range_tuple(ct, nc,
                                                       conn_for_un_nat_copy);
+                ct_rwlock_unlock(&ct->resources_lock);
 
                 if (!nat_res) {
                     goto nat_res_exhaustion;
@@ -930,15 +988,25 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
 
                 /* Update nc with nat adjustments made to
                  * conn_for_un_nat_copy by nat_select_range_tuple(). */
-                *nc = *conn_for_un_nat_copy;
-                ct_rwlock_unlock(&ct->resources_lock);
+                memcpy(nc, conn_for_un_nat_copy, sizeof *nc);
             }
             conn_for_un_nat_copy->conn_type = CT_CONN_TYPE_UN_NAT;
             conn_for_un_nat_copy->nat_info = NULL;
             conn_for_un_nat_copy->alg = NULL;
             nat_packet(pkt, nc, ctx->icmp_related);
         }
-        hmap_insert(&ct->buckets[bucket].connections, &nc->node, ctx->hash);
+        struct conn *nconn = new_conn(&ct->buckets[bucket], pkt, &ctx->key,
+                                      now);
+        memcpy(&nconn->key, &nc->key, sizeof nconn->key);
+        memcpy(&nconn->rev_key, &nc->rev_key, sizeof nconn->rev_key);
+        memcpy(&nconn->master_key, &nc->master_key, sizeof nconn->master_key);
+        nconn->alg_related = nc->alg_related;
+        nconn->alg = nc->alg;
+        nconn->mark = nc->mark;
+        nconn->label = nc->label;
+        nconn->nat_info = nc->nat_info;
+        ctx->conn = nc = nconn;
+        hmap_insert(&ct->buckets[bucket].connections, &nconn->node, ctx->hash);
         atomic_count_inc(&ct->n_conn);
     }
 
@@ -951,13 +1019,8 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
      * against with firewall rules or a separate firewall.
      * Also using zone partitioning can limit DoS impact. */
 nat_res_exhaustion:
-    ovs_list_remove(&nc->exp_node);
-    delete_conn(nc);
-    /* conn_for_un_nat_copy is a local variable in process_one; this
-     * memset() serves to document that conn_for_un_nat_copy is from
-     * this point on unused. */
-    memset(conn_for_un_nat_copy, 0, sizeof *conn_for_un_nat_copy);
-    ct_rwlock_unlock(&ct->resources_lock);
+    free(nc->alg);
+    free(nc->nat_info);
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
     VLOG_WARN_RL(&rl, "Unable to NAT due to tuple space exhaustion - "
                  "if DoS attack, use firewalling and/or zone partitioning.");
@@ -971,6 +1034,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
     OVS_REQUIRES(ct->buckets[bucket].lock)
 {
     bool create_new_conn = false;
+    struct conn lconn;
 
     if (ctx->icmp_related) {
         pkt->md.ct_state |= CS_RELATED;
@@ -997,7 +1061,10 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             pkt->md.ct_state = CS_INVALID;
             break;
         case CT_UPDATE_NEW:
-            conn_clean(ct, *conn, &ct->buckets[bucket]);
+            memcpy(&lconn, *conn, sizeof lconn);
+            ct_lock_unlock(&ct->buckets[bucket].lock);
+            conn_clean_safe(ct, &lconn, &ct->buckets[bucket], ctx->hash);
+            ct_lock_lock(&ct->buckets[bucket].lock);
             create_new_conn = true;
             break;
         default:
@@ -1012,8 +1079,8 @@ create_un_nat_conn(struct conntrack *ct, struct conn *conn_for_un_nat_copy,
                    long long now, bool alg_un_nat)
 {
     struct conn *nc = xmemdup(conn_for_un_nat_copy, sizeof *nc);
-    nc->key = conn_for_un_nat_copy->rev_key;
-    nc->rev_key = conn_for_un_nat_copy->key;
+    memcpy(&nc->key, &conn_for_un_nat_copy->rev_key, sizeof nc->key);
+    memcpy(&nc->rev_key, &conn_for_un_nat_copy->key, sizeof nc->rev_key);
     uint32_t un_nat_hash = conn_key_hash(&nc->key, ct->hash_basis);
     unsigned un_nat_conn_bucket = hash_to_bucket(un_nat_hash);
     ct_lock_lock(&ct->buckets[un_nat_conn_bucket].lock);
@@ -1186,8 +1253,12 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     conn = ctx->conn;
 
     /* Delete found entry if in wrong direction. 'force' implies commit. */
-    if (conn && force && ctx->reply) {
-        conn_clean(ct, conn, &ct->buckets[bucket]);
+    if (OVS_UNLIKELY(force && ctx->reply && conn)) {
+        struct conn lconn;
+        memcpy(&lconn, conn, sizeof lconn);
+        ct_lock_unlock(&ct->buckets[bucket].lock);
+        conn_clean_safe(ct, &lconn, &ct->buckets[bucket], ctx->hash);
+        ct_lock_lock(&ct->buckets[bucket].lock);
         conn = NULL;
     }
 
@@ -1198,7 +1269,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
 
             struct conn_lookup_ctx ctx2;
             ctx2.conn = NULL;
-            ctx2.key = conn->rev_key;
+            memcpy(&ctx2.key, &conn->rev_key, sizeof ctx2.key);
             ctx2.hash = conn_key_hash(&conn->rev_key, ct->hash_basis);
 
             ct_lock_unlock(&ct->buckets[bucket].lock);
@@ -1284,7 +1355,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
 
     struct conn conn_for_expectation;
     if (OVS_UNLIKELY((ct_alg_ctl != CT_ALG_CTL_NONE) && conn)) {
-        conn_for_expectation = *conn;
+        memcpy(&conn_for_expectation, conn, sizeof conn_for_expectation);
     }
 
     ct_lock_unlock(&ct->buckets[bucket].lock);
@@ -1387,19 +1458,17 @@ sweep_bucket(struct conntrack *ct, struct conntrack_bucket *ctb,
 
     for (unsigned i = 0; i < N_CT_TM; i++) {
         LIST_FOR_EACH_SAFE (conn, next, exp_node, &ctb->exp_lists[i]) {
-            if (conn->conn_type == CT_CONN_TYPE_DEFAULT) {
-                if (!conn_expired(conn, now) || count >= limit) {
-                    min_expiration = MIN(min_expiration, conn->expiration);
-                    if (count >= limit) {
-                        /* Do not check other lists. */
-                        COVERAGE_INC(conntrack_long_cleanup);
-                        return min_expiration;
-                    }
-                    break;
+            if (!conn_expired(conn, now) || count >= limit) {
+                min_expiration = MIN(min_expiration, conn->expiration);
+                if (count >= limit) {
+                    /* Do not check other lists. */
+                    COVERAGE_INC(conntrack_long_cleanup);
+                    return min_expiration;
                 }
-                conn_clean(ct, conn, ctb);
-                count++;
+                break;
             }
+            conn_clean(ct, conn, ctb);
+            count++;
         }
     }
     return min_expiration;
@@ -1585,19 +1654,14 @@ static inline bool
 checksum_valid(const struct conn_key *key, const void *data, size_t size,
                const void *l3)
 {
-    uint32_t csum = 0;
-
     if (key->dl_type == htons(ETH_TYPE_IP)) {
-        csum = packet_csum_pseudoheader(l3);
+        uint32_t csum = packet_csum_pseudoheader(l3);
+        return csum_finish(csum_continue(csum, data, size)) == 0;
     } else if (key->dl_type == htons(ETH_TYPE_IPV6)) {
-        csum = packet_csum_pseudoheader6(l3);
+        return packet_csum_upperlayer6(l3, data, key->nw_proto, size) == 0;
     } else {
         return false;
     }
-
-    csum = csum_continue(csum, data, size);
-
-    return csum_finish(csum) == 0;
 }
 
 static inline bool
@@ -2271,8 +2335,10 @@ nat_conn_keys_insert(struct hmap *nat_conn_keys, const struct conn *nat_conn,
 
     if (!nat_conn_key_node) {
         struct nat_conn_key_node *nat_conn_key = xzalloc(sizeof *nat_conn_key);
-        nat_conn_key->key = nat_conn->rev_key;
-        nat_conn_key->value = nat_conn->key;
+        memcpy(&nat_conn_key->key, &nat_conn->rev_key,
+               sizeof nat_conn_key->key);
+        memcpy(&nat_conn_key->value, &nat_conn->key,
+               sizeof nat_conn_key->value);
         hmap_insert(nat_conn_keys, &nat_conn_key->node,
                     conn_key_hash(&nat_conn_key->key, basis));
         return true;
@@ -2351,12 +2417,7 @@ static struct conn *
 new_conn(struct conntrack_bucket *ctb, struct dp_packet *pkt,
          struct conn_key *key, long long now)
 {
-    struct conn *newconn = l4_protos[key->nw_proto]->new_conn(ctb, pkt, now);
-    if (newconn) {
-        newconn->key = *key;
-    }
-
-    return newconn;
+    return l4_protos[key->nw_proto]->new_conn(ctb, pkt, now);
 }
 
 static void
@@ -2549,16 +2610,19 @@ int
 conntrack_flush(struct conntrack *ct, const uint16_t *zone)
 {
     for (unsigned i = 0; i < CONNTRACK_BUCKETS; i++) {
-        struct conn *conn, *next;
-
-        ct_lock_lock(&ct->buckets[i].lock);
-        HMAP_FOR_EACH_SAFE (conn, next, node, &ct->buckets[i].connections) {
-            if ((!zone || *zone == conn->key.zone) &&
-                (conn->conn_type == CT_CONN_TYPE_DEFAULT)) {
-                conn_clean(ct, conn, &ct->buckets[i]);
+        struct conntrack_bucket *ctb = &ct->buckets[i];
+        ovs_mutex_lock(&ctb->cleanup_mutex);
+        ct_lock_lock(&ctb->lock);
+        for (unsigned j = 0; j < N_CT_TM; j++) {
+            struct conn *conn, *next;
+            LIST_FOR_EACH_SAFE (conn, next, exp_node, &ctb->exp_lists[j]) {
+                if (!zone || *zone == conn->key.zone) {
+                    conn_clean(ct, conn, ctb);
+                }
             }
         }
-        ct_lock_unlock(&ct->buckets[i].lock);
+        ct_lock_unlock(&ctb->lock);
+        ovs_mutex_unlock(&ctb->cleanup_mutex);
     }
 
     return 0;
@@ -2575,16 +2639,19 @@ conntrack_flush_tuple(struct conntrack *ct, const struct ct_dpif_tuple *tuple,
     tuple_to_conn_key(tuple, zone, &ctx.key);
     ctx.hash = conn_key_hash(&ctx.key, ct->hash_basis);
     unsigned bucket = hash_to_bucket(ctx.hash);
+    struct conntrack_bucket *ctb = &ct->buckets[bucket];
 
-    ct_lock_lock(&ct->buckets[bucket].lock);
-    conn_key_lookup(&ct->buckets[bucket], &ctx, time_msec());
+    ovs_mutex_lock(&ctb->cleanup_mutex);
+    ct_lock_lock(&ctb->lock);
+    conn_key_lookup(ctb, &ctx, time_msec());
     if (ctx.conn && ctx.conn->conn_type == CT_CONN_TYPE_DEFAULT) {
-        conn_clean(ct, ctx.conn, &ct->buckets[bucket]);
+        conn_clean(ct, ctx.conn, ctb);
     } else {
         VLOG_WARN("Must flush tuple using the original pre-NATed tuple");
         error = ENOENT;
     }
-    ct_lock_unlock(&ct->buckets[bucket].lock);
+    ct_lock_unlock(&ctb->lock);
+    ovs_mutex_unlock(&ctb->cleanup_mutex);
     return error;
 }
 
@@ -2753,7 +2820,8 @@ expectation_create(struct conntrack *ct, ovs_be16 dst_port,
     alg_exp_node->key.dst.port = dst_port;
     alg_exp_node->master_mark = master_conn->mark;
     alg_exp_node->master_label = master_conn->label;
-    alg_exp_node->master_key = master_conn->key;
+    memcpy(&alg_exp_node->master_key, &master_conn->key,
+           sizeof alg_exp_node->master_key);
     /* Take the write lock here because it is almost 100%
      * likely that the lookup will fail and
      * expectation_create() will be called below. */
@@ -3259,16 +3327,14 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     }
 
     th->tcp_csum = 0;
-    uint32_t tcp_csum;
     if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-        tcp_csum = packet_csum_pseudoheader6(nh6);
+        th->tcp_csum = packet_csum_upperlayer6(nh6, th, ctx->key.nw_proto,
+                           dp_packet_l4_size(pkt));
     } else {
-        tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        uint32_t tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        th->tcp_csum = csum_finish(
+             csum_continue(tcp_csum, th, dp_packet_l4_size(pkt)));
     }
-    const char *tail = dp_packet_tail(pkt);
-    uint8_t pad = dp_packet_l2_pad_size(pkt);
-    th->tcp_csum = csum_finish(
-        csum_continue(tcp_csum, th, tail - (char *) th - pad));
 
     if (seq_skew) {
         conn_seq_skew_set(ct, &ec->key, now, seq_skew + ec->seq_skew,

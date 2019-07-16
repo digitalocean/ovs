@@ -174,15 +174,19 @@ main(int argc, char *argv[])
     apply_options_direct(parsed_options, n_parsed_options, &local_options);
     free(parsed_options);
 
-    /* Initialize IDL. */
-    idl = the_idl = ovsdb_idl_create(db, &nbrec_idl_class, true, false);
-    ovsdb_idl_set_leader_only(idl, leader_only);
-
+    bool daemon_mode = false;
     if (get_detach()) {
         if (argc != optind) {
             ctl_fatal("non-option arguments not supported with --detach "
                       "(use --help for help)");
         }
+        daemon_mode = true;
+    }
+    /* Initialize IDL. "retry" is true iff in daemon mode. */
+    idl = the_idl = ovsdb_idl_create(db, &nbrec_idl_class, true, daemon_mode);
+    ovsdb_idl_set_leader_only(idl, leader_only);
+
+    if (daemon_mode) {
         server_loop(idl, argc, argv);
     } else {
         struct ctl_command *commands;
@@ -1484,7 +1488,7 @@ lsp_contains_duplicates(const struct nbrec_logical_switch *ls,
         for (size_t j = 0; j < lsp_test->n_addresses; j++) {
             struct lport_addresses laddrs_test;
             char *addr = lsp_test->addresses[j];
-            if (is_dynamic_lsp_address(addr)) {
+            if (is_dynamic_lsp_address(addr) && lsp_test->dynamic_addresses) {
                 addr = lsp_test->dynamic_addresses;
             }
             if (extract_lsp_addresses(addr, &laddrs_test)) {

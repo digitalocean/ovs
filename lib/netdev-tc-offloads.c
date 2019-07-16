@@ -1001,12 +1001,12 @@ test_key_and_mask(struct match *match)
                key->nw_proto == IPPROTO_ICMPV6) {
         if (mask->tp_src) {
             VLOG_DBG_RL(&rl,
-                        "offloading attribute icmp_type isn't supported");
+                        "offloading attribute icmpv6_type isn't supported");
             return EOPNOTSUPP;
         }
         if (mask->tp_dst) {
             VLOG_DBG_RL(&rl,
-                        "offloading attribute icmp_code isn't supported");
+                        "offloading attribute icmpv6_code isn't supported");
             return EOPNOTSUPP;
         }
     } else if (key->dl_type == htons(OFP_DL_TYPE_NOT_ETH_TYPE)) {
@@ -1372,9 +1372,9 @@ netdev_tc_flow_get(struct netdev *netdev OVS_UNUSED,
         return -ifindex;
     }
 
-    VLOG_DBG_RL(&rl, "flow get (dev %s prio %d handle %d)",
-                netdev_get_name(dev), prio, handle);
-    block_id = get_block_id_from_netdev(netdev);
+    block_id = get_block_id_from_netdev(dev);
+    VLOG_DBG_RL(&rl, "flow get (dev %s prio %d handle %d block_id %d)",
+                netdev_get_name(dev), prio, handle, block_id);
     err = tc_get_flower(ifindex, prio, handle, &flower, block_id);
     netdev_close(dev);
     if (err) {
@@ -1418,7 +1418,7 @@ netdev_tc_flow_del(struct netdev *netdev OVS_UNUSED,
         return -ifindex;
     }
 
-    block_id = get_block_id_from_netdev(netdev);
+    block_id = get_block_id_from_netdev(dev);
 
     if (stats) {
         memset(stats, 0, sizeof *stats);
@@ -1482,6 +1482,7 @@ out:
 static void
 probe_tc_block_support(int ifindex)
 {
+    struct tc_flower flower;
     uint32_t block_id = 1;
     int error;
 
@@ -1490,10 +1491,21 @@ probe_tc_block_support(int ifindex)
         return;
     }
 
+    memset(&flower, 0, sizeof flower);
+
+    flower.key.eth_type = htons(ETH_P_IP);
+    flower.mask.eth_type = OVS_BE16_MAX;
+    memset(&flower.key.dst_mac, 0x11, sizeof flower.key.dst_mac);
+    memset(&flower.mask.dst_mac, 0xff, sizeof flower.mask.dst_mac);
+
+    error = tc_replace_flower(ifindex, 1, 1, &flower, block_id);
+
     tc_add_del_ingress_qdisc(ifindex, false, block_id);
 
-    block_support = true;
-    VLOG_INFO("probe tc: block offload is supported.");
+    if (!error) {
+        block_support = true;
+        VLOG_INFO("probe tc: block offload is supported.");
+    }
 }
 
 int
@@ -1511,6 +1523,9 @@ netdev_tc_init_flow_api(struct netdev *netdev)
                     netdev_get_name(netdev), ovs_strerror(-ifindex));
         return -ifindex;
     }
+
+    /* make sure there is no ingress qdisc */
+    tc_add_del_ingress_qdisc(ifindex, false, 0);
 
     if (ovsthread_once_start(&block_once)) {
         probe_tc_block_support(ifindex);

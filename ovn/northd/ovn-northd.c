@@ -1829,7 +1829,12 @@ join_logical_ports(struct northd_context *ctx,
                 }
             }
         }
+    }
 
+    /* Wait until all ports have been connected to add to IPAM since
+     * it relies on proper peers to be set
+     */
+    HMAP_FOR_EACH (op, key_node, ports) {
         ipam_add_port_addresses(op->od, op);
     }
 }
@@ -6323,13 +6328,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                 continue;
             }
 
-            /* Add the prefix option if the address mode is slaac or
-             * dhcpv6_stateless. */
-            if (strcmp(address_mode, "dhcpv6_stateful")) {
-                ds_put_format(&actions, ", prefix = %s/%u",
-                              op->lrp_networks.ipv6_addrs[i].network_s,
-                              op->lrp_networks.ipv6_addrs[i].plen);
-            }
+            ds_put_format(&actions, ", prefix = %s/%u",
+                          op->lrp_networks.ipv6_addrs[i].network_s,
+                          op->lrp_networks.ipv6_addrs[i].plen);
+
             add_rs_response_flow = true;
         }
 

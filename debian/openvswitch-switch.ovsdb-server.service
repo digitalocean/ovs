@@ -1,9 +1,9 @@
 [Unit]
 Description=Open vSwitch Database Unit
-After=syslog.target network-pre.target
-Before=network.target network.service
-ReloadPropagatedFrom=openvswitch-switch.service
+After=syslog.target network-pre.target dpdk.service
+Before=network.target networking.service
 PartOf=openvswitch-switch.service
+DefaultDependencies=no
 
 [Service]
 LimitNOFILE=1048576

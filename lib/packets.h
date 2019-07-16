@@ -951,7 +951,7 @@ struct icmp6_error_header {
 BUILD_ASSERT_DECL(ICMP6_ERROR_HEADER_LEN == sizeof(struct icmp6_error_header));
 
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
-uint16_t packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
+ovs_be16 packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
                                  const void *, uint8_t, uint16_t);
 
 /* Neighbor Discovery option field.
@@ -977,9 +977,6 @@ struct ovs_nd_prefix_opt {
     union ovs_16aligned_in6_addr prefix;
 };
 BUILD_ASSERT_DECL(ND_PREFIX_OPT_LEN == sizeof(struct ovs_nd_prefix_opt));
-
-#define ND_PREFIX_ON_LINK            0x80
-#define ND_PREFIX_AUTONOMOUS_ADDRESS 0x40
 
 /* Neighbor Discovery option: MTU. */
 #define ND_MTU_OPT_LEN 8

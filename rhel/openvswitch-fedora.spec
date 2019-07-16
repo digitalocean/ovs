@@ -58,7 +58,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 2.11.0
+Version: 2.11.1
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL
@@ -225,6 +225,20 @@ make install DESTDIR=$RPM_BUILD_ROOT
 install -d -m 0755 $RPM_BUILD_ROOT%{_rundir}/openvswitch
 install -d -m 0750 $RPM_BUILD_ROOT%{_localstatedir}/log/openvswitch
 install -d -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch
+copy_headers() {
+    src=$1
+    dst=$RPM_BUILD_ROOT/$2
+    install -d -m 0755 $dst
+    install -m 0644 $src/*.h $dst
+}
+copy_headers include %{_includedir}/openvswitch
+copy_headers include/openflow %{_includedir}/openvswitch/openflow
+copy_headers include/openvswitch %{_includedir}/openvswitch/openvswitch
+copy_headers include/sparse %{_includedir}/openvswitch/sparse
+copy_headers include/sparse/arpa %{_includedir}/openvswitch/sparse/arpa
+copy_headers include/sparse/netinet %{_includedir}/openvswitch/sparse/netinet
+copy_headers include/sparse/sys %{_includedir}/openvswitch/sparse/sys
+copy_headers lib %{_includedir}/openvswitch/lib
 
 %if %{with dpdk}
 install -p -D -m 0644 rhel/usr_lib_udev_rules.d_91-vfio.rules \

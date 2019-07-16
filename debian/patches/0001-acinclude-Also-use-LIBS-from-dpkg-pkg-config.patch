@@ -64,7 +64,7 @@ Last-Update: 2019-02-14
      ovs_save_CFLAGS="$CFLAGS"
      ovs_save_LDFLAGS="$LDFLAGS"
      CFLAGS="$CFLAGS $DPDK_INCLUDE"
-@@ -342,7 +343,14 @@ AC_DEFUN([OVS_CHECK_DPDK], [
+@@ -377,7 +378,14 @@ AC_DEFUN([OVS_CHECK_DPDK], [
      #
      # These options are specified inside a single -Wl directive to prevent
      # autotools from reordering them.

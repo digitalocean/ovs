@@ -403,7 +403,23 @@ dpdk_init__(const struct smap *ovs_other_config)
         return false;
     }
 
-    rte_memzone_dump(stdout);
+    if (VLOG_IS_DBG_ENABLED()) {
+        size_t size;
+        char *response = NULL;
+        FILE *stream = open_memstream(&response, &size);
+
+        if (stream) {
+            rte_memzone_dump(stream);
+            fclose(stream);
+            if (size) {
+                VLOG_DBG("rte_memzone_dump:\n%s", response);
+            }
+            free(response);
+        } else {
+            VLOG_DBG("Could not dump memzone. Unable to open memstream: %s.",
+                     ovs_strerror(errno));
+        }
+    }
 
     /* We are called from the main thread here */
     RTE_PER_LCORE(_lcore_id) = NON_PMD_CORE_ID;
@@ -441,8 +457,8 @@ dpdk_init(const struct smap *ovs_other_config)
     const char *dpdk_init_val = smap_get_def(ovs_other_config, "dpdk-init",
                                              "false");
 
-    bool try_only = !strcmp(dpdk_init_val, "try");
-    if (!strcmp(dpdk_init_val, "true") || try_only) {
+    bool try_only = !strcasecmp(dpdk_init_val, "try");
+    if (!strcasecmp(dpdk_init_val, "true") || try_only) {
         static struct ovsthread_once once_enable = OVSTHREAD_ONCE_INITIALIZER;
 
         if (ovsthread_once_start(&once_enable)) {

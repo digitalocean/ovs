@@ -26,3 +26,4 @@ usr/share/openvswitch/scripts/ovs-ctl
 usr/share/openvswitch/scripts/ovs-kmod-ctl
 usr/share/openvswitch/scripts/ovs-save
 usr/share/openvswitch/vswitch.ovsschema
+debian/ovs-systemd-reload /usr/share/openvswitch/scripts
