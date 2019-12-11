@@ -733,7 +733,16 @@ dpif_port_query_by_name(const struct dpif *dpif, const char *devname,
 
 /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE
  * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
- * flows whose packets arrived on port 'port_no'.
+ * flows whose packets arrived on port 'port_no'.  In the case where the
+ * provider allocates multiple Netlink PIDs to a single port, it may use
+ * 'hash' to spread load among them.  The caller need not use a particular
+ * hash function; a 5-tuple hash is suitable.
+ *
+ * (The datapath implementation might use some different hash function for
+ * distributing packets received via flow misses among PIDs.  This means
+ * that packets received via flow misses might be reordered relative to
+ * packets received via userspace actions.  This is not ordinarily a
+ * problem.)
  *
  * A 'port_no' of ODPP_NONE is a special case: it returns a reserved PID, not
  * allocated to any port, that the client may use for special purposes.
@@ -744,10 +753,10 @@ dpif_port_query_by_name(const struct dpif *dpif, const char *devname,
  * update all of the flows that it installed that contain
  * OVS_ACTION_ATTR_USERSPACE actions. */
 uint32_t
-dpif_port_get_pid(const struct dpif *dpif, odp_port_t port_no)
+dpif_port_get_pid(const struct dpif *dpif, odp_port_t port_no, uint32_t hash)
 {
     return (dpif->dpif_class->port_get_pid
-            ? (dpif->dpif_class->port_get_pid)(dpif, port_no)
+            ? (dpif->dpif_class->port_get_pid)(dpif, port_no, hash)
             : 0);
 }
 
