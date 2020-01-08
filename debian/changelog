@@ -1,3 +1,9 @@
+openvswitch (2.11.2-2) unstable; urgency=low
+
+   * SYS-1615: Revert 69c51582ff78. Causes a thundering herd wakeup. 
+
+ -- David Ahern <dahern@digitalocean.com>  Wed, 08 Jan 2020 10:16:37 -0700
+
 openvswitch (2.11.2-1) unstable; urgency=low
    [ Open vSwitch team ]
    * New upstream version
