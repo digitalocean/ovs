@@ -1,2 +1,3 @@
 py3-compat.patch
 0001-acinclude-Also-use-LIBS-from-dpkg-pkg-config.patch
+0002-revert-dpif-netlink-per-thread-sockets.patch
