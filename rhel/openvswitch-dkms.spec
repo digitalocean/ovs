@@ -11,7 +11,7 @@
 %define oname openvswitch
 
 Name:             %{oname}-dkms
-Version:          2.11.1
+Version:          2.11.3
 Release:          1%{?dist}
 Summary:          Open vSwitch kernel module
 

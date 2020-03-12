@@ -58,7 +58,7 @@ Name: openvswitch
 Summary: Open vSwitch
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
-Version: 2.11.1
+Version: 2.11.3
 
 # Nearly all of openvswitch is ASL 2.0.  The bugtool is LGPLv2+, and the
 # lib/sflow*.[ch] files are SISSL

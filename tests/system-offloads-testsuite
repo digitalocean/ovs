@@ -918,7 +918,7 @@ fi
 # List of tests.
 if $at_list_p; then
   cat <<_ATEOF || at_write_fail=1
-openvswitch 2.11.1 test suite test groups:
+openvswitch 2.11.3 test suite test groups:
 
  NUM: FILE-NAME:LINE     TEST-GROUP-NAME
       KEYWORDS
@@ -959,7 +959,7 @@ _ATEOF
   exit $at_write_fail
 fi
 if $at_version_p; then
-  $as_echo "$as_me (openvswitch 2.11.1)" &&
+  $as_echo "$as_me (openvswitch 2.11.3)" &&
   cat <<\_ATEOF || at_write_fail=1
 
 Copyright (C) 2012 Free Software Foundation, Inc.
@@ -1153,11 +1153,11 @@ exec 5>>"$at_suite_log"
 
 # Banners and logs.
 $as_echo "## ------------------------------ ##
-## openvswitch 2.11.1 test suite. ##
+## openvswitch 2.11.3 test suite. ##
 ## ------------------------------ ##"
 {
   $as_echo "## ------------------------------ ##
-## openvswitch 2.11.1 test suite. ##
+## openvswitch 2.11.3 test suite. ##
 ## ------------------------------ ##"
   echo
 
@@ -2578,7 +2578,7 @@ _ASBOX
   $as_echo "Please send $at_msg and all information you think might help:
 
    To: <bugs@openvswitch.org>
-   Subject: [openvswitch 2.11.1] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
+   Subject: [openvswitch 2.11.3] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
 
 You may investigate any problem if you feel able to do so, in which
 case the test suite provides a good starting point.  Its output may
@@ -3935,8 +3935,8 @@ at_fn_check_prepare_notrace 'a shell pipeline' "system-offloads-traffic.at:55"
 at_status=$? at_failed=false
 $at_check_filter
 at_fn_diff_devnull "$at_stderr" || at_failed=:
-echo >>"$at_stdout"; $as_echo "in_port(2),eth(macs),eth_type(0x0800), packets:9, bytes:756, used:0.001s, actions:output
-in_port(3),eth(macs),eth_type(0x0800), packets:9, bytes:756, used:0.001s, actions:output
+echo >>"$at_stdout"; $as_echo "in_port(2),eth(macs),eth_type(0x0800),ipv4(frag=no), packets:9, bytes:756, used:0.001s, actions:output
+in_port(3),eth(macs),eth_type(0x0800),ipv4(frag=no), packets:9, bytes:756, used:0.001s, actions:output
 " | \
   $at_diff - "$at_stdout" || at_failed=:
 at_fn_check_status 0 $at_status "$at_srcdir/system-offloads-traffic.at:55"
@@ -3963,15 +3963,15 @@ $at_traceon; }
 
 
 { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:62: ovs-appctl dpctl/dump-flows type=offloaded | grep \"eth_type(0x0800)\" | sed -e 's/used:[0-9].[0-9]*s/used:0.001s/;s/eth(src=[a-z0-9:]*,dst=[a-z0-9:]*)/eth(macs)/;s/actions:[0-9,]*/actions:output/;s/recirc_id(0),//' | sort"
+$as_echo "$at_srcdir/system-offloads-traffic.at:62: ovs-appctl dpctl/dump-flows type=tc,offloaded | grep \"eth_type(0x0800)\" | sed -e 's/used:[0-9].[0-9]*s/used:0.001s/;s/eth(src=[a-z0-9:]*,dst=[a-z0-9:]*)/eth(macs)/;s/actions:[0-9,]*/actions:output/;s/recirc_id(0),//' | sort"
 at_fn_check_prepare_notrace 'a shell pipeline' "system-offloads-traffic.at:62"
-( $at_check_trace; ovs-appctl dpctl/dump-flows type=offloaded | grep "eth_type(0x0800)" | sed -e 's/used:[0-9].[0-9]*s/used:0.001s/;s/eth(src=[a-z0-9:]*,dst=[a-z0-9:]*)/eth(macs)/;s/actions:[0-9,]*/actions:output/;s/recirc_id(0),//' | sort
+( $at_check_trace; ovs-appctl dpctl/dump-flows type=tc,offloaded | grep "eth_type(0x0800)" | sed -e 's/used:[0-9].[0-9]*s/used:0.001s/;s/eth(src=[a-z0-9:]*,dst=[a-z0-9:]*)/eth(macs)/;s/actions:[0-9,]*/actions:output/;s/recirc_id(0),//' | sort
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter
 at_fn_diff_devnull "$at_stderr" || at_failed=:
-echo >>"$at_stdout"; $as_echo "in_port(2),eth(macs),eth_type(0x0800), packets:9, bytes:756, used:0.001s, actions:output
-in_port(3),eth(macs),eth_type(0x0800), packets:9, bytes:756, used:0.001s, actions:output
+echo >>"$at_stdout"; $as_echo "in_port(2),eth(macs),eth_type(0x0800),ipv4(frag=no), packets:9, bytes:756, used:0.001s, actions:output
+in_port(3),eth(macs),eth_type(0x0800),ipv4(frag=no), packets:9, bytes:756, used:0.001s, actions:output
 " | \
   $at_diff - "$at_stdout" || at_failed=:
 at_fn_check_status 0 $at_status "$at_srcdir/system-offloads-traffic.at:62"
@@ -3982,9 +3982,9 @@ $at_traceon; }
 
 
 { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:67: check_logs '/.*/d'"
+$as_echo "$at_srcdir/system-offloads-traffic.at:67: check_logs "
 at_fn_check_prepare_trace "system-offloads-traffic.at:67"
-( $at_check_trace; check_logs '/.*/d'
+( $at_check_trace; check_logs
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter

@@ -31,6 +31,7 @@
 #include <net/netfilter/nf_conntrack_seqadj.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/ipv6/nf_defrag_ipv6.h>
+#include <net/ipv6_frag.h>
 
 #ifdef CONFIG_NF_NAT_NEEDED
 #include <linux/netfilter/nf_nat.h>
@@ -569,6 +570,11 @@ static int handle_fragments(struct net *net, struct sw_flow_key *key,
 		return -EPFNOSUPPORT;
 	}
 
+	/* The key extracted from the fragment that completed this datagram
+	 * likely didn't have an L4 header, so regenerate it.
+	 */
+	ovs_flow_key_update_l3l4(skb, key);
+
 	key->ip.frag = OVS_FRAG_TYPE_NONE;
 	skb_clear_hash(skb);
 	skb->ignore_df = 1;
@@ -987,6 +993,11 @@ static int __ovs_ct_lookup(struct net *net, struct sw_flow_key *key,
 	struct nf_conn *ct;
 
 	if (!cached) {
+		struct nf_hook_state state = {
+			.hook = NF_INET_PRE_ROUTING,
+			.pf = info->family,
+			.net = net,
+		};
 		struct nf_conn *tmpl = info->ct;
 		int err;
 
@@ -998,8 +1009,7 @@ static int __ovs_ct_lookup(struct net *net, struct sw_flow_key *key,
 			nf_ct_set(skb, tmpl, IP_CT_NEW);
 		}
 
-		err = nf_conntrack_in(net, info->family,
-				      NF_INET_PRE_ROUTING, skb);
+		err = nf_conntrack_in(skb, &state);
 		if (err != NF_ACCEPT)
 			return -ENOENT;
 
@@ -1691,10 +1701,6 @@ int ovs_ct_copy_action(struct net *net, const struct nlattr *attr,
 		OVS_NLERR(log, "Failed to allocate conntrack template");
 		return -ENOMEM;
 	}
-
-	__set_bit(IPS_CONFIRMED_BIT, &ct_info.ct->status);
-	nf_conntrack_get(&ct_info.ct->ct_general);
-
 	if (helper) {
 		err = ovs_ct_add_helper(&ct_info, helper, key, log);
 		if (err)
@@ -1706,6 +1712,8 @@ int ovs_ct_copy_action(struct net *net, const struct nlattr *attr,
 	if (err)
 		goto err_free_ct;
 
+	__set_bit(IPS_CONFIRMED_BIT, &ct_info.ct->status);
+	nf_conntrack_get(&ct_info.ct->ct_general);
 	return 0;
 err_free_ct:
 	__ovs_ct_free_action(&ct_info);

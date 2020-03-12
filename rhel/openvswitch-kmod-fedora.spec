@@ -25,7 +25,7 @@ Summary: Open vSwitch Kernel Modules
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: OpenSource Security Ralf Spenneberg <ralf@os-s.net>
-Version: 2.11.1
+Version: 2.11.3
 
 # The entire source code is ASL 2.0 except datapath/ which is GPLv2
 License: GPLv2
@@ -120,6 +120,15 @@ do
 done
 fi
 /sbin/depmod -a
+
+%posttrans
+# The upgrade path from the older kmod-openvswitch SysV package to
+# the newer openvswitch-kmod systemd package will end up removing
+# the symlinks to the weak-updates/openvswitch drivers because of
+# it's %postun section.  We add this section to handle that case.
+if [ -x "%{_datadir}/openvswitch/scripts/ovs-kmod-manage.sh" ]; then
+    %{_datadir}/openvswitch/scripts/ovs-kmod-manage.sh
+fi
 
 %files
 %defattr(0644,root,root)

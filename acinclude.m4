@@ -634,6 +634,8 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                         [ndo_change_mtu], [OVS_DEFINE([HAVE_RHEL7_MAX_MTU])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_state])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_state],
+                        [struct net ], [OVS_DEFINE([HAVE_NF_HOOK_STATE_NET])])
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_register_net_hook])
   OVS_GREP_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hookfn.*nf_hook_ops],
                   [OVS_DEFINE([HAVE_NF_HOOKFN_ARG_OPS])])
@@ -949,6 +951,22 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_FIND_FIELD_IFELSE([$KSRC/include/net/inet_frag.h], [inet_frags],
                         [rnd],
                         [OVS_DEFINE([HAVE_INET_FRAGS_RND])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/overflow.h], [__LINUX_OVERFLOW_H],
+                  [OVS_DEFINE([HAVE_OVERFLOW_H])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/overflow.h], [struct_size],
+                  [OVS_DEFINE([HAVE_STRUCT_SIZE])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/mm.h], [kvmalloc_array],
+                  [OVS_DEFINE([HAVE_KVMALLOC_ARRAY])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/mm.h], [kvmalloc_node],
+                  [OVS_DEFINE([HAVE_KVMALLOC_NODE])])
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_l3proto.h],
+                  [nf_conntrack_l3proto],
+                  [OVS_DEFINE([HAVE_NF_CONNTRACK_L3PROATO_H])])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_core.h],
+                        [nf_conntrack_in], [nf_hook_state],
+                        [OVS_DEFINE([HAVE_NF_CONNTRACK_IN_TAKES_NF_HOOK_STATE])])
+  OVS_GREP_IFELSE([$KSRC/include/net/ipv6_frag.h], [IP6_DEFRAG_CONNTRACK_IN],
+                  [OVS_DEFINE([HAVE_IPV6_FRAG_H])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

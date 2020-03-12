@@ -2380,9 +2380,9 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
 
     ovs_mutex_lock(&pmd->dp->port_mutex);
     port = dp_netdev_lookup_port(pmd->dp, in_port);
-    if (!port) {
+    if (!port || netdev_vport_is_vport_class(port->netdev->netdev_class)) {
         ovs_mutex_unlock(&pmd->dp->port_mutex);
-        return -1;
+        goto err_free;
     }
     ret = netdev_flow_put(port->netdev, &offload->match,
                           CONST_CAST(struct nlattr *, offload->actions),
@@ -2391,20 +2391,22 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
     ovs_mutex_unlock(&pmd->dp->port_mutex);
 
     if (ret) {
-        if (!modification) {
-            flow_mark_free(mark);
-        } else {
-            mark_to_flow_disassociate(pmd, flow);
-        }
-        return -1;
+        goto err_free;
     }
 
     if (!modification) {
         megaflow_to_mark_associate(&flow->mega_ufid, mark);
         mark_to_flow_associate(mark, flow);
     }
-
     return 0;
+
+err_free:
+    if (!modification) {
+        flow_mark_free(mark);
+    } else {
+        mark_to_flow_disassociate(pmd, flow);
+    }
+    return -1;
 }
 
 static void *
@@ -5096,7 +5098,7 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
     uint64_t improvement = 0;
     uint32_t num_pmds;
     uint32_t *pmd_corelist;
-    struct rxq_poll *poll, *poll_next;
+    struct rxq_poll *poll;
     bool ret;
 
     num_pmds = cmap_count(&dp->poll_threads);
@@ -5122,13 +5124,14 @@ pmd_rebalance_dry_run(struct dp_netdev *dp)
         /* Estimate the cycles to cover all intervals. */
         total_cycles *= PMD_RXQ_INTERVAL_MAX;
 
-        HMAP_FOR_EACH_SAFE (poll, poll_next, node, &pmd->poll_list) {
-            uint64_t proc_cycles = 0;
+        ovs_mutex_lock(&pmd->port_mutex);
+        HMAP_FOR_EACH (poll, node, &pmd->poll_list) {
             for (unsigned i = 0; i < PMD_RXQ_INTERVAL_MAX; i++) {
-                proc_cycles += dp_netdev_rxq_get_intrvl_cycles(poll->rxq, i);
+                total_proc += dp_netdev_rxq_get_intrvl_cycles(poll->rxq, i);
             }
-            total_proc += proc_cycles;
         }
+        ovs_mutex_unlock(&pmd->port_mutex);
+
         if (total_proc) {
             curr_pmd_usage[num_pmds] = (total_proc * 100) / total_cycles;
         }
@@ -5547,7 +5550,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     memset(exceeded_rate, 0, cnt * sizeof *exceeded_rate);
 
     /* All packets will hit the meter at the same time. */
-    long_delta_t = (now - meter->used) / 1000; /* msec */
+    long_delta_t = now / 1000 - meter->used / 1000; /* msec */
 
     /* Make sure delta_t will not be too large, so that bucket will not
      * wrap around below. */
@@ -6436,20 +6439,13 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         miniflow_extract(packet, &key->mf);
         key->len = 0; /* Not computed yet. */
-        /* If EMC and SMC disabled skip hash computation */
-        if (smc_enable_db == true || cur_min != 0) {
-            if (!md_is_valid) {
-                key->hash = dpif_netdev_packet_get_rss_hash_orig_pkt(packet,
-                        &key->mf);
-            } else {
-                key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
-            }
-        }
-        if (cur_min) {
-            flow = emc_lookup(&cache->emc_cache, key);
-        } else {
-            flow = NULL;
-        }
+        key->hash =
+                (md_is_valid == false)
+                ? dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf)
+                : dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+
+        /* If EMC is disabled skip emc_lookup */
+        flow = (cur_min != 0) ? emc_lookup(&cache->emc_cache, key) : NULL;
         if (OVS_LIKELY(flow)) {
             tcp_flags = miniflow_get_tcp_flags(&key->mf);
             n_emc_hit++;
@@ -6554,8 +6550,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
          * could have already been installed since we last did the flow
          * lookup before upcall.  This could be solved by moving the
          * mutex lock outside the loop, but that's an awful long time
-         * to be locking everyone out of making flow installs.  If we
-         * move to a per-core classifier, it would be reasonable. */
+         * to be locking revalidators out of making flow modifications. */
         ovs_mutex_lock(&pmd->flow_mutex);
         netdev_flow = dp_netdev_pmd_lookup_flow(pmd, key, NULL);
         if (OVS_LIKELY(!netdev_flow)) {
