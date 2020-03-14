@@ -30,7 +30,7 @@ ifneq (,$(filter i386 amd64 ppc64el arm64, $(DEB_HOST_ARCH)))
 	cd _dpdk && ( \
 		test -e Makefile || \
         ../configure --prefix=/usr --localstatedir=/var --enable-ssl \
-                     --with-dpdk --sysconfdir=/etc \
+                     --without-dpdk --sysconfdir=/etc \
 					 $(DATAPATH_CONFIGURE_OPTS))
 endif
 
