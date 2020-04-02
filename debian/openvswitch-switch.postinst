@@ -59,6 +59,28 @@ export OVS_MISSING_KMOD_OK
 [ -z "${OVS_FORCE_RELOAD_KMOD}" ] && OVS_FORCE_RELOAD_KMOD=yes || true
 export OVS_FORCE_RELOAD_KMOD
 
-#DEBHELPER#
+# Manually added by nacc 4/2/2020
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+        # This will only remove masks created by d-s-h on package removal.
+        deb-systemd-helper unmask 'openvswitch-switch.service' >/dev/null || true
+
+        # was-enabled defaults to true, so new installations run enable.
+        if deb-systemd-helper --quiet was-enabled 'openvswitch-switch.service'; then
+                # Enables the unit on first installation, creates new
+                # symlinks on upgrades if the unit file has changed.
+                deb-systemd-helper enable 'openvswitch-switch.service' >/dev/null || true
+        else
+                # Update the statefile to add new symlinks (if any), which need to be
+                # cleaned up on purge. Also remove old symlinks.
+                deb-systemd-helper update-state 'openvswitch-switch.service' >/dev/null || true
+        fi
+        if systemctl --quiet is-active 'openvswitch-switch.service'; then
+            systemctl --job-mode=ignore-dependencies reload 'openvswitch-switch.service'
+        else
+            systemctl --job-mode=ignore-dependencies start 'ovsdb-server.service'
+            systemctl --job-mode=ignore-dependencies start 'ovs-vswitchd.service'
+            systemctl --job-mode=ignore-dependencies start 'openvswitch-switch.service'
+        fi
+fi
 
 exit 0
