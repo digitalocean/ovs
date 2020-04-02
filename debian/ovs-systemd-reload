@@ -22,6 +22,11 @@ esac
 
 stop_ovsdb() {
     systemctl --job-mode=ignore-dependencies stop ovsdb-server
+    # Hack to ensure that sysvinit daemons stop when upgrading to
+    # systemd units
+    if daemon_is_running ovsdb-server; then
+        stop_daemon ovsdb-server
+    fi
 }
 
 start_ovsdb() {
@@ -30,6 +35,11 @@ start_ovsdb() {
 
 stop_forwarding() {
     systemctl --job-mode=ignore-dependencies stop ovs-vswitchd
+    # Hack to ensure that sysvinit daemons stop when upgrading to
+    # systemd units
+    if daemon_is_running ovs-vswitchd; then
+        stop_daemon ovs-vswitchd
+    fi
 }
 
 start_forwarding() {
