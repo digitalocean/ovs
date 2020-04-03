@@ -1,3 +1,23 @@
+openvswitch (2.11.3-0digitalocean1) bionic; urgency=medium
+
+  * New upstream release (2.11.3)
+  * d/p/0002-revert-dpif-netlink-per-thread-sockets.patch: Revert
+    "dpif-netlink: don't allocate per thread netlink sockets".
+  * d/*.init: remove _SYSTEMCTL_SKIP_REDIRECT=yes from init scripts (Bug: #910474).
+  * d/rules: disable DPDK
+  * d/openvswitch-switch.postinst: reload instead of restart. This
+    requires a manual postinst section instead of using debhelper (due
+    to dh_installsystemd missing functionality) (LP: #1823282).
+    Additionally, call start manually on the parts of the service if the
+    systemd unit is not already active, to ensure pending-packages is
+    able to correctly upgrade on reboot.
+  * d/ovs-systemd-reload: force handling of upgrading from sysvinit to
+    systemd. Since the new package does not use the sysvinit script at
+    all, we need to manually stop the sysvinit daemons during the
+    upgrade. This can be dropped in the next version.
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Thu, 02 Apr 2020 20:22:41 -0500
+
 openvswitch (2.11.1-0ubuntu1) eoan; urgency=medium
 
   * New upstream point release (LP: #1836709):
