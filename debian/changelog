@@ -1,4 +1,4 @@
-openvswitch (2.11.3-0digitalocean2) bionic; urgency=medium
+openvswitch (2.11.3-0digitalocean2~1e0b7b996) bionic; urgency=medium
 
   * d/{openvswitch-switch,ovsdb-server,ovs-vswitchd}.service: bringup
     OVS after networking.service
