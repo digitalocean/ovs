@@ -5,6 +5,8 @@ PartOf=network.target
 Requires=ovsdb-server.service
 Requires=ovs-vswitchd.service
 Requires=networking.service
+Before=network-online-digitalocean.service
+RequiredBy=network-online-digitalocean.service
 
 [Service]
 Type=oneshot
