@@ -1,16 +1,18 @@
 [Unit]
 Description=Open vSwitch
-Before=network.target
-After=network-pre.target ovsdb-server.service ovs-vswitchd.service
+After=ovsdb-server.service ovs-vswitchd.service networking.service
 PartOf=network.target
 Requires=ovsdb-server.service
 Requires=ovs-vswitchd.service
+Requires=networking.service
+Before=network-online-digitalocean.service
+RequiredBy=network-online-digitalocean.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/true
+ExecStart=/sbin/ifup --allow=ovs br0
 ExecReload=/usr/share/openvswitch/scripts/ovs-systemd-reload
-ExecStop=/bin/true
+ExecStop=/sbin/ifdown --allow=ovs br0
 RemainAfterExit=yes
 
 [Install]

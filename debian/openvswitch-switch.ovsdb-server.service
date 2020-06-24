@@ -1,7 +1,6 @@
 [Unit]
 Description=Open vSwitch Database Unit
-After=syslog.target network-pre.target dpdk.service
-Before=network.target networking.service
+After=syslog.target dpdk.service networking.service
 PartOf=openvswitch-switch.service
 DefaultDependencies=no
 
