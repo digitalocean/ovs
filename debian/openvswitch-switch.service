@@ -10,9 +10,9 @@ RequiredBy=network-online-digitalocean.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/true
+ExecStart=/sbin/ifup --allow=ovs br0
 ExecReload=/usr/share/openvswitch/scripts/ovs-systemd-reload
-ExecStop=/bin/true
+ExecStop=/sbin/ifdown --allow=ovs br0
 RemainAfterExit=yes
 
 [Install]
