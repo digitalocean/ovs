@@ -27,6 +27,12 @@ stop_ovsdb() {
     if daemon_is_running ovsdb-server; then
         stop_daemon ovsdb-server
     fi
+    # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
+    # am not sure if this is due to ovs-vswitchd being busy, or some other
+    # strange issue (on one host, I saw OVS being manually started somewhere).
+    # We have not seen this occur with ovsdb-server, but the process should
+    # already be stopped at this point, so it should be a no-op
+    pkill ovsdb-server
 }
 
 start_ovsdb() {
@@ -40,6 +46,10 @@ stop_forwarding() {
     if daemon_is_running ovs-vswitchd; then
         stop_daemon ovs-vswitchd
     fi
+    # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
+    # am not sure if this is due to ovs-vswitchd being busy, or some other
+    # strange issue (on one host, I saw OVS being manually started somewhere).
+    pkill ovs-vswitchd
 }
 
 start_forwarding() {
