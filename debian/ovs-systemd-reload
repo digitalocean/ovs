@@ -63,7 +63,7 @@ start_ovsdb() {
 }
 
 stop_forwarding() {
-    wait_for_stopped 'ovs-vswitchd' _stop_forwarding
+    wait_for_stopped 'ovs-vswitchd'
 }
 
 start_forwarding() {
