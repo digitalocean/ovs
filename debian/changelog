@@ -1,3 +1,9 @@
+openvswitch (2.11.3-0digitalocean5) bionic; urgency=medium
+
+  * d/ovs-systemd-reload: add try-looping for process killing path.
+
+ -- Nishanth Aravamudan <nacc@breakout>  Fri, 18 Sep 2020 10:00:42 -0500
+
 openvswitch (2.11.3-0digitalocean4) bionic; urgency=medium
 
   * d/ovs-systemd-reload: manually kill ovs processes after graceful shutdown.
