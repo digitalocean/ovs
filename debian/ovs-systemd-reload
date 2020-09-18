@@ -37,7 +37,7 @@ ovs_stop() {
 }
 
 # OVS daemons can take minutes to shutdown (apparently). Abstract out a
-# wait for death loop that waits up to 15 minutes?
+# wait for death loop that waits up to 15 minutes
 wait_for_stopped() {
     pname="$1"
     i=0
