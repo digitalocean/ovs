@@ -20,19 +20,42 @@ case $0 in
 esac
 . "$dir0/ovs-lib" || exit 1
 
-stop_ovsdb() {
-    systemctl --job-mode=ignore-dependencies stop ovsdb-server
+# ovsdb-server and ovs-vswitchd are stopped in identical ways
+ovs_stop() {
+    systemctl --job-mode=ignore-dependencies stop "$1"
     # Hack to ensure that sysvinit daemons stop when upgrading to
     # systemd units
-    if daemon_is_running ovsdb-server; then
-        stop_daemon ovsdb-server
+    if daemon_is_running "$1;" then
+        stop_daemon "$1"
     fi
     # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
     # am not sure if this is due to ovs-vswitchd being busy, or some other
     # strange issue (on one host, I saw OVS being manually started somewhere).
     # We have not seen this occur with ovsdb-server, but the process should
     # already be stopped at this point, so it should be a no-op
-    pkill ovsdb-server
+    pkill "$1"
+}
+
+# OVS daemons can take minutes to shutdown (apparently). Abstract out a
+# wait for death loop that waits up to 15 minutes?
+wait_for_stopped() {
+    pname="$1"
+    i=0
+    # 30 * 30s = 15m
+    while [[ $i < 30 ]]; do
+        pgrep -c "$pname"
+        if [ $? != 0 ]; then
+            break
+        fi
+        ovs_stop "$pname"
+        sleep 30
+        $i++
+    done
+}
+
+
+stop_ovsdb() {
+    wait_for_stopped 'ovsdb-server'
 }
 
 start_ovsdb() {
@@ -40,16 +63,7 @@ start_ovsdb() {
 }
 
 stop_forwarding() {
-    systemctl --job-mode=ignore-dependencies stop ovs-vswitchd
-    # Hack to ensure that sysvinit daemons stop when upgrading to
-    # systemd units
-    if daemon_is_running ovs-vswitchd; then
-        stop_daemon ovs-vswitchd
-    fi
-    # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
-    # am not sure if this is due to ovs-vswitchd being busy, or some other
-    # strange issue (on one host, I saw OVS being manually started somewhere).
-    pkill ovs-vswitchd
+    wait_for_stopped 'ovs-vswitchd' _stop_forwarding
 }
 
 start_forwarding() {
