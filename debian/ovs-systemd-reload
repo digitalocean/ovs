@@ -25,7 +25,7 @@ ovs_stop() {
     systemctl --job-mode=ignore-dependencies stop "$1"
     # Hack to ensure that sysvinit daemons stop when upgrading to
     # systemd units
-    if daemon_is_running "$1;" then
+    if daemon_is_running "$1"; then
         stop_daemon "$1"
     fi
     # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
