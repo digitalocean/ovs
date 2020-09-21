@@ -20,6 +20,16 @@ case $0 in
 esac
 . "$dir0/ovs-lib" || exit 1
 
+# 5 minutes by default
+RELOAD_TIMEOUT_SECS=300
+# 10s sleeps by default
+RELOAD_SLEEP_SECS=10
+# if you want to override, set the above variables in the following file
+if [ -f /etc/default/openvswitch-reload-DO ]; then
+    . /etc/default/openvswitch-reload-DO
+fi
+
+
 # ovsdb-server and ovs-vswitchd are stopped in identical ways
 ovs_stop() {
     systemctl --job-mode=ignore-dependencies stop "$1"
@@ -37,19 +47,18 @@ ovs_stop() {
 }
 
 # OVS daemons can take minutes to shutdown (apparently). Abstract out a
-# wait for death loop that waits up to 15 minutes
+# wait for death loop that waits up to RELOAD_TIMEOUT_SECS
 wait_for_stopped() {
     pname="$1"
     i=0
-    # 30 * 30s = 15m
-    while [[ $i < 30 ]]; do
-        pgrep -c "$pname"
+    while [[ $i -lt $RELOAD_TIMEOUT_SECS ]]; do
+        pgrep -c "$pname" >/dev/null 2>&1
         if [ $? != 0 ]; then
             break
         fi
-        ovs_stop "$pname"
-        sleep 30
-        $i++
+        ovs_stop $pname
+        sleep $RELOAD_SLEEP_SECS
+        ((i += RELOAD_SLEEP_SECS)
     done
 }
 
