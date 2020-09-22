@@ -58,7 +58,7 @@ wait_for_stopped() {
         fi
         ovs_stop $pname
         sleep $RELOAD_SLEEP_SECS
-        ((i += RELOAD_SLEEP_SECS)
+        ((i += RELOAD_SLEEP_SECS))
     done
 }
 

@@ -1,3 +1,9 @@
+openvswitch (2.11.3-0digitalocean6) bionic; urgency=medium
+
+  * d/ovs-systemd-reload: fix obvious bash syntax error.
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Tue, 22 Sep 2020 12:54:00 -0500
+
 openvswitch (2.11.3-0digitalocean5) bionic; urgency=medium
 
   * d/ovs-systemd-reload: add try-looping for process killing path.
