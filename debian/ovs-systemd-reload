@@ -73,8 +73,17 @@ start_forwarding() {
     systemctl --job-mode=ignore-dependencies start ovs-vswitchd
 }
 
+# this hook runs after we have started OVS back up and restored flows
 add_managers() {
-    :
+    # there appears to be some issue with libvirt and the tap device
+    # when we upgrade OVS. Use a hammer rather than a knife to avoid
+    # INCI-320 in the future, by bouncing every Droplet's NIC.
+    for dom in $(virsh list --name | head -1); do
+        for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
+            virsh domif-setlink $dom $tap down
+            virsh domif-setlink $dom $tap up
+        done
+    done
 }
 
 if [ "$1" = "force-reload-kmod" ]; then
