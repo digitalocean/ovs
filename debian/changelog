@@ -1,3 +1,12 @@
+openvswitch (2.11.3-0digitalocean7) bionic; urgency=medium
+
+  * d/openvswitch-switch.service: always reload kmod.
+  * d/ovs-systemd-reload: explicitly shebang bash.
+  * d/ovs-systemd-reload: remove pkill.
+  * d/ovs-systemd-reload: manually set libvirt domain links down/up.
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Wed, 23 Sep 2020 12:42:32 -0500
+
 openvswitch (2.11.3-0digitalocean6) bionic; urgency=medium
 
   * d/ovs-systemd-reload: fix obvious bash syntax error.
