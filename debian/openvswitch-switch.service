@@ -10,7 +10,7 @@ Before=network-online-digitalocean.service
 [Service]
 Type=oneshot
 ExecStart=/sbin/ifup --allow=ovs br0
-ExecReload=/usr/share/openvswitch/scripts/ovs-systemd-reload
+ExecReload=/usr/share/openvswitch/scripts/ovs-systemd-reload force-reload-kmod
 ExecStop=/sbin/ifdown --allow=ovs br0
 RemainAfterExit=yes
 

@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/bash
 
 # Copyright (c) 2017 Red Hat, Inc.
 #
@@ -38,12 +38,6 @@ ovs_stop() {
     if daemon_is_running "$1"; then
         stop_daemon "$1"
     fi
-    # INCI-320: we have seen a small number of hosts not stop ovs-vswitchd. I
-    # am not sure if this is due to ovs-vswitchd being busy, or some other
-    # strange issue (on one host, I saw OVS being manually started somewhere).
-    # We have not seen this occur with ovsdb-server, but the process should
-    # already be stopped at this point, so it should be a no-op
-    pkill "$1"
 }
 
 # OVS daemons can take minutes to shutdown (apparently). Abstract out a
@@ -60,6 +54,7 @@ wait_for_stopped() {
         sleep $RELOAD_SLEEP_SECS
         ((i += RELOAD_SLEEP_SECS))
     done
+    log_success_msg "Stopped $pname after $i iterations"
 }
 
 
@@ -79,8 +74,36 @@ start_forwarding() {
     systemctl --job-mode=ignore-dependencies start ovs-vswitchd
 }
 
+# this hook runs after we have started OVS back up and restored flows
 add_managers() {
-    :
+    # just to be on the safe side, restart rmetadataproxyd
+    systemctl --job-mode=ignore-dependencies restart rmetadataproxyd
+    log_success_msg "Restarted rmetadataproxyd"
+    # there appears to be some issue with libvirt and the tap device
+    # when we upgrade OVS. Use a hammer rather than a knife to avoid
+    # INCI-320 in the future, by bouncing every Droplet's NIC.
+    for dom in $(virsh list --name | head -1); do
+        for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
+            virsh domif-getlink $dom $tap | grep -q up
+            if [ $? == 0 ]; then
+                log_success_msg "$dom $tap was up, bouncing..."
+                msg="Setting $dom $tap link down"
+                virsh domif-setlink $dom $tap down
+                if [ $? == 0 ]; then
+                    log_success_msg $msg
+                else
+                    log_failure_msg $msg
+                fi
+                msg="Setting $dom $tap link up"
+                virsh domif-setlink $dom $tap up
+                if [ $? == 0 ]; then
+                    log_success_msg $msg
+                else
+                    log_failure_msg $msg
+                fi
+            fi
+        done
+    done
 }
 
 if [ "$1" = "force-reload-kmod" ]; then
