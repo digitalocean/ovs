@@ -54,6 +54,7 @@ wait_for_stopped() {
         sleep $RELOAD_SLEEP_SECS
         ((i += RELOAD_SLEEP_SECS))
     done
+    log_success_msg "Stopped $pname after $i iterations"
 }
 
 
@@ -77,6 +78,7 @@ start_forwarding() {
 add_managers() {
     # just to be on the safe side, restart rmetadataproxyd
     systemctl --job-mode=ignore-dependencies restart rmetadataproxyd
+    log_success_msg "Restarted rmetadataproxyd"
     # there appears to be some issue with libvirt and the tap device
     # when we upgrade OVS. Use a hammer rather than a knife to avoid
     # INCI-320 in the future, by bouncing every Droplet's NIC.
@@ -84,8 +86,21 @@ add_managers() {
         for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
             virsh domif-getlink $dom $tap | grep -q up
             if [ $? == 0 ]; then
+                log_success_msg "$dom $tap was up, bouncing..."
+                msg="Setting $dom $tap link down"
                 virsh domif-setlink $dom $tap down
+                if [ $? == 0 ]; then
+                    log_success_msg $msg
+                else
+                    log_failure_msg $msg
+                fi
+                msg="Setting $dom $tap link up"
                 virsh domif-setlink $dom $tap up
+                if [ $? == 0 ]; then
+                    log_success_msg $msg
+                else
+                    log_failure_msg $msg
+                fi
             fi
         done
     done
