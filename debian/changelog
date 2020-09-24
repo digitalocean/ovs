@@ -7,6 +7,7 @@ openvswitch (2.11.3-0digitalocean7) bionic; urgency=medium
   * d/ovs-systemd-reload: only bounce link on already up interfaces
   * d/ovs-systemd-reload: restart rmetadataproxyd after restoring flows
   * d/ovs-systemd-reload: add more logging
+  * d/openvswitch-switch.service: fix typo
 
  -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Wed, 23 Sep 2020 12:42:32 -0500
 
