@@ -75,6 +75,8 @@ start_forwarding() {
 
 # this hook runs after we have started OVS back up and restored flows
 add_managers() {
+    # just to be on the safe side, restart rmetadataproxyd
+    systemctl --job-mode=ignore-dependencies restart rmetadataproxyd
     # there appears to be some issue with libvirt and the tap device
     # when we upgrade OVS. Use a hammer rather than a knife to avoid
     # INCI-320 in the future, by bouncing every Droplet's NIC.
