@@ -80,8 +80,11 @@ add_managers() {
     # INCI-320 in the future, by bouncing every Droplet's NIC.
     for dom in $(virsh list --name | head -1); do
         for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
-            virsh domif-setlink $dom $tap down
-            virsh domif-setlink $dom $tap up
+            virsh domif-getlink $dom $tap | grep -q up
+            if [ $? == 0 ]; then
+                virsh domif-setlink $dom $tap down
+                virsh domif-setlink $dom $tap up
+            fi
         done
     done
 }
