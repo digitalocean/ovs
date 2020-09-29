@@ -79,10 +79,17 @@ add_managers() {
     # just to be on the safe side, restart rmetadataproxyd
     systemctl --job-mode=ignore-dependencies restart rmetadataproxyd
     log_success_msg "Restarted rmetadataproxyd"
+    # for L3 sites, if OVS is down long enough, respawn limits expire
+    for svc in setup-l3-vlans bird hvannounced respond; do
+        systemctl is-enabled $svc >/dev/null 2>&1
+        if [ $? == 0 ]; then
+            systemctl --job-mode=ignore-dependencies restart $svc
+        fi
+    done
     # there appears to be some issue with libvirt and the tap device
     # when we upgrade OVS. Use a hammer rather than a knife to avoid
     # INCI-320 in the future, by bouncing every Droplet's NIC.
-    for dom in $(virsh list --name | head -1); do
+    for dom in $(virsh list --name | head --lines=-1); do
         for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
             virsh domif-getlink $dom $tap | grep -q up
             if [ $? == 0 ]; then
