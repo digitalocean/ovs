@@ -1,3 +1,10 @@
+openvswitch (2.11.3-0digitalocean8) bionic; urgency=medium
+
+  * d/ovs-systemd-reload: fix iteration of Droplets.
+  * d/ovs-systemd-reload: manually restart l3 services.
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Tue, 29 Sep 2020 11:17:01 -0500
+
 openvswitch (2.11.3-0digitalocean7) bionic; urgency=medium
 
   * d/openvswitch-switch.service: always reload kmod.
