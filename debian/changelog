@@ -1,3 +1,11 @@
+openvswitch (2.11.3-0digitalocean9) bionic; urgency=medium
+
+
+  * d/ovs-system-reload: move all post-reload operations to separate
+    function.
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Wed, 30 Sep 2020 15:35:52 -0500
+
 openvswitch (2.11.3-0digitalocean8) bionic; urgency=medium
 
   * d/ovs-systemd-reload: fix iteration of Droplets.
