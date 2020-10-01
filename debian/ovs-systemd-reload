@@ -74,49 +74,25 @@ start_forwarding() {
     systemctl --job-mode=ignore-dependencies start ovs-vswitchd
 }
 
-# this hook runs after we have started OVS back up and restored flows
 add_managers() {
-    # just to be on the safe side, restart rmetadataproxyd
-    systemctl --job-mode=ignore-dependencies restart rmetadataproxyd
-    log_success_msg "Restarted rmetadataproxyd"
-    # for L3 sites, if OVS is down long enough, respawn limits expire
-    for svc in setup-l3-vlans bird hvannounced respond; do
-        systemctl is-enabled $svc >/dev/null 2>&1
-        if [ $? == 0 ]; then
-            systemctl --job-mode=ignore-dependencies restart $svc
-        fi
-    done
-    # there appears to be some issue with libvirt and the tap device
-    # when we upgrade OVS. Use a hammer rather than a knife to avoid
-    # INCI-320 in the future, by bouncing every Droplet's NIC.
-    for dom in $(virsh list --name | head --lines=-1); do
-        for tap in $(virsh domiflist $dom | tail +3 | awk '{print $1}'); do
-            virsh domif-getlink $dom $tap | grep -q up
-            if [ $? == 0 ]; then
-                log_success_msg "$dom $tap was up, bouncing..."
-                msg="Setting $dom $tap link down"
-                virsh domif-setlink $dom $tap down
-                if [ $? == 0 ]; then
-                    log_success_msg $msg
-                else
-                    log_failure_msg $msg
-                fi
-                msg="Setting $dom $tap link up"
-                virsh domif-setlink $dom $tap up
-                if [ $? == 0 ]; then
-                    log_success_msg $msg
-                else
-                    log_failure_msg $msg
-                fi
-            fi
-        done
-    done
+   :
 }
+
+post_reload () {
+    :
+}
+
+if [ -f $dir0/ovs-post-reload ]; then
+    # overrides post_reload
+    . $dir0/ovs-post-reload
+fi
 
 if [ "$1" = "force-reload-kmod" ]; then
     force_reload_kmod
 else
     restart
 fi
+
+post_reload
 
 exit 0
