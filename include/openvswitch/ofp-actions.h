@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
+ * Copyright (c) 2012-2017, 2019-2020 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,6 +94,7 @@ struct vl_mff_map;
     OFPACT(PUSH_MPLS,       ofpact_push_mpls,   ofpact, "push_mpls")    \
     OFPACT(POP_MPLS,        ofpact_pop_mpls,    ofpact, "pop_mpls")     \
     OFPACT(DEC_NSH_TTL,     ofpact_null,        ofpact, "dec_nsh_ttl")  \
+    OFPACT(DELETE_FIELD,    ofpact_delete_field, ofpact, "delete_field") \
                                                                         \
     /* Generic encap & decap */                                         \
     OFPACT(ENCAP,           ofpact_encap,       props, "encap")         \
@@ -123,6 +124,8 @@ struct vl_mff_map;
     OFPACT(NAT,             ofpact_nat,         ofpact, "nat")          \
     OFPACT(OUTPUT_TRUNC,    ofpact_output_trunc,ofpact, "output_trunc") \
     OFPACT(CLONE,           ofpact_nest,        actions, "clone")       \
+    OFPACT(CHECK_PKT_LARGER, ofpact_check_pkt_larger, ofpact,           \
+           "check_pkt_larger")                                          \
                                                                         \
     /* Debugging actions.                                               \
      *                                                                  \
@@ -131,7 +134,7 @@ struct vl_mff_map;
     OFPACT(DEBUG_RECIRC, ofpact_null,           ofpact, "debug_recirc") \
     OFPACT(DEBUG_SLOW,   ofpact_null,           ofpact, "debug_slow")   \
                                                                         \
-    /* Instructions. */                                                 \
+    /* Instructions ("meter" is an action in OF1.5+). */                \
     OFPACT(METER,           ofpact_meter,       ofpact, "meter")        \
     OFPACT(CLEAR_ACTIONS,   ofpact_null,        ofpact, "clear_actions") \
     OFPACT(WRITE_ACTIONS,   ofpact_nest,        actions, "write_actions") \
@@ -223,6 +226,13 @@ ofpact_last(const struct ofpact *a, const struct ofpact *ofpacts,
             size_t ofpact_len)
 {
     return ofpact_next(a) == ofpact_end(ofpacts, ofpact_len);
+}
+
+static inline size_t
+ofpact_remaining_len(const struct ofpact *a, const struct ofpact *ofpacts,
+                     size_t ofpact_len)
+{
+    return ofpact_len - ((uint8_t *)a - (uint8_t *)ofpacts);
 }
 
 static inline const struct ofpact *
@@ -567,6 +577,16 @@ struct ofpact_pop_mpls {
     );
 };
 
+/* OFPACT_DELETE_FIELD.
+ *
+ * Used for NXAST_DELETE_FIELD. */
+struct ofpact_delete_field {
+    OFPACT_PADDED_MEMBERS(
+        struct ofpact ofpact;
+        const struct mf_field *field;
+    );
+};
+
 /* OFPACT_SET_TUNNEL.
  *
  * Used for NXAST_SET_TUNNEL, NXAST_SET_TUNNEL64. */
@@ -620,6 +640,16 @@ struct ofpact_meter {
     );
 };
 
+/* OFPACT_CHECK_PKT_LARGER.
+ *
+ * Used for NXAST_CHECK_PKT_LARGER. */
+struct ofpact_check_pkt_larger {
+    OFPACT_PADDED_MEMBERS(
+        struct ofpact ofpact;
+        struct mf_subfield dst;
+        uint16_t pkt_len;
+    );
+};
 /* OFPACT_WRITE_ACTIONS, OFPACT_CLONE.
  *
  * Used for OFPIT11_WRITE_ACTIONS, NXAST_CLONE. */
@@ -1341,7 +1371,7 @@ enum {
 const char *ovs_instruction_name_from_type(enum ovs_instruction_type type);
 int ovs_instruction_type_from_name(const char *name);
 enum ovs_instruction_type ovs_instruction_type_from_ofpact_type(
-    enum ofpact_type);
+    enum ofpact_type, enum ofp_version);
 enum ofperr ovs_instruction_type_from_inst_type(
     enum ovs_instruction_type *instruction_type, const uint16_t inst_type);
 

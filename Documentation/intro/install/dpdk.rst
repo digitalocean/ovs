@@ -42,7 +42,7 @@ Build requirements
 In addition to the requirements described in :doc:`general`, building Open
 vSwitch with DPDK will require the following:
 
-- DPDK 18.11.2
+- DPDK 19.11.2
 
 - A `DPDK supported NIC`_
 
@@ -71,9 +71,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-18.11.2.tar.xz
-       $ tar xf dpdk-18.11.2.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-stable-18.11.2
+       $ wget https://fast.dpdk.org/rel/dpdk-19.11.2.tar.xz
+       $ tar xf dpdk-19.11.2.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-stable-19.11.2
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library
@@ -107,8 +107,8 @@ Install DPDK
 Install OVS
 ~~~~~~~~~~~
 
-OVS can be installed using different methods. For OVS to use DPDK datapath, it
-has to be configured with DPDK support (``--with-dpdk``).
+OVS can be installed using different methods.  For OVS to use DPDK, it
+has to be configured to build against the DPDK library (``--with-dpdk``).
 
 .. note::
   This section focuses on generic recipe that suits most cases. For
@@ -136,6 +136,16 @@ has to be configured with DPDK support (``--with-dpdk``).
      While ``--with-dpdk`` is required, you can pass any other configuration
      option described in :ref:`general-configuring`.
 
+   It is strongly recommended to build OVS with at least ``-msse4.2`` and
+   ``-mpopcnt`` optimization flags. If these flags are not enabled, the AVX512
+   optimized DPCLS implementation is not available in the resulting binary.
+   For technical details see the subtable registration code in the
+   ``lib/dpif-netdev-lookup.c`` file.
+
+   An example that enables the AVX512 optimizations is::
+
+       $ ./configure --with-dpdk=$DPDK_BUILD CFLAGS="-Ofast -msse4.2 -mpopcnt"
+
 #. Build and install OVS, as described in :ref:`general-building`
 
 Additional information can be found in :doc:`general`.
@@ -146,6 +156,26 @@ Additional information can be found in :doc:`general`.
   working IOMMU.  Visit the `RHEL README`__ for additional information.
 
 __ https://github.com/openvswitch/ovs/blob/master/rhel/README.RHEL.rst
+
+
+Possible issues when enabling AVX512
+++++++++++++++++++++++++++++++++++++
+
+The enabling of ISA optimized builds requires build-system support.
+Certain versions of the assembler provided by binutils is known to have
+AVX512 assembling issues. The binutils versions affected are 2.30 and 2.31.
+As many distros backport fixes to previous versions of a package, checking
+the version output of ``as -v`` can err on the side of disabling AVX512. To
+remedy this, the OVS build system uses a build-time check to see if ``as``
+will correctly assemble the AVX512 code. The output of a good version when
+running the ``./configure`` step of the build process is as follows::
+
+   $ checking binutils avx512 assembler checks passing... yes
+
+If a bug is detected in the binutils assembler, it would indicate ``no``.
+Build an updated binutils, or request a backport of this binutils
+fix commit ``2069ccaf8dc28ea699bd901fdd35d90613e4402a`` to fix the issue.
+
 
 Setup
 -----
@@ -288,7 +318,7 @@ with either the ovs-vswitchd logs, or by running either of the commands::
   "DPDK 17.11.0"
 
 At this point you can use ovs-vsctl to set up bridges and other Open vSwitch
-features. Seeing as we've configured the DPDK datapath, we will use DPDK-type
+features. Seeing as we've configured DPDK support, we will use DPDK-type
 ports. For example, to create a userspace bridge named ``br0`` and add two
 ``dpdk`` ports to it, run::
 
@@ -673,7 +703,7 @@ Limitations
   release notes`_.
 
 .. _DPDK release notes:
-   https://doc.dpdk.org/guides/rel_notes/release_18_11.html
+   https://doc.dpdk.org/guides-19.11/rel_notes/release_19_11.html
 
 - Upper bound MTU: DPDK device drivers differ in how the L2 frame for a
   given MTU value is calculated e.g. i40e driver includes 2 x vlan headers in

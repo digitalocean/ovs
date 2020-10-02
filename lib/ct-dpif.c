@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Nicira, Inc.
+ * Copyright (c) 2015, 2018 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,6 @@ struct flags {
     const char *name;
 };
 
-static void ct_dpif_format_ipproto(struct ds *, uint16_t ipproto);
 static void ct_dpif_format_counters(struct ds *,
                                     const struct ct_dpif_counters *);
 static void ct_dpif_format_timestamp(struct ds *,
@@ -165,6 +164,22 @@ ct_dpif_get_nconns(struct dpif *dpif, uint32_t *nconns)
 }
 
 int
+ct_dpif_set_tcp_seq_chk(struct dpif *dpif, bool enabled)
+{
+    return (dpif->dpif_class->ct_set_tcp_seq_chk
+            ? dpif->dpif_class->ct_set_tcp_seq_chk(dpif, enabled)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_get_tcp_seq_chk(struct dpif *dpif, bool *enabled)
+{
+    return (dpif->dpif_class->ct_get_tcp_seq_chk
+            ? dpif->dpif_class->ct_get_tcp_seq_chk(dpif, enabled)
+            : EOPNOTSUPP);
+}
+
+int
 ct_dpif_set_limits(struct dpif *dpif, const uint32_t *default_limit,
                    const struct ovs_list *zone_limits)
 {
@@ -191,6 +206,62 @@ ct_dpif_del_limits(struct dpif *dpif, const struct ovs_list *zone_limits)
 {
     return (dpif->dpif_class->ct_del_limits
             ? dpif->dpif_class->ct_del_limits(dpif, zone_limits)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_set_enabled(struct dpif *dpif, bool v6, bool enable)
+{
+    return (dpif->dpif_class->ipf_set_enabled
+            ? dpif->dpif_class->ipf_set_enabled(dpif, v6, enable)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_set_min_frag(struct dpif *dpif, bool v6, uint32_t min_frag)
+{
+    return (dpif->dpif_class->ipf_set_min_frag
+            ? dpif->dpif_class->ipf_set_min_frag(dpif, v6, min_frag)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_set_max_nfrags(struct dpif *dpif, uint32_t max_frags)
+{
+    return (dpif->dpif_class->ipf_set_max_nfrags
+            ? dpif->dpif_class->ipf_set_max_nfrags(dpif, max_frags)
+            : EOPNOTSUPP);
+}
+
+int ct_dpif_ipf_get_status(struct dpif *dpif,
+                           struct dpif_ipf_status *dpif_ipf_status)
+{
+    return (dpif->dpif_class->ipf_get_status
+            ? dpif->dpif_class->ipf_get_status(dpif, dpif_ipf_status)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_dump_start(struct dpif *dpif, struct ipf_dump_ctx **dump_ctx)
+{
+    return (dpif->dpif_class->ipf_dump_start
+           ? dpif->dpif_class->ipf_dump_start(dpif, dump_ctx)
+           : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_dump_next(struct dpif *dpif, void *dump_ctx,  char **dump)
+{
+    return (dpif->dpif_class->ipf_dump_next
+            ? dpif->dpif_class->ipf_dump_next(dpif, dump_ctx, dump)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_ipf_dump_done(struct dpif *dpif, void *dump_ctx)
+{
+    return (dpif->dpif_class->ipf_dump_done
+            ? dpif->dpif_class->ipf_dump_done(dpif, dump_ctx)
             : EOPNOTSUPP);
 }
 
@@ -259,7 +330,7 @@ ct_dpif_format_entry(const struct ct_dpif_entry *entry, struct ds *ds,
     }
 }
 
-static void
+void
 ct_dpif_format_ipproto(struct ds *ds, uint16_t ipproto)
 {
     const char *name;
@@ -372,6 +443,12 @@ const char *ct_dpif_tcp_state_string[] = {
 #undef CT_DPIF_TCP_STATE
 };
 
+const char *ct_dpif_sctp_state_string[] = {
+#define CT_DPIF_SCTP_STATE(STATE) [CT_DPIF_SCTP_STATE_##STATE] = #STATE,
+    CT_DPIF_SCTP_STATES
+#undef CT_DPIF_SCTP_STATE
+};
+
 static void
 ct_dpif_format_enum__(struct ds *ds, const char *title, unsigned int state,
                       const char *names[], unsigned int max)
@@ -442,6 +519,16 @@ ct_dpif_format_protoinfo_tcp_verbose(struct ds *ds,
 }
 
 static void
+ct_dpif_format_protoinfo_sctp(struct ds *ds,
+                              const struct ct_dpif_protoinfo *protoinfo)
+{
+    ct_dpif_format_enum(ds, "state=", protoinfo->sctp.state,
+                        ct_dpif_sctp_state_string);
+    ds_put_format(ds, ",vtag_orig=%" PRIu32 ",vtag_reply=%" PRIu32,
+                  protoinfo->sctp.vtag_orig, protoinfo->sctp.vtag_reply);
+}
+
+static void
 ct_dpif_format_protoinfo(struct ds *ds, const char *title,
                          const struct ct_dpif_protoinfo *protoinfo,
                          bool verbose)
@@ -457,6 +544,9 @@ ct_dpif_format_protoinfo(struct ds *ds, const char *title,
             } else {
                 ct_dpif_format_protoinfo_tcp(ds, protoinfo);
             }
+            break;
+        case IPPROTO_SCTP:
+            ct_dpif_format_protoinfo_sctp(ds, protoinfo);
             break;
         }
         if (title) {
@@ -685,4 +775,117 @@ ct_dpif_format_zone_limits(uint32_t default_limit,
         ds_put_format(ds, ",limit=%"PRIu32, zone_limit->limit);
         ds_put_format(ds, ",count=%"PRIu32, zone_limit->count);
     }
+}
+
+static const char *const ct_dpif_tp_attr_string[] = {
+#define CT_DPIF_TP_TCP_ATTR(ATTR) \
+    [CT_DPIF_TP_ATTR_TCP_##ATTR] = "TCP_"#ATTR,
+    CT_DPIF_TP_TCP_ATTRS
+#undef CT_DPIF_TP_TCP_ATTR
+#define CT_DPIF_TP_UDP_ATTR(ATTR) \
+    [CT_DPIF_TP_ATTR_UDP_##ATTR] = "UDP_"#ATTR,
+    CT_DPIF_TP_UDP_ATTRS
+#undef CT_DPIF_TP_UDP_ATTR
+#define CT_DPIF_TP_ICMP_ATTR(ATTR) \
+    [CT_DPIF_TP_ATTR_ICMP_##ATTR] = "ICMP_"#ATTR,
+    CT_DPIF_TP_ICMP_ATTRS
+#undef CT_DPIF_TP_ICMP_ATTR
+};
+
+static bool
+ct_dpif_set_timeout_policy_attr(struct ct_dpif_timeout_policy *tp,
+                                uint32_t attr, uint32_t value)
+{
+    if (tp->present & (1 << attr) && tp->attrs[attr] == value) {
+        return false;
+    }
+    tp->attrs[attr] = value;
+    tp->present |= 1 << attr;
+    return true;
+}
+
+/* Sets a timeout value identified by '*name' to 'value'.
+ * Returns true if the attribute is changed */
+bool
+ct_dpif_set_timeout_policy_attr_by_name(struct ct_dpif_timeout_policy *tp,
+                                        const char *name, uint32_t value)
+{
+    for (uint32_t i = 0; i < CT_DPIF_TP_ATTR_MAX; ++i) {
+        if (!strcasecmp(name, ct_dpif_tp_attr_string[i])) {
+            return ct_dpif_set_timeout_policy_attr(tp, i, value);
+        }
+    }
+    return false;
+}
+
+bool
+ct_dpif_timeout_policy_support_ipproto(uint8_t ipproto)
+{
+    if (ipproto == IPPROTO_TCP || ipproto == IPPROTO_UDP ||
+        ipproto == IPPROTO_ICMP || ipproto == IPPROTO_ICMPV6) {
+        return true;
+    }
+    return false;
+}
+
+int
+ct_dpif_set_timeout_policy(struct dpif *dpif,
+                           const struct ct_dpif_timeout_policy *tp)
+{
+    return (dpif->dpif_class->ct_set_timeout_policy
+            ? dpif->dpif_class->ct_set_timeout_policy(dpif, tp)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_del_timeout_policy(struct dpif *dpif, uint32_t tp_id)
+{
+    return (dpif->dpif_class->ct_del_timeout_policy
+            ? dpif->dpif_class->ct_del_timeout_policy(dpif, tp_id)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_get_timeout_policy(struct dpif *dpif, uint32_t tp_id,
+                           struct ct_dpif_timeout_policy *tp)
+{
+    return (dpif->dpif_class->ct_get_timeout_policy
+            ? dpif->dpif_class->ct_get_timeout_policy(
+                dpif, tp_id, tp) : EOPNOTSUPP);
+}
+
+int
+ct_dpif_timeout_policy_dump_start(struct dpif *dpif, void **statep)
+{
+    return (dpif->dpif_class->ct_timeout_policy_dump_start
+            ? dpif->dpif_class->ct_timeout_policy_dump_start(dpif, statep)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_timeout_policy_dump_next(struct dpif *dpif, void *state,
+                                 struct ct_dpif_timeout_policy *tp)
+{
+    return (dpif->dpif_class->ct_timeout_policy_dump_next
+            ? dpif->dpif_class->ct_timeout_policy_dump_next(dpif, state, tp)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_timeout_policy_dump_done(struct dpif *dpif, void *state)
+{
+    return (dpif->dpif_class->ct_timeout_policy_dump_done
+            ? dpif->dpif_class->ct_timeout_policy_dump_done(dpif, state)
+            : EOPNOTSUPP);
+}
+
+int
+ct_dpif_get_timeout_policy_name(struct dpif *dpif, uint32_t tp_id,
+                                uint16_t dl_type, uint8_t nw_proto,
+                                char **tp_name, bool *is_generic)
+{
+    return (dpif->dpif_class->ct_get_timeout_policy_name
+            ? dpif->dpif_class->ct_get_timeout_policy_name(
+                dpif, tp_id, dl_type, nw_proto, tp_name, is_generic)
+            : EOPNOTSUPP);
 }

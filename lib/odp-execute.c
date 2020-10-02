@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "coverage.h"
 #include "dp-packet.h"
 #include "dpif.h"
 #include "netlink.h"
@@ -36,6 +37,72 @@
 #include "util.h"
 #include "csum.h"
 #include "conntrack.h"
+#include "openvswitch/vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(odp_execute);
+COVERAGE_DEFINE(datapath_drop_sample_error);
+COVERAGE_DEFINE(datapath_drop_nsh_decap_error);
+COVERAGE_DEFINE(drop_action_of_pipeline);
+COVERAGE_DEFINE(drop_action_bridge_not_found);
+COVERAGE_DEFINE(drop_action_recursion_too_deep);
+COVERAGE_DEFINE(drop_action_too_many_resubmit);
+COVERAGE_DEFINE(drop_action_stack_too_deep);
+COVERAGE_DEFINE(drop_action_no_recirculation_context);
+COVERAGE_DEFINE(drop_action_recirculation_conflict);
+COVERAGE_DEFINE(drop_action_too_many_mpls_labels);
+COVERAGE_DEFINE(drop_action_invalid_tunnel_metadata);
+COVERAGE_DEFINE(drop_action_unsupported_packet_type);
+COVERAGE_DEFINE(drop_action_congestion);
+COVERAGE_DEFINE(drop_action_forwarding_disabled);
+
+static void
+dp_update_drop_action_counter(enum xlate_error drop_reason,
+                              int delta)
+{
+   static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+   switch (drop_reason) {
+   case XLATE_OK:
+        COVERAGE_ADD(drop_action_of_pipeline, delta);
+        break;
+   case XLATE_BRIDGE_NOT_FOUND:
+        COVERAGE_ADD(drop_action_bridge_not_found, delta);
+        break;
+   case XLATE_RECURSION_TOO_DEEP:
+        COVERAGE_ADD(drop_action_recursion_too_deep, delta);
+        break;
+   case XLATE_TOO_MANY_RESUBMITS:
+        COVERAGE_ADD(drop_action_too_many_resubmit, delta);
+        break;
+   case XLATE_STACK_TOO_DEEP:
+        COVERAGE_ADD(drop_action_stack_too_deep, delta);
+        break;
+   case XLATE_NO_RECIRCULATION_CONTEXT:
+        COVERAGE_ADD(drop_action_no_recirculation_context, delta);
+        break;
+   case XLATE_RECIRCULATION_CONFLICT:
+        COVERAGE_ADD(drop_action_recirculation_conflict, delta);
+        break;
+   case XLATE_TOO_MANY_MPLS_LABELS:
+        COVERAGE_ADD(drop_action_too_many_mpls_labels, delta);
+        break;
+   case XLATE_INVALID_TUNNEL_METADATA:
+        COVERAGE_ADD(drop_action_invalid_tunnel_metadata, delta);
+        break;
+   case XLATE_UNSUPPORTED_PACKET_TYPE:
+        COVERAGE_ADD(drop_action_unsupported_packet_type, delta);
+        break;
+   case XLATE_CONGESTION_DROP:
+        COVERAGE_ADD(drop_action_congestion, delta);
+        break;
+   case XLATE_FORWARDING_DISABLED:
+        COVERAGE_ADD(drop_action_forwarding_disabled, delta);
+        break;
+   case XLATE_MAX:
+   default:
+        VLOG_ERR_RL(&rl, "Invalid Drop reason type: %d", drop_reason);
+   }
+}
 
 /* Masked copy of an ethernet address. 'src' is already properly masked. */
 static void
@@ -198,7 +265,7 @@ odp_set_sctp(struct dp_packet *packet, const struct ovs_key_sctp *key,
 static void
 odp_set_tunnel_action(const struct nlattr *a, struct flow_tnl *tun_key)
 {
-    ovs_assert(odp_tun_key_from_attr(a, tun_key) != ODP_FIT_ERROR);
+    ovs_assert(odp_tun_key_from_attr(a, tun_key, NULL) != ODP_FIT_ERROR);
 }
 
 static void
@@ -225,6 +292,23 @@ set_arp(struct dp_packet *packet, const struct ovs_key_arp *key,
         put_16aligned_be32(&arp->ar_tpa,
                            key->arp_tip | (ar_tpa & ~mask->arp_tip));
     }
+}
+
+static void
+odp_set_nd_ext(struct dp_packet *packet, const struct ovs_key_nd_extensions
+        *key, const struct ovs_key_nd_extensions *mask)
+{
+    const struct ovs_nd_msg *ns = dp_packet_l4(packet);
+    ovs_16aligned_be32 reserved = ns->rso_flags;
+    uint8_t opt_type = ns->options[0].type;
+
+    if (mask->nd_reserved) {
+        put_16aligned_be32(&reserved, key->nd_reserved);
+    }
+    if (mask->nd_options_type) {
+        opt_type = key->nd_options_type;
+    }
+    packet_set_nd_ext(packet, reserved, opt_type);
 }
 
 static void
@@ -280,9 +364,9 @@ odp_set_nsh(struct dp_packet *packet, const struct nlattr *a, bool has_mask)
     ovs_be32 path_hdr;
 
     if (has_mask) {
-        odp_nsh_key_from_attr(a, &key, &mask);
+        odp_nsh_key_from_attr(a, &key, &mask, NULL);
     } else {
-        odp_nsh_key_from_attr(a, &key, NULL);
+        odp_nsh_key_from_attr(a, &key, NULL, NULL);
     }
 
     if (!has_mask) {
@@ -438,6 +522,16 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         }
         break;
 
+    case OVS_KEY_ATTR_ND_EXTENSIONS:
+        if (OVS_LIKELY(dp_packet_get_nd_payload(packet))) {
+            const struct ovs_key_nd_extensions *nd_ext_key
+                 = nl_attr_get_unspec(a, sizeof(struct ovs_key_nd_extensions));
+            ovs_16aligned_be32 rso_flags;
+            put_16aligned_be32(&rso_flags, nd_ext_key->nd_reserved);
+            packet_set_nd_ext(packet, rso_flags, nd_ext_key->nd_options_type);
+        }
+        break;
+
     case OVS_KEY_ATTR_DP_HASH:
         md->dp_hash = nl_attr_get_u32(a);
         break;
@@ -540,6 +634,11 @@ odp_execute_masked_set_action(struct dp_packet *packet,
                    get_mask(a, struct ovs_key_nd));
         break;
 
+    case OVS_KEY_ATTR_ND_EXTENSIONS:
+        odp_set_nd_ext(packet, nl_attr_get(a),
+                       get_mask(a, struct ovs_key_nd_extensions));
+        break;
+
     case OVS_KEY_ATTR_DP_HASH:
         md->dp_hash = nl_attr_get_u32(a)
             | (md->dp_hash & ~*get_mask(a, uint32_t));
@@ -589,6 +688,7 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
         case OVS_SAMPLE_ATTR_PROBABILITY:
             if (random_uint32() >= nl_attr_get_u32(a)) {
                 if (steal) {
+                    COVERAGE_INC(datapath_drop_sample_error);
                     dp_packet_delete(packet);
                 }
                 return;
@@ -642,6 +742,50 @@ odp_execute_clone(void *dp, struct dp_packet_batch *batch, bool steal,
     }
 }
 
+static void
+odp_execute_check_pkt_len(void *dp, struct dp_packet *packet, bool steal,
+                          const struct nlattr *action,
+                          odp_execute_cb dp_execute_action)
+{
+    static const struct nl_policy ovs_cpl_policy[] = {
+        [OVS_CHECK_PKT_LEN_ATTR_PKT_LEN] = { .type = NL_A_U16 },
+        [OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_GREATER] = { .type = NL_A_NESTED },
+        [OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_LESS_EQUAL]
+            = { .type = NL_A_NESTED },
+    };
+    struct nlattr *attrs[ARRAY_SIZE(ovs_cpl_policy)];
+
+    if (!nl_parse_nested(action, ovs_cpl_policy, attrs, ARRAY_SIZE(attrs))) {
+        OVS_NOT_REACHED();
+    }
+
+    const struct nlattr *a;
+    struct dp_packet_batch pb;
+    uint32_t size = dp_packet_get_send_len(packet)
+                    - dp_packet_l2_pad_size(packet);
+
+    a = attrs[OVS_CHECK_PKT_LEN_ATTR_PKT_LEN];
+    if (size > nl_attr_get_u16(a)) {
+        a = attrs[OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_GREATER];
+    } else {
+        a = attrs[OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_LESS_EQUAL];
+    }
+
+    if (!steal) {
+        /* The 'subactions' may modify the packet, but the modification
+         * should not propagate beyond this action. Make a copy
+         * the packet in case we don't own the packet, so that the
+         * 'subactions' are only applid to check_pkt_len. 'odp_execute_actions'
+         * will free the clone.  */
+        packet = dp_packet_clone(packet);
+    }
+    /* If nl_attr_get(a) is NULL, the packet will be freed by
+     * odp_execute_actions. */
+    dp_packet_batch_init_packet(&pb, packet);
+    odp_execute_actions(dp, &pb, true, nl_attr_get(a), nl_attr_get_size(a),
+                        dp_execute_action);
+}
+
 static bool
 requires_datapath_assistance(const struct nlattr *a)
 {
@@ -650,6 +794,7 @@ requires_datapath_assistance(const struct nlattr *a)
     switch (type) {
         /* These only make sense in the context of a datapath. */
     case OVS_ACTION_ATTR_OUTPUT:
+    case OVS_ACTION_ATTR_LB_OUTPUT:
     case OVS_ACTION_ATTR_TUNNEL_PUSH:
     case OVS_ACTION_ATTR_TUNNEL_POP:
     case OVS_ACTION_ATTR_USERSPACE:
@@ -673,6 +818,8 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_PUSH_NSH:
     case OVS_ACTION_ATTR_POP_NSH:
     case OVS_ACTION_ATTR_CT_CLEAR:
+    case OVS_ACTION_ATTR_CHECK_PKT_LEN:
+    case OVS_ACTION_ATTR_DROP:
         return false;
 
     case OVS_ACTION_ATTR_UNSPEC:
@@ -889,6 +1036,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                 if (pop_nsh(packet)) {
                     dp_packet_batch_refill(batch, packet, i);
                 } else {
+                    COVERAGE_INC(datapath_drop_nsh_decap_error);
                     dp_packet_delete(packet);
                 }
             }
@@ -900,7 +1048,29 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             }
             break;
 
+        case OVS_ACTION_ATTR_CHECK_PKT_LEN:
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+                odp_execute_check_pkt_len(dp, packet, steal && last_action, a,
+                                          dp_execute_action);
+            }
+
+            if (last_action) {
+                /* We do not need to free the packets.
+                 * odp_execute_check_pkt_len() has stolen them. */
+                return;
+            }
+            break;
+
+        case OVS_ACTION_ATTR_DROP:{
+            const enum xlate_error *drop_reason = nl_attr_get(a);
+
+            dp_update_drop_action_counter(*drop_reason,
+                                          dp_packet_batch_size(batch));
+            dp_packet_delete_batch(batch, steal);
+            return;
+        }
         case OVS_ACTION_ATTR_OUTPUT:
+        case OVS_ACTION_ATTR_LB_OUTPUT:
         case OVS_ACTION_ATTR_TUNNEL_PUSH:
         case OVS_ACTION_ATTR_TUNNEL_POP:
         case OVS_ACTION_ATTR_USERSPACE:

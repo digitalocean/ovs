@@ -20,6 +20,11 @@
 #include <stdint.h>
 #include "openvswitch/dynamic-string.h"
 
+#ifdef HAVE_UNWIND
+#define UNW_LOCAL_ONLY
+#include <libunwind.h>
+#endif
+
 /* log_backtrace() will save the backtrace of a running program
  * into the log at the DEBUG level.
  *
@@ -27,8 +32,8 @@
  * desired:
  *       #include "backtrace.h"
  *
- *       log_backtrace();
- *       // A message can be added with log_backtrace_msg("your message")
+ *       log_backtrace();                           <-- plain
+ *       log_backtrace_msg("your message");         <-- with a message
  *
  *
  * A typical log will look like the following. The hex numbers listed after
@@ -68,7 +73,21 @@ struct backtrace {
     uintptr_t frames[BACKTRACE_MAX_FRAMES];
 };
 
+#ifdef HAVE_UNWIND
+#define UNW_MAX_DEPTH 32
+#define UNW_MAX_FUNCN 32
+#define UNW_MAX_BUF \
+    (UNW_MAX_DEPTH * sizeof(struct unw_backtrace))
+
+struct unw_backtrace {
+    char func[UNW_MAX_FUNCN];
+    unw_word_t ip;
+    unw_word_t offset;
+};
+#endif
+
 void backtrace_capture(struct backtrace *);
 void log_backtrace_at(const char *msg, const char *where);
+void log_received_backtrace(int fd);
 
 #endif /* backtrace.h */

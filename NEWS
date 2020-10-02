@@ -1,19 +1,177 @@
-v2.11.3 - 06 Sep 2019
+v2.14.0 - 17 Aug 2020
 ---------------------
-   - Fix compilation issue with Ubuntu kernel 4.15.60.
+   - ovs-vswitchd no longer deletes datapath flows on exit by default.
+   - OpenFlow:
+     * The OpenFlow ofp_desc/serial_num may now be configured by setting the
+       value of other-config:dp-sn in the Bridge table.
+     * Added support to watch CONTROLLER port status in fast failover group.
+     * New action "delete_field".
+   - DPDK:
+     * Deprecated DPDK pdump packet capture support removed.
+     * Deprecated DPDK ring ports (dpdkr) are no longer supported.
+     * Add hardware offload support for VLAN Push/Pop actions (experimental).
+     * Add hardware offload support for matching IPv6 protocol (experimental).
+     * Add hardware offload support for set of IPv6 src/dst/ttl
+       and tunnel push-output actions (experimental).
+     * OVS validated with DPDK 19.11.2, due to the inclusion of fixes for
+       CVE-2020-10722, CVE-2020-10723, CVE-2020-10724, CVE-2020-10725 and
+       CVE-2020-10726, this DPDK version is strongly recommended to be used.
+     * New 'ovs-appctl dpdk/log-list' and 'ovs-appctl dpdk/log-set' commands
+       to list and change log levels in DPDK components.
+     * Vhost-user Dequeue zero-copy support is deprecated and will be removed
+       in the next release.
+   - Linux datapath:
+     * Support for kernel versions up to 5.5.x.
+   - AF_XDP:
+     * New netdev class 'afxdp-nonpmd' for netdev-afxdp to save CPU cycles
+       by enabling interrupt mode.
+   - Userspace datapath:
+     * Removed artificial datapath flow limit that was 65536.
+       Now number of datapath flows is fully controlled by revalidators and the
+       'other_config:flow-limit' knob.
+     * Add support for conntrack zone-based timeout policy.
+     * New configuration knob 'other_config:lb-output-action' for bond ports
+       that enables new datapath action 'lb_output' to avoid recirculation
+       in balance-tcp mode.  Disabled by default.
+     * Add runtime CPU ISA detection to allow optimized ISA functions
+     * Add support for dynamically changing DPCLS subtable lookup functions
+     * Add ISA optimized DPCLS lookup function using AVX512
+   - New configuration knob 'other_config:bond-primary' for AB bonds
+     that specifies interface will be the preferred port if it is active.
+   - Tunnels: TC Flower offload
+     * Tunnel Local endpoint address masked match are supported.
+     * Tunnel Romte endpoint address masked match are supported.
 
-v2.11.2 - 03 Sep 2019
----------------------
-   - Bug fixes
-   - DPDK
-     * OVS validated with DPDK 18.11.2 which is recommended to be used.
 
-v2.11.1 - 30 Mar 2019
+v2.13.0 - 14 Feb 2020
 ---------------------
-   - Bug fixes
+   - OVN:
+     * OVN has been removed from this repository. It now exists as a
+       separate project. You can find it at
+       https://github.com/ovn-org/ovn.git
+   - Userspace datapath:
+     * Add option to enable, disable and query TCP sequence checking in
+       conntrack.
+     * Add support for conntrack zone limits.
+     * Command "ovs-appctl dpctl/dump-flows" refactored to show subtable
+       miniflow bits for userspace datapath.
+   - AF_XDP:
+     * New option 'use-need-wakeup' for netdev-afxdp to control enabling
+       of corresponding 'need_wakeup' flag in AF_XDP rings.  Enabled by default
+       if supported by libbpf.
+     * 'xdpmode' option for netdev-afxdp renamed to 'xdp-mode'.
+       Modes also updated.  New values:
+         native-with-zerocopy  - former DRV
+         native                - new one, DRV without zero-copy
+         generic               - former SKB
+         best-effort [default] - new one, chooses the best available from
+                                 3 above modes
+   - DPDK:
+     * DPDK pdump packet capture support disabled by default. New configure
+       option '--enable-dpdk-pdump' to enable it.
+     * DPDK pdump support is deprecated and will be removed in next releases.
+     * DPDK ring ports (dpdkr) are deprecated and will be removed in next
+       releases.
+     * Add support for DPDK 19.11.
+     * Add hardware offload support for output, drop, set of MAC, IPv4 and
+       TCP/UDP ports actions (experimental).
+     * Add experimental support for TSO.
+   - RSTP:
+     * The rstp_statistics column in Port table will only be updated every
+       stats-update-interval configured in Open_vSwitch table.
+   - OVSDB:
+     * When ovsdb-server is running in backup mode, the default value of probe
+       interval is increased to 60 seconds for the connection to the
+       replication server. This value is configurable with the unixctl
+       command - ovsdb-server/set-active-ovsdb-server-probe-interval.
+     * ovsdb-server: New OVSDB extension to allow clients to specify row UUIDs.
+   - 'ovs-appctl dpctl/dump-flows' can now show offloaded=partial for
+     partially offloaded flows, dp:dpdk for fully offloaded by dpdk, and
+     type filter supports new filters: "dpdk" and "partially-offloaded".
+   - GTP-U Tunnel Protocol
+     * Add two new fields: tun_gtpu_flags, tun_gtpu_msgtype.
+     * Only support for userspace datapath.
+
+v2.12.0 - 03 Sep 2019
+---------------------
+   - DPDK:
+     * New option 'other_config:dpdk-socket-limit' to limit amount of
+       hugepage memory that can be used by DPDK.
+     * Add support for vHost Post-copy Live Migration (experimental).
+     * OVS validated with DPDK 18.11.2 which is the new minimal supported
+       version.
+     * DPDK 18.11.1 and lower is no longer supported.
+     * New option 'tx-retries-max' to set the maximum amount of vhost tx
+       retries that can be made.
+   - OpenFlow:
+     * All features required by OpenFlow 1.5 are now implemented, so
+       ovs-vswitchd now enables OpenFlow 1.5 by default (in addition to
+       OpenFlow 1.0 to 1.4).
+     * Removed support for OpenFlow 1.6 (draft), which ONF abandoned.
+     * New action "check_pkt_larger".
+     * Support for OpenFlow 1.5 "meter" action.
+   - Userspace datapath:
+     * ICMPv6 ND enhancements: support for match and set ND options type
+       and reserved fields.
+     * Add v4/v6 fragmentation support for conntrack.
+     * New ovs-appctl "dpctl/ipf-set-enabled" and "dpctl/ipf-set-disabled"
+       commands for userspace datapath conntrack fragmentation support.
+     * New "ovs-appctl dpctl/ipf-set-min-frag" command for userspace
+       datapath conntrack fragmentation support.
+     * New "ovs-appctl dpctl/ipf-set-max-nfrags" command for userspace datapath
+       conntrack fragmentation support.
+     * New "ovs-appctl dpctl/ipf-get-status" command for userspace datapath
+       conntrack fragmentation support.
+     * New action "check_pkt_len".
+     * Port configuration with "other-config:priority-tags" now has a mode
+       that retains the 802.1Q header even if VLAN and priority are both zero.
+     * 'ovs-appctl exit' now implies cleanup of non-internal ports in userspace
+       datapath regardless of '--cleanup' option. Use '--cleanup' to remove
+       internal ports too.
+     * Removed experimental tag for SMC cache.
+     * Datapath classifer code refactored to enable function pointers to select
+       the lookup implementation at runtime. This enables specialization of
+       specific subtables based on the miniflow attributes, enhancing the
+       performance of the subtable search.
+     * Add Linux AF_XDP support through a new experimental netdev type "afxdp".
+   - OVSDB:
+     * OVSDB clients can now resynchronize with clustered servers much more
+       quickly after a brief disconnection, saving bandwidth and CPU time.
+       See section 4.1.15 of ovsdb-server(7) for details of related OVSDB
+       protocol extension.
+     * Support to convert from cluster database to standalone database is now
+       available when clustered is down and cannot be revived using ovsdb-tool
+       . Check "Database Migration Commands" in ovsdb-tool man section.
+   - OVN:
+     * IPAM/MACAM:
+       - select IPAM mac_prefix in a random manner if not provided by the user
+       - add the capability to specify a static IPv4 and/or IPv6 address and
+         get the L2 one allocated dynamically using the following syntax:
+           ovn-nbctl lsp-set-addresses <port> "dynamic <IPv4 addr> <IPv6 addr>"
+     * Added the HA chassis group support.
+     * Added 'external' logical port support.
+     * Added Policy-based routing(PBR) support to create permit/deny/reroute
+       policies on the logical router. New table(Logical_Router_Policy) added in
+       OVN-NB schema. New "ovn-nbctl" commands to add/delete/list PBR policies.
+     * Support for Transport Zones, a way to separate chassis into
+       logical groups which results in tunnels only been formed between
+       members of the same transport zone(s).
+     * Support for IGMP Snooping and IGMP Querier.
+   - New QoS type "linux-netem" on Linux.
+   - Added support for TLS Server Name Indication (SNI).
+   - Linux datapath:
+     * Support for the kernel versions 4.19.x and 4.20.x.
+     * Support for the kernel version 5.0.x.
+     * Add support for conntrack zone-based timeout policy.
+   - 'ovs-dpctl dump-flows' is no longer suitable for dumping offloaded flows.
+     'ovs-appctl dpctl/dump-flows' should be used instead.
+   - Add new argument '--offload-stats' for command
+     'ovs-appctl bridge/dump-flows',
+     so it can display offloaded packets statistics.
+   - Add L2 GRE tunnel over IPv6 support.
 
 v2.11.0 - 19 Feb 2019
-----------------------
+---------------------
    - OpenFlow:
      * OFPMP_TABLE_FEATURES_REQUEST can now modify table features.
    - ovs-ofctl:
@@ -34,8 +192,6 @@ v2.11.0 - 19 Feb 2019
    - DPDK:
      * Add support for DPDK 18.11
      * Add support for port representors.
-     * New option 'other_config:dpdk-socket-limit' to limit amount of
-       hugepage memory that can be used by DPDK.
    - Userspace datapath:
      * Add option for simple round-robin based Rxq to PMD assignment.
        It can be set with pmd-rxq-assign.

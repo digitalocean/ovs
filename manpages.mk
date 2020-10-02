@@ -1,33 +1,5 @@
 # Generated automatically -- do not modify!    -*- buffer-read-only: t -*-
 
-ovn/utilities/ovn-detrace.1: \
-	ovn/utilities/ovn-detrace.1.in \
-	lib/common-syn.man \
-	lib/common.man \
-	lib/ovs.tmac
-ovn/utilities/ovn-detrace.1.in:
-lib/common-syn.man:
-lib/common.man:
-lib/ovs.tmac:
-
-ovn/utilities/ovn-sbctl.8: \
-	ovn/utilities/ovn-sbctl.8.in \
-	lib/common.man \
-	lib/db-ctl-base.man \
-	lib/ovs.tmac \
-	lib/ssl-bootstrap.man \
-	lib/ssl.man \
-	lib/table.man \
-	lib/vlog.man
-ovn/utilities/ovn-sbctl.8.in:
-lib/common.man:
-lib/db-ctl-base.man:
-lib/ovs.tmac:
-lib/ssl-bootstrap.man:
-lib/ssl.man:
-lib/table.man:
-lib/vlog.man:
-
 ovsdb/ovsdb-client.1: \
 	ovsdb/ovsdb-client.1.in \
 	lib/common-syn.man \
@@ -132,14 +104,6 @@ utilities/bugtool/ovs-bugtool.8: \
 utilities/bugtool/ovs-bugtool.8.in:
 lib/ovs.tmac:
 
-utilities/ovs-appctl.8: \
-	utilities/ovs-appctl.8.in \
-	lib/common.man \
-	lib/ovs.tmac
-utilities/ovs-appctl.8.in:
-lib/common.man:
-lib/ovs.tmac:
-
 utilities/ovs-dpctl-top.8: \
 	utilities/ovs-dpctl-top.8.in \
 	lib/ovs.tmac
@@ -157,16 +121,6 @@ lib/common.man:
 lib/dpctl.man:
 lib/ovs.tmac:
 lib/vlog.man:
-
-utilities/ovs-l3ping.8: \
-	utilities/ovs-l3ping.8.in \
-	lib/common-syn.man \
-	lib/common.man \
-	lib/ovs.tmac
-utilities/ovs-l3ping.8.in:
-lib/common-syn.man:
-lib/common.man:
-lib/ovs.tmac:
 
 utilities/ovs-ofctl.8: \
 	utilities/ovs-ofctl.8.in \
@@ -200,30 +154,6 @@ lib/common-syn.man:
 lib/common.man:
 lib/ovs.tmac:
 
-utilities/ovs-pki.8: \
-	utilities/ovs-pki.8.in \
-	lib/ovs.tmac
-utilities/ovs-pki.8.in:
-lib/ovs.tmac:
-
-utilities/ovs-tcpdump.8: \
-	utilities/ovs-tcpdump.8.in \
-	lib/common.man \
-	lib/ovs.tmac
-utilities/ovs-tcpdump.8.in:
-lib/common.man:
-lib/ovs.tmac:
-
-utilities/ovs-tcpundump.1: \
-	utilities/ovs-tcpundump.1.in \
-	lib/common-syn.man \
-	lib/common.man \
-	lib/ovs.tmac
-utilities/ovs-tcpundump.1.in:
-lib/common-syn.man:
-lib/common.man:
-lib/ovs.tmac:
-
 utilities/ovs-testcontroller.8: \
 	utilities/ovs-testcontroller.8.in \
 	lib/common.man \
@@ -247,16 +177,6 @@ lib/unixctl.man:
 lib/vconn-active.man:
 lib/vconn-passive.man:
 lib/vlog.man:
-
-utilities/ovs-vlan-bug-workaround.8: \
-	utilities/ovs-vlan-bug-workaround.8.in \
-	lib/common.man \
-	lib/ovs.tmac \
-	utilities/ovs-vlan-bugs.man
-utilities/ovs-vlan-bug-workaround.8.in:
-lib/common.man:
-lib/ovs.tmac:
-utilities/ovs-vlan-bugs.man:
 
 utilities/ovs-vsctl.8: \
 	utilities/ovs-vsctl.8.in \
@@ -288,6 +208,7 @@ vswitchd/ovs-vswitchd.8: \
 	lib/coverage-unixctl.man \
 	lib/daemon.man \
 	lib/dpctl.man \
+	lib/dpdk-unixctl.man \
 	lib/dpif-netdev-unixctl.man \
 	lib/memory-unixctl.man \
 	lib/netdev-dpdk-unixctl.man \
@@ -307,6 +228,7 @@ lib/common.man:
 lib/coverage-unixctl.man:
 lib/daemon.man:
 lib/dpctl.man:
+lib/dpdk-unixctl.man:
 lib/dpif-netdev-unixctl.man:
 lib/memory-unixctl.man:
 lib/netdev-dpdk-unixctl.man:

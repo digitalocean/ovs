@@ -52,6 +52,13 @@
     one record in the <ref table="Open_vSwitch"/> table.
 
     <group title="Configuration">
+      <column name="datapaths">
+        Map of datapath types to datapaths.  The
+        <ref column="datapath_type"/> column of the <ref table="Bridge"/>
+        table is used as a key for this map.  The value points to a row in
+        the <ref table="Datapath"/> table.
+      </column>
+
       <column name="bridges">
         Set of bridges managed by the daemon.
       </column>
@@ -190,6 +197,31 @@
         </p>
     </column>
 
+      <column name="other_config" key="max-revalidator"
+              type='{"type": "integer", "minInteger": 100}'>
+        <p>
+          The maximum time (in ms) that revalidator threads will wait before
+          executing flow revalidation. Note that this is maximum allowed value.
+          Actual timeout used by OVS is minimum of max-idle and max-revalidator
+          values. Tweaking this value is discouraged unless you know exactly
+          what you're doing.
+        </p>
+        <p>
+          The default is 500.
+        </p>
+      </column>
+
+      <column name="other_config" key="min-revalidate-pps"
+              type='{"type": "integer", "minInteger": 1}'>
+        <p>
+          Set minimum pps that flow must have in order to be revalidated when
+          revalidation duration exceeds half of max-revalidator config variable.
+        </p>
+        <p>
+          The default is 5.
+        </p>
+      </column>
+
       <column name="other_config" key="hw-offload"
               type='{"type": "boolean"}'>
         <p>
@@ -207,6 +239,11 @@
           which kernel version is used, and what hardware is
           available, Open vSwitch may not be able to offload
           functionality to hardware.
+        </p>
+        <p>
+          In order to dump HW offloaded flows use
+          <code>ovs-appctl dpctl/dump-flows</code>, <code>ovs-dpctl</code>
+          doesn't support this functionality. See ovs-vswitchd(8) for details.
         </p>
       </column>
 
@@ -400,6 +437,22 @@
           protocol, (on which vHost IOMMU relies) prior to v2.9.1. Setting this
           value to <code>true</code> enables vHost IOMMU support for vHost User
           Client ports in OvS-DPDK, starting from DPDK v17.11.
+        </p>
+        <p>
+          Changing this value requires restarting the daemon.
+        </p>
+      </column>
+
+      <column name="other_config" key="vhost-postcopy-support"
+              type='{"type": "boolean"}'>
+        <p>
+          vHost post-copy is a feature which allows switching live migration
+          of VM attached to dpdkvhostuserclient port to post-copy mode if
+          default pre-copy migration can not be converged or takes too long to
+          converge.
+          Setting this value to <code>true</code> enables vHost post-copy
+          support for all dpdkvhostuserclient ports. Available starting from
+          DPDK v18.11 and QEMU 2.12.
         </p>
         <p>
           Changing this value requires restarting the daemon.
@@ -635,6 +688,26 @@
          This option can be configured to avoid frequent trigger of auto load
          balancing of PMDs. For e.g. set the value (in min) such that it occurs
          once in few hours or a day or a week.
+        </p>
+      </column>
+      <column name="other_config" key="userspace-tso-enable"
+              type='{"type": "boolean"}'>
+        <p>
+          Set this value to <code>true</code> to enable userspace support for
+          TCP Segmentation Offloading (TSO). When it is enabled, the interfaces
+          can provide an oversized TCP segment to the datapath and the datapath
+          will offload the TCP segmentation and checksum calculation to the
+          interfaces when necessary.
+        </p>
+        <p>
+          The default value is <code>false</code>. Changing this value requires
+          restarting the daemon.
+        </p>
+        <p>
+          The feature only works if Open vSwitch is built with DPDK support.
+        </p>
+        <p>
+          The feature is considered experimental.
         </p>
       </column>
     </group>
@@ -1151,9 +1224,12 @@
           avoid loops on such a bridge, configure <code>secure</code> mode or
           enable STP (see <ref column="stp_enable"/>).
         </p>
-        <p>When more than one controller is configured,
-        <ref column="fail_mode"/> is considered only when none of the
-        configured controllers can be contacted.</p>
+        <p>
+          The <ref column="fail_mode"/> setting applies only to primary
+          controllers.  When more than one primary controller is configured,
+          <ref column="fail_mode"/> is considered only when none of the
+          configured controllers can be contacted.
+        </p>
         <p>
           Changing <ref column="fail_mode"/> when no primary controllers are
           configured clears the OpenFlow flow tables, group table, and meter
@@ -1168,53 +1244,11 @@
       </column>
 
       <column name="datapath_version">
-        <p>
-          Reports the version number of the Open vSwitch datapath in use.
-          This allows management software to detect and report discrepancies
-          between Open vSwitch userspace and datapath versions.  (The <ref
-          column="ovs_version" table="Open_vSwitch"/> column in the <ref
-          table="Open_vSwitch"/> reports the Open vSwitch userspace version.)
-          The version reported depends on the datapath in use:
-        </p>
-
-        <ul>
-          <li>
-            When the kernel module included in the Open vSwitch source tree is
-            used, this column reports the Open vSwitch version from which the
-            module was taken.
-          </li>
-
-          <li>
-            When the kernel module that is part of the upstream Linux kernel is
-            used, this column reports <code>&lt;unknown&gt;</code>.
-          </li>
-
-          <li>
-            When the datapath is built into the <code>ovs-vswitchd</code>
-            binary, this column reports <code>&lt;built-in&gt;</code>.  A
-            built-in datapath is by definition the same version as the rest of
-            the Open VSwitch userspace.
-          </li>
-
-          <li>
-            Other datapaths (such as the Hyper-V kernel datapath) currently
-            report <code>&lt;unknown&gt;</code>.
-          </li>
-        </ul>
-
-        <p>
-          A version discrepancy between <code>ovs-vswitchd</code> and the
-          datapath in use is not normally cause for alarm.  The Open vSwitch
-          kernel datapaths for Linux and Hyper-V, in particular, are designed
-          for maximum inter-version compatibility: any userspace version works
-          with with any kernel version.  Some reasons do exist to insist on
-          particular user/kernel pairings.  First, newer kernel versions add
-          new features, that can only be used by new-enough userspace, e.g.
-          VXLAN tunneling requires certain minimal userspace and kernel
-          versions.  Second, as an extension to the first reason, some newer
-          kernel versions add new features for enhancing performance that only
-          new-enough userspace versions can take advantage of.
-        </p>
+          Reports the datapath version.  This column is maintained for
+          backwards compatibility.  The preferred locatation is the
+          <ref column="datapath_id" table="Datapath"/> column of the
+          <ref table="Datapath"/> table.  The full documentation for this
+          column is there.
       </column>
 
       <column name="other_config" key="datapath-id">
@@ -1227,6 +1261,18 @@
         Human readable description of datapath.  It is a maximum 256
         byte-long free-form string to describe the datapath for
         debugging purposes, e.g. <code>switch3 in room 3120</code>.
+        The value is returned by the switch as a part of reply to OFPMP_DESC 
+        request (ofp_desc). The OpenFlow specification (e.g. 1.3.5) describes
+        the ofp_desc structure to contaion "NULL terminated ASCII strings".
+        For the compatibility reasons no more than 255 ASCII characters should be used.
+      </column>
+
+      <column name="other_config" key="dp-sn">
+        Serial number. It is a maximum 32 byte-long free-form string to
+        provide an additional switch identification. The value is returned
+        by the switch as a part of reply to OFPMP_DESC request (ofp_desc).
+        Same as mentioned in the description of <ref column="other-config" key="dp-desc"/>,
+        the string should be no more than 31 ASCII characters for the compatibility.
       </column>
 
       <column name="other_config" key="disable-in-band"
@@ -1244,18 +1290,19 @@
         ID, the default queue is used instead.
       </column>
 
-      <column name="protocols">
-        <p>
-          List of OpenFlow protocols that may be used when negotiating
-          a connection with a controller.  OpenFlow 1.0, 1.1, 1.2, 1.3, and
-          1.4 are enabled by default if this column is empty.
-        </p>
+      <column name="other_config" key="controller-queue-size"
+              type='{"type": "integer", "minInteger": 1, "maxInteger": 512}'>
+        This sets the maximum size of the queue of packets that need to be
+        sent to the OpenFlow management controller. The value must be less
+        than 512. If not specified the queue size is limited to 100 packets
+        by default. Note: increasing the queue size might have a negative
+        impact on latency.
+      </column>
 
-        <p>
-          OpenFlow 1.5 and 1.6 are not enabled by default because their
-          implementations are missing features.  In addition, the OpenFlow 1.6
-          specification is still under development and thus subject to change.
-        </p>
+      <column name="protocols">
+        List of OpenFlow protocols that may be used when negotiating a
+        connection with a controller.  OpenFlow 1.0, 1.1, 1.2, 1.3, 1.4, and
+        1.5 are enabled by default if this column is empty.
       </column>
     </group>
 
@@ -1858,7 +1905,8 @@
       </column>
 
       <column name="other_config" key="priority-tags"
-              type='{"type": "boolean"}'>
+              type='{"type": "string",
+                     "enum": ["set", ["never", "if-nonzero", "always"]]}'>
         <p>
           An 802.1Q header contains two important pieces of information: a VLAN
           ID and a priority.  A frame with a zero VLAN ID, called a
@@ -1871,12 +1919,14 @@
           header at all, even when the VLAN ID is zero.  Therefore, by default
           Open vSwitch does not output priority-tagged frames, instead omitting
           the 802.1Q header entirely if the VLAN ID is zero.  Set this key to
-          <code>true</code> to enable priority-tagged frames on a port.
+          <code>if-nonzero</code> to enable priority-tagged frames on a port.
         </p>
 
         <p>
-          Regardless of this setting, Open vSwitch omits the 802.1Q header on
-          output if both the VLAN ID and priority would be zero.
+          For <code>if-nonzero</code> Open vSwitch omits the 802.1Q header on
+          output if both the VLAN ID and priority would be zero. Set to
+          <code>always</code> to retain the 802.1Q header in such frames as
+          well.
         </p>
 
         <p>
@@ -1941,6 +1991,23 @@
         balanced bonds.  When changed, all flows will be assigned different
         hash values possibly causing slave selection decisions to change.  Does
         not affect bonding modes which do not employ load balancing such as
+        <code>active-backup</code>.
+      </column>
+
+      <column name="other_config" key="lb-output-action"
+              type='{"type": "boolean"}'>
+        Enable/disable usage of optimized <code>lb_output</code> action for
+        balancing flows among output slaves in load balanced bonds in
+        <code>balance-tcp</code>. When enabled, it uses optimized path for
+        balance-tcp mode by using rss hash and avoids recirculation.
+        This knob does not affect other balancing modes.
+      </column>
+
+      <column name="other_config" key="bond-primary"
+              type='{"type": "string"}'>
+        If a slave interface with this name exists in the bond and
+        is up, it will be made active.  Relevant only when <ref
+        column="other_config" key="bond_mode"/> is
         <code>active-backup</code>.
       </column>
 
@@ -2054,7 +2121,8 @@
         </p>
 
         <column name="other_config" key="bond-rebalance-interval"
-                type='{"type": "integer", "minInteger": 0, "maxInteger": 10000}'>
+                type='{"type": "integer",
+                       "minInteger": 0, "maxInteger": 2147483647}'>
           For a load balanced bonded port, the number of milliseconds between
           successive attempts to rebalance the bond, that is, to move flows
           from one interface on the bond to another in an attempt to keep usage
@@ -2535,8 +2603,14 @@
 
           <dt><code>gre</code></dt>
           <dd>
-            Generic Routing Encapsulation (GRE) over IPv4/IPv6 tunnel,
+            Generic Routing Encapsulation (GRE) over IPv4 tunnel,
             configurable to encapsulate layer 2 or layer 3 traffic.
+          </dd>
+
+          <dt><code>ip6gre</code></dt>
+          <dd>
+            Generic Routing Encapsulation (GRE) over IPv6 tunnel,
+            encapsulate layer 2 traffic.
           </dd>
 
           <dt><code>vxlan</code></dt>
@@ -2590,6 +2664,30 @@
           <dd>
             A pair of virtual devices that act as a patch cable.
           </dd>
+
+          <dt><code>gtpu</code></dt>
+          <dd>
+            <p>
+            GPRS Tunneling Protocol (GTP) is a group of IP-based communications
+            protocols used to carry general packet radio service (GPRS) within
+            GSM, UMTS and LTE networks. GTP-U is used for carrying user data
+            within the GPRS core network and between the radio access network
+            and the core network. The user data transported can be packets in
+            any of IPv4, IPv6, or PPP formats.
+            </p>
+
+            <p>
+            The protocol is documented at
+            http://www.3gpp.org/DynaReport/29281.htm
+            </p>
+
+            <p>
+            Open vSwitch uses UDP destination port 2152. The source port used
+            for GTP traffic varies on a per-flow basis and is in the ephemeral
+            port range.
+            </p>
+          </dd>
+
         </dl>
       </column>
     </group>
@@ -2597,8 +2695,8 @@
     <group title="Tunnel Options">
       <p>
         These options apply to interfaces with <ref column="type"/> of
-        <code>geneve</code>, <code>gre</code>, <code>vxlan</code>,
-        <code>lisp</code> and <code>stt</code>.
+        <code>geneve</code>, <code>gre</code>, <code>ip6gre</code>,
+        <code>vxlan</code>, <code>lisp</code> and <code>stt</code>.
       </p>
 
       <p>
@@ -2895,10 +2993,10 @@
         </column>
       </group>
 
-      <group title="Tunnel Options: gre, geneve, and vxlan">
+      <group title="Tunnel Options: gre, ip6gre, geneve, and vxlan">
         <p>
-          <code>gre</code>, <code>geneve</code>, and
-          <code>vxlan</code> interfaces support these options.
+          <code>gre</code>, <code>ip6gre</code>, <code>geneve</code>,
+          and <code>vxlan</code> interfaces support these options.
         </p>
 
         <column name="options" key="csum" type='{"type": "boolean"}'>
@@ -2912,8 +3010,9 @@
           <p>
             When using the upstream Linux kernel module, computation of
             checksums for <code>geneve</code> and <code>vxlan</code> requires
-            Linux kernel version 4.0 or higher. <code>gre</code> supports
-            checksums for all versions of Open vSwitch that support GRE.
+            Linux kernel version 4.0 or higher. <code>gre</code> and
+            <code>ip6gre</code> support checksums for all versions of
+            Open vSwitch that support GRE.
             The out of tree kernel module distributed as part of OVS
             can compute all tunnel checksums on any kernel version that it
             is compatible with.
@@ -2925,10 +3024,11 @@
       <group title="Tunnel Options: IPsec">
         <p>
           Setting any of these options enables IPsec support for a given
-          tunnel.  <code>gre</code>, <code>geneve</code>, <code>vxlan</code>,
-          and <code>stt</code> interfaces support these options.  See the
-          <code>IPsec</code> section in the <ref table="Open_vSwitch"/> table
-          for a description of each mode.
+          tunnel.  <code>gre</code>, <code>ip6gre</code>,
+          <code>geneve</code>, <code>vxlan</code> and <code>stt</code>
+          interfaces support these options.  See the <code>IPsec</code>
+          section in the <ref table="Open_vSwitch"/> table for a description
+          of each mode.
         </p>
         <column name="options" key="psk" type='{"type": "string"}'>
           <p>
@@ -3080,6 +3180,53 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         </p>
       </column>
 
+      <column name="options" key="xdp-mode"
+              type='{"type": "string",
+                     "enum": ["set", ["best-effort", "native-with-zerocopy",
+                                      "native", "generic"]]}'>
+        <p>
+          Specifies the operational mode of the XDP program.
+          <p>
+            In <code>native-with-zerocopy</code> mode the XDP program is loaded
+            into the device driver with zero-copy RX and TX enabled.  This mode
+            requires device driver support and has the best performance because
+            there should be no copying of packets.
+          </p>
+          <p>
+            <code>native</code> is the same as
+            <code>native-with-zerocopy</code>, but without zero-copy
+            capability.  This requires at least one copy between kernel and the
+            userspace. This mode also requires support from device driver.
+          </p>
+          <p>
+            In <code>generic</code> case the XDP program in kernel works after
+            skb allocation on early stages of packet processing inside the
+            network stack.  This mode doesn't require driver support, but has
+            much lower performance.
+          </p>
+          <p>
+            <code>best-effort</code> tries to detect and choose the best
+            (fastest) from the available modes for current interface.
+          </p>
+          <p>
+            Note that this option is specific to netdev-afxdp.
+            Defaults to <code>best-effort</code> mode.
+          </p>
+        </p>
+      </column>
+
+      <column name="options" key="use-need-wakeup"
+              type='{"type": "boolean"}'>
+        <p>
+          Specifies whether to use need_wakeup feature in afxdp netdev.
+          If enabled, OVS explicitly wakes up the kernel RX, using poll()
+          syscall and wakes up TX, using sendto() syscall. For physical
+          devices, this feature improves the performance by avoiding
+          unnecessary sendto syscalls.
+          Defaults to true if supported by libbpf.
+        </p>
+      </column>
+
       <column name="options" key="vhost-server-path"
               type='{"type": "string"}'>
         <p>
@@ -3097,6 +3244,18 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           Must be set before vhost-server-path is specified.
           Only supported by dpdkvhostuserclient interfaces.
           The feature is considered experimental.
+        </p>
+      </column>
+
+      <column name="options" key="tx-retries-max"
+              type='{"type": "integer", "minInteger": 0, "maxInteger": 32}'>
+        <p>
+          The value specifies the maximum amount of vhost tx retries that can
+          be made while trying to send a batch of packets to an interface.
+          Only supported by dpdkvhostuserclient interfaces.
+        </p>
+        <p>
+          Default value is 8.
         </p>
       </column>
 
@@ -3509,6 +3668,13 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         The Open vSwitch implementation of BFD aims to comply faithfully
         with RFC 5880 requirements.  Open vSwitch does not implement the
         optional Authentication or ``Echo Mode'' features.
+      </p>
+
+      <p>
+        OVS 2.13 and earlier intercepted and processed all BFD packets.
+        OVS 2.14 and later only intercept and process BFD packets destined
+        to a configured BFD instance, and other BFD packets are made available
+        to the OVS flow table for forwarding.
       </p>
 
       <group title="BFD Configuration">
@@ -4325,6 +4491,14 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           for information on how this classifier works.
         </dd>
 
+        <dt><code>linux-netem</code></dt>
+        <dd>
+          Linux ``Network Emulator'' classifier. See
+          <code>tc-netem</code>(8) (also at
+          <code>http://man7.org/linux/man-pages/man8/tc-netem.8.html</code>)
+          for information on how this classifier works.
+        </dd>
+
         <dt><code>linux-noop</code></dt>
         <dd>
           Linux ``No operation.''  By default, Open vSwitch manages quality of
@@ -4346,6 +4520,19 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           cycles ordinarily are used for packet proccessing. As such the drop
           in performance will be noticed in terms of overall aggregate traffic
           throughput.
+        </dd>
+        <dt><code>trtcm-policer</code></dt>
+        <dd>
+          A DPDK egress policer algorithm using RFC 4115's Two-Rate,
+          Three-Color marker. It's a two-level hierarchical policer
+          which first does a color-blind marking of the traffic at the queue
+          level, followed by a color-aware marking at the port level. At the
+          end traffic marked as Green or Yellow is forwarded, Red is dropped.
+          For details on how traffic is marked, see RFC 4115.
+
+          If the ``default queue'', 0, is not configured it's automatically
+          created with the same <code>other_config</code> values as the
+          physical port.
         </dd>
       </dl>
     </column>
@@ -4414,6 +4601,27 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         bytes/tokens of the packet. If there are not enough tokens in the cbs
         bucket the packet will be dropped.
       </column>
+      <column name="other_config" key="eir" type='{"type": "integer"}'>
+        The Excess Information Rate (EIR) is measured in bytes of IP
+        packets per second, i.e. it includes the IP header, but not link
+        specific (e.g. Ethernet) headers. This represents the bytes per second
+        rate at which the token bucket will be updated. The eir value is
+        calculated by (pps x packet data size).  For example assuming a user
+        wishes to limit a stream consisting of 64 byte packets to 1 million
+        packets per second the EIR would be set to to to 46000000. This value
+        can be broken into '1,000,000 x 46'. Where 1,000,000 is the policing
+        rate for the number of packets per second and 46 represents the size
+        of the packet data for a 64 byte ip packet.
+      </column>
+      <column name="other_config" key="ebs" type='{"type": "integer"}'>
+        The Excess Burst Size (EBS) is measured in bytes and represents a
+        token bucket. At a minimum this value should be be set to the expected
+        largest size packet in the traffic stream. In practice larger values
+        may be used to increase the size of the token bucket. If a packet can
+        be transmitted then the ebs will be decremented by the number of
+        bytes/tokens of the packet. If there are not enough tokens in the cbs
+        bucket the packet might be dropped.
+      </column>
     </group>
 
     <group title="Configuration for linux-sfq">
@@ -4432,6 +4640,26 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         Number of bytes <code>linux-sfq</code> QoS can dequeue in one turn in
         round-robin from one flow. The default and recommended value is equal
         to interface's MTU.
+      </column>
+    </group>
+
+    <group title="Configuration for linux-netem">
+      <p>
+        The <code>linux-netem</code> QoS supports the following key-value
+        pairs:
+      </p>
+
+      <column name="other_config" key="latency" type='{"type": "integer"}'>
+        Adds the chosen delay to the packets outgoing to chosen network
+        interface. The latency value expressed in us.
+      </column>
+      <column name="other_config" key="limit" type='{"type": "integer"}'>
+        Maximum number of packets the qdisc may hold queued at a time.
+        The default value is 1000.
+      </column>
+      <column name="other_config" key="loss" type='{"type": "integer"}'>
+        Adds an independent loss probability to the packets outgoing from the
+        chosen network interface.
       </column>
     </group>
 
@@ -4690,71 +4918,64 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
   <table name="Controller" title="OpenFlow controller configuration.">
     <p>An OpenFlow controller.</p>
 
-    <p>
-      Open vSwitch supports two kinds of OpenFlow controllers:
-    </p>
-
-    <dl>
-      <dt>Primary controllers</dt>
-      <dd>
-        <p>
-          This is the kind of controller envisioned by the OpenFlow 1.0
-          specification.  Usually, a primary controller implements a network
-          policy by taking charge of the switch's flow table.
-        </p>
-
-        <p>
-          Open vSwitch initiates and maintains persistent connections to
-          primary controllers, retrying the connection each time it fails or
-          drops.  The <ref table="Bridge" column="fail_mode"/> column in the
-          <ref table="Bridge"/> table applies to primary controllers.
-        </p>
-
-        <p>
-          Open vSwitch permits a bridge to have any number of primary
-          controllers.  When multiple controllers are configured, Open
-          vSwitch connects to all of them simultaneously.  Because
-          OpenFlow 1.0 does not specify how multiple controllers
-          coordinate in interacting with a single switch, more than
-          one primary controller should be specified only if the
-          controllers are themselves designed to coordinate with each
-          other.  (The Nicira-defined <code>NXT_ROLE</code> OpenFlow
-          vendor extension may be useful for this.)
-        </p>
-      </dd>
-      <dt>Service controllers</dt>
-      <dd>
-        <p>
-          These kinds of OpenFlow controller connections are intended for
-          occasional support and maintenance use, e.g. with
-          <code>ovs-ofctl</code>.  Usually a service controller connects only
-          briefly to inspect or modify some of a switch's state.
-        </p>
-
-        <p>
-          Open vSwitch listens for incoming connections from service
-          controllers.  The service controllers initiate and, if necessary,
-          maintain the connections from their end.  The <ref table="Bridge"
-          column="fail_mode"/> column in the <ref table="Bridge"/> table does
-          not apply to service controllers.
-        </p>
-
-        <p>
-          Open vSwitch supports configuring any number of service controllers.
-        </p>
-      </dd>
-    </dl>
-
-    <p>
-      The <ref column="target"/> determines the type of controller.
-    </p>
-
     <group title="Core Features">
+      <column name="type">
+        <p>
+          Open vSwitch supports two kinds of OpenFlow controllers.  A bridge
+          may have any number of each kind:
+        </p>
+
+        <dl>
+          <dt>Primary controllers</dt>
+          <dd>
+            <p>
+              This is the kind of controller envisioned by the OpenFlow
+              specifications.  Usually, a primary controller implements a
+              network policy by taking charge of the switch's flow table.
+            </p>
+
+            <p>
+              The <ref table="Bridge" column="fail_mode"/> column in the <ref
+              table="Bridge"/> table applies to primary controllers.
+            </p>
+
+            <p>
+              When multiple primary controllers are configured, Open vSwitch
+              connects to all of them simultaneously.  OpenFlow provides few
+              facilities to allow multiple controllers to coordinate in
+              interacting with a single switch, so more than one primary
+              controller should be specified only if the controllers are
+              themselves designed to coordinate with each other.
+            </p>
+          </dd>
+          <dt>Service controllers</dt>
+          <dd>
+            <p>
+              These kinds of OpenFlow controller connections are intended for
+              occasional support and maintenance use, e.g. with
+              <code>ovs-ofctl</code>.  Usually a service controller connects
+              only briefly to inspect or modify some of a switch's state.
+            </p>
+
+            <p>
+              The <ref table="Bridge" column="fail_mode"/> column in the <ref
+              table="Bridge"/> table does not apply to service controllers.
+            </p>
+          </dd>
+        </dl>
+
+        <p>
+          By default, Open vSwitch treats controllers with active connection
+          methods as primary controllers and those with passive connection
+          methods as service controllers.  Set this column to the desired type
+          to override this default.
+        </p>
+      </column>
+
       <column name="target">
         <p>Connection method for controller.</p>
         <p>
-          The following connection methods are currently supported for primary
-          controllers:
+          The following active connection methods are currently supported:
         </p>
         <dl>
           <dt><code>ssl:<var>host</var></code>[<code>:<var>port</var></code>]</dt>
@@ -4783,8 +5004,7 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           </dd>
         </dl>
         <p>
-          The following connection methods are currently supported for service
-          controllers:
+          The following passive connection methods are currently supported:
         </p>
         <dl>
           <dt><code>pssl:</code>[<var>port</var>][<code>:<var>host</var></code>]</dt>
@@ -4928,6 +5148,18 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
           column="ingress_policing_rate" table="Interface"/> in the <ref
           table="Interface"/> table for ingress policing configuration.
         </p>
+
+      <column name="controller_queue_size">
+        <p>
+           This sets the maximum size of the queue of packets that need to be
+           sent to this OpenFlow controller. The value must be less than 512.
+           If not specified the queue size is limited to the value set for
+           the management controller in <ref table="Bridge"
+           column="other_config" key="controller-queue-size"/> if present or
+           100 packets by default. Note: increasing the queue size might
+           have a negative impact on latency.
+        </p>
+      </column>
 
         <column name="controller_rate_limit">
           <p>
@@ -5477,6 +5709,477 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
       disambiguate the traffic.</p>
       <p>When this option is enabled, a maximum of 508 ports are supported.</p>
     </column>
+
+    <group title="Common Columns">
+      The overall purpose of these columns is described under <code>Common
+      Columns</code> at the beginning of this document.
+
+      <column name="external_ids"/>
+    </group>
+  </table>
+
+  <table name="Datapath">
+    <p>
+      Configuration for a datapath within <ref table="Open_vSwitch"/>.
+    </p>
+    <p>
+      A datapath is responsible for providing the packet handling in Open
+      vSwitch.  There are two primary datapath implementations used by
+      Open vSwitch: kernel and userspace.  Kernel datapath
+      implementations are available for Linux and Hyper-V, and selected
+      as <code>system</code> in the <ref column="datapath_type"/> column
+      of the <ref table="Bridge"/> table.  The userspace datapath is used
+      by DPDK and AF-XDP, and is selected as <code>netdev</code> in the
+      <ref column="datapath_type"/> column of the <ref table="Bridge"/>
+      table.
+    </p>
+    <p>
+      A datapath of a particular type is shared by all the bridges that use
+      that datapath.  Thus, configurations applied to this table affect
+      all bridges that use this datapath.
+    </p>
+
+    <column name="datapath_version">
+      <p>
+        Reports the version number of the Open vSwitch datapath in use.
+        This allows management software to detect and report discrepancies
+        between Open vSwitch userspace and datapath versions.  (The <ref
+        column="ovs_version" table="Open_vSwitch"/> column in the <ref
+        table="Open_vSwitch"/> reports the Open vSwitch userspace version.)
+        The version reported depends on the datapath in use:
+      </p>
+
+      <ul>
+        <li>
+          When the kernel module included in the Open vSwitch source tree is
+          used, this column reports the Open vSwitch version from which the
+          module was taken.
+        </li>
+
+        <li>
+          When the kernel module that is part of the upstream Linux kernel is
+          used, this column reports <code>&lt;unknown&gt;</code>.
+        </li>
+
+        <li>
+          When the datapath is built into the <code>ovs-vswitchd</code>
+          binary, this column reports <code>&lt;built-in&gt;</code>.  A
+          built-in datapath is by definition the same version as the rest of
+          the Open vSwitch userspace.
+        </li>
+
+        <li>
+          Other datapaths (such as the Hyper-V kernel datapath) currently
+          report <code>&lt;unknown&gt;</code>.
+        </li>
+      </ul>
+
+      <p>
+        A version discrepancy between <code>ovs-vswitchd</code> and the
+        datapath in use is not normally cause for alarm.  The Open vSwitch
+        kernel datapaths for Linux and Hyper-V, in particular, are designed
+        for maximum inter-version compatibility: any userspace version works
+        with with any kernel version.  Some reasons do exist to insist on
+        particular user/kernel pairings.  First, newer kernel versions add
+        new features, that can only be used by new-enough userspace, e.g.
+        VXLAN tunneling requires certain minimal userspace and kernel
+        versions.  Second, as an extension to the first reason, some newer
+        kernel versions add new features for enhancing performance that only
+        new-enough userspace versions can take advantage of.
+      </p>
+    </column>
+
+    <column name="ct_zones">
+      Configuration for connection tracking zones.  Each pair maps from a
+      zone id to a configuration for that zone.  Zone <code>0</code> applies
+      to the default zone (ie, the one used if a zone is not specified in
+      connection tracking-related OpenFlow matches and actions).
+    </column>
+
+    <group title="Capabilities">
+      <p>
+        The <ref column="capabilities"/> column reports a datapath's
+        features.  For the <code>netdev</code> datapath, the
+        capabilities are fixed for a given version of Open vSwitch
+        because this datapath is built into the
+        <code>ovs-vswitchd</code> binary.  The Linux kernel and
+        Windows and other datapaths, which are external to OVS
+        userspace, can vary in version and capabilities independently
+        from <code>ovs-vswitchd</code>.
+      </p>
+
+      <p>
+        Some of these features indicate whether higher-level Open vSwitch
+        features are available.  For example, OpenFlow features for
+        connection-tracking are available only when <ref column="capabilities"
+        key="ct_state"/> is <code>true</code>.  A controller that wishes to
+        determine whether a feature is supported could, therefore, consult the
+        relevant capabilities in this table.  However, as a general rule, it is
+        better for a controller to try to use the higher-level feature and use
+        the result as an indication of support, since the low-level
+        capabilities are more likely to shift over time than the high-level
+        features that rely on them.
+      </p>
+
+      <column name="capabilities" key="max_vlan_headers"
+              type='{"type": "integer", "minInteger": 0}'>
+        Number of 802.1q VLAN headers supported by the datapath, as probed by
+        the <code>ovs-vswitchd</code> slow path.  If the datapath supports more
+        VLAN headers than the slow path, this reports the slow path's limit.
+        The value of <ref column="other-config" key="vlan-limit"/> in the <ref
+        table="Open_vSwitch"/> table does not influence the number reported
+        here.
+      </column>
+      <column name="capabilities" key="recirc" type='{"type": "boolean"}'>
+        If this is true, then the datapath supports recirculation,
+        specifically OVS_KEY_ATTR_RECIRC_ID.  Recirculation enables
+        higher performance for MPLS and active-active load balancing
+        bonding modes.
+      </column>
+      <column name="capabilities" key="lb_output_action"
+              type='{"type": "boolean"}'>
+        If this is true, then the datapath supports optimized balance-tcp
+        bond mode. This capability replaces existing <code>hash</code> and
+        <code>recirc</code> actions with new action <code>lb_output</code>
+        and avoids recirculation of packet in datapath. It is supported
+        only for balance-tcp bond mode in netdev datapath. The new action
+        gives higer performance by using bond buckets instead of post
+        recirculation flows for selection of slave port from bond. By default
+        this new action is disabled, however it can be enabled by setting
+        <ref column="other-config" key="lb-output-action"/> in
+        <ref table="Port"/> table.
+      </column>
+      <group title="Connection-Tracking Capabilities">
+        <p>
+          These capabilities are granular because Open vSwitch and its
+          datapaths added support for connection tracking over several
+          releases, with features added individually over that time.
+        </p>
+
+        <column name="capabilities" key="ct_state" type='{"type": "boolean"}'>
+          <p>
+            If true, datapath supports OVS_KEY_ATTR_CT_STATE, which indicates
+            support for the bits in the OpenFlow <code>ct_state</code> field
+            (see <code>ovs-fields</code>(7)) other than <code>snat</code> and
+            <code>dnat</code>, which have a separate capability.
+          </p>
+
+          <p>
+            If this is false, the datapath does not support connection-tracking
+            at all and the remaining connection-tracking capabilities should
+            all be false.  In this case, Open vSwitch will reject flows that
+            match on the <code>ct_state</code> field or use the <code>ct</code>
+            action.
+          </p>
+        </column>
+        <column name="capabilities" key="ct_state_nat"
+                type='{"type": "boolean"}'>
+          <p>
+            If true, it means that the datapath supports the <code>snat</code>
+            and <code>dnat</code> flags in the OpenFlow <code>ct_state</code>
+            field.  The <code>ct_state</code> capability must be true for this
+            to make sense.
+          </p>
+
+          <p>
+            If false, Open vSwitch will reject flows that match on the
+            <code>snat</code> or <code>dnat</code> bits in
+            <code>ct_state</code> or use <code>nat</code> in the
+            <code>ct</code> action.
+          </p>
+        </column>
+        <column name="capabilities" key="ct_zone" type='{"type": "boolean"}'>
+          If true, datapath supports OVS_KEY_ATTR_CT_ZONE.  If false, Open
+          vSwitch rejects flows that match on the <code>ct_zone</code> field or
+          that specify a nonzero zone or a zone field on the <code>ct</code>
+          action.
+        </column>
+        <column name="capabilities" key="ct_mark" type='{"type": "boolean"}'>
+          If true, datapath supports OVS_KEY_ATTR_CT_MARK.  If false, Open
+          vSwitch rejects flows that match on the <code>ct_mark</code> field or
+          that set <code>ct_mark</code> in the <code>ct</code> action.
+        </column>
+        <column name="capabilities" key="ct_label" type='{"type": "boolean"}'>
+          If true, datapath supports OVS_KEY_ATTR_CT_LABEL.  If false, Open
+          vSwitch rejects flows that match on the <code>ct_label</code> field
+          or that set <code>ct_label</code> in the <code>ct</code> action.
+        </column>
+        <column name="capabilities" key="ct_orig_tuple"
+                type='{"type": "boolean"}'>
+          <p>
+            If true, the datapath supports matching the 5-tuple from the
+            connection's original direction for IPv4 traffic.  If false, Open
+            vSwitch rejects flows that match on <code>ct_nw_src</code> or
+            <code>ct_nw_dst</code>, that use the <code>ct</code> feature of the
+            <code>resubmit</code> action, or the <code>force</code> keyword in
+            the <code>ct</code> action.  (The latter isn't tied to connection
+            tracking support of original tuples in any technical way.  They are
+            conflated because all current datapaths implemented the two
+            features at the same time.)
+          </p>
+
+          <p>
+            If this and <ref column="capabilities" key="ct_orig_tuple6"/> are
+            both false, Open vSwitch rejects flows that match on
+            <code>ct_nw_proto</code>, <code>ct_tp_src</code>, or
+            <code>ct_tp_dst</code>.
+          </p>
+        </column>
+        <column name="capabilities" key="ct_orig_tuple6"
+                type='{"type": "boolean"}'>
+          If true, the datapath supports matching the 5-tuple from the
+          connection's original direction for IPv6 traffic.  If false, Open
+          vSwitch rejects flows that match on <code>ct_ipv6_src</code> or
+          <code>ct_ipv6_dst</code>.
+        </column>
+      </group>
+      <column name="capabilities" key="masked_set_action"
+              type='{"type": "boolean"}'>
+        True if the datapath supports masked data in OVS_ACTION_ATTR_SET
+        actions.  Masked data can improve performance by allowing megaflows to
+        match on fewer fields.
+      </column>
+      <column name="capabilities" key="tnl_push_pop"
+              type='{"type": "boolean"}'>
+        True if the datapath supports tnl_push and pop actions.  This is a
+        prerequisite for a datapath to support native tunneling.
+      </column>
+      <column name="capabilities" key="ufid" type='{"type": "boolean"}'>
+        True if the datapath supports OVS_FLOW_ATTR_UFID.  UFID support
+        improves revalidation performance by transferring less data between
+        the slow path and the datapath.
+      </column>
+      <column name="capabilities" key="trunc" type='{"type": "boolean"}'>
+        True if the datapath supports OVS_ACTION_ATTR_TRUNC action.  If false,
+        the <code>output</code> action with packet truncation requires every
+        packet to be sent to the Open vSwitch slow path, which is likely to
+        make it too slow for mirroring traffic in bulk.
+      </column>
+      <column name="capabilities" key="nd_ext" type='{"type": "boolean"}'>
+        True if the datapath supports OVS_KEY_ATTR_ND_EXTENSIONS to match on
+        ICMPv6 "ND reserved" and "ND option type" header fields. If false,
+        the datapath reports error if the feature is used.
+      </column>
+      <group title="Clone Actions">
+        <p>
+          When Open vSwitch translates actions from OpenFlow into the datapath
+          representation, some of the datapath actions may modify the packet or
+          have other side effects that later datapath actions can't undo.  The
+          OpenFlow <code>ct</code>, <code>meter</code>, <code>output</code>
+          with truncation, <code>encap</code>, <code>decap</code>, and
+          <code>dec_nsh_ttl</code> actions fall into this category.  Often,
+          this is not a problem because nothing later on needs the original
+          packet.
+        </p>
+
+        <p>
+          Such actions can, however, occur in circumstances where the
+          translation does require the original packet.  For example, an
+          OpenFlow <code>output</code> action might direct a packet to a patch
+          port, which might in turn lead to a <code>ct</code> action that NATs
+          the packet (which cannot be undone), and then afterward when control
+          flow pops back across the patch port some other action might need to
+          act on the original packet.
+        </p>
+
+        <p>
+          Open vSwitch has two different ways to implement this ``save and
+          restore'' via datapath actions.  These capabilities indicate which
+          one Open vSwitch will choose.  When neither is available, Open
+          vSwitch simply fails in situations that require this feature.
+        </p>
+
+        <column name="capabilities" key="clone" type='{"type": "boolean"}'>
+          <p>
+            True if the datapath supports OVS_ACTION_ATTR_CLONE action.  This
+            is the preferred option for saving and restoring packets, since it
+            is intended for the purpose, but old datapaths do not support it.
+            Open vSwitch will use it whenever it is available.
+          </p>
+
+          <p>
+            (The OpenFlow <code>clone</code> action does not always yield a
+            OVS_ACTION_ATTR_CLONE action.  It only does so when the datapath
+            supports it and the <code>clone</code> brackets actions that
+            otherwise cannot be undone.)
+          </p>
+        </column>
+        <column name="capabilities" key="sample_nesting"
+                type='{"type": "integer", "minInteger": 0}'>
+          Maximum level of nesting allowed by OVS_ACTION_ATTR_SAMPLE action.
+          Open vSwitch misuses this action for saving and restoring packets
+          when the datapath supports more than 3 levels of nesting and
+          OVS_ACTION_ATTR_CLONE is not available.
+        </column>
+      </group>
+      <column name="capabilities" key="ct_eventmask"
+              type='{"type": "boolean"}'>
+        True if the datapath's OVS_ACTION_ATTR_CT action implements the
+        OVS_CT_ATTR_EVENTMASK attribute.  When this is true, Open vSwitch uses
+        the event mask feature to limit the kinds of events reported to
+        conntrack update listeners.  When Open vSwitch doesn't limit the event
+        mask, listeners receive reports of numerous usually unimportant events,
+        such as TCP state machine changes, which can waste CPU time.
+      </column>
+      <column name="capabilities" key="ct_clear" type='{"type": "boolean"}'>
+        True if the datapath supports OVS_ACTION_ATTR_CT_CLEAR action.
+        If false, the OpenFlow <code>ct_clear</code> action has no effect
+        on the datapath.
+      </column>
+      <column name="capabilities" key="max_hash_alg"
+              type='{"type": "integer", "minInteger": 0}'>
+        Highest supported dp_hash algorithm.  This allows Open vSwitch to avoid
+        requesting a packet hash that the datapath does not support.
+      </column>
+      <column name="capabilities" key="check_pkt_len"
+              type='{"type": "boolean"}'>
+        True if the datapath supports OVS_ACTION_ATTR_CHECK_PKT_LEN.  If false,
+        Open vSwitch implements the <code>check_pkt_larger</code> action by
+        sending every packet through the Open vSwitch slow path, which is
+        likely to make it too slow for handling traffic in bulk.
+      </column>
+      <column name="capabilities" key="ct_timeout" type='{"type": "boolean"}'>
+        True if the datapath supports OVS_CT_ATTR_TIMEOUT in the
+        OVS_ACTION_ATTR_CT action.  If false, Open vswitch cannot implement
+        timeout policies based on connection tracking zones, as configured
+        through the <code>CT_Timeout_Policy</code> table.
+      </column>
+      <column name="capabilities" key="explicit_drop_action"
+              type='{"type": "boolean"}'>
+        True if the datapath supports OVS_ACTION_ATTR_DROP.  If false,
+        explicit drop action will not be sent to the datapath.
+      </column>
+    </group>
+
+    <group title="Common Columns">
+      The overall purpose of these columns is described under <code>Common
+      Columns</code> at the beginning of this document.
+
+      <column name="external_ids"/>
+    </group>
+  </table>
+
+  <table name="CT_Zone">
+    Connection tracking zone configuration
+
+    <column name="timeout_policy">
+      Connection tracking timeout policy for this zone. If a timeout policy
+      is not specified, it defaults to the timeout policy in the system.
+    </column>
+
+    <group title="Common Columns">
+      The overall purpose of these columns is described under <code>Common
+      Columns</code> at the beginning of this document.
+
+      <column name="external_ids"/>
+    </group>
+  </table>
+
+  <table name="CT_Timeout_Policy">
+    Connection tracking timeout policy configuration
+
+    <group title="Timeouts">
+      <column name="timeouts">
+        The <code>timeouts</code> column contains key-value pairs used
+        to configure connection tracking timeouts in a datapath.
+        Key-value pairs that are not supported by a datapath are
+        ignored.  The timeout value is in seconds.
+      </column>
+
+      <group title="TCP Timeouts">
+        <column name="timeouts" key="tcp_syn_sent">
+          The timeout for the connection after the first TCP SYN packet has
+          been seen by conntrack.
+        </column>
+
+        <column name="timeouts" key="tcp_syn_recv">
+          The timeout of the connection after the first TCP SYN-ACK packet
+          has been seen by conntrack.
+        </column>
+
+        <column name="timeouts" key="tcp_established">
+          The timeout of the connection after the connection has been fully
+          established.
+        </column>
+
+        <column name="timeouts" key="tcp_fin_wait">
+          The timeout of the connection after the first TCP FIN packet
+          has been seen by conntrack.
+        </column>
+
+        <column name="timeouts" key="tcp_close_wait">
+          The timeout of the connection after the first TCP ACK packet
+          has been seen after it receives TCP FIN packet.  This timeout
+          is only supported by the Linux kernel datapath.
+        </column>
+
+        <column name="timeouts" key="tcp_last_ack">
+          The timeout of the connection after TCP FIN packets have been
+          seen by conntrack from both directions.  This timeout is only
+          supported by the Linux kernel datapath.
+        </column>
+
+        <column name="timeouts" key="tcp_time_wait">
+          The timeout of the connection after conntrack has seen the
+          TCP ACK packet for the second TCP FIN packet.
+        </column>
+
+        <column name="timeouts" key="tcp_close">
+          The timeout of the connection after the first TCP RST packet
+          has been seen by conntrack.
+        </column>
+
+        <column name="timeouts" key="tcp_syn_sent2">
+          The timeout of the connection when only a TCP SYN packet has been
+          seen by conntrack from both directions (simultaneous open).
+          This timeout is only supported by the Linux kernel datapath.
+        </column>
+
+        <column name="timeouts" key="tcp_retransmit">
+          The timeout of the connection when it exceeds the maximum
+          number of retransmissions.  This timeout is only supported by
+          the Linux kernel datapath.
+        </column>
+
+        <column name="timeouts" key="tcp_unack">
+          The timeout of the connection when non-SYN packets create an
+          established connection in TCP loose tracking mode.  This timeout
+          is only supported by the Linux kernel datapath.
+        </column>
+      </group>
+
+      <group title="UDP Timeouts">
+        <column name="timeouts" key="udp_first">
+          The timeout of the connection after the first UDP packet has
+          been seen by conntrack.  This timeout is only supported by the
+          userspace datapath.
+        </column>
+
+        <column name="timeouts" key="udp_single">
+          The timeout of the connection when conntrack only seen UDP
+          packet from the source host, but the destination host has never
+          sent one back.
+        </column>
+
+        <column name="timeouts" key="udp_multiple">
+          The timeout of the connection when UDP packets have been seen in
+          both directions.
+        </column>
+      </group>
+
+      <group title="ICMP Timeouts">
+        <column name="timeouts" key="icmp_first">
+          The timeout of the connection after the first ICMP packet has
+          been seen by conntrack.
+        </column>
+
+        <column name="timeouts" key="icmp_reply">
+          The timeout of the connection when ICMP packets have been seen in
+          both direction.  This timeout is only supported by the userspace
+          datapath.
+        </column>
+      </group>
+    </group>
 
     <group title="Common Columns">
       The overall purpose of these columns is described under <code>Common

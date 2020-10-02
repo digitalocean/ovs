@@ -1203,8 +1203,8 @@ for i in `seq 1 $n_iterations`; do
     trigger_big_update $i
 done
 AT_CHECK([ovs-appctl -t ovsdb-client ovsdb-client/unblock])
-OVS_WAIT_UNTIL([grep "\"xyzzy$counter\"" ovsdb-client.out])
-OVS_WAIT_UNTIL([grep "\"xyzzy$counter\"" ovsdb-client-nonblock.out])
+OVS_WAIT_UNTIL([grep "xyzzy$counter" ovsdb-client.out])
+OVS_WAIT_UNTIL([grep "xyzzy$counter" ovsdb-client-nonblock.out])
 OVS_APP_EXIT_AND_WAIT([ovsdb-client])
 AT_CHECK([kill `cat nonblock.pid`])
 
@@ -1221,7 +1221,7 @@ echo "logged_updates=$logged_updates (expected less than $logged_nonblock_update
 AT_CHECK([test $logged_nonblock_updates -le $n_updates])
 AT_CHECK([test $logged_updates -lt $logged_nonblock_updates])
 AT_CHECK_UNQUOTED([ovs-vsctl get open_vswitch . system_version], [0],
-  ["xyzzy$counter"
+  [xyzzy$counter
 ])
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
@@ -1902,4 +1902,113 @@ cat stdout >> output
 AT_CHECK([uuidfilt output], [0], [[[{"details":"insert operation not allowed when database server is in read only mode","error":"not allowed"}]]
 ], [ignore])
 OVSDB_SERVER_SHUTDOWN
+AT_CLEANUP
+
+AT_SETUP([ovsdb-server replication with schema mismatch])
+AT_KEYWORDS([ovsdb server replication])
+replication_schema > subset_schema
+replication_schema_v2 > superset_schema
+
+AT_CHECK([ovsdb-tool create db1 subset_schema], [0], [stdout], [ignore])
+AT_CHECK([ovsdb-tool create db2 superset_schema], [0], [stdout], [ignore])
+
+dnl Add some data to both DBs
+AT_CHECK([ovsdb-tool transact db1 \
+'[["mydb",
+  {"op": "insert",
+   "table": "a",
+   "row": {"number": 9, "name": "nine"}}]]'], [0], [ignore], [ignore])
+
+AT_CHECK([ovsdb-tool transact db2 \
+'[["mydb",
+  {"op": "insert",
+   "table": "a",
+   "row": {"number": 10, "name": "ten"}}]]'], [0], [ignore], [ignore])
+
+dnl Start both 'db1' and 'db2'.
+AT_CHECK([ovsdb-server --detach --no-chdir --log-file=ovsdb-server1.log --pidfile="`pwd`"/pid --remote=punix:db.sock --unixctl="`pwd`"/unixctl db1 --active ], [0], [ignore], [ignore])
+on_exit 'test ! -e pid || kill `cat pid`'
+
+
+AT_CHECK([ovsdb-server --detach --no-chdir --log-file=ovsdb-server2.log --pidfile="`pwd`"/pid2 --remote=punix:db2.sock --unixctl="`pwd`"/unixctl2 db2], [0], [ignore], [ignore])
+on_exit 'test ! -e pid2 || kill `cat pid2`'
+
+OVS_WAIT_UNTIL([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/sync-status |grep active])
+OVS_WAIT_UNTIL([ovs-appctl -t "`pwd`"/unixctl2 ovsdb-server/sync-status |grep active])
+
+AT_CHECK([ovsdb-client dump unix:db.sock a number name], 0, [dnl
+a table
+name number
+---- ------
+nine 9
+])
+
+AT_CHECK([ovsdb-client dump unix:db2.sock a number name], 0, [dnl
+a table
+name number
+---- ------
+ten  10
+])
+
+# Replicate db1 from db2. It should fail since db2 schema
+# doesn't match with db1 and has additional tables/columns.
+AT_CHECK([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/set-active-ovsdb-server unix:db2.sock])
+AT_CHECK([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/connect-active-ovsdb-server])
+
+OVS_WAIT_UNTIL(
+  [test 1 = `cat ovsdb-server1.log | grep "Schema version mismatch, checking if mydb can still be replicated or not" | wc -l]`
+)
+
+OVS_WAIT_UNTIL(
+  [test 1 = `cat ovsdb-server1.log | grep "mydb cannot be replicated" | wc -l]`
+)
+
+OVS_WAIT_UNTIL([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/sync-status |grep active])
+
+# Replicate db2 from db1. This should be successful.
+AT_CHECK([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/disconnect-active-ovsdb-server])
+AT_CHECK([ovs-appctl -t "`pwd`"/unixctl2 ovsdb-server/set-active-ovsdb-server unix:db.sock])
+AT_CHECK([ovs-appctl -t "`pwd`"/unixctl2 ovsdb-server/connect-active-ovsdb-server])
+
+OVS_WAIT_UNTIL(
+  [test 1 = `cat ovsdb-server2.log | grep "Schema version mismatch, checking if mydb can still be replicated or not" | wc -l]`
+)
+
+OVS_WAIT_UNTIL(
+  [test 1 = `cat ovsdb-server2.log | grep "mydb can be replicated" | wc -l]`
+)
+
+OVS_WAIT_UNTIL([ovs-appctl -t "`pwd`"/unixctl2 ovsdb-server/sync-status |grep replicating])
+
+AT_CHECK([ovsdb-client dump unix:db.sock a number name], 0, [dnl
+a table
+name number
+---- ------
+nine 9
+])
+
+AT_CHECK([ovsdb-client dump unix:db2.sock a number name], 0, [dnl
+a table
+name number
+---- ------
+nine 9
+])
+
+AT_CHECK([ovsdb-client transact unix:db.sock \
+'[["mydb",
+  {"op": "insert",
+   "table": "a",
+   "row": {"number": 6, "name": "six"}}]]'], [0], [ignore], [ignore])
+
+OVS_WAIT_UNTIL([test 1 = `ovsdb-client dump unix:db2.sock a number name | grep six | wc -l`])
+
+AT_CHECK([
+  ovsdb-client dump unix:db2.sock a number name], 0, [dnl
+a table
+name number
+---- ------
+nine 9
+six  6
+])
+
 AT_CLEANUP

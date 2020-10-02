@@ -67,8 +67,11 @@ Q: What Linux kernel versions does each Open vSwitch release work with?
     2.7.x        3.10 to 4.9
     2.8.x        3.10 to 4.12
     2.9.x        3.10 to 4.13
-    2.10.x       3.10 to 4.17
-    2.11.x       3.10 to 4.18
+    2.10.x       3.16 to 4.17
+    2.11.x       3.16 to 4.18
+    2.12.x       3.16 to 5.0
+    2.13.x       3.16 to 5.0
+    2.14.x       3.16 to 5.5
     ============ ==============
 
     Open vSwitch userspace should also work with the Linux kernel module built
@@ -76,6 +79,10 @@ Q: What Linux kernel versions does each Open vSwitch release work with?
 
     Open vSwitch userspace is not sensitive to the Linux kernel version.  It
     should build against almost any kernel, certainly against 2.6.32 and later.
+
+    Open vSwitch branches 2.10 through 2.14 will still compile against the
+    RHEL and CentOS 7 3.10 based kernels since they have diverged from the
+    Linux kernel.org 3.10 kernels.
 
 Q: Are all features available with all datapaths?
 
@@ -96,40 +103,50 @@ Q: Are all features available with all datapaths?
       OVS source tree.
 
     Userspace
-      Also known as DPDK, dpif-netdev or dummy datapath. It is the only
-      datapath that works on NetBSD, FreeBSD and Mac OSX.
+      This datapath supports conventional system devices as well as
+      DPDK and AF_XDP devices when support for those is built.  This
+      is the only datapath that works on NetBSD, FreeBSD and Mac OSX.
 
     Hyper-V
       Also known as the Windows datapath.
 
-    The following table lists the datapath supported features from an Open
-    vSwitch user's perspective.
+    The following table lists the datapath supported features from an
+    Open vSwitch user's perspective.  The "Linux upstream" column
+    lists the Linux kernel version that introduced a given feature
+    into its kernel module.  The "Linux OVS tree" and "Userspace"
+    columns list the Open vSwitch release versions that introduced a
+    given feature into the included kernel module or the userspace
+    datapath, respectively.
 
-    ===================== ============== ============== ========= =======
-    Feature               Linux upstream Linux OVS tree Userspace Hyper-V
-    ===================== ============== ============== ========= =======
-    NAT                   4.6            YES            Yes       NO
-    Connection tracking   4.3            YES            PARTIAL   PARTIAL
-    Tunnel - LISP         NO             YES            NO        NO
-    Tunnel - STT          NO             YES            NO        YES
-    Tunnel - GRE          3.11           YES            YES       YES
-    Tunnel - VXLAN        3.12           YES            YES       YES
-    Tunnel - Geneve       3.18           YES            YES       YES
-    Tunnel - GRE-IPv6     4.18           YES            YES       NO
-    Tunnel - VXLAN-IPv6   4.3            YES            YES       NO
-    Tunnel - Geneve-IPv6  4.4            YES            YES       NO
-    Tunnel - ERSPAN       4.18           YES            YES       NO
-    Tunnel - ERSPAN-IPv6  4.18           YES            YES       NO
-    QoS - Policing        YES            YES            YES       NO
-    QoS - Shaping         YES            YES            NO        NO
-    sFlow                 YES            YES            YES       NO
-    IPFIX                 3.10           YES            YES       NO
-    Set action            YES            YES            YES       PARTIAL
-    NIC Bonding           YES            YES            YES       YES
-    Multiple VTEPs        YES            YES            YES       YES
-    Meters                4.15           YES            YES       NO
-    Conntrack zone limit  4.18           YES            NO        NO
-    ===================== ============== ============== ========= =======
+    ========================== ============== ============== ========= =======
+    Feature                    Linux upstream Linux OVS tree Userspace Hyper-V
+    ========================== ============== ============== ========= =======
+    Connection tracking             4.3            2.5          2.6      YES
+    Conntrack Fragment Reass.       4.3            2.6          2.12     YES
+    Conntrack Timeout Policies      5.2            2.12         2.14     NO
+    Conntrack Zone Limit            4.18           2.10         2.13     YES
+    Conntrack NAT                   4.6            2.6          2.8      YES
+    Tunnel - LISP                   NO             2.11         NO       NO
+    Tunnel - STT                    NO             2.4          NO       YES
+    Tunnel - GRE                    3.11           1.0          2.4      YES
+    Tunnel - VXLAN                  3.12           1.10         2.4      YES
+    Tunnel - Geneve                 3.18           2.4          2.4      YES
+    Tunnel - GRE-IPv6               4.18           2.6          2.6      NO
+    Tunnel - VXLAN-IPv6             4.3            2.6          2.6      NO
+    Tunnel - Geneve-IPv6            4.4            2.6          2.6      NO
+    Tunnel - ERSPAN                 4.18           2.10         2.10     NO
+    Tunnel - ERSPAN-IPv6            4.18           2.10         2.10     NO
+    Tunnel - GTP-U                  NO             NO           2.14     NO
+    QoS - Policing                  YES            1.1          2.6      NO
+    QoS - Shaping                   YES            1.1          NO       NO
+    sFlow                           YES            1.0          1.0      NO
+    IPFIX                           3.10           1.11         1.11     YES
+    Set action                      YES            1.0          1.0    PARTIAL
+    NIC Bonding                     YES            1.0          1.0      YES
+    Multiple VTEPs                  YES            1.10         1.10     YES
+    Meter action                    4.15           2.10         2.7      NO
+    check_pkt_len action            5.2            2.12         2.12     NO
+    ========================== ============== ============== ========= =======
 
     Do note, however:
 
@@ -164,9 +181,9 @@ Q: What DPDK version does each Open vSwitch release work with?
     A: The following table lists the DPDK version against which the given
     versions of Open vSwitch will successfully build.
 
-    ============ =======
+    ============ ========
     Open vSwitch DPDK
-    ============ =======
+    ============ ========
     2.2.x        1.6
     2.3.x        1.6
     2.4.x        2.0
@@ -174,10 +191,13 @@ Q: What DPDK version does each Open vSwitch release work with?
     2.6.x        16.07.2
     2.7.x        16.11.9
     2.8.x        17.05.2
-    2.9.x        17.11.4
-    2.10.x       17.11.4
-    2.11.x       18.11.2
-    ============ =======
+    2.9.x        17.11.10
+    2.10.x       17.11.10
+    2.11.x       18.11.9
+    2.12.x       18.11.9
+    2.13.x       19.11.2
+    2.14.x       19.11.2
+    ============ ========
 
 Q: Are all the DPDK releases that OVS versions work with maintained?
 

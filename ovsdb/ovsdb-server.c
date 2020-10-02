@@ -86,6 +86,7 @@ static unixctl_cb_func ovsdb_server_set_active_ovsdb_server;
 static unixctl_cb_func ovsdb_server_get_active_ovsdb_server;
 static unixctl_cb_func ovsdb_server_connect_active_ovsdb_server;
 static unixctl_cb_func ovsdb_server_disconnect_active_ovsdb_server;
+static unixctl_cb_func ovsdb_server_set_active_ovsdb_server_probe_interval;
 static unixctl_cb_func ovsdb_server_set_sync_exclude_tables;
 static unixctl_cb_func ovsdb_server_get_sync_exclude_tables;
 static unixctl_cb_func ovsdb_server_get_sync_status;
@@ -97,6 +98,7 @@ struct server_config {
     char **sync_from;
     char **sync_exclude;
     bool *is_backup;
+    int *replication_probe_interval;
     struct ovsdb_jsonrpc_server *jsonrpc;
 };
 static unixctl_cb_func ovsdb_server_add_remote;
@@ -144,9 +146,10 @@ static void load_config(FILE *config_file, struct sset *remotes,
 
 static void
 ovsdb_replication_init(const char *sync_from, const char *exclude,
-                       struct shash *all_dbs, const struct uuid *server_uuid)
+                       struct shash *all_dbs, const struct uuid *server_uuid,
+                       int probe_interval)
 {
-    replication_init(sync_from, exclude, server_uuid);
+    replication_init(sync_from, exclude, server_uuid, probe_interval);
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
@@ -219,6 +222,11 @@ main_loop(struct server_config *config,
         struct shash_node *next;
         SHASH_FOR_EACH_SAFE (node, next, all_dbs) {
             struct db *db = node->data;
+            ovsdb_txn_history_run(db->db);
+            ovsdb_storage_run(db->db->storage);
+            read_db(config, db);
+            /* Run triggers after storage_run and read_db to make sure new raft
+             * updates are utilized in current iteration. */
             if (ovsdb_trigger_run(db->db, time_msec())) {
                 /* The message below is currently the only reason to disconnect
                  * all clients. */
@@ -227,8 +235,6 @@ main_loop(struct server_config *config,
                     xasprintf("committed %s database schema conversion",
                               db->db->name));
             }
-            ovsdb_storage_run(db->db->storage);
-            read_db(config, db);
             if (ovsdb_storage_is_dead(db->db->storage)) {
                 VLOG_INFO("%s: removing database because storage disconnected "
                           "permanently", node->name);
@@ -301,6 +307,7 @@ main(int argc, char *argv[])
     struct server_config server_config;
     struct shash all_dbs;
     struct shash_node *node, *next;
+    int replication_probe_interval = REPLICATION_DEFAULT_PROBE_INTERVAL;
 
     ovs_cmdl_proctitle_init(argc, argv);
     set_program_name(argv[0]);
@@ -348,6 +355,7 @@ main(int argc, char *argv[])
     server_config.sync_from = &sync_from;
     server_config.sync_exclude = &sync_exclude;
     server_config.is_backup = &is_backup;
+    server_config.replication_probe_interval = &replication_probe_interval;
 
     perf_counters_init();
 
@@ -433,6 +441,9 @@ main(int argc, char *argv[])
     unixctl_command_register("ovsdb-server/disconnect-active-ovsdb-server", "",
                              0, 0, ovsdb_server_disconnect_active_ovsdb_server,
                              &server_config);
+    unixctl_command_register(
+        "ovsdb-server/set-active-ovsdb-server-probe-interval", "", 1, 1,
+        ovsdb_server_set_active_ovsdb_server_probe_interval, &server_config);
     unixctl_command_register("ovsdb-server/set-sync-exclude-tables", "",
                              0, 1, ovsdb_server_set_sync_exclude_tables,
                              &server_config);
@@ -451,7 +462,8 @@ main(int argc, char *argv[])
     if (is_backup) {
         const struct uuid *server_uuid;
         server_uuid = ovsdb_jsonrpc_server_get_uuid(jsonrpc);
-        ovsdb_replication_init(sync_from, sync_exclude, &all_dbs, server_uuid);
+        ovsdb_replication_init(sync_from, sync_exclude, &all_dbs, server_uuid,
+                               replication_probe_interval);
     }
 
     main_loop(&server_config, jsonrpc, &all_dbs, unixctl, &remotes,
@@ -528,7 +540,7 @@ close_db(struct server_config *config, struct db *db, char *comment)
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 parse_txn(struct server_config *config, struct db *db,
-          struct ovsdb_schema *schema, const struct json *txn_json,
+          const struct ovsdb_schema *schema, const struct json *txn_json,
           const struct uuid *txnid)
 {
     if (schema) {
@@ -536,7 +548,9 @@ parse_txn(struct server_config *config, struct db *db,
          * (first grabbing its storage), then replace it with the new schema.
          * The transaction must also include the replacement data.
          *
-         * Only clustered database schema changes go through this path. */
+         * Only clustered database schema changes and snapshot installs
+         * go through this path.
+         */
         ovs_assert(txn_json);
         ovs_assert(ovsdb_storage_is_clustered(db->db->storage));
 
@@ -546,13 +560,17 @@ parse_txn(struct server_config *config, struct db *db,
             return error;
         }
 
-        ovsdb_jsonrpc_server_reconnect(
-            config->jsonrpc, false,
-            (db->db->schema
-             ? xasprintf("database %s schema changed", db->db->name)
-             : xasprintf("database %s connected to storage", db->db->name)));
+        if (!db->db->schema ||
+            strcmp(schema->version, db->db->schema->version)) {
+            ovsdb_jsonrpc_server_reconnect(
+                config->jsonrpc, false,
+                (db->db->schema
+                ? xasprintf("database %s schema changed", db->db->name)
+                : xasprintf("database %s connected to storage",
+                            db->db->name)));
+        }
 
-        ovsdb_replace(db->db, ovsdb_create(schema, NULL));
+        ovsdb_replace(db->db, ovsdb_create(ovsdb_schema_clone(schema), NULL));
 
         /* Force update to schema in _Server database. */
         db->row_uuid = UUID_ZERO;
@@ -568,6 +586,7 @@ parse_txn(struct server_config *config, struct db *db,
 
         error = ovsdb_file_txn_from_json(db->db, txn_json, false, &txn);
         if (!error) {
+            ovsdb_txn_set_txnid(txnid, txn);
             log_and_free_error(ovsdb_txn_replay_commit(txn));
         }
         if (!error && !uuid_is_zero(txnid)) {
@@ -600,6 +619,7 @@ read_db(struct server_config *config, struct db *db)
         } else {
             error = parse_txn(config, db, schema, txn_json, &txnid);
             json_destroy(txn_json);
+            ovsdb_schema_destroy(schema);
             if (error) {
                 break;
             }
@@ -658,6 +678,10 @@ open_db(struct server_config *config, const char *filename)
     db->db = ovsdb_create(schema, storage);
     ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
 
+    /* Enable txn history for clustered mode. It is not enabled for other mode
+     * for now, since txn id is available for clustered mode only. */
+    ovsdb_txn_history_init(db->db, ovsdb_storage_is_clustered(storage));
+
     read_db(config, db);
 
     error = (db->db->name[0] == '_'
@@ -695,6 +719,8 @@ add_server_db(struct server_config *config)
     json_destroy(schema_json);
 
     struct db *db = xzalloc(sizeof *db);
+    /* We don't need txn_history for server_db. */
+
     db->filename = xstrdup("<internal>");
     db->db = ovsdb_create(schema, ovsdb_storage_create_unbacked());
     bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
@@ -1307,7 +1333,8 @@ ovsdb_server_connect_active_ovsdb_server(struct unixctl_conn *conn,
         const struct uuid *server_uuid;
         server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
         ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                               config->all_dbs, server_uuid);
+                               config->all_dbs, server_uuid,
+                               *config->replication_probe_interval);
         if (!*config->is_backup) {
             *config->is_backup = true;
             save_config(config);
@@ -1331,6 +1358,28 @@ ovsdb_server_disconnect_active_ovsdb_server(struct unixctl_conn *conn,
 }
 
 static void
+ovsdb_server_set_active_ovsdb_server_probe_interval(struct unixctl_conn *conn,
+                                                   int argc OVS_UNUSED,
+                                                   const char *argv[],
+                                                   void *config_)
+{
+    struct server_config *config = config_;
+
+    int probe_interval;
+    if (str_to_int(argv[1], 10, &probe_interval)) {
+        *config->replication_probe_interval = probe_interval;
+        save_config(config);
+        if (*config->is_backup) {
+            replication_set_probe_interval(probe_interval);
+        }
+        unixctl_command_reply(conn, NULL);
+    } else {
+        unixctl_command_reply(
+            conn, "Invalid probe interval, integer value expected");
+    }
+}
+
+static void
 ovsdb_server_set_sync_exclude_tables(struct unixctl_conn *conn,
                                      int argc OVS_UNUSED,
                                      const char *argv[],
@@ -1347,7 +1396,8 @@ ovsdb_server_set_sync_exclude_tables(struct unixctl_conn *conn,
             const struct uuid *server_uuid;
             server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
             ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                                   config->all_dbs, server_uuid);
+                                   config->all_dbs, server_uuid,
+                                   *config->replication_probe_interval);
         }
         err = set_blacklist_tables(argv[1], false);
     }
@@ -1558,7 +1608,8 @@ ovsdb_server_add_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
             const struct uuid *server_uuid;
             server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
             ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                                   config->all_dbs, server_uuid);
+                                   config->all_dbs, server_uuid,
+                                   *config->replication_probe_interval);
         }
         unixctl_command_reply(conn, NULL);
     } else {
@@ -1580,7 +1631,8 @@ remove_db(struct server_config *config, struct shash_node *node, char *comment)
         const struct uuid *server_uuid;
         server_uuid = ovsdb_jsonrpc_server_get_uuid(config->jsonrpc);
         ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
-                               config->all_dbs, server_uuid);
+                               config->all_dbs, server_uuid,
+                               *config->replication_probe_interval);
     }
 }
 

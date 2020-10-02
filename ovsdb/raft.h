@@ -67,6 +67,7 @@
 struct json;
 struct ovsdb_log;
 struct raft;
+struct simap;
 struct sset;
 
 #define RAFT_MAGIC "CLUSTER"
@@ -113,6 +114,7 @@ const struct uuid *raft_get_cid(const struct raft *);
 const struct uuid *raft_get_sid(const struct raft *);
 bool raft_is_connected(const struct raft *);
 bool raft_is_leader(const struct raft *);
+void raft_get_memory_usage(const struct raft *, struct simap *usage);
 
 /* Joining a cluster. */
 bool raft_is_joining(const struct raft *);
@@ -180,4 +182,5 @@ struct ovsdb_error *raft_store_snapshot(struct raft *,
 void raft_take_leadership(struct raft *);
 void raft_transfer_leadership(struct raft *, const char *reason);
 
+const struct uuid *raft_current_eid(const struct raft *);
 #endif /* lib/raft.h */

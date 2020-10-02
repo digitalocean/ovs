@@ -181,7 +181,7 @@ void xlate_bundle_set(struct ofproto_dpif *, struct ofbundle *,
                       const char *name, enum port_vlan_mode,
                       uint16_t qinq_ethtype, int vlan,
                       unsigned long *trunks, unsigned long *cvlans,
-                      bool use_priority_tags,
+                      enum port_priority_tags_mode,
                       const struct bond *, const struct lacp *,
                       bool floodable, bool protected);
 void xlate_bundle_remove(struct ofbundle *);
@@ -199,24 +199,12 @@ void xlate_ofport_remove(struct ofport_dpif *);
 
 struct ofproto_dpif * xlate_lookup_ofproto(const struct dpif_backer *,
                                            const struct flow *,
-                                           ofp_port_t *ofp_in_port);
+                                           ofp_port_t *ofp_in_port,
+                                           char **errorp);
 int xlate_lookup(const struct dpif_backer *, const struct flow *,
                  struct ofproto_dpif **, struct dpif_ipfix **,
                  struct dpif_sflow **, struct netflow **,
                  ofp_port_t *ofp_in_port);
-
-enum xlate_error {
-    XLATE_OK = 0,
-    XLATE_BRIDGE_NOT_FOUND,
-    XLATE_RECURSION_TOO_DEEP,
-    XLATE_TOO_MANY_RESUBMITS,
-    XLATE_STACK_TOO_DEEP,
-    XLATE_NO_RECIRCULATION_CONTEXT,
-    XLATE_RECIRCULATION_CONFLICT,
-    XLATE_TOO_MANY_MPLS_LABELS,
-    XLATE_INVALID_TUNNEL_METADATA,
-    XLATE_UNSUPPORTED_PACKET_TYPE,
-};
 
 const char *xlate_strerror(enum xlate_error error);
 

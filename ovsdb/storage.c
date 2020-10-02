@@ -26,6 +26,7 @@
 #include "ovsdb.h"
 #include "raft.h"
 #include "random.h"
+#include "simap.h"
 #include "timeval.h"
 #include "util.h"
 
@@ -186,6 +187,15 @@ uint64_t
 ovsdb_storage_get_applied_index(const struct ovsdb_storage *storage)
 {
     return storage->raft ? raft_get_applied_index(storage->raft) : 0;
+}
+
+void
+ovsdb_storage_get_memory_usage(const struct ovsdb_storage *storage,
+                               struct simap *usage)
+{
+    if (storage->raft) {
+        raft_get_memory_usage(storage->raft, usage);
+    }
 }
 
 void
@@ -600,4 +610,13 @@ ovsdb_storage_write_schema_change(struct ovsdb_storage *storage,
         *resultp = result;
     }
     return w;
+}
+
+const struct uuid *
+ovsdb_storage_peek_last_eid(struct ovsdb_storage *storage)
+{
+    if (!storage->raft) {
+        return NULL;
+    }
+    return raft_current_eid(storage->raft);
 }

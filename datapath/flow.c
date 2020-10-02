@@ -72,7 +72,7 @@ u64 ovs_flow_used_time(unsigned long flow_jiffies)
 void ovs_flow_stats_update(struct sw_flow *flow, __be16 tcp_flags,
 			   const struct sk_buff *skb)
 {
-	struct flow_stats *stats;
+	struct sw_flow_stats *stats;
 	unsigned int cpu = smp_processor_id();
 	int len = skb->len + (skb_vlan_tag_present(skb) ? VLAN_HLEN : 0);
 
@@ -100,7 +100,7 @@ void ovs_flow_stats_update(struct sw_flow *flow, __be16 tcp_flags,
 			if (likely(flow->stats_last_writer != -1) &&
 			    likely(!rcu_access_pointer(flow->stats[cpu]))) {
 				/* Try to allocate CPU-specific stats. */
-				struct flow_stats *new_stats;
+				struct sw_flow_stats *new_stats;
 
 				new_stats =
 					kmem_cache_alloc_node(flow_stats_cache,
@@ -147,7 +147,7 @@ void ovs_flow_stats_get(const struct sw_flow *flow,
 
 	/* We open code this to make sure cpu 0 is always considered */
 	for (cpu = 0; cpu < nr_cpu_ids; cpu = cpumask_next(cpu, &flow->cpu_used_mask)) {
-		struct flow_stats *stats = rcu_dereference_ovsl(flow->stats[cpu]);
+		struct sw_flow_stats *stats = rcu_dereference_ovsl(flow->stats[cpu]);
 
 		if (stats) {
 			/* Local CPU may write on non-local stats, so we must
@@ -171,7 +171,7 @@ void ovs_flow_stats_clear(struct sw_flow *flow)
 
 	/* We open code this to make sure cpu 0 is always considered */
 	for (cpu = 0; cpu < nr_cpu_ids; cpu = cpumask_next(cpu, &flow->cpu_used_mask)) {
-		struct flow_stats *stats = ovsl_dereference(flow->stats[cpu]);
+		struct sw_flow_stats *stats = ovsl_dereference(flow->stats[cpu]);
 
 		if (stats) {
 			spin_lock_bh(&stats->lock);
@@ -327,7 +327,7 @@ static int parse_vlan_tag(struct sk_buff *skb, struct vlan_head *key_vh,
 		return -ENOMEM;
 
 	vh = (struct vlan_head *)skb->data;
-	key_vh->tci = vh->tci | htons(VLAN_TAG_PRESENT);
+	key_vh->tci = vh->tci | htons(VLAN_CFI_MASK);
 	key_vh->tpid = vh->tpid;
 
 	if (unlikely(untag_vlan)) {
@@ -365,7 +365,7 @@ static int parse_vlan(struct sk_buff *skb, struct sw_flow_key *key)
 	key->eth.cvlan.tpid = 0;
 
 	if (skb_vlan_tag_present(skb)) {
-		key->eth.vlan.tci = htons(skb->vlan_tci);
+		key->eth.vlan.tci = htons(skb->vlan_tci) | htons(VLAN_CFI_MASK);
 		key->eth.vlan.tpid = skb->vlan_proto;
 	} else {
 		/* Parse outer vlan tag in the non-accelerated case. */
@@ -659,27 +659,35 @@ static int key_extract_l3l4(struct sk_buff *skb, struct sw_flow_key *key)
 			memset(&key->ipv4, 0, sizeof(key->ipv4));
 		}
 	} else if (eth_p_mpls(key->eth.type)) {
-		size_t stack_len = MPLS_HLEN;
+		u8 label_count = 1;
 
+		memset(&key->mpls, 0, sizeof(key->mpls));
 		skb_set_inner_network_header(skb, skb->mac_len);
 		while (1) {
 			__be32 lse;
 
-			error = check_header(skb, skb->mac_len + stack_len);
+			error = check_header(skb, skb->mac_len +
+					     label_count * MPLS_HLEN);
 			if (unlikely(error))
 				return 0;
 
 			memcpy(&lse, skb_inner_network_header(skb), MPLS_HLEN);
 
-			if (stack_len == MPLS_HLEN)
-				memcpy(&key->mpls.top_lse, &lse, MPLS_HLEN);
+			if (label_count <= MPLS_LABEL_DEPTH)
+				memcpy(&key->mpls.lse[label_count - 1], &lse,
+				       MPLS_HLEN);
 
-			skb_set_inner_network_header(skb, skb->mac_len + stack_len);
+			skb_set_inner_network_header(skb, skb->mac_len +
+						     label_count * MPLS_HLEN);
 			if (lse & htonl(MPLS_LS_S_MASK))
 				break;
 
-			stack_len += MPLS_HLEN;
+			label_count++;
 		}
+		if (label_count > MPLS_LABEL_DEPTH)
+			label_count = MPLS_LABEL_DEPTH;
+
+		key->mpls.num_labels_mask = GENMASK(label_count - 1, 0);
 	} else if (key->eth.type == htons(ETH_P_IPV6)) {
 		int nh_len;             /* IPv6 Header + Extensions */
 

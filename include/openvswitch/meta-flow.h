@@ -506,6 +506,34 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_TUN_ERSPAN_HWID,
 
+    /* "tun_gtpu_flags".
+     *
+     * GTP-U tunnel flags.
+     *
+     * Type: u8.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: none.
+     * OXM: NXOXM_ET_GTPU_FLAGS(15) since v2.13.
+     */
+    MFF_TUN_GTPU_FLAGS,
+
+    /* "tun_gtpu_msgtype".
+     *
+     * GTP-U tunnel message type.
+     *
+     * Type: u8.
+     * Maskable: bitwise.
+     * Formatting: decimal.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: none.
+     * OXM: NXOXM_ET_GTPU_MSGTYPE(16) since v2.13.
+     */
+    MFF_TUN_GTPU_MSGTYPE,
+
 #if TUN_METADATA_NUM_OPTS == 64
     /* "tun_metadata<N>".
      *
@@ -1796,6 +1824,34 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_ND_TLL,
 
+    /* "nd_reserved".
+     *
+     * The reserved field in IPv6 Neighbor Discovery message.
+     *
+     * Type: be32.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: ND.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: ERICOXM_OF_ICMPV6_ND_RESERVED(1) since v2.11.
+     */
+    MFF_ND_RESERVED,
+
+    /* "nd_options_type".
+     *
+     * The type of the option in IPv6 Neighbor Discovery message.
+     *
+     * Type: u8.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: ND.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: ERICOXM_OF_ICMPV6_ND_OPTIONS_TYPE(2) since v2.11.
+     */
+    MFF_ND_OPTIONS_TYPE,
+
 /* ## ---- ## */
 /* ## NSH  ## */
 /* ## ---- ## */
@@ -1915,6 +1971,9 @@ struct mf_bitmap {
 
 bool mf_bitmap_is_superset(const struct mf_bitmap *super,
                            const struct mf_bitmap *sub);
+struct mf_bitmap mf_bitmap_and(struct mf_bitmap, struct mf_bitmap);
+struct mf_bitmap mf_bitmap_or(struct mf_bitmap, struct mf_bitmap);
+struct mf_bitmap mf_bitmap_not(struct mf_bitmap);
 
 /* Use this macro as CASE_MFF_REGS: in a switch statement to choose all of the
  * MFF_REGn cases. */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2017 Nicira, Inc.
+ * Copyright (c) 2008-2017, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -274,8 +274,7 @@ ofputil_encode_group_desc_request(enum ofp_version ofp_version,
                                ofp_version, 0);
         break;
     case OFP10_VERSION:
-    case OFP15_VERSION:
-    case OFP16_VERSION: {
+    case OFP15_VERSION: {
         struct ofp15_group_desc_request *req;
         request = ofpraw_alloc((ofp_version == OFP10_VERSION
                                 ? OFPRAW_NXST_GROUP_DESC_REQUEST
@@ -369,8 +368,7 @@ ofputil_append_group_stats(struct ovs_list *replies,
     case OFP10_VERSION:
     case OFP13_VERSION:
     case OFP14_VERSION:
-    case OFP15_VERSION:
-    case OFP16_VERSION: {
+    case OFP15_VERSION: {
             struct ofp13_group_stats *gs13;
 
             length = sizeof *gs13 + bucket_counter_size;
@@ -662,7 +660,8 @@ parse_bucket_str(struct ofputil_bucket *bucket, char *str_,
         } else if (!strcasecmp(key, "watch_port")) {
             if (!ofputil_port_from_string(value, port_map, &bucket->watch_port)
                 || (ofp_to_u16(bucket->watch_port) >= ofp_to_u16(OFPP_MAX)
-                    && bucket->watch_port != OFPP_ANY)) {
+                    && bucket->watch_port != OFPP_ANY
+                    && bucket->watch_port != OFPP_CONTROLLER)) {
                 error = xasprintf("%s: invalid watch_port", value);
             }
         } else if (!strcasecmp(key, "watch_group")) {
@@ -1306,7 +1305,6 @@ ofputil_append_group_desc_reply(const struct ofputil_group_desc *gds,
 
     case OFP10_VERSION:
     case OFP15_VERSION:
-    case OFP16_VERSION:
         ofputil_append_ofp15_group_desc_reply(gds, buckets, replies, version);
         break;
 
@@ -1780,7 +1778,6 @@ ofputil_decode_group_desc_reply(struct ofputil_group_desc *gd,
 
     case OFP10_VERSION:
     case OFP15_VERSION:
-    case OFP16_VERSION:
         return ofputil_decode_ofp15_group_desc_reply(gd, msg, version);
 
     default:
@@ -2018,6 +2015,8 @@ ofputil_encode_ofp11_group_mod(enum ofp_version ofp_version,
     ogm->type = gm->type;
     ogm->group_id = htonl(gm->group_id);
 
+    ofpmsg_update_length(b);
+
     return b;
 }
 
@@ -2084,6 +2083,7 @@ ofputil_encode_ofp15_group_mod(enum ofp_version ofp_version,
     }
 
     id_pool_destroy(bucket_ids);
+    ofpmsg_update_length(b);
     return b;
 }
 
@@ -2117,7 +2117,6 @@ ofputil_encode_group_mod(enum ofp_version ofp_version,
 
     case OFP10_VERSION:
     case OFP15_VERSION:
-    case OFP16_VERSION:
         return ofputil_encode_ofp15_group_mod(ofp_version, gm, group_existed);
 
     default:
@@ -2304,7 +2303,6 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
 
     case OFP10_VERSION:
     case OFP15_VERSION:
-    case OFP16_VERSION:
         err = ofputil_pull_ofp15_group_mod(&msg, ofp_version, gm);
         break;
 

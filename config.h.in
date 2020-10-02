@@ -26,11 +26,8 @@
 /* System uses the DPDK module. */
 #undef DPDK_NETDEV
 
-/* DPDK pdump enabled in OVS. */
-#undef DPDK_PDUMP
-
-/* Define to 1 if building on ESX. */
-#undef ESX
+/* Define to 1 if AF_XDP support is available and enabled. */
+#undef HAVE_AF_XDP
 
 /* Define to 1 if you have the <atomic> header file. */
 #undef HAVE_ATOMIC
@@ -46,6 +43,14 @@
 
 /* define if the compiler supports basic C++11 syntax */
 #undef HAVE_CXX11
+
+/* Define to 1 if you have the declaration of `RTE_EAL_NUMA_AWARE_HUGEPAGES',
+   and to 0 if you don't. */
+#undef HAVE_DECL_RTE_EAL_NUMA_AWARE_HUGEPAGES
+
+/* Define to 1 if you have the declaration of `RTE_LIBRTE_VHOST_NUMA', and to
+   0 if you don't. */
+#undef HAVE_DECL_RTE_LIBRTE_VHOST_NUMA
 
 /* Define to 1 if you have the declaration of `strerror_r', and to 0 if you
    don't. */
@@ -84,6 +89,9 @@
 /* Define to 1 if you have the `socket' library (-lsocket). */
 #undef HAVE_LIBSOCKET
 
+/* Define to 1 if you have the <libunwind.h> header file. */
+#undef HAVE_LIBUNWIND_H
+
 /* Define to 1 if you have the <linux/if_ether.h> header file. */
 #undef HAVE_LINUX_IF_ETHER_H
 
@@ -115,6 +123,9 @@
 /* Define to 1 if you have the <net/if_mib.h> header file. */
 #undef HAVE_NET_IF_MIB_H
 
+/* Define to 1 if struct nla_bitfield32 is available. */
+#undef HAVE_NLA_BITFIELD32
+
 /* Define to 1 if OpenSSL is installed. */
 #undef HAVE_OPENSSL
 
@@ -126,6 +137,15 @@
 
 /* Define to 1 if you have the `pthread_set_name_np' function. */
 #undef HAVE_PTHREAD_SET_NAME_NP
+
+/* Define to 1 if you have the `pthread_spin_lock' function. */
+#undef HAVE_PTHREAD_SPIN_LOCK
+
+/* Define to 1 if you have the <rte_config.h> header file. */
+#undef HAVE_RTE_CONFIG_H
+
+/* Define to 1 if SCTP_CONNTRACK_HEARTBEAT_SENT is available. */
+#undef HAVE_SCTP_CONNTRACK_HEARTBEATS
 
 /* Define to 1 if you have the `sendmmsg' function. */
 #undef HAVE_SENDMMSG
@@ -175,6 +195,9 @@
 /* Define to 1 if `st_mtim.tv_nsec' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC
 
+/* Define to 1 if `firstuse' is a member of `struct tcf_t'. */
+#undef HAVE_STRUCT_TCF_T_FIRSTUSE
+
 /* Define to 1 if the system has the type `struct timespec'. */
 #undef HAVE_STRUCT_TIMESPEC
 
@@ -187,11 +210,17 @@
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
-/* Define to 1 if TCA_FLOWER_KEY_ENC_IP_TTL_MASK is available. */
-#undef HAVE_TCA_FLOWER_KEY_ENC_IP_TTL_MASK
+/* Define to 1 if TCA_ACT_FLAGS is available. */
+#undef HAVE_TCA_ACT_FLAGS
+
+/* Define to 1 if HAVE_TCA_MPLS_TTL is available. */
+#undef HAVE_TCA_MPLS_TTL
 
 /* Define to 1 if TCA_PEDIT_KEY_EX_HDR_TYPE_UDP is available. */
 #undef HAVE_TCA_PEDIT_KEY_EX_HDR_TYPE_UDP
+
+/* Define to 1 if TCA_SKBEDIT_FLAGS is available. */
+#undef HAVE_TCA_SKBEDIT_FLAGS
 
 /* Define to 1 if TCA_TUNNEL_KEY_ENC_TTL is available. */
 #undef HAVE_TCA_TUNNEL_KEY_ENC_TTL
@@ -209,8 +238,17 @@
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
+/* Define to 1 if unwind is detected. */
+#undef HAVE_UNWIND
+
 /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
 #undef HAVE_VALGRIND_VALGRIND_H
+
+/* Define to 1 if __virtio16 is available. */
+#undef HAVE_VIRTIO_TYPES
+
+/* XDP need wakeup support detected in xsk.h. */
+#undef HAVE_XDP_NEED_WAKEUP
 
 /* Define to 1 if the C compiler and linker supports the GCC __thread
    extenions. */
@@ -218,6 +256,9 @@
 
 /* Define to the sub-directory where libtool stores uninstalled libraries. */
 #undef LT_OBJDIR
+
+/* Define to 1 if OpenSSL supports Server Name Indication (SNI). */
+#undef OPENSSL_SUPPORTS_SNI
 
 /* Name of package */
 #undef PACKAGE

@@ -344,6 +344,11 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_ND_TARGET:
         return ipv6_mask_is_any(&wc->masks.nd_target);
 
+    case MFF_ND_RESERVED:
+        return !wc->masks.igmp_group_ip4;
+    case MFF_ND_OPTIONS_TYPE:
+        return !wc->masks.tcp_flags;
+
     case MFF_IP_FRAG:
         return !(wc->masks.nw_frag & FLOW_NW_FRAG_MASK);
 
@@ -386,6 +391,10 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_NSH_C3:
     case MFF_NSH_C4:
         return !wc->masks.nsh.context[mf->id - MFF_NSH_C1];
+    case MFF_TUN_GTPU_FLAGS:
+        return !wc->masks.tunnel.gtpu_flags;
+    case MFF_TUN_GTPU_MSGTYPE:
+        return !wc->masks.tunnel.gtpu_msgtype;
 
     case MFF_N_IDS:
     default:
@@ -525,6 +534,8 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_TUN_ERSPAN_VER:
     case MFF_TUN_ERSPAN_DIR:
     case MFF_TUN_ERSPAN_HWID:
+    case MFF_TUN_GTPU_FLAGS:
+    case MFF_TUN_GTPU_MSGTYPE:
     CASE_MFF_TUN_METADATA:
     case MFF_METADATA:
     case MFF_IN_PORT:
@@ -571,6 +582,8 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
+    case MFF_ND_RESERVED:
+    case MFF_ND_OPTIONS_TYPE:
         return true;
 
     case MFF_IN_PORT_OXM:
@@ -703,6 +716,12 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         break;
     case MFF_TUN_ERSPAN_HWID:
         value->u8 = flow->tunnel.erspan_hwid;
+        break;
+    case MFF_TUN_GTPU_FLAGS:
+        value->u8 = flow->tunnel.gtpu_flags;
+        break;
+    case MFF_TUN_GTPU_MSGTYPE:
+        value->u8 = flow->tunnel.gtpu_msgtype;
         break;
     CASE_MFF_TUN_METADATA:
         tun_metadata_read(&flow->tunnel, mf, value);
@@ -909,7 +928,12 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         break;
 
     case MFF_TCP_FLAGS:
+    case MFF_ND_OPTIONS_TYPE:
         value->be16 = flow->tcp_flags;
+        break;
+
+    case MFF_ND_RESERVED:
+        value->be32 = flow->igmp_group_ip4;
         break;
 
     case MFF_ICMPV4_TYPE:
@@ -1029,6 +1053,12 @@ mf_set_value(const struct mf_field *mf,
         break;
     case MFF_TUN_ERSPAN_HWID:
         match_set_tun_erspan_hwid(match, value->u8);
+        break;
+    case MFF_TUN_GTPU_FLAGS:
+        match_set_tun_gtpu_flags(match, value->u8);
+        break;
+    case MFF_TUN_GTPU_MSGTYPE:
+        match_set_tun_gtpu_msgtype(match, value->u8);
         break;
     CASE_MFF_TUN_METADATA:
         tun_metadata_set_match(mf, value, NULL, match, err_str);
@@ -1259,6 +1289,14 @@ mf_set_value(const struct mf_field *mf,
         match_set_nd_target(match, &value->ipv6);
         break;
 
+    case MFF_ND_RESERVED:
+        match_set_nd_reserved(match, value->be32);
+        break;
+
+    case MFF_ND_OPTIONS_TYPE:
+        match_set_nd_options_type(match, value->u8);
+        break;
+
     case MFF_NSH_FLAGS:
         MATCH_SET_FIELD_UINT8(match, nsh.flags, value->u8);
         break;
@@ -1438,6 +1476,12 @@ mf_set_flow_value(const struct mf_field *mf,
         break;
     case MFF_TUN_ERSPAN_HWID:
         flow->tunnel.erspan_hwid = value->u8;
+        break;
+    case MFF_TUN_GTPU_FLAGS:
+        flow->tunnel.gtpu_flags = value->u8;
+        break;
+    case MFF_TUN_GTPU_MSGTYPE:
+        flow->tunnel.gtpu_msgtype = value->u8;
         break;
     CASE_MFF_TUN_METADATA:
         tun_metadata_write(&flow->tunnel, mf, value);
@@ -1668,6 +1712,14 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->nd_target = value->ipv6;
         break;
 
+    case MFF_ND_RESERVED:
+        flow->igmp_group_ip4 = value->be32;
+        break;
+
+    case MFF_ND_OPTIONS_TYPE:
+        flow->tcp_flags = htons(value->u8);
+        break;
+
     case MFF_NSH_FLAGS:
         flow->nsh.flags = value->u8;
         break;
@@ -1752,6 +1804,8 @@ mf_is_pipeline_field(const struct mf_field *mf)
     case MFF_TUN_ERSPAN_IDX:
     case MFF_TUN_ERSPAN_DIR:
     case MFF_TUN_ERSPAN_HWID:
+    case MFF_TUN_GTPU_FLAGS:
+    case MFF_TUN_GTPU_MSGTYPE:
     CASE_MFF_TUN_METADATA:
     case MFF_METADATA:
     case MFF_IN_PORT:
@@ -1823,6 +1877,8 @@ mf_is_pipeline_field(const struct mf_field *mf)
     case MFF_ND_TARGET:
     case MFF_ND_SLL:
     case MFF_ND_TLL:
+    case MFF_ND_RESERVED:
+    case MFF_ND_OPTIONS_TYPE:
     case MFF_NSH_FLAGS:
     case MFF_NSH_TTL:
     case MFF_NSH_MDTYPE:
@@ -1939,6 +1995,12 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
         break;
     case MFF_TUN_ERSPAN_HWID:
         match_set_tun_erspan_hwid_masked(match, 0, 0);
+        break;
+    case MFF_TUN_GTPU_FLAGS:
+        match_set_tun_gtpu_flags_masked(match, 0, 0);
+        break;
+    case MFF_TUN_GTPU_MSGTYPE:
+        match_set_tun_gtpu_msgtype_masked(match, 0, 0);
         break;
     CASE_MFF_TUN_METADATA:
         tun_metadata_set_match(mf, NULL, NULL, match, err_str);
@@ -2150,6 +2212,11 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
         match->wc.masks.arp_tha = eth_addr_zero;
         break;
 
+    case MFF_ND_RESERVED:
+        match->wc.masks.igmp_group_ip4 = htonl(0);
+        match->flow.igmp_group_ip4 = htonl(0);
+        break;
+
     case MFF_TCP_SRC:
     case MFF_UDP_SRC:
     case MFF_SCTP_SRC:
@@ -2169,6 +2236,7 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
         break;
 
     case MFF_TCP_FLAGS:
+    case MFF_ND_OPTIONS_TYPE:
         match->wc.masks.tcp_flags = htons(0);
         match->flow.tcp_flags = htons(0);
         break;
@@ -2251,15 +2319,15 @@ mf_set(const struct mf_field *mf,
         *err_str = NULL;
     }
 
+    /* The cases where 'mask' is all-1-bits or all-0-bits were already handled
+     * above[*], so the code below only needs to work for the remaining cases
+     * of a nontrivial mask.
+     *
+     * [*] Except where the field is a tunnel metadata field and 'mask' is
+     *     all-0-bits; see above. */
     switch (mf->id) {
     case MFF_CT_ZONE:
     case MFF_CT_NW_PROTO:
-    case MFF_CT_NW_SRC:
-    case MFF_CT_NW_DST:
-    case MFF_CT_IPV6_SRC:
-    case MFF_CT_IPV6_DST:
-    case MFF_CT_TP_SRC:
-    case MFF_CT_TP_DST:
     case MFF_RECIRC_ID:
     case MFF_PACKET_TYPE:
     case MFF_CONJ_ID:
@@ -2285,6 +2353,8 @@ mf_set(const struct mf_field *mf,
     case MFF_ICMPV4_CODE:
     case MFF_ICMPV6_TYPE:
     case MFF_ICMPV6_CODE:
+    case MFF_ND_RESERVED:
+    case MFF_ND_OPTIONS_TYPE:
         return OFPUTIL_P_NONE;
 
     case MFF_DP_HASH:
@@ -2333,6 +2403,12 @@ mf_set(const struct mf_field *mf,
     case MFF_TUN_ERSPAN_HWID:
         match_set_tun_erspan_hwid_masked(match, value->u8, mask->u8);
         break;
+    case MFF_TUN_GTPU_FLAGS:
+        match_set_tun_gtpu_flags_masked(match, value->u8, mask->u8);
+        break;
+    case MFF_TUN_GTPU_MSGTYPE:
+        match_set_tun_gtpu_msgtype_masked(match, value->u8, mask->u8);
+        break;
     CASE_MFF_TUN_METADATA:
         tun_metadata_set_match(mf, value, mask, match, err_str);
         break;
@@ -2373,6 +2449,30 @@ mf_set(const struct mf_field *mf,
     case MFF_CT_LABEL:
         match_set_ct_label_masked(match, ntoh128(value->be128),
                                   ntoh128(mask->be128));
+        break;
+
+    case MFF_CT_NW_SRC:
+        match_set_ct_nw_src_masked(match, value->be32, mask->be32);
+        break;
+
+    case MFF_CT_NW_DST:
+        match_set_ct_nw_dst_masked(match, value->be32, mask->be32);
+        break;
+
+    case MFF_CT_IPV6_SRC:
+        match_set_ct_ipv6_src_masked(match, &value->ipv6, &mask->ipv6);
+        break;
+
+    case MFF_CT_IPV6_DST:
+        match_set_ct_ipv6_dst_masked(match, &value->ipv6, &mask->ipv6);
+        break;
+
+    case MFF_CT_TP_SRC:
+        match_set_ct_tp_src_masked(match, value->be16, mask->be16);
+        break;
+
+    case MFF_CT_TP_DST:
+        match_set_ct_tp_dst_masked(match, value->be16, mask->be16);
         break;
 
     case MFF_ETH_DST:
@@ -3503,7 +3603,7 @@ mf_vl_mff_nx_pull_entry(struct ofpbuf *b, const struct vl_mff_map *vl_mff_map,
                         const struct mf_field **field, union mf_value *value,
                         union mf_value *mask, uint64_t *tlv_bitmap)
 {
-    enum ofperr error = nx_pull_entry(b, vl_mff_map, field, value, mask);
+    enum ofperr error = nx_pull_entry(b, vl_mff_map, field, value, mask, true);
     if (error) {
         return error;
     }
@@ -3536,4 +3636,28 @@ mf_bitmap_is_superset(const struct mf_bitmap *super,
                       const struct mf_bitmap *sub)
 {
     return bitmap_is_superset(super->bm, sub->bm, MFF_N_IDS);
+}
+
+/* Returns the bitwise-and of 'a' and 'b'. */
+struct mf_bitmap
+mf_bitmap_and(struct mf_bitmap a, struct mf_bitmap b)
+{
+    bitmap_and(a.bm, b.bm, MFF_N_IDS);
+    return a;
+}
+
+/* Returns the bitwise-or of 'a' and 'b'. */
+struct mf_bitmap
+mf_bitmap_or(struct mf_bitmap a, struct mf_bitmap b)
+{
+    bitmap_or(a.bm, b.bm, MFF_N_IDS);
+    return a;
+}
+
+/* Returns the bitwise-not of 'x'. */
+struct mf_bitmap
+mf_bitmap_not(struct mf_bitmap x)
+{
+    bitmap_not(x.bm, MFF_N_IDS);
+    return x;
 }

@@ -12,7 +12,7 @@
 %define oname openvswitch
 
 Name:           kmod-%{oname}
-Version:        2.11.3
+Version:        2.14.0
 Release:        1%{?dist}
 Summary:        Open vSwitch kernel module
 

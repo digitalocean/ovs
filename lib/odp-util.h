@@ -147,7 +147,7 @@ void odp_portno_name_format(const struct hmap *portno_names,
  * add another field and forget to adjust this value.
  */
 #define ODPUTIL_FLOW_KEY_BYTES 640
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -157,10 +157,11 @@ struct odputil_keybuf {
 };
 
 enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *,
-                                           struct flow_tnl *);
+                                           struct flow_tnl *, char **errorp);
 enum odp_key_fitness odp_nsh_key_from_attr(const struct nlattr *,
                                            struct ovs_key_nsh *,
-                                           struct ovs_key_nsh *);
+                                           struct ovs_key_nsh *,
+                                           char **errorp);
 enum odp_key_fitness odp_nsh_hdr_from_attr(const struct nlattr *,
                                            struct nsh_hdr *, size_t);
 
@@ -172,9 +173,8 @@ void odp_flow_format(const struct nlattr *key, size_t key_len,
                      const struct hmap *portno_names, struct ds *,
                      bool verbose);
 void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
-int odp_flow_from_string(const char *s,
-                         const struct simap *port_names,
-                         struct ofpbuf *, struct ofpbuf *);
+int odp_flow_from_string(const char *s, const struct simap *port_names,
+                         struct ofpbuf *, struct ofpbuf *, char **errorp);
 
 /* ODP_SUPPORT_FIELD(TYPE, FIELD_NAME, FIELD_DESCRIPTION)
  *
@@ -203,7 +203,11 @@ int odp_flow_from_string(const char *s,
                                                                              \
     /* Conntrack original direction tuple matching * supported. */           \
     ODP_SUPPORT_FIELD(bool, ct_orig_tuple, "CT orig tuple")                  \
-    ODP_SUPPORT_FIELD(bool, ct_orig_tuple6, "CT orig tuple for IPv6")
+    ODP_SUPPORT_FIELD(bool, ct_orig_tuple6, "CT orig tuple for IPv6")        \
+                                                                             \
+    /* If true, it means that the datapath supports the IPv6 Neigh           \
+     * Discovery Extension bits. */                                          \
+    ODP_SUPPORT_FIELD(bool, nd_ext, "IPv6 ND Extension")
 
 /* Indicates support for various fields. This defines how flows will be
  * serialised. */
@@ -239,7 +243,7 @@ struct odp_flow_key_parms {
 void odp_flow_key_from_flow(const struct odp_flow_key_parms *, struct ofpbuf *);
 void odp_flow_key_from_mask(const struct odp_flow_key_parms *, struct ofpbuf *);
 
-uint32_t odp_flow_key_hash(const struct nlattr *, size_t);
+void odp_flow_key_hash(const void *key, size_t key_len, ovs_u128 *hash);
 
 /* Estimated space needed for metadata. */
 enum { ODP_KEY_METADATA_SIZE = 9 * 8 };
@@ -261,11 +265,12 @@ enum odp_key_fitness {
     ODP_FIT_ERROR,              /* The key was invalid. */
 };
 enum odp_key_fitness odp_flow_key_to_flow(const struct nlattr *, size_t,
-                                          struct flow *);
+                                          struct flow *, char **errorp);
 enum odp_key_fitness odp_flow_key_to_mask(const struct nlattr *mask_key,
                                           size_t mask_key_len,
                                           struct flow_wildcards *mask,
-                                          const struct flow *flow);
+                                          const struct flow *flow,
+                                          char **errorp);
 int parse_key_and_mask_to_match(const struct nlattr *key, size_t key_len,
                                 const struct nlattr *mask, size_t mask_len,
                                 struct match *match);

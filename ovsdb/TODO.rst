@@ -27,20 +27,13 @@ OVSDB Clustering To-do List
 
 * Ephemeral columns.
 
-* Unit test snapshotting.
-
 * Locks.
-
-* Investigate 100% CPU for long-running triggers
 
 * Tons of unit tests.
 
 * Increase exponential backoff cap.  Introduce randomization.
 
 * Include index with monitor update?
-
-* Back off when transaction fails to commit?  Definitely back off until
-  the eid changes for prereq failures
 
 * Testing with replication.
 
@@ -49,10 +42,6 @@ OVSDB Clustering To-do List
 * Documentation:
 
   * ACID (and CAP?) explanation.
-
-  * Upgrading OVN to a clustered database
-
-  * Installing OVN with a clustered database
 
   * Overall diagram explaining the cluster and ovsdb protocol pieces
 

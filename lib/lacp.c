@@ -86,6 +86,12 @@ BUILD_ASSERT_DECL(LACP_PDU_LEN == sizeof(struct lacp_pdu));
 
 /* Implementation. */
 
+enum pdu_subtype {
+    SUBTYPE_UNUSED = 0,
+    SUBTYPE_LACP,       /* Link Aggregation Control Protocol. */
+    SUBTYPE_MARKER,     /* Link Aggregation Marker Protocol. */
+};
+
 enum slave_status {
     LACP_CURRENT,   /* Current State.  Partner up to date. */
     LACP_EXPIRED,   /* Expired State.  Partner out of date. */
@@ -122,6 +128,7 @@ struct slave {
 
     enum slave_status status;     /* Slave status. */
     bool attached;                /* Attached. Traffic may flow. */
+    bool carrier_up;              /* Carrier state of link. */
     struct lacp_info partner;     /* Partner information. */
     struct lacp_info ntt_actor;   /* Used to decide if we Need To Transmit. */
     struct timer tx;              /* Next message transmission timer. */
@@ -129,6 +136,7 @@ struct slave {
 
     uint32_t count_rx_pdus;         /* dot3adAggPortStatsLACPDUsRx */
     uint32_t count_rx_pdus_bad;     /* dot3adAggPortStatsIllegalRx */
+    uint32_t count_rx_pdus_marker;  /* dot3adAggPortStatsMarkerPDUsRx */
     uint32_t count_tx_pdus;         /* dot3adAggPortStatsLACPDUsTx */
     uint32_t count_link_expired;    /* Num of times link expired */
     uint32_t count_link_defaulted;  /* Num of times link defaulted */
@@ -154,6 +162,7 @@ static struct slave *slave_lookup(const struct lacp *, const void *slave)
     OVS_REQUIRES(mutex);
 static bool info_tx_equal(struct lacp_info *, struct lacp_info *)
     OVS_REQUIRES(mutex);
+static bool slave_may_enable__(struct slave *slave) OVS_REQUIRES(mutex);
 
 static unixctl_cb_func lacp_unixctl_show;
 static unixctl_cb_func lacp_unixctl_show_stats;
@@ -181,12 +190,13 @@ compose_lacp_pdu(const struct lacp_info *actor,
     pdu->collector_delay = htons(0);
 }
 
-/* Parses 'b' which represents a packet containing a LACP PDU.  This function
- * returns NULL if 'b' is malformed, or does not represent a LACP PDU format
+/* Parses 'p' which represents a packet containing a LACP PDU. This function
+ * returns NULL if 'p' is malformed, or does not represent a LACP PDU format
  * supported by OVS.  Otherwise, it returns a pointer to the lacp_pdu contained
- * within 'b'. */
+ * within 'p'. It also returns the subtype of PDU.*/
+
 static const struct lacp_pdu *
-parse_lacp_packet(const struct dp_packet *p)
+parse_lacp_packet(const struct dp_packet *p, enum pdu_subtype *subtype)
 {
     const struct lacp_pdu *pdu;
 
@@ -196,8 +206,13 @@ parse_lacp_packet(const struct dp_packet *p)
     if (pdu && pdu->subtype == 1
         && pdu->actor_type == 1 && pdu->actor_len == 20
         && pdu->partner_type == 2 && pdu->partner_len == 20) {
+        *subtype = SUBTYPE_LACP;
         return pdu;
-    } else {
+    } else if (pdu && pdu->subtype == SUBTYPE_MARKER) {
+        *subtype = SUBTYPE_MARKER;
+        return NULL;
+    } else{
+        *subtype = SUBTYPE_UNUSED;
         return NULL;
     }
 }
@@ -324,7 +339,7 @@ lacp_is_active(const struct lacp *lacp) OVS_EXCLUDED(mutex)
 /* Processes 'packet' which was received on 'slave_'.  This function should be
  * called on all packets received on 'slave_' with Ethernet Type ETH_TYPE_LACP.
  */
-void
+bool
 lacp_process_packet(struct lacp *lacp, const void *slave_,
                     const struct dp_packet *packet)
     OVS_EXCLUDED(mutex)
@@ -333,6 +348,8 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
     const struct lacp_pdu *pdu;
     long long int tx_rate;
     struct slave *slave;
+    bool lacp_may_enable = false;
+    enum pdu_subtype subtype;
 
     lacp_lock();
     slave = slave_lookup(lacp, slave_);
@@ -341,10 +358,29 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
     }
     slave->count_rx_pdus++;
 
-    pdu = parse_lacp_packet(packet);
-    if (!pdu) {
-        slave->count_rx_pdus_bad++;
-        VLOG_WARN_RL(&rl, "%s: received an unparsable LACP PDU.", lacp->name);
+    pdu = parse_lacp_packet(packet, &subtype);
+    switch (subtype) {
+        case SUBTYPE_LACP:
+            break;
+        case SUBTYPE_MARKER:
+            slave->count_rx_pdus_marker++;
+            VLOG_DBG("%s: received a LACP marker PDU.", lacp->name);
+            goto out;
+        case SUBTYPE_UNUSED:
+        default:
+            slave->count_rx_pdus_bad++;
+            VLOG_WARN_RL(&rl, "%s: received an unparsable LACP PDU.",
+                         lacp->name);
+            goto out;
+    }
+
+    /* On some NICs L1 state reporting is slow. In case LACP packets are
+     * received while carrier (L1) state is still down, drop the LACP PDU and
+     * trigger re-checking of L1 state. */
+    if (!slave->carrier_up) {
+        VLOG_INFO_RL(&rl, "%s: carrier state is DOWN,"
+                     " dropping received LACP PDU.", slave->name);
+        seq_change(connectivity_seq_get());
         goto out;
     }
 
@@ -354,7 +390,7 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
 
     slave->ntt_actor = pdu->partner;
 
-    /* Update our information about our partner if it's out of date.  This may
+    /* Update our information about our partner if it's out of date. This may
      * cause priorities to change so re-calculate attached status of all
      * slaves.  */
     if (memcmp(&slave->partner, &pdu->actor, sizeof pdu->actor)) {
@@ -362,8 +398,14 @@ lacp_process_packet(struct lacp *lacp, const void *slave_,
         slave->partner = pdu->actor;
     }
 
+    /* Evaluate may_enable here to avoid dropping of packets till main thread
+     * sets may_enable to true. */
+    lacp_may_enable = slave_may_enable__(slave);
+
 out:
     lacp_unlock();
+
+    return lacp_may_enable;
 }
 
 /* Returns the lacp_status of the given 'lacp' object (which may be NULL). */
@@ -448,7 +490,8 @@ lacp_slave_unregister(struct lacp *lacp, const void *slave_)
 /* This function should be called whenever the carrier status of 'slave_' has
  * changed.  If 'lacp' is null, this function has no effect.*/
 void
-lacp_slave_carrier_changed(const struct lacp *lacp, const void *slave_)
+lacp_slave_carrier_changed(const struct lacp *lacp, const void *slave_,
+                           bool carrier_up)
     OVS_EXCLUDED(mutex)
 {
     struct slave *slave;
@@ -465,7 +508,11 @@ lacp_slave_carrier_changed(const struct lacp *lacp, const void *slave_)
     if (slave->status == LACP_CURRENT || slave->lacp->active) {
         slave_set_expired(slave);
     }
-    slave->count_carrier_changed++;
+
+    if (slave->carrier_up != carrier_up) {
+        slave->carrier_up = carrier_up;
+        slave->count_carrier_changed++;
+    }
 
 out:
     lacp_unlock();
@@ -490,11 +537,18 @@ lacp_slave_may_enable(const struct lacp *lacp, const void *slave_)
 {
     if (lacp) {
         struct slave *slave;
-        bool ret;
+        bool ret = false;
 
         lacp_lock();
         slave = slave_lookup(lacp, slave_);
-        ret = slave ? slave_may_enable__(slave) : false;
+        if (slave) {
+            /* It is only called when carrier is up. So, enable slave's
+             * carrier state if it is currently down. */
+            if (!slave->carrier_up) {
+                slave->carrier_up = true;
+            }
+            ret = slave_may_enable__(slave);
+        }
         lacp_unlock();
         return ret;
     } else {
@@ -812,7 +866,9 @@ slave_get_priority(struct slave *slave, struct lacp_info *priority)
 static bool
 slave_may_tx(const struct slave *slave) OVS_REQUIRES(mutex)
 {
-    return slave->lacp->active || slave->status != LACP_DEFAULTED;
+    /* Check for L1 state as well as LACP state. */
+    return (slave->carrier_up) && ((slave->lacp->active) ||
+            (slave->status != LACP_DEFAULTED));
 }
 
 static struct slave *
@@ -1021,9 +1077,11 @@ lacp_print_stats(struct ds *ds, struct lacp *lacp) OVS_REQUIRES(mutex)
     for (i = 0; i < shash_count(&slave_shash); i++) {
         slave = sorted_slaves[i]->data;
         ds_put_format(ds, "\nslave: %s:\n", slave->name);
+        ds_put_format(ds, "  TX PDUs: %u\n", slave->count_tx_pdus);
         ds_put_format(ds, "  RX PDUs: %u\n", slave->count_rx_pdus);
         ds_put_format(ds, "  RX Bad PDUs: %u\n", slave->count_rx_pdus_bad);
-        ds_put_format(ds, "  TX PDUs: %u\n", slave->count_tx_pdus);
+        ds_put_format(ds, "  RX Marker Request PDUs: %u\n",
+                      slave->count_rx_pdus_marker);
         ds_put_format(ds, "  Link Expired: %u\n",
                       slave->count_link_expired);
         ds_put_format(ds, "  Link Defaulted: %u\n",

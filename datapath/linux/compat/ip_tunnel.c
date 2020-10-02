@@ -51,6 +51,7 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <net/rtnetlink.h>
+#include <net/dst_metadata.h>
 
 #if IS_ENABLED(CONFIG_IPV6)
 #include <net/ipv6.h>
@@ -263,10 +264,15 @@ static int rpl_tnl_update_pmtu(struct net_device *dev, struct sk_buff *skb,
 		mtu = dst_mtu(&rt->dst) - dev->hard_header_len
 					- sizeof(struct iphdr) - tunnel->hlen;
 	else
-		mtu = skb_dst(skb) ? dst_mtu(skb_dst(skb)) : dev->mtu;
+		mtu = skb_valid_dst(skb) ? dst_mtu(skb_dst(skb)) : dev->mtu;
 
-	if (skb_dst(skb))
+	if (skb_valid_dst(skb))
+#ifndef HAVE_DST_OPS_CONFIRM_NEIGH
 		skb_dst(skb)->ops->update_pmtu(skb_dst(skb), NULL, skb, mtu);
+#else
+		skb_dst(skb)->ops->update_pmtu(skb_dst(skb),
+					       NULL, skb, mtu, false);
+#endif
 
 	if (skb->protocol == htons(ETH_P_IP)) {
 		if (!skb_is_gso(skb) &&
@@ -279,7 +285,10 @@ static int rpl_tnl_update_pmtu(struct net_device *dev, struct sk_buff *skb,
 	}
 #if IS_ENABLED(CONFIG_IPV6)
 	else if (skb->protocol == htons(ETH_P_IPV6)) {
-		struct rt6_info *rt6 = (struct rt6_info *)skb_dst(skb);
+		struct rt6_info *rt6;
+
+		rt6 = skb_valid_dst(skb) ? (struct rt6_info *)skb_dst(skb) :
+					   NULL;
 
 		if (rt6 && mtu < dst_mtu(skb_dst(skb)) &&
 			   mtu >= IPV6_MIN_MTU) {

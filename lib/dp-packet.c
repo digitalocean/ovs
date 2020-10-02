@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "dp-packet.h"
+#include "netdev-afxdp.h"
 #include "netdev-dpdk.h"
 #include "openvswitch/dynamic-string.h"
 #include "util.h"
@@ -30,9 +31,10 @@ dp_packet_init__(struct dp_packet *b, size_t allocated, enum dp_packet_source so
     b->source = source;
     dp_packet_reset_offsets(b);
     pkt_metadata_init(&b->md, 0);
-    dp_packet_rss_invalidate(b);
-    dp_packet_mbuf_init(b);
     dp_packet_reset_cutlen(b);
+    dp_packet_reset_offload(b);
+    /* Initialize implementation-specific fields of dp_packet. */
+    dp_packet_init_specific(b);
     /* By default assume the packet type to be Ethernet. */
     b->packet_type = htonl(PT_ETH);
 }
@@ -57,6 +59,22 @@ dp_packet_use(struct dp_packet *b, void *base, size_t allocated)
 {
     dp_packet_use__(b, base, allocated, DPBUF_MALLOC);
 }
+
+#if HAVE_AF_XDP
+/* Initialize 'b' as an empty dp_packet that contains
+ * memory starting at AF_XDP umem base.
+ */
+void
+dp_packet_use_afxdp(struct dp_packet *b, void *data, size_t allocated,
+                    size_t headroom)
+{
+    dp_packet_set_base(b, (char *)data - headroom);
+    dp_packet_set_data(b, data);
+    dp_packet_set_size(b, 0);
+
+    dp_packet_init__(b, allocated, DPBUF_AFXDP);
+}
+#endif
 
 /* Initializes 'b' as an empty dp_packet that contains the 'allocated' bytes of
  * memory starting at 'base'.  'base' should point to a buffer on the stack.
@@ -121,6 +139,8 @@ dp_packet_uninit(struct dp_packet *b)
              * created as a dp_packet */
             free_dpdk_buf((struct dp_packet*) b);
 #endif
+        } else if (b->source == DPBUF_AFXDP) {
+            free_afxdp_buf(b);
         }
     }
 }
@@ -161,6 +181,7 @@ struct dp_packet *
 dp_packet_clone_with_headroom(const struct dp_packet *buffer, size_t headroom)
 {
     struct dp_packet *new_buffer;
+    uint32_t mark;
 
     new_buffer = dp_packet_clone_data_with_headroom(dp_packet_data(buffer),
                                                  dp_packet_size(buffer),
@@ -171,18 +192,14 @@ dp_packet_clone_with_headroom(const struct dp_packet *buffer, size_t headroom)
             sizeof(struct dp_packet) -
             offsetof(struct dp_packet, l2_pad_size));
 
-#ifdef DPDK_NETDEV
-    new_buffer->mbuf.ol_flags = buffer->mbuf.ol_flags;
-#else
-    new_buffer->rss_hash_valid = buffer->rss_hash_valid;
-#endif
+    *dp_packet_ol_flags_ptr(new_buffer) = *dp_packet_ol_flags_ptr(buffer);
+    *dp_packet_ol_flags_ptr(new_buffer) &= DP_PACKET_OL_SUPPORTED_MASK;
 
-    if (dp_packet_rss_valid(new_buffer)) {
-#ifdef DPDK_NETDEV
-        new_buffer->mbuf.hash.rss = buffer->mbuf.hash.rss;
-#else
-        new_buffer->rss_hash = buffer->rss_hash;
-#endif
+    if (dp_packet_rss_valid(buffer)) {
+        dp_packet_set_rss_hash(new_buffer, dp_packet_get_rss_hash(buffer));
+    }
+    if (dp_packet_has_flow_mark(buffer, &mark)) {
+        dp_packet_set_flow_mark(new_buffer, mark);
     }
 
     return new_buffer;
@@ -224,8 +241,8 @@ dp_packet_copy__(struct dp_packet *b, uint8_t *new_base,
 
 /* Reallocates 'b' so that it has exactly 'new_headroom' and 'new_tailroom'
  * bytes of headroom and tailroom, respectively. */
-static void
-dp_packet_resize__(struct dp_packet *b, size_t new_headroom, size_t new_tailroom)
+void
+dp_packet_resize(struct dp_packet *b, size_t new_headroom, size_t new_tailroom)
 {
     void *new_base, *new_data;
     size_t new_allocated;
@@ -247,6 +264,9 @@ dp_packet_resize__(struct dp_packet *b, size_t new_headroom, size_t new_tailroom
         break;
 
     case DPBUF_STACK:
+        OVS_NOT_REACHED();
+
+    case DPBUF_AFXDP:
         OVS_NOT_REACHED();
 
     case DPBUF_STUB:
@@ -275,7 +295,7 @@ void
 dp_packet_prealloc_tailroom(struct dp_packet *b, size_t size)
 {
     if (size > dp_packet_tailroom(b)) {
-        dp_packet_resize__(b, dp_packet_headroom(b), MAX(size, 64));
+        dp_packet_resize(b, dp_packet_headroom(b), MAX(size, 64));
     }
 }
 
@@ -286,7 +306,7 @@ void
 dp_packet_prealloc_headroom(struct dp_packet *b, size_t size)
 {
     if (size > dp_packet_headroom(b)) {
-        dp_packet_resize__(b, MAX(size, 64), dp_packet_tailroom(b));
+        dp_packet_resize(b, MAX(size, 64), dp_packet_tailroom(b));
     }
 }
 
@@ -434,6 +454,7 @@ dp_packet_steal_data(struct dp_packet *b)
 {
     void *p;
     ovs_assert(b->source != DPBUF_DPDK);
+    ovs_assert(b->source != DPBUF_AFXDP);
 
     if (b->source == DPBUF_MALLOC && dp_packet_data(b) == dp_packet_base(b)) {
         p = dp_packet_data(b);

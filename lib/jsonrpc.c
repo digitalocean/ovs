@@ -43,7 +43,7 @@ struct jsonrpc {
 
     /* Input. */
     struct byteq input;
-    uint8_t input_buffer[512];
+    uint8_t input_buffer[4096];
     struct json_parser *parser;
 
     /* Output. */
@@ -824,10 +824,11 @@ jsonrpc_session_open_multiple(const struct svec *remotes, bool retry)
 
     s = xmalloc(sizeof *s);
 
-    /* Set 'n' remotes from 'names', shuffling them into random order. */
-    ovs_assert(remotes->n > 0);
+    /* Set 'n' remotes from 'names'. */
     svec_clone(&s->remotes, remotes);
-    svec_shuffle(&s->remotes);
+    if (!s->remotes.n) {
+        svec_add(&s->remotes, "invalid:");
+    }
     s->next_remote = 0;
 
     s->reconnect = reconnect_create(time_msec());

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2017 Nicira, Inc.
+ * Copyright (c) 2008-2017, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -590,6 +590,8 @@ open_vconn__(const char *name, enum open_target target,
     } else if (!open_vconn_socket(socket_name, vconnp)) {
         /* Fall Through. */
     } else {
+        free(bridge_path);
+        free(socket_name);
         ovs_fatal(0, "%s is not a bridge or a socket", name);
     }
 
@@ -1724,6 +1726,7 @@ bundle_flow_mod__(const char *remote, struct ofputil_flow_mod *fms,
 
         ovs_list_push_back(&requests, &request->list_node);
         free(CONST_CAST(struct ofpact *, fm->ofpacts));
+        minimatch_destroy(&fm->match);
     }
 
     bundle_transact(vconn, &requests, OFPBF_ORDERED | OFPBF_ATOMIC);
@@ -2286,6 +2289,14 @@ ofctl_monitor(struct ovs_cmdl_context *ctx)
                 ovs_fatal(0, "%s", error);
             }
 
+            if (!(usable_protocols & allowed_protocols)) {
+                char *allowed_s =
+                                ofputil_protocols_to_string(allowed_protocols);
+                char *usable_s = ofputil_protocols_to_string(usable_protocols);
+                ovs_fatal(0, "none of the usable flow formats (%s) is among "
+                         "the allowed flow formats (%s)", usable_s, allowed_s);
+            }
+
             msg = ofpbuf_new(0);
             ofputil_append_flow_monitor_request(&fmr, msg);
             dump_transaction(vconn, msg);
@@ -2489,7 +2500,6 @@ ofctl_mod_port(struct ovs_cmdl_context *ctx)
 
     pm.port_no = pp.port_no;
     pm.hw_addr = pp.hw_addr;
-    pm.hw_addr64 = pp.hw_addr64;
     pm.config = 0;
     pm.mask = 0;
     pm.advertise = 0;
@@ -2695,8 +2705,7 @@ ofctl_mod_table(struct ovs_cmdl_context *ctx)
          * necessary to restore the current configuration of table-config
          * parameters using OFPMP14_TABLE_DESC request. */
         if (allowed_versions & ((1u << OFP14_VERSION) |
-                                (1u << OFP15_VERSION) |
-                                (1u << OFP16_VERSION))) {
+                                (1u << OFP15_VERSION))) {
             struct ofputil_table_desc td;
 
             if (tm.table_id == OFPTT_ALL) {
@@ -4177,6 +4186,44 @@ ofctl_parse_flows(struct ovs_cmdl_context *ctx)
     free(fms);
 }
 
+/* "parse-group GROUP": parses the argument as a group (like add-group) and
+ * prints it back to stdout.  */
+static void
+ofctl_parse_group(struct ovs_cmdl_context *ctx)
+{
+    enum ofputil_protocol usable_protocols;
+    struct ofputil_group_mod gm;
+    char *error = parse_ofp_group_mod_str(&gm, OFPGC11_ADD, ctx->argv[1], NULL,
+                                          NULL, &usable_protocols);
+    if (error) {
+        ovs_fatal(0, "%s", error);
+    }
+
+    char *usable_s = ofputil_protocols_to_string(usable_protocols);
+    printf("usable protocols: %s\n", usable_s);
+    free(usable_s);
+
+    if (!(usable_protocols & allowed_protocols)) {
+        ovs_fatal(0, "no usable protocol");
+    }
+    enum ofputil_protocol protocol = 0;
+    for (int i = 0; i < sizeof(enum ofputil_protocol) * CHAR_BIT; i++) {
+        protocol = 1 << i;
+        if (protocol & usable_protocols & allowed_protocols) {
+            break;
+        }
+    }
+
+    enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
+    printf("chosen version: %s\n", ofputil_version_to_string(version));
+
+    struct ofpbuf *msg = ofputil_encode_group_mod(version, &gm, NULL, false);
+    ofp_print(stdout, msg->data, msg->size, NULL, NULL, verbosity);
+    ofpbuf_delete(msg);
+
+    ofputil_uninit_group_mod(&gm);
+}
+
 static void
 ofctl_parse_nxm__(bool oxm, enum ofp_version version)
 {
@@ -5035,6 +5082,7 @@ static const struct ovs_cmdl_command all_commands[] = {
     /* Undocumented commands for testing. */
     { "parse-flow", NULL, 1, 1, ofctl_parse_flow, OVS_RW },
     { "parse-flows", NULL, 1, 1, ofctl_parse_flows, OVS_RW },
+    { "parse-group", NULL, 1, 1, ofctl_parse_group, OVS_RW },
     { "parse-nx-match", NULL, 0, 0, ofctl_parse_nxm, OVS_RW },
     { "parse-nxm", NULL, 0, 0, ofctl_parse_nxm, OVS_RW },
     { "parse-oxm", NULL, 1, 1, ofctl_parse_oxm, OVS_RW },

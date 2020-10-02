@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2017 Nicira, Inc.
+ * Copyright (c) 2010-2017, 2020 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,8 @@ struct vl_mff_map;
  * See include/openflow/nicira-ext.h for NXM specification.
  */
 
+char * mf_parse_field(const struct mf_field **field, const char *s)
+    OVS_WARN_UNUSED_RESULT;
 void mf_format_subfield(const struct mf_subfield *, struct ds *);
 char *mf_parse_subfield__(struct mf_subfield *sf, const char **s)
     OVS_WARN_UNUSED_RESULT;
@@ -82,7 +84,7 @@ int oxm_put_field_array(struct ofpbuf *, const struct field_array *,
  * ID followed by a value and possibly a mask). */
 enum ofperr nx_pull_entry(struct ofpbuf *, const struct vl_mff_map *,
                           const struct mf_field **, union mf_value *value,
-                          union mf_value *mask);
+                          union mf_value *mask, bool is_action);
 enum ofperr nx_pull_header(struct ofpbuf *, const struct vl_mff_map *,
                            const struct mf_field **, bool *masked);
 void nxm_put_entry_raw(struct ofpbuf *, enum mf_field_id field,

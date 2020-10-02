@@ -1094,6 +1094,18 @@ MapFlowTunKeyToNlKey(PNL_BUFFER nlBuf,
         goto done;
     }
 
+    if (!NlMsgPutTailU16(nlBuf, OVS_TUNNEL_KEY_ATTR_TP_SRC,
+                         tunKey->flow_hash)) {
+        rc = STATUS_UNSUCCESSFUL;
+        goto done;
+    }
+
+    if (!NlMsgPutTailU16(nlBuf, OVS_TUNNEL_KEY_ATTR_TP_DST,
+                         tunKey->dst_port)) {
+        rc = STATUS_UNSUCCESSFUL;
+        goto done;
+    }
+
 done:
     NlMsgEndNested(nlBuf, offset);
 error_nested_start:
@@ -2350,8 +2362,8 @@ OvsExtractFlow(const NET_BUFFER_LIST *packet,
     } else {
         if (eth->dix.typeNBO == ETH_TYPE_802_1PQ_NBO) {
             Eth_802_1pq_Tag *tag= (Eth_802_1pq_Tag *)&eth->dix.typeNBO;
-            flow->l2.vlanKey.vlanTci = ((UINT16)tag->priority << 13) |
-                OVSWIN_VLAN_CFI | ((UINT16)tag->vidHi << 8) | tag->vidLo;
+            flow->l2.vlanKey.vlanTci = htons(((UINT16)tag->priority << 13) |
+                OVSWIN_VLAN_CFI | ((UINT16)tag->vidHi << 8) | tag->vidLo);
             flow->l2.vlanKey.vlanTpid = htons(ETH_TYPE_802_1PQ);
             offset = sizeof (Eth_802_1pq_Tag);
         } else {

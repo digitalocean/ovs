@@ -22,11 +22,39 @@
 #include "openvswitch/compiler.h"
 
 struct dp_packet;
+struct netdev;
 
 #ifdef DPDK_NETDEV
 
+struct rte_flow;
+struct rte_flow_error;
+struct rte_flow_attr;
+struct rte_flow_item;
+struct rte_flow_action;
+struct rte_flow_query_count;
+
 void netdev_dpdk_register(void);
 void free_dpdk_buf(struct dp_packet *);
+
+bool netdev_dpdk_flow_api_supported(struct netdev *);
+
+int
+netdev_dpdk_rte_flow_destroy(struct netdev *netdev,
+                             struct rte_flow *rte_flow,
+                             struct rte_flow_error *error);
+struct rte_flow *
+netdev_dpdk_rte_flow_create(struct netdev *netdev,
+                            const struct rte_flow_attr *attr,
+                            const struct rte_flow_item *items,
+                            const struct rte_flow_action *actions,
+                            struct rte_flow_error *error);
+int
+netdev_dpdk_rte_flow_query_count(struct netdev *netdev,
+                                 struct rte_flow *rte_flow,
+                                 struct rte_flow_query_count *query,
+                                 struct rte_flow_error *error);
+int
+netdev_dpdk_get_port_id(struct netdev *netdev);
 
 #else
 

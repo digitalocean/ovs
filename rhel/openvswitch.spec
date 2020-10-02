@@ -27,7 +27,7 @@ Summary: Open vSwitch daemon/database/utilities
 Group: System Environment/Daemons
 URL: http://www.openvswitch.org/
 Vendor: Nicira, Inc.
-Version: 2.11.3
+Version: 2.14.0
 
 License: ASL 2.0
 Release: 1
@@ -38,8 +38,9 @@ BuildRequires: python-six
 BuildRequires: openssl-devel
 BuildRequires: checkpolicy, selinux-policy-devel
 BuildRequires: autoconf, automake, libtool
-BuildRequires: python-sphinx
+BuildRequires: python3-sphinx
 BuildRequires: unbound-devel
+BuildRequires: unwind-devel
 
 %bcond_without check
 %bcond_with check_datapath_kernel
@@ -100,13 +101,7 @@ rm \
     $RPM_BUILD_ROOT/usr/bin/ovs-test \
     $RPM_BUILD_ROOT/usr/bin/ovs-l3ping \
     $RPM_BUILD_ROOT/usr/share/man/man8/ovs-test.8 \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8 \
-    $RPM_BUILD_ROOT/usr/sbin/ovs-vlan-bug-workaround \
-    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-vlan-bug-workaround.8 \
-    $RPM_BUILD_ROOT/usr/bin/ovn-* \
-    $RPM_BUILD_ROOT/usr/share/man/man?/ovn-* \
-    $RPM_BUILD_ROOT/usr/share/openvswitch/ovn-* \
-    $RPM_BUILD_ROOT/usr/share/openvswitch/scripts/ovn*
+    $RPM_BUILD_ROOT/usr/share/man/man8/ovs-l3ping.8
 (cd "$RPM_BUILD_ROOT" && rm -rf usr/%{_lib}/*.la)
 (cd "$RPM_BUILD_ROOT" && rm -rf usr/include)
 

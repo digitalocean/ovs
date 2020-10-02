@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
+# Copyright (C) 2009-2018 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -9,6 +9,8 @@ lib_LTLIBRARIES += lib/libopenvswitch.la
 
 lib_libopenvswitch_la_LIBADD = $(SSL_LIBS)
 lib_libopenvswitch_la_LIBADD += $(CAPNG_LDADD)
+lib_libopenvswitch_la_LIBADD += $(LIBBPF_LDADD)
+
 
 if WIN32
 lib_libopenvswitch_la_LIBADD += ${PTHREAD_LIBS}
@@ -19,6 +21,29 @@ lib_libopenvswitch_la_LDFLAGS = \
         -Wl,--version-script=$(top_builddir)/lib/libopenvswitch.sym \
         $(AM_LDFLAGS)
 
+if HAVE_AVX512F
+if HAVE_LD_AVX512_GOOD
+# Build library of avx512 code with CPU ISA CFLAGS enabled. This allows the
+# compiler to use the ISA features required for the ISA optimized code-paths.
+# Use LDFLAGS to compile only static library of this code, as it should be
+# statically linked into vswitchd even if vswitchd is a shared build.
+lib_LTLIBRARIES += lib/libopenvswitchavx512.la
+lib_libopenvswitch_la_LIBADD += lib/libopenvswitchavx512.la
+lib_libopenvswitchavx512_la_CFLAGS = \
+	-mavx512f \
+	-mavx512bw \
+	-mavx512dq \
+	-mbmi2 \
+	-fPIC \
+	$(AM_CFLAGS)
+lib_libopenvswitchavx512_la_SOURCES = \
+	lib/dpif-netdev-lookup-avx512-gather.c
+lib_libopenvswitchavx512_la_LDFLAGS = \
+	-static
+endif
+endif
+
+# Build core vswitch libraries as before
 lib_libopenvswitch_la_SOURCES = \
 	lib/aes128.c \
 	lib/aes128.h \
@@ -52,6 +77,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/conntrack-icmp.c \
 	lib/conntrack-private.h \
 	lib/conntrack-tcp.c \
+	lib/conntrack-tp.c \
+	lib/conntrack-tp.h \
 	lib/conntrack-other.c \
 	lib/conntrack.c \
 	lib/conntrack.h \
@@ -78,8 +105,13 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/dp-packet.h \
 	lib/dp-packet.c \
 	lib/dpdk.h \
+	lib/dpif-netdev-lookup.h \
+	lib/dpif-netdev-lookup.c \
+	lib/dpif-netdev-lookup-autovalidator.c \
+	lib/dpif-netdev-lookup-generic.c \
 	lib/dpif-netdev.c \
 	lib/dpif-netdev.h \
+	lib/dpif-netdev-private.h \
 	lib/dpif-netdev-perf.c \
 	lib/dpif-netdev-perf.h \
 	lib/dpif-provider.h \
@@ -100,6 +132,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/guarded-list.h \
 	lib/hash.c \
 	lib/hash.h \
+	lib/hash-aarch64.h \
 	lib/hindex.c \
 	lib/hindex.h \
 	lib/hmap.c \
@@ -107,6 +140,10 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/hmapx.h \
 	lib/id-pool.c \
 	lib/id-pool.h \
+	lib/if-notifier-manual.c \
+	lib/if-notifier.h \
+	lib/ipf.c \
+	lib/ipf.h \
 	lib/jhash.c \
 	lib/jhash.h \
 	lib/json.c \
@@ -134,6 +171,9 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/namemap.c \
 	lib/netdev-dpdk.h \
 	lib/netdev-dummy.c \
+	lib/netdev-offload.c \
+	lib/netdev-offload.h \
+	lib/netdev-offload-provider.h \
 	lib/netdev-provider.h \
 	lib/netdev-vport.c \
 	lib/netdev-vport.h \
@@ -303,6 +343,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/unicode.h \
 	lib/unixctl.c \
 	lib/unixctl.h \
+	lib/userspace-tso.c \
+	lib/userspace-tso.h \
 	lib/util.c \
 	lib/util.h \
 	lib/uuid.c \
@@ -385,11 +427,10 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/dpif-netlink-rtnl.c \
 	lib/dpif-netlink-rtnl.h \
 	lib/if-notifier.c \
-	lib/if-notifier.h \
 	lib/netdev-linux.c \
 	lib/netdev-linux.h \
-	lib/netdev-tc-offloads.c \
-	lib/netdev-tc-offloads.h \
+	lib/netdev-linux-private.h \
+	lib/netdev-offload-tc.c \
 	lib/netlink-conntrack.c \
 	lib/netlink-conntrack.h \
 	lib/netlink-notifier.c \
@@ -405,10 +446,19 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/tc.h
 endif
 
+if HAVE_AF_XDP
+lib_libopenvswitch_la_SOURCES += \
+	lib/netdev-afxdp-pool.c \
+	lib/netdev-afxdp-pool.h \
+	lib/netdev-afxdp.c \
+	lib/netdev-afxdp.h
+endif
+
 if DPDK_NETDEV
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpdk.c \
-	lib/netdev-dpdk.c
+	lib/netdev-dpdk.c \
+	lib/netdev-offload-dpdk.c
 else
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpdk-stub.c
@@ -435,12 +485,6 @@ if HAVE_POSIX_AIO
 lib_libopenvswitch_la_SOURCES += lib/async-append-aio.c
 else
 lib_libopenvswitch_la_SOURCES += lib/async-append-null.c
-endif
-
-if ESX
-lib_libopenvswitch_la_SOURCES += \
-	lib/route-table-stub.c \
-	lib/if-notifier-stub.c
 endif
 
 if HAVE_IF_DL
@@ -502,6 +546,7 @@ MAN_FRAGMENTS += \
 	lib/daemon-syn.man \
 	lib/db-ctl-base.man \
 	lib/dpctl.man \
+	lib/dpdk-unixctl.man \
 	lib/memory-unixctl.man \
 	lib/netdev-dpdk-unixctl.man \
 	lib/dpif-netdev-unixctl.man \

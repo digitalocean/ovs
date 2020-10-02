@@ -27,7 +27,7 @@ extern "C" {
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 41
+#define FLOW_WC_SEQ 42
 
 /* Number of Open vSwitch extension 32-bit registers. */
 #define FLOW_N_REGS 16
@@ -144,7 +144,8 @@ struct flow {
     struct in6_addr nd_target;  /* IPv6 neighbor discovery (ND) target. */
     struct eth_addr arp_sha;    /* ARP/ND source hardware address. */
     struct eth_addr arp_tha;    /* ARP/ND target hardware address. */
-    ovs_be16 tcp_flags;         /* TCP flags. With L3 to avoid matching L4. */
+    ovs_be16 tcp_flags;         /* TCP flags/ICMPv6 ND options type.
+                                 * With L3 to avoid matching L4. */
     ovs_be16 pad2;              /* Pad to 64 bits. */
     struct ovs_key_nsh nsh;     /* Network Service Header keys */
 
@@ -153,7 +154,8 @@ struct flow {
     ovs_be16 tp_dst;            /* TCP/UDP/SCTP destination port/ICMP code. */
     ovs_be16 ct_tp_src;         /* CT original tuple source port/ICMP type. */
     ovs_be16 ct_tp_dst;         /* CT original tuple dst port/ICMP code. */
-    ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address.
+    ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address/ICMPv6 ND reserved
+                                 * field.
                                  * Keep last for BUILD_ASSERT_DECL below. */
     ovs_be32 pad3;              /* Pad to 64 bits. */
 };
@@ -166,7 +168,7 @@ BUILD_ASSERT_DECL(sizeof(struct ovs_key_nsh) % sizeof(uint64_t) == 0);
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
                   == sizeof(struct flow_tnl) + sizeof(struct ovs_key_nsh) + 300
-                  && FLOW_WC_SEQ == 41);
+                  && FLOW_WC_SEQ == 42);
 
 /* Incremental points at which flow classification may be performed in
  * segments.

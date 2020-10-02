@@ -57,7 +57,19 @@ dpdk_vhost_iommu_enabled(void)
 }
 
 bool
+dpdk_vhost_postcopy_enabled(void)
+{
+    return false;
+}
+
+bool
 dpdk_per_port_memory(void)
+{
+    return false;
+}
+
+bool
+dpdk_available(void)
 {
     return false;
 }
@@ -65,6 +77,15 @@ dpdk_per_port_memory(void)
 void
 print_dpdk_version(void)
 {
+}
+
+bool
+dpdk_get_cpu_has_isa(const char *arch OVS_UNUSED,
+                     const char *feature OVS_UNUSED)
+{
+    VLOG_ERR_ONCE("DPDK not supported in this version of Open vSwitch, "
+                  "cannot use CPU flag based optimizations");
+    return false;
 }
 
 void

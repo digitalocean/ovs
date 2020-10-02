@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+# Copyright (c) 2008-2016, 2019 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,16 +59,6 @@ AC_DEFUN([OVS_CHECK_NDEBUG],
       esac],
      [ndebug=false])
    AM_CONDITIONAL([NDEBUG], [test x$ndebug = xtrue])])
-
-dnl Checks for ESX.
-AC_DEFUN([OVS_CHECK_ESX],
-  [AC_CHECK_HEADER([vmware.h],
-                   [ESX=yes],
-                   [ESX=no])
-   AM_CONDITIONAL([ESX], [test "$ESX" = yes])
-   if test "$ESX" = yes; then
-      AC_DEFINE([ESX], [1], [Define to 1 if building on ESX.])
-   fi])
 
 dnl Checks for MSVC x64 compiler.
 AC_DEFUN([OVS_CHECK_WIN64],
@@ -285,7 +275,24 @@ OpenFlow connections over SSL will not be supported.
    AM_CONDITIONAL([HAVE_OPENSSL], [test "$HAVE_OPENSSL" = yes])
    if test "$HAVE_OPENSSL" = yes; then
       AC_DEFINE([HAVE_OPENSSL], [1], [Define to 1 if OpenSSL is installed.])
-   fi])
+   fi
+
+   OPENSSL_SUPPORTS_SNI=no
+   if test $HAVE_OPENSSL = yes; then
+      save_CPPFLAGS=$CPPFLAGS
+      CPPFLAGS="$CPPFLAGS $SSL_INCLUDES"
+      AC_CHECK_DECL([SSL_set_tlsext_host_name], [OPENSSL_SUPPORTS_SNI=yes],
+                    [], [#include <openssl/ssl.h>
+])
+      if test $OPENSSL_SUPPORTS_SNI = yes; then
+        AC_DEFINE(
+          [OPENSSL_SUPPORTS_SNI], [1],
+          [Define to 1 if OpenSSL supports Server Name Indication (SNI).])
+      fi
+      CPPFLAGS=$save_CPPFLAGS
+   fi
+   AC_SUBST([OPENSSL_SUPPORTS_SNI])
+])
 
 dnl Checks for libraries needed by lib/socket-util.c.
 AC_DEFUN([OVS_CHECK_SOCKET_LIBS],
@@ -347,57 +354,16 @@ dnl Checks for valgrind/valgrind.h.
 AC_DEFUN([OVS_CHECK_VALGRIND],
   [AC_CHECK_HEADERS([valgrind/valgrind.h])])
 
-dnl Checks for Python 2.x, x >= 7.
-AC_DEFUN([OVS_CHECK_PYTHON2],
-  [AC_CACHE_CHECK(
-     [for Python 2.x for x >= 7],
-     [ovs_cv_python2],
-     [if test -n "$PYTHON2"; then
-        ovs_cv_python2=$PYTHON2
-      else
-        ovs_cv_python2=no
-        for binary in python2 python2.7 python; do
-          ovs_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-          for dir in $PATH; do
-            IFS=$ovs_save_IFS
-            test -z "$dir" && dir=.
-            if test -x "$dir"/"$binary" && "$dir"/"$binary" -c 'import sys
-if sys.hexversion >= 0x02070000 and sys.hexversion < 0x03000000:
-    sys.exit(0)
-else:
-    sys.exit(1)'; then
-              ovs_cv_python2=$dir/$binary
-              break 2
-            fi
-          done
-        done
-        if test "$ovs_cv_python2" != no && test -x "$ovs_cv_python2"; then
-          if ! "$ovs_cv_python2" -c 'import six ; six.moves.range' >&AS_MESSAGE_LOG_FD 2>&1; then
-            ovs_cv_python2=no
-            AC_MSG_WARN([Missing Python six library or version too old.])
-          fi
-        fi
-      fi])
-   AC_SUBST([HAVE_PYTHON2])
-   AM_MISSING_PROG([PYTHON2], [python2])
-   if test "$ovs_cv_python2" != no; then
-     PYTHON2=$ovs_cv_python2
-     HAVE_PYTHON2=yes
-   else
-     HAVE_PYTHON2=no
-   fi
-   AM_CONDITIONAL([HAVE_PYTHON2], [test "$HAVE_PYTHON2" = yes])])
-
-dnl Checks for Python 3.x, x >= 4.
+dnl Checks for Python 3.4 or later.
 AC_DEFUN([OVS_CHECK_PYTHON3],
   [AC_CACHE_CHECK(
-     [for Python 3.x for x >= 4],
+     [for Python 3 (version 3.4 or later)],
      [ovs_cv_python3],
      [if test -n "$PYTHON3"; then
         ovs_cv_python3=$PYTHON3
       else
         ovs_cv_python3=no
-        for binary in python3 python3.4; do
+        for binary in python3 python3.4 python3.5 python3.6 python3.7; do
           ovs_save_IFS=$IFS; IFS=$PATH_SEPARATOR
           for dir in $PATH; do
             IFS=$ovs_save_IFS
@@ -412,46 +378,12 @@ else:
             fi
           done
         done
-        if test "$ovs_cv_python3" != no; then
-          if test -x "$ovs_cv_python3" && ! "$ovs_cv_python3" -c 'import six' >/dev/null 2>&1; then
-            ovs_cv_python3=no
-            AC_MSG_WARN([Missing Python six library.])
-          fi
-        fi
       fi])
-   AC_SUBST([HAVE_PYTHON3])
-   AM_MISSING_PROG([PYTHON3], [python3])
-   if test "$ovs_cv_python3" != no; then
-     PYTHON3=$ovs_cv_python3
-     HAVE_PYTHON3=yes
-   else
-     HAVE_PYTHON3=no
+   if test "$ovs_cv_python3" = no; then
+     AC_MSG_ERROR([Python 3.4 or later is required but not found in $PATH, please install it or set $PYTHON3 to point to it])
    fi
-   AM_CONDITIONAL([HAVE_PYTHON3], [test "$HAVE_PYTHON3" = yes])])
-
-dnl Checks if you have any compatible Python version installed.
-dnl Python 2.7+ has the preference to 3.4+
-AC_DEFUN([OVS_CHECK_PYTHON],
-  [AC_CACHE_CHECK(
-     [for Python 2 or 3],
-     [ovs_cv_python],
-     [if test -n "$PYTHON"; then
-        ovs_cv_python=$PYTHON
-      else
-        ovs_cv_python=no
-        if test "$ovs_cv_python2" != no; then
-          ovs_cv_python=$ovs_cv_python2
-        elif test "$ovs_cv_python3" != no; then
-          ovs_cv_python=$ovs_cv_python3
-        else
-          AC_MSG_ERROR([Missing Python.])
-        fi
-      fi])
-    AC_SUBST([PYTHON])
-    PYTHON=$ovs_cv_python
-    AC_SUBST([HAVE_PYTHON])
-    HAVE_PYTHON=yes
-    AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])])
+   AC_ARG_VAR([PYTHON3])
+   PYTHON3=$ovs_cv_python3])
 
 dnl Checks for flake8.
 AC_DEFUN([OVS_CHECK_FLAKE8],
@@ -467,15 +399,44 @@ AC_DEFUN([OVS_CHECK_FLAKE8],
 
 dnl Checks for sphinx.
 AC_DEFUN([OVS_CHECK_SPHINX],
+  [AC_CHECK_PROGS(
+     [SPHINXBUILD], [sphinx-build-3 sphinx-build-2 sphinx-build], [none])
+   AC_ARG_VAR([SPHINXBUILD])
+   AM_CONDITIONAL([HAVE_SPHINX], [test "$SPHINXBUILD" != none])])
+
+dnl Checks for binutils/assembler known issue with AVX512.
+dnl Due to backports, we probe assembling a reproducer instead of checking
+dnl binutils version string. More details, including ASM dumps and debug here:
+dnl   GCC: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90028
+dnl The checking of binutils funcationality instead of LD version is similar
+dnl to as how DPDK proposes to solve this issue:
+dnl   http://patches.dpdk.org/patch/71723/
+AC_DEFUN([OVS_CHECK_BINUTILS_AVX512],
   [AC_CACHE_CHECK(
-    [for sphinx],
-    [ovs_cv_sphinx],
-    [if type sphinx-build >/dev/null 2>&1; then
-       ovs_cv_sphinx=yes
+    [binutils avx512 assembler checks passing],
+    [ovs_cv_binutils_avx512_good],
+    [dnl Assemble a short snippet to test for issue in "build-aux" dir:
+     mkdir -p build-aux
+     OBJFILE=build-aux/binutils_avx512_check.o
+     GATHER_PARAMS='0x8(,%ymm1,1),%ymm0{%k2}'
+     echo "vpgatherqq $GATHER_PARAMS" | as --64 -o $OBJFILE -
+     if ($CC -dumpmachine | grep x86_64) >/dev/null 2>&1; then
+       if (objdump -d  --no-show-raw-insn $OBJFILE | grep -q $GATHER_PARAMS) >/dev/null 2>&1; then
+         ovs_cv_binutils_avx512_good=yes
+         CFLAGS="$CFLAGS -DHAVE_LD_AVX512_GOOD"
+       else
+         ovs_cv_binutils_avx512_good=no
+         dnl Explicitly disallow avx512f to stop compiler auto-vectorizing
+         dnl and causing zmm usage with buggy binutils versions.
+         CFLAGS="$CFLAGS -mno-avx512f"
+       fi
      else
-       ovs_cv_sphinx=no
+       dnl non x86_64 architectures don't have avx512, so not affected
+       ovs_cv_binutils_avx512_good=no
      fi])
-   AM_CONDITIONAL([HAVE_SPHINX], [test "$ovs_cv_sphinx" = yes])])
+     rm $OBJFILE
+   AM_CONDITIONAL([HAVE_LD_AVX512_GOOD],
+                  [test "$ovs_cv_binutils_avx512_good" = yes])])
 
 dnl Checks for dot.
 AC_DEFUN([OVS_CHECK_DOT],
@@ -691,10 +652,22 @@ AC_DEFUN([OVS_CHECK_CXX],
 
 dnl Checks for unbound library.
 AC_DEFUN([OVS_CHECK_UNBOUND],
-  [AC_CHECK_LIB(unbound, ub_ctx_create, [HAVE_UNBOUND=yes])
+  [AC_CHECK_LIB(unbound, ub_ctx_create, [HAVE_UNBOUND=yes], [HAVE_UNBOUND=no])
    if test "$HAVE_UNBOUND" = yes; then
      AC_DEFINE([HAVE_UNBOUND], [1], [Define to 1 if unbound is detected.])
      LIBS="$LIBS -lunbound"
    fi
    AM_CONDITIONAL([HAVE_UNBOUND], [test "$HAVE_UNBOUND" = yes])
    AC_SUBST([HAVE_UNBOUND])])
+
+dnl Checks for libunwind.
+AC_DEFUN([OVS_CHECK_UNWIND],
+  [AC_CHECK_LIB([unwind], [unw_backtrace],
+   [AC_CHECK_HEADERS([libunwind.h], [HAVE_UNWIND=yes], [HAVE_UNWIND=no])],
+   [HAVE_UNWIND=no])
+   if test "$HAVE_UNWIND" = yes; then
+     AC_DEFINE([HAVE_UNWIND], [1], [Define to 1 if unwind is detected.])
+     LIBS="$LIBS -lunwind"
+   fi
+   AM_CONDITIONAL([HAVE_UNWIND], [test "$HAVE_UNWIND" = yes])
+   AC_SUBST([HAVE_UNWIND])])

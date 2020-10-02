@@ -988,7 +988,7 @@ sflow_read_set_action(const struct nlattr *attr,
             /* Do not handle multi-encap for now. */
             sflow_actions->tunnel_err = true;
         } else {
-            if (odp_tun_key_from_attr(attr, &sflow_actions->tunnel)
+            if (odp_tun_key_from_attr(attr, &sflow_actions->tunnel, NULL)
                 == ODP_FIT_ERROR) {
                 /* Tunnel parsing error. */
                 sflow_actions->tunnel_err = true;
@@ -1026,7 +1026,7 @@ sflow_read_set_action(const struct nlattr *attr,
                 sflow_actions->tunnel.ip_tos = key->ipv4_tos;
             }
             if (key->ipv4_ttl) {
-                sflow_actions->tunnel.ip_tos = key->ipv4_ttl;
+                sflow_actions->tunnel.ip_ttl = key->ipv4_ttl;
             }
         }
         break;
@@ -1055,6 +1055,7 @@ sflow_read_set_action(const struct nlattr *attr,
     case OVS_KEY_ATTR_ICMPV6:
     case OVS_KEY_ATTR_ARP:
     case OVS_KEY_ATTR_ND:
+    case OVS_KEY_ATTR_ND_EXTENSIONS:
     case OVS_KEY_ATTR_CT_STATE:
     case OVS_KEY_ATTR_CT_ZONE:
     case OVS_KEY_ATTR_CT_MARK:
@@ -1174,8 +1175,9 @@ dpif_sflow_read_actions(const struct flow *flow,
         case OVS_ACTION_ATTR_RECIRC:
         case OVS_ACTION_ATTR_HASH:
         case OVS_ACTION_ATTR_CT:
-    case OVS_ACTION_ATTR_CT_CLEAR:
+        case OVS_ACTION_ATTR_CT_CLEAR:
         case OVS_ACTION_ATTR_METER:
+        case OVS_ACTION_ATTR_LB_OUTPUT:
             break;
 
         case OVS_ACTION_ATTR_SET_MASKED:
@@ -1222,6 +1224,8 @@ dpif_sflow_read_actions(const struct flow *flow,
         case OVS_ACTION_ATTR_PUSH_NSH:
         case OVS_ACTION_ATTR_POP_NSH:
         case OVS_ACTION_ATTR_UNSPEC:
+        case OVS_ACTION_ATTR_CHECK_PKT_LEN:
+        case OVS_ACTION_ATTR_DROP:
         case __OVS_ACTION_ATTR_MAX:
         default:
             break;

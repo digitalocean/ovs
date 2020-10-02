@@ -143,6 +143,9 @@ struct ovs_vport_stats {
 /* Allow datapath to associate multiple Netlink PIDs to each vport */
 #define OVS_DP_F_VPORT_PIDS	(1 << 1)
 
+/* Allow tc offload recirc sharing */
+#define OVS_DP_F_TC_RECIRC_SHARING  (1 << 2)
+
 /* Fixed logical ports. */
 #define OVSP_LOCAL      ((__u32)0)
 
@@ -210,6 +213,7 @@ enum ovs_packet_attr {
 				       error logging should be suppressed. */
 	OVS_PACKET_ATTR_MRU,	    /* Maximum received IP fragment size. */
 	OVS_PACKET_ATTR_LEN,		/* Packet size before truncation. */
+	OVS_PACKET_ATTR_HASH,		/* Packet hash. */
 	__OVS_PACKET_ATTR_MAX
 };
 
@@ -241,6 +245,7 @@ enum ovs_vport_type {
 	OVS_VPORT_TYPE_ERSPAN = 107, /* ERSPAN tunnel. */
 	OVS_VPORT_TYPE_IP6ERSPAN = 108, /* ERSPAN tunnel. */
 	OVS_VPORT_TYPE_IP6GRE = 109,
+	OVS_VPORT_TYPE_GTPU = 110,
 	__OVS_VPORT_TYPE_MAX
 };
 
@@ -375,6 +380,7 @@ enum ovs_key_attr {
 #ifndef __KERNEL__
 	/* Only used within userspace data path. */
 	OVS_KEY_ATTR_PACKET_TYPE,  /* be32 packet type */
+	OVS_KEY_ATTR_ND_EXTENSIONS, /* struct ovs_key_nd_extensions */
 #endif
 
 	__OVS_KEY_ATTR_MAX
@@ -399,10 +405,33 @@ enum ovs_tunnel_key_attr {
 	OVS_TUNNEL_KEY_ATTR_IPV6_DST,		/* struct in6_addr dst IPv6 address. */
 	OVS_TUNNEL_KEY_ATTR_PAD,
 	OVS_TUNNEL_KEY_ATTR_ERSPAN_OPTS,	/* struct erspan_metadata */
+	OVS_TUNNEL_KEY_ATTR_GTPU_OPTS,		/* struct gtpu_metadata */
 	__OVS_TUNNEL_KEY_ATTR_MAX
 };
 
 #define OVS_TUNNEL_KEY_ATTR_MAX (__OVS_TUNNEL_KEY_ATTR_MAX - 1)
+
+/**
+ * enum xlate_error -  Different types of error during translation
+ */
+
+#ifndef __KERNEL__
+enum xlate_error {
+	XLATE_OK = 0,
+	XLATE_BRIDGE_NOT_FOUND,
+	XLATE_RECURSION_TOO_DEEP,
+	XLATE_TOO_MANY_RESUBMITS,
+	XLATE_STACK_TOO_DEEP,
+	XLATE_NO_RECIRCULATION_CONTEXT,
+	XLATE_RECIRCULATION_CONFLICT,
+	XLATE_TOO_MANY_MPLS_LABELS,
+	XLATE_INVALID_TUNNEL_METADATA,
+	XLATE_UNSUPPORTED_PACKET_TYPE,
+	XLATE_CONGESTION_DROP,
+	XLATE_FORWARDING_DISABLED,
+	XLATE_MAX,
+};
+#endif
 
 /**
  * enum ovs_frag_type - IPv4 and IPv6 fragment type
@@ -488,6 +517,13 @@ struct ovs_key_nd {
 	__u8	nd_sll[ETH_ALEN];
 	__u8	nd_tll[ETH_ALEN];
 };
+
+#ifndef __KERNEL__
+struct ovs_key_nd_extensions {
+    __be32  nd_reserved;
+    __u8    nd_options_type;
+};
+#endif
 
 #define OVS_CT_LABELS_LEN_32	4
 #define OVS_CT_LABELS_LEN	(OVS_CT_LABELS_LEN_32 * sizeof(__u32))
@@ -793,6 +829,7 @@ struct ovs_action_push_tnl {
  * be received on NFNLGRP_CONNTRACK_NEW and NFNLGRP_CONNTRACK_DESTROY groups,
  * respectively.  Remaining bits control the changes for which an event is
  * delivered on the NFNLGRP_CONNTRACK_UPDATE group.
+ * @OVS_CT_ATTR_TIMEOUT: Variable length string defining conntrack timeout.
  */
 enum ovs_ct_attr {
 	OVS_CT_ATTR_UNSPEC,
@@ -805,6 +842,9 @@ enum ovs_ct_attr {
 	OVS_CT_ATTR_NAT,        /* Nested OVS_NAT_ATTR_* */
 	OVS_CT_ATTR_FORCE_COMMIT,  /* No argument */
 	OVS_CT_ATTR_EVENTMASK,  /* u32 mask of IPCT_* events. */
+	OVS_CT_ATTR_TIMEOUT,    /* Associate timeout with this connection for
+				 * fine-grain timeout tuning. */
+
 	__OVS_CT_ATTR_MAX
 };
 
@@ -854,6 +894,41 @@ enum ovs_nat_attr {
 };
 
 #define OVS_NAT_ATTR_MAX (__OVS_NAT_ATTR_MAX - 1)
+
+/*
+ * enum ovs_check_pkt_len_attr - Attributes for %OVS_ACTION_ATTR_CHECK_PKT_LEN.
+ *
+ * @OVS_CHECK_PKT_LEN_ATTR_PKT_LEN: u16 Packet length to check for.
+ * @OVS_CHECK_PKT_LEN_ATTR_USERSPACE_COND: u8 comparison condition to send
+ * the packet to userspace. One of OVS_CHECK_PKT_LEN_COND_*.
+ * @OVS_CHECK_PKT_LEN_ATTR_USERPACE - Nested OVS_USERSPACE_ATTR_* actions.
+ */
+enum ovs_check_pkt_len_attr {
+	OVS_CHECK_PKT_LEN_ATTR_UNSPEC,
+	OVS_CHECK_PKT_LEN_ATTR_PKT_LEN,
+	OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_GREATER,
+	OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_LESS_EQUAL,
+	__OVS_CHECK_PKT_LEN_ATTR_MAX,
+
+#ifdef __KERNEL__
+	OVS_CHECK_PKT_LEN_ATTR_ARG          /* struct check_pkt_len_arg  */
+#endif
+};
+
+#define OVS_CHECK_PKT_LEN_ATTR_MAX (__OVS_CHECK_PKT_LEN_ATTR_MAX - 1)
+
+#ifdef __KERNEL__
+struct check_pkt_len_arg {
+        u16 pkt_len;    /* Same value as OVS_CHECK_PKT_LEN_ATTR_PKT_LEN'. */
+        bool exec_for_greater;  /* When true, actions in IF_GREATE will
+                                 * not change flow keys. False otherwise.
+                                 */
+        bool exec_for_lesser_equal; /* When true, actions in IF_LESS_EQUAL
+                                     * will not change flow keys. False
+                                     * otherwise.
+                                     */
+};
+#endif
 
 /**
  * enum ovs_action_attr - Action types.
@@ -911,6 +986,10 @@ enum ovs_nat_attr {
  * packet, or modify the packet (e.g., change the DSCP field).
  * @OVS_ACTION_ATTR_CLONE: make a copy of the packet and execute a list of
  * actions without affecting the original packet and key.
+ * @OVS_ACTION_ATTR_CHECK_PKT_LEN: Check the packet length and execute a set
+ * of actions if greater than the specified packet length, else execute
+ * another set of actions.
+ * @OVS_ACTION_ATTR_DROP: Explicit drop action.
  */
 
 enum ovs_action_attr {
@@ -938,10 +1017,13 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_POP_NSH,      /* No argument. */
 	OVS_ACTION_ATTR_METER,        /* u32 meter number. */
 	OVS_ACTION_ATTR_CLONE,        /* Nested OVS_CLONE_ATTR_*.  */
+	OVS_ACTION_ATTR_CHECK_PKT_LEN, /* Nested OVS_CHECK_PKT_LEN_ATTR_*. */
 
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
+	OVS_ACTION_ATTR_DROP,          /* u32 xlate_error. */
+	OVS_ACTION_ATTR_LB_OUTPUT,     /* u32 bond-id. */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */

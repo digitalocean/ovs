@@ -524,6 +524,14 @@ extern unsigned ofproto_flow_limit;
  * on system load and other factors. This variable is subject to change. */
 extern unsigned ofproto_max_idle;
 
+/* Maximum timeout (in ms) for revalidator timer.
+ * Revalidator timeout is a minimum of max_idle and max_revalidator values. */
+extern unsigned ofproto_max_revalidator;
+
+/* Minimum pps that flow must have in order to be revalidated when revalidation
+ * duration exceeds half of max-revalidator config variable. */
+extern unsigned ofproto_min_revalidate_pps;
+
 /* Number of upcall handler and revalidator threads. Only affects the
  * ofproto-dpif implementation. */
 extern size_t n_handlers, n_revalidators;
@@ -578,6 +586,13 @@ struct ofgroup {
     struct ofputil_group_props props;
 
     struct rule_collection rules OVS_GUARDED;   /* Referring rules. */
+};
+
+struct pkt_stats {
+    uint64_t n_packets;
+    uint64_t n_bytes;
+    uint64_t n_offload_packets; /* n_offload_packets are a subset n_packets */
+    uint64_t n_offload_bytes;   /* n_offload_bytes are a subset of n_bytes */
 };
 
 struct ofgroup *ofproto_group_lookup(const struct ofproto *ofproto,
@@ -1076,6 +1091,17 @@ struct ofproto_class {
     int (*port_get_stats)(const struct ofport *port,
                           struct netdev_stats *stats);
 
+    /* Get status of the virtual port (ex. tunnel, patch).
+     *
+     * Returns '0' if 'port' is not a virtual port or has no errors.
+     * Otherwise, stores the error string in '*errp' and returns positive errno
+     * value. The caller is responsible for freeing '*errp' (with free()).
+     *
+     * This function may be a null pointer if the ofproto implementation does
+     * not support any virtual ports or their states.
+     */
+    int (*vport_get_status)(const struct ofport *port, char **errp);
+
     /* Port iteration functions.
      *
      * The client might not be entirely in control of the ports within an
@@ -1128,12 +1154,12 @@ struct ofproto_class {
      *         if (error) {
      *             break;
      *         }
-     *         // Do something with 'port' here (without modifying or freeing
-     *         // any of its data).
+     *         ...Do something with 'port' here (without modifying or freeing
+     *            any of its data)...
      *     }
      *     ofproto->ofproto_class->port_dump_done(ofproto, state);
      * }
-     * // 'error' is now EOF (success) or a positive errno value (failure).
+     * ...'error' is now EOF (success) or a positive errno value (failure)...
      */
     int (*port_dump_start)(const struct ofproto *ofproto, void **statep);
     int (*port_dump_next)(const struct ofproto *ofproto, void *state,
@@ -1318,8 +1344,8 @@ struct ofproto_class {
     struct rule *(*rule_alloc)(void);
     enum ofperr (*rule_construct)(struct rule *rule)
         /* OVS_REQUIRES(ofproto_mutex) */;
-    void (*rule_insert)(struct rule *rule, struct rule *old_rule,
-                        bool forward_counts)
+    enum ofperr (*rule_insert)(struct rule *rule, struct rule *old_rule,
+                               bool forward_counts)
         /* OVS_REQUIRES(ofproto_mutex) */;
     void (*rule_delete)(struct rule *rule) /* OVS_REQUIRES(ofproto_mutex) */;
     void (*rule_destruct)(struct rule *rule);
@@ -1329,8 +1355,8 @@ struct ofproto_class {
      * matched it in '*packet_count' and the number of bytes in those packets
      * in '*byte_count'.  UINT64_MAX indicates that the packet count or byte
      * count is unknown. */
-    void (*rule_get_stats)(struct rule *rule, uint64_t *packet_count,
-                           uint64_t *byte_count, long long int *used)
+    void (*rule_get_stats)(struct rule *rule, struct pkt_stats *stats,
+                           long long int *used)
         /* OVS_EXCLUDED(ofproto_mutex) */;
 
     /* Translates actions in 'opo->ofpacts', for 'opo->packet' in flow tables
@@ -1357,9 +1383,15 @@ struct ofproto_class {
      * packet_xlate_revert() calls have to be made in reverse order. */
     void (*packet_xlate_revert)(struct ofproto *, struct ofproto_packet_out *);
 
-    /* Executes the datapath actions, translation side-effects, and stats as
-     * produced by ->packet_xlate().  The caller retains ownership of 'opo'.
-     */
+    /* Translates side-effects, and stats as produced by ->packet_xlate().
+     * Prepares to execute datapath actions.  The caller retains ownership
+     * of 'opo'. */
+    void (*packet_execute_prepare)(struct ofproto *,
+                                   struct ofproto_packet_out *opo);
+
+    /* Executes the datapath actions.  The caller retains ownership of 'opo'.
+     * Should be called after successful packet_execute_prepare().
+     * No-op if called after packet_xlate_revert(). */
     void (*packet_execute)(struct ofproto *, struct ofproto_packet_out *opo);
 
     /* Changes the OpenFlow IP fragment handling policy to 'frag_handling',
@@ -1848,6 +1880,9 @@ struct ofproto_class {
      */
     const char *(*get_datapath_version)(const struct ofproto *);
 
+    /* Get capabilities of the datapath type 'dp_type'. */
+    void (*get_datapath_cap)(const char *dp_type, struct smap *caps);
+
     /* Pass custom configuration options to the 'type' datapath.
      *
      * This function should be NULL if an implementation does not support it.
@@ -1861,6 +1896,15 @@ struct ofproto_class {
     /* Flushes the connection tracking tables. If 'zone' is not NULL,
      * only deletes connections in '*zone'. */
     void (*ct_flush)(const struct ofproto *, const uint16_t *zone);
+
+    /* Sets conntrack timeout policy specified by 'timeout_policy' to 'zone'
+     * in datapath type 'dp_type'. */
+    void (*ct_set_zone_timeout_policy)(const char *dp_type, uint16_t zone,
+                                       struct simap *timeout_policy);
+
+    /* Deletes the timeout policy associated with 'zone' in datapath type
+     * 'dp_type'. */
+    void (*ct_del_zone_timeout_policy)(const char *dp_type, uint16_t zone);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;
@@ -1973,7 +2017,7 @@ enum ofperr ofproto_flow_mod_learn_start(struct ofproto_flow_mod *ofm)
     OVS_REQUIRES(ofproto_mutex);
 void ofproto_flow_mod_learn_revert(struct ofproto_flow_mod *ofm)
     OVS_REQUIRES(ofproto_mutex);
-void ofproto_flow_mod_learn_finish(struct ofproto_flow_mod *ofm,
+enum ofperr ofproto_flow_mod_learn_finish(struct ofproto_flow_mod *ofm,
                                           struct ofproto *orig_ofproto)
     OVS_REQUIRES(ofproto_mutex);
 void ofproto_add_flow(struct ofproto *, const struct match *, int priority,

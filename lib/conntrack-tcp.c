@@ -39,21 +39,27 @@
 #include <config.h>
 
 #include "conntrack-private.h"
+#include "conntrack-tp.h"
+#include "coverage.h"
 #include "ct-dpif.h"
 #include "dp-packet.h"
 #include "util.h"
 
+COVERAGE_DEFINE(conntrack_tcp_seq_chk_bypass);
+COVERAGE_DEFINE(conntrack_tcp_seq_chk_failed);
+COVERAGE_DEFINE(conntrack_invalid_tcp_flags);
+
 struct tcp_peer {
-    enum ct_dpif_tcp_state state;
     uint32_t               seqlo;          /* Max sequence number sent     */
     uint32_t               seqhi;          /* Max the other end ACKd + win */
     uint16_t               max_win;        /* largest window (pre scaling) */
     uint8_t                wscale;         /* window scaling factor        */
+    enum ct_dpif_tcp_state state;
 };
 
 struct conn_tcp {
     struct conn up;
-    struct tcp_peer peer[2];
+    struct tcp_peer peer[2]; /* 'conn' lock protected. */
 };
 
 enum {
@@ -144,8 +150,18 @@ tcp_get_wscale(const struct tcp_header *tcp)
     return wscale;
 }
 
+static bool
+tcp_bypass_seq_chk(struct conntrack *ct)
+{
+    if (!conntrack_get_tcp_seq_chk(ct)) {
+        COVERAGE_INC(conntrack_tcp_seq_chk_bypass);
+        return true;
+    }
+    return false;
+}
+
 static enum ct_update_res
-tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
+tcp_conn_update(struct conntrack *ct, struct conn *conn_,
                 struct dp_packet *pkt, bool reply, long long now)
 {
     struct conn_tcp *conn = conn_tcp_cast(conn_);
@@ -162,14 +178,20 @@ tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
     uint32_t p_len = tcp_payload_length(pkt);
 
     if (tcp_invalid_flags(tcp_flags)) {
+        COVERAGE_INC(conntrack_invalid_tcp_flags);
         return CT_UPDATE_INVALID;
     }
 
-    if (((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN)
-        && dst->state >= CT_DPIF_TCPS_FIN_WAIT_2
-        && src->state >= CT_DPIF_TCPS_FIN_WAIT_2) {
-        src->state = dst->state = CT_DPIF_TCPS_CLOSED;
-        return CT_UPDATE_NEW;
+    if ((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) {
+        if (dst->state >= CT_DPIF_TCPS_FIN_WAIT_2
+            && src->state >= CT_DPIF_TCPS_FIN_WAIT_2) {
+            src->state = dst->state = CT_DPIF_TCPS_CLOSED;
+            return CT_UPDATE_NEW;
+        } else if (src->state <= CT_DPIF_TCPS_SYN_SENT) {
+            src->state = CT_DPIF_TCPS_SYN_SENT;
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_FIRST_PACKET, now);
+            return CT_UPDATE_VALID_NEW;
+        }
     }
 
     if (src->wscale & CT_WSCALE_FLAG
@@ -272,7 +294,7 @@ tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
 
     int ackskew = check_ackskew ? dst->seqlo - ack : 0;
 #define MAXACKWINDOW (0xffff + 1500)    /* 1500 is an arbitrary fudge factor */
-    if (SEQ_GEQ(src->seqhi, end)
+    if ((SEQ_GEQ(src->seqhi, end)
         /* Last octet inside other's window space */
         && SEQ_GEQ(seq, src->seqlo - (dst->max_win << dws))
         /* Retrans: not more than one window back */
@@ -281,7 +303,8 @@ tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
         && (ackskew <= (MAXACKWINDOW << sws))
         /* Acking not more than one window forward */
         && ((tcp_flags & TCP_RST) == 0 || orig_seq == src->seqlo
-            || (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo))) {
+            || (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo)))
+        || tcp_bypass_seq_chk(ct)) {
         /* Require an exact/+1 sequence match on resets when possible */
 
         /* update max window */
@@ -317,18 +340,18 @@ tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
 
         if (src->state >= CT_DPIF_TCPS_FIN_WAIT_2
             && dst->state >= CT_DPIF_TCPS_FIN_WAIT_2) {
-            conn_update_expiration(ctb, &conn->up, CT_TM_TCP_CLOSED, now);
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_CLOSED, now);
         } else if (src->state >= CT_DPIF_TCPS_CLOSING
                    && dst->state >= CT_DPIF_TCPS_CLOSING) {
-            conn_update_expiration(ctb, &conn->up, CT_TM_TCP_FIN_WAIT, now);
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_FIN_WAIT, now);
         } else if (src->state < CT_DPIF_TCPS_ESTABLISHED
                    || dst->state < CT_DPIF_TCPS_ESTABLISHED) {
-            conn_update_expiration(ctb, &conn->up, CT_TM_TCP_OPENING, now);
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_OPENING, now);
         } else if (src->state >= CT_DPIF_TCPS_CLOSING
                    || dst->state >= CT_DPIF_TCPS_CLOSING) {
-            conn_update_expiration(ctb, &conn->up, CT_TM_TCP_CLOSING, now);
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_CLOSING, now);
         } else {
-            conn_update_expiration(ctb, &conn->up, CT_TM_TCP_ESTABLISHED, now);
+            conn_update_expiration(ct, &conn->up, CT_TM_TCP_ESTABLISHED, now);
         }
     } else if ((dst->state < CT_DPIF_TCPS_SYN_SENT
                 || dst->state >= CT_DPIF_TCPS_FIN_WAIT_2
@@ -385,6 +408,7 @@ tcp_conn_update(struct conn *conn_, struct conntrack_bucket *ctb,
             src->state = dst->state = CT_DPIF_TCPS_TIME_WAIT;
         }
     } else {
+        COVERAGE_INC(conntrack_tcp_seq_chk_failed);
         return CT_UPDATE_INVALID;
     }
 
@@ -412,8 +436,8 @@ tcp_valid_new(struct dp_packet *pkt)
 }
 
 static struct conn *
-tcp_new_conn(struct conntrack_bucket *ctb, struct dp_packet *pkt,
-             long long now)
+tcp_new_conn(struct conntrack *ct, struct dp_packet *pkt, long long now,
+             uint32_t tp_id)
 {
     struct conn_tcp* newconn = NULL;
     struct tcp_header *tcp = dp_packet_l4(pkt);
@@ -449,8 +473,8 @@ tcp_new_conn(struct conntrack_bucket *ctb, struct dp_packet *pkt,
     src->state = CT_DPIF_TCPS_SYN_SENT;
     dst->state = CT_DPIF_TCPS_CLOSED;
 
-    conn_init_expiration(ctb, &newconn->up, CT_TM_TCP_FIRST_PACKET,
-                         now);
+    newconn->up.tp_id = tp_id;
+    conn_init_expiration(ct, &newconn->up, CT_TM_TCP_FIRST_PACKET, now);
 
     return &newconn->up;
 }

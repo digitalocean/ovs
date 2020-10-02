@@ -26,10 +26,12 @@
 /* Concurrent Priority Vector
  * ==========================
  *
- * Concurrent priority vector holds non-NULL pointers to objects in an
- * increasing priority order and allows readers to traverse the vector without
- * being concerned about writers modifying the vector as they are traversing
- * it.
+ * Concurrent priority vector holds non-NULL pointers to objects in a
+ * nondecreasing priority order and allows readers to traverse the vector
+ * without being concerned about writers modifying the vector as they are
+ * traversing it.
+ *
+ * Multiple elements of a given priority are allowed.
  *
  * The priority order is maintained as a linear vector of elements to allow
  * for efficient memory prefetching.
@@ -54,6 +56,13 @@
  * 'temp' may contain NULL pointers and it may be in unsorted order.  It is
  * sorted before it is published at 'impl', which also removes the NULLs from
  * the published vector.
+ *
+ * Since the vector is RCU protected, the entry destruction after removal must
+ * be RCU postponed.  Also, if it happens before changes published with
+ * pvector_publish(), destruction must be double postponed, i.e., the second
+ * ovsrcu_postpone() call to destruct the entry should be called from the first
+ * RCU callback.  This is required because readers could still obtain the
+ * unmodified vector until updated version is published.
  */
 
 struct pvector_entry {
@@ -62,8 +71,8 @@ struct pvector_entry {
 };
 
 struct pvector_impl {
-    size_t size;       /* Number of entries in the vector. */
-    size_t allocated;  /* Number of allocated entries. */
+    atomic_size_t size;   /* Number of entries in the vector. */
+    size_t allocated;     /* Number of allocated entries. */
     struct pvector_entry vector[];
 };
 
@@ -174,12 +183,17 @@ pvector_cursor_init(const struct pvector *pvec,
 {
     const struct pvector_impl *impl;
     struct pvector_cursor cursor;
+    size_t size;
 
     impl = ovsrcu_get(struct pvector_impl *, &pvec->impl);
 
-    ovs_prefetch_range(impl->vector, impl->size * sizeof impl->vector[0]);
+    /* Use memory_order_acquire to ensure entry access can not be
+     * reordered to happen before size read. */
+    atomic_read_explicit(&CONST_CAST(struct pvector_impl *, impl)->size,
+                         &size, memory_order_acquire);
+    ovs_prefetch_range(impl->vector, size * sizeof impl->vector[0]);
 
-    cursor.size = impl->size;
+    cursor.size = size;
     cursor.vector = impl->vector;
     cursor.entry_idx = -1;
 

@@ -32,7 +32,7 @@
 # rpmbuild -bb --without check xenserver/openvswitch-xen.spec
 
 %if %{?openvswitch_version:0}%{!?openvswitch_version:1}
-%define openvswitch_version 2.11.3
+%define openvswitch_version 2.14.0
 %endif
 
 %if %{?kernel_uname:1}%{!?kernel_uname:0}
@@ -457,11 +457,9 @@ exit 0
 /usr/share/openvswitch/scripts/ovs-ctl
 /usr/share/openvswitch/scripts/ovs-lib
 /usr/share/openvswitch/scripts/ovs-vtep
-/usr/share/openvswitch/scripts/ovndb-servers.ocf
 /usr/share/openvswitch/vswitch.ovsschema
 /usr/share/openvswitch/vtep.ovsschema
 /usr/sbin/ovs-bugtool
-/usr/sbin/ovs-vlan-bug-workaround
 /usr/sbin/ovs-vswitchd
 /usr/sbin/ovsdb-server
 /usr/bin/ovs-appctl
@@ -495,7 +493,6 @@ exit 0
 /usr/share/man/man8/ovs-parse-backtrace.8.gz
 /usr/share/man/man1/ovs-pcap.1.gz
 /usr/share/man/man1/ovs-tcpundump.1.gz
-/usr/share/man/man8/ovs-vlan-bug-workaround.8.gz
 /usr/share/man/man8/ovs-vlan-test.8.gz
 /usr/share/man/man8/ovs-vsctl.8.gz
 /usr/share/man/man8/ovs-vswitchd.8.gz
@@ -508,12 +505,6 @@ exit 0
 %exclude /usr/share/openvswitch/python/*.py[co]
 %exclude /usr/share/openvswitch/python/ovs/*.py[co]
 %exclude /usr/share/openvswitch/python/ovs/db/*.py[co]
-%exclude /usr/bin/ovn-*
-%exclude /usr/share/man/man5/ovn-*
-%exclude /usr/share/man/man7/ovn-*
-%exclude /usr/share/man/man8/ovn-*
-%exclude /usr/share/openvswitch/ovn-*
-%exclude /usr/share/openvswitch/scripts/ovn-*
 
 %files %{module_package}
 /lib/modules/%{xen_version}/extra/openvswitch/openvswitch.ko

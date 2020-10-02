@@ -453,9 +453,9 @@ value0
 key0=othervalue
 
 
-{"key1"="value1"}
-{"key2"="value2", "key3"="value3"}
-{"key4"="value4"}
+{key1=value1}
+{key2=value2, key3=value3}
+{key4=value4}
 ])
 AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
   [br-get-external-id a],
@@ -463,9 +463,9 @@ AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
   [get interface a2 external-ids],
   [get interface a3 external-ids])], [0],
 [
-{"key1"="value1"}
-{"key2"="value2", "key3"="value3"}
-{"key4"="value4"}
+{key1=value1}
+{key2=value2, key3=value3}
+{key4=value4}
 ])
 CHECK_BRIDGES([a, a, 0])
 CHECK_PORTS([a], [a1], [bond0])
@@ -503,6 +503,152 @@ tcp:1.2.3.4
 ])
 OVS_VSCTL_CLEANUP
 AT_CLEANUP
+
+
+AT_SETUP([fail-mode])
+AT_KEYWORDS([fail-mode ovs-vsctl])
+OVS_VSCTL_SETUP
+AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
+  [add-br br0],
+
+  [get-fail-mode br0],
+  [set-fail-mode br0 secure],
+  [get-fail-mode br0],
+
+  [del-fail-mode br0],
+  [get-fail-mode br0],
+
+  [set-fail-mode br0 standalone],
+  [get-fail-mode br0])], [0], [
+
+
+secure
+
+
+
+standalone
+])
+OVS_VSCTL_CLEANUP
+AT_CLEANUP
+
+
+# check if emer-reset reset switch to known good state
+# test is implemented by creating switch entities and checks if after applying
+# emer-reset these entities are deleted
+AT_SETUP([emer-reset])
+AT_KEYWORDS([emer-reset ovs-vsctl])
+OVS_VSCTL_SETUP
+
+# define controllers, fail-mode, netflow, mirror
+AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
+   [add-br br0],
+   [add-port br0 eth0],
+   [add-port br0 eth1],
+   [set-controller br0 tcp:4.5.6.7],
+   [set-fail-mode br0 secure],
+   [set bridge br0 netflow=@nf],
+   [--id=@nf create netflow targets=3.4.5.6],
+   [set bridge br0 mirrors=@m],
+   [--id=@eth0 get port eth0],
+   [--id=@eth1 get port eth1],
+   [--id=@m create mirror name=mymirror select-dst-port=@eth0 select-src-port=@eth0 output-port=@eth1],
+   [set bridge br0 sflow=@sf],
+   [--id=@sf create sflow targets=1.2.3.4],
+   [set bridge br0 datapath-type=dummy other-config:datapath-id=1234 other-config:hwaddr="00:12:34:56:78:bb"],
+   [set bridge br0 ipfix=@fix],
+   [--id=@fix create ipfix targets=1.2.3.4],
+   [set bridge br0 flood_vlans=1],
+   [set bridge br0 datapath_id=2 datapath_version="alpha"],
+   [list bridge > configured_bridge.txt]
+   )], [0], [stdout])
+
+AT_CHECK(
+    [uuidfilt configured_bridge.txt],
+    [0],[[
+
+
+
+
+
+<0>
+
+
+
+<1>
+
+<2>
+
+
+<3>
+
+
+_uuid               : <4>
+auto_attach         : []
+controller          : [<5>]
+datapath_id         : "2"
+datapath_type       : dummy
+datapath_version    : alpha
+external_ids        : {}
+fail_mode           : secure
+flood_vlans         : [1]
+flow_tables         : {}
+ipfix               : <6>
+mcast_snooping_enable: false
+mirrors             : [<7>]
+name                : br0
+netflow             : <8>
+other_config        : {datapath-id="1234", hwaddr="00:12:34:56:78:bb"}
+ports               : [<9>, <10>, <11>]
+protocols           : []
+rstp_enable         : false
+rstp_status         : {}
+sflow               : <12>
+status              : {}
+stp_enable          : false
+]])
+
+
+# execute emer-reset
+AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
+   [emer-reset])], [0], [
+])
+
+# check if bridge was cleaned/reset
+AT_CHECK([RUN_OVS_VSCTL_TOGETHER(
+   [list bridge > cleaned_bridge.txt]
+   )], [0], [stdout])
+
+AT_CHECK(
+    [uuidfilt cleaned_bridge.txt],
+    [0],[[_uuid               : <0>
+auto_attach         : []
+controller          : []
+datapath_id         : "2"
+datapath_type       : dummy
+datapath_version    : alpha
+external_ids        : {}
+fail_mode           : []
+flood_vlans         : []
+flow_tables         : {}
+ipfix               : []
+mcast_snooping_enable: false
+mirrors             : []
+name                : br0
+netflow             : []
+other_config        : {hwaddr="00:12:34:56:78:bb"}
+ports               : [<1>, <2>, <3>]
+protocols           : []
+rstp_enable         : false
+rstp_status         : {}
+sflow               : []
+status              : {}
+stp_enable          : false
+]])
+
+OVS_VSCTL_CLEANUP
+AT_CLEANUP
+
+
 
 dnl ----------------------------------------------------------------------
 dnl OVS_VSCTL_SETUP_SIMPLE_FAKE_CONF([VLAN])
@@ -731,7 +877,7 @@ flow_tables         : {}
 ipfix               : []
 mcast_snooping_enable: false
 mirrors             : []
-name                : "br0"
+name                : br0
 netflow             : []
 other_config        : {}
 ports               : []
@@ -747,14 +893,14 @@ AT_CHECK(
   [RUN_OVS_VSCTL([--columns=fail_mode,name,datapath_type list bridge])],
   [0],
   [[fail_mode           : []
-name                : "br0"
+name                : br0
 datapath_type       : ""
 ]], [ignore])
 AT_CHECK(
   [RUN_OVS_VSCTL([--columns=fail_mode,name,datapath_type find bridge])],
   [0],
   [[fail_mode           : []
-name                : "br0"
+name                : br0
 datapath_type       : ""
 ]], [ignore])
 AT_CHECK([
@@ -766,8 +912,8 @@ AT_CHECK(
   [RUN_OVS_VSCTL([--columns=name find bridge datapath_type!=foo])], [0], [stdout],
   [ignore])
 AT_CHECK([sed -n '/./p' stdout | sort], [0],
-  [[name                : "br0"
-name                : "br2"
+  [[name                : br0
+name                : br2
 ]])
 AT_CHECK(
   [RUN_OVS_VSCTL(
@@ -805,6 +951,32 @@ AT_CHECK(
   [RUN_OVS_VSCTL([--if-exists remove netflow x targets '"1.2.3.4:567"'])])
 AT_CHECK(
   [RUN_OVS_VSCTL([--if-exists clear netflow x targets])])
+
+AT_CHECK([RUN_OVS_VSCTL([-- --id=@m create Datapath datapath_version=0 -- set Open_vSwitch . datapaths:"netdev"=@m])], [0], [stdout])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=1 icmp_first=1 icmp_reply=2])])
+AT_CHECK([RUN_OVS_VSCTL([--may-exist add-zone-tp netdev zone=1 icmp_first=1 icmp_reply=2])])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:1, Timeout Policies: icmp_first=1 icmp_reply=2
+])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=2 icmp_first=2 icmp_reply=3])])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:1, Timeout Policies: icmp_first=1 icmp_reply=2
+Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
+])
+AT_CHECK([RUN_OVS_VSCTL([del-zone-tp netdev zone=1])])
+AT_CHECK([RUN_OVS_VSCTL([--if-exists del-zone-tp netdev zone=1])])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
+])
+
+AT_CHECK(
+  [RUN_OVS_VSCTL_TOGETHER([--id=@n create CT_Zone external_ids:"test"="123"],
+                          [--id=@m create Datapath datapath_version=0 ct_zones:"10"=@n],
+                          [set Open_vSwitch . datapaths:"netdev"=@m])],
+  [0], [stdout])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:10, Timeout Policies: system default
+])
+
+AT_CHECK([RUN_OVS_VSCTL([-- --id=@m create Datapath datapath_version=0 'capabilities={recirc=true}' -- set Open_vSwitch . datapaths:"system"=@m])], [0], [stdout])
+AT_CHECK([RUN_OVS_VSCTL([list-dp-cap system])], [0], [recirc=true
+])
 OVS_VSCTL_CLEANUP
 AT_CLEANUP
 
@@ -848,6 +1020,9 @@ targets             : ["1.2.3.4:567"]
 AT_CHECK([RUN_OVS_VSCTL([list interx x])],
   [1], [], [ovs-vsctl: unknown table "interx"
 ])
+AT_CHECK([RUN_OVS_VSCTL([list c x])],
+  [1], [], [ovs-vsctl: "c" matches multiple table names: CT_Timeout_Policy, CT_Zone, Controller
+])
 AT_CHECK([RUN_OVS_VSCTL([list bridge x])],
   [1], [], [ovs-vsctl: no row "x" in table Bridge
 ])
@@ -855,7 +1030,7 @@ AT_CHECK([RUN_OVS_VSCTL([get bridge x datapath_id])],
   [1], [], [ovs-vsctl: no row "x" in table Bridge
 ])
 AT_CHECK([RUN_OVS_VSCTL([get bridge br0 d])],
-  [1], [], [ovs-vsctl: Bridge contains more than one column whose name matches "d"
+  [1], [], [ovs-vsctl: Bridge contains more than one column whose name matches "d": datapath_id, datapath_type, datapath_version
 ])
 AT_CHECK([RUN_OVS_VSCTL([get bridge br0 x])],
   [1], [], [ovs-vsctl: Bridge does not contain a column whose name matches "x"
@@ -890,10 +1065,10 @@ AT_CHECK([RUN_OVS_VSCTL([set bridge br0 flood_vlans=-1])],
 AT_CHECK([RUN_OVS_VSCTL([set bridge br0 flood_vlans=4096])],
   [1], [], [ovs-vsctl: constraint violation: 4096 is not in the valid range 0 to 4095 (inclusive)
 ])
-AT_CHECK([RUN_OVS_VSCTL([set c br1 'connection-mode=xyz'])],
+AT_CHECK([RUN_OVS_VSCTL([set controller br1 'connection-mode=xyz'])],
   [1], [], [[ovs-vsctl: constraint violation: xyz is not one of the allowed values ([in-band, out-of-band])
 ]])
-AT_CHECK([RUN_OVS_VSCTL([set c br1 connection-mode:x=y])],
+AT_CHECK([RUN_OVS_VSCTL([set controller br1 connection-mode:x=y])],
   [1], [], [ovs-vsctl: cannot specify key to set for non-map column connection_mode
 ])
 AT_CHECK([RUN_OVS_VSCTL([add bridge br1 datapath_id x y])],
@@ -929,6 +1104,28 @@ AT_CHECK([RUN_OVS_VSCTL([remove bridge br1 flood-vlans true])],
 AT_CHECK([RUN_OVS_VSCTL([clear bridge br1 name])],
   [1], [], [ovs-vsctl: cannot modify read-only column name in table Bridge
 ])
+
+AT_CHECK([RUN_OVS_VSCTL([-- --id=@m create Datapath datapath_version=0 -- set Open_vSwitch . datapaths:"netdev"=@m])], [0], [stdout])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdevxx zone=1 icmp_first=1 icmp_reply=2])],
+  [1], [], [ovs-vsctl: datapath netdevxx does not exist
+])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=2 icmp_first=2 icmp_reply=3])])
+AT_CHECK([RUN_OVS_VSCTL([add-zone-tp netdev zone=2 icmp_first=2 icmp_reply=3])],
+  [1], [], [ovs-vsctl: zone id 2 already exists
+])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
+])
+AT_CHECK([RUN_OVS_VSCTL([del-zone-tp netdev zone=11])],
+  [1], [], [ovs-vsctl: zone id 11 does not exist
+])
+AT_CHECK([RUN_OVS_VSCTL([list-zone-tp netdev])], [0], [Zone:2, Timeout Policies: icmp_first=2 icmp_reply=3
+])
+
+AT_CHECK([RUN_OVS_VSCTL([-- --id=@m create Datapath datapath_version=0 'capabilities={recirc=true}' -- set Open_vSwitch . datapaths:"system"=@m])], [0], [stdout])
+AT_CHECK([RUN_OVS_VSCTL([list-dp-cap nosystem])],
+  [1], [], [ovs-vsctl: datapath "nosystem" record not found
+])
+
 OVS_VSCTL_CLEANUP
 AT_CLEANUP
 
@@ -1142,9 +1339,9 @@ AT_CHECK(
 AT_CHECK(
   [sed -n -e '/uuid/p' -e '/name/p' -e '/mirrors/p' -e '/select/p' -e '/output/p' < stdout | uuidfilt], [0], [dnl
 [_uuid               : <0>
-name                : "eth0"
+name                : eth0
 _uuid               : <1>
-name                : "eth1"
+name                : eth1
 _uuid               : <2>
 name                : mymirror
 output_port         : <1>
@@ -1155,7 +1352,7 @@ select_src_port     : [<0>]
 select_vlan         : []
 _uuid               : <3>
 mirrors             : [<2>]
-name                : "br0"
+name                : br0
 ]])
 OVS_VSCTL_CLEANUP
 AT_CLEANUP
@@ -1214,7 +1411,7 @@ flow_tables         : {}
 ipfix               : []
 mcast_snooping_enable: false
 mirrors             : []
-name                : "br0"
+name                : br0
 netflow             : []
 other_config        : {}
 ports               : []
@@ -1357,7 +1554,7 @@ OVS_VSCTL_SETUP
 dnl First check that the database commands can refer to row by database UUID.
 AT_CHECK([RUN_OVS_VSCTL([add-br br0])])
 uuid=`[]RUN_OVS_VSCTL(get port br0 _uuid)`
-AT_CHECK([RUN_OVS_VSCTL([get port $uuid name])], [0], ["br0"
+AT_CHECK([RUN_OVS_VSCTL([get port $uuid name])], [0], [br0
 ])
 
 dnl Next check that, if a database row is given a name that has the same form
@@ -1418,6 +1615,26 @@ OVS_WAIT_UNTIL([test -e $PKIDIR/cacert.pem])
 # After bootstrap, the connection should be successful.
 AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem add-br br0], [0])
 AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:127.0.0.1:$SSL_PORT --private-key=$PKIDIR/vsctl-privkey.pem --certificate=$PKIDIR/vsctl-cert.pem --bootstrap-ca-cert=$PKIDIR/cacert.pem list-br], [0], [br0
+])
+
+OVS_VSCTL_CLEANUP
+AT_CLEANUP
+
+AT_SETUP([TLS server name indication (SNI)])
+AT_KEYWORDS([ovsdb server positive ssl tls sni])
+AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
+AT_SKIP_IF([test "$OPENSSL_SUPPORTS_SNI" = no])
+AT_SKIP_IF([test "$HAVE_UNBOUND" = no])
+OVSDB_INIT([conf.db])
+PKIDIR=$abs_top_builddir/tests
+AT_CHECK([ovsdb-server --log-file --detach --no-chdir --pidfile --private-key=$PKIDIR/testpki-privkey2.pem --certificate=$PKIDIR/testpki-cert2.pem --ca-cert=$PKIDIR/testpki-cacert.pem --remote=pssl:0:127.0.0.1 -vPATTERN:file:%m -vstream_ssl conf.db], [0], [ignore], [ignore])
+PARSE_LISTENING_PORT([ovsdb-server.log], [SSL_PORT])
+
+AT_CHECK([ovs-vsctl -t 5 --no-wait --db=ssl:localhost:$SSL_PORT --private-key=$PKIDIR/testpki-privkey.pem --certificate=$PKIDIR/testpki-cert.pem --bootstrap-ca-cert=$PKIDIR/testpki-cacert.pem add-br br0])
+
+AT_CAPTURE_FILE([ovsdb-server.log])
+AT_CHECK([grep "server name" ovsdb-server.log], [0],
+         [connection indicated server name localhost
 ])
 
 OVS_VSCTL_CLEANUP

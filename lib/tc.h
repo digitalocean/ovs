@@ -36,10 +36,26 @@
 #ifndef TC_H_MIN_INGRESS
 #define TC_H_MIN_INGRESS       0xFFF2U
 #endif
+#ifndef TC_H_MIN_EGRESS
+#define TC_H_MIN_EGRESS       0xFFF3U
+#endif
 
 #define TC_INGRESS_PARENT TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS)
+#define TC_EGRESS_PARENT TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_EGRESS)
 
 #define TC_POLICY_DEFAULT "none"
+
+enum tc_flower_reserved_prio {
+    TC_RESERVED_PRIORITY_NONE,
+    TC_RESERVED_PRIORITY_POLICE,
+    __TC_RESERVED_PRIORITY_MAX
+};
+#define TC_RESERVED_PRIORITY_MAX (__TC_RESERVED_PRIORITY_MAX -1)
+
+enum tc_qdisc_hook {
+    TC_INGRESS,
+    TC_EGRESS,
+};
 
 /* Returns tc handle 'major':'minor'. */
 static inline unsigned int
@@ -65,7 +81,8 @@ tc_get_minor(unsigned int handle)
 struct tcmsg *tc_make_request(int ifindex, int type,
                               unsigned int flags, struct ofpbuf *);
 int tc_transact(struct ofpbuf *request, struct ofpbuf **replyp);
-int tc_add_del_ingress_qdisc(int ifindex, bool add, uint32_t block_id);
+int tc_add_del_qdisc(int ifindex, bool add, uint32_t block_id,
+                     enum tc_qdisc_hook hook);
 
 struct tc_cookie {
     const void *data;
@@ -99,15 +116,30 @@ struct tc_flower_key {
     uint8_t ip_ttl;
     uint8_t ip_tos;
 
+    uint16_t ct_state;
+    uint16_t ct_zone;
+    uint32_t ct_mark;
+    ovs_u128 ct_label;
+
+    struct {
+        ovs_be32 spa;
+        ovs_be32 tpa;
+        struct eth_addr sha;
+        struct eth_addr tha;
+        uint8_t opcode;
+    } arp;
+
     struct {
         ovs_be32 ipv4_src;
         ovs_be32 ipv4_dst;
         uint8_t rewrite_ttl;
+        uint8_t rewrite_tos;
     } ipv4;
     struct {
         struct in6_addr ipv6_src;
         struct in6_addr ipv6_dst;
         uint8_t rewrite_hlimit;
+        uint8_t rewrite_tclass;
     } ipv6;
 
     struct {
@@ -134,11 +166,28 @@ enum tc_action_type {
     TC_ACT_PEDIT,
     TC_ACT_VLAN_POP,
     TC_ACT_VLAN_PUSH,
+    TC_ACT_MPLS_POP,
+    TC_ACT_MPLS_PUSH,
+    TC_ACT_MPLS_SET,
+    TC_ACT_GOTO,
+    TC_ACT_CT,
+};
+
+enum nat_type {
+    TC_NO_NAT = 0,
+    TC_NAT_SRC,
+    TC_NAT_DST,
+    TC_NAT_RESTORE,
 };
 
 struct tc_action {
     union {
-        int ifindex_out;
+        int chain;
+
+        struct {
+            int ifindex_out;
+            bool ingress;
+        } out;
 
         struct {
             ovs_be16 vlan_push_tpid;
@@ -147,6 +196,15 @@ struct tc_action {
         } vlan;
 
         struct {
+            ovs_be16 proto;
+            uint32_t label;
+            uint8_t tc;
+            uint8_t ttl;
+            uint8_t bos;
+        } mpls;
+
+        struct {
+            bool id_present;
             ovs_be64 id;
             ovs_be16 tp_src;
             ovs_be16 tp_dst;
@@ -163,6 +221,38 @@ struct tc_action {
             } ipv6;
             struct tun_metadata data;
         } encap;
+
+        struct {
+            uint16_t zone;
+            uint32_t mark;
+            uint32_t mark_mask;
+            ovs_u128 label;
+            ovs_u128 label_mask;
+            uint8_t nat_type;
+            struct {
+                uint8_t ip_family;
+
+                union {
+                    struct {
+                        ovs_be32 min;
+                        ovs_be32 max;
+                    } ipv4;
+                    struct {
+                        struct in6_addr min;
+                        struct in6_addr max;
+                    } ipv6;
+                };
+
+                struct {
+                    ovs_be16 min;
+                    ovs_be16 max;
+                } port;
+
+            } range;
+            bool clear;
+            bool force;
+            bool commit;
+        } ct;
      };
 
      enum tc_action_type type;
@@ -174,15 +264,60 @@ enum tc_offloaded_state {
     TC_OFFLOADED_STATE_NOT_IN_HW,
 };
 
-struct tc_flower {
-    uint32_t handle;
-    uint32_t prio;
+#define TCA_ACT_MAX_NUM 16
 
+struct tcf_id {
+    enum tc_qdisc_hook hook;
+    uint32_t block_id;
+    int ifindex;
+    uint32_t chain;
+    uint16_t prio;
+    uint32_t handle;
+};
+
+static inline struct tcf_id
+tc_make_tcf_id(int ifindex, uint32_t block_id, uint16_t prio,
+               enum tc_qdisc_hook hook)
+{
+    struct tcf_id id = {
+        .hook = hook,
+        .block_id = block_id,
+        .ifindex = ifindex,
+        .prio = prio,
+    };
+
+    return id;
+}
+
+static inline struct tcf_id
+tc_make_tcf_id_chain(int ifindex, uint32_t block_id, uint32_t chain,
+                     uint16_t prio, enum tc_qdisc_hook hook)
+{
+    struct tcf_id id = tc_make_tcf_id(ifindex, block_id, prio, hook);
+
+    id.chain = chain;
+
+    return id;
+}
+
+static inline bool
+is_tcf_id_eq(struct tcf_id *id1, struct tcf_id *id2)
+{
+    return id1->prio == id2->prio
+           && id1->handle == id2->handle
+           && id1->handle == id2->handle
+           && id1->hook == id2->hook
+           && id1->block_id == id2->block_id
+           && id1->ifindex == id2->ifindex
+           && id1->chain == id2->chain;
+}
+
+struct tc_flower {
     struct tc_flower_key key;
     struct tc_flower_key mask;
 
     int action_count;
-    struct tc_action actions[TCA_ACT_MAX_PRIO];
+    struct tc_action actions[TCA_ACT_MAX_NUM];
 
     struct ovs_flow_stats stats;
     uint64_t lastused;
@@ -211,15 +346,14 @@ BUILD_ASSERT_DECL(offsetof(struct tc_flower, rewrite)
                   + MEMBER_SIZEOF(struct tc_flower, rewrite)
                   + sizeof(uint32_t) - 2 < sizeof(struct tc_flower));
 
-int tc_replace_flower(int ifindex, uint16_t prio, uint32_t handle,
-                      struct tc_flower *flower, uint32_t block_id);
-int tc_del_filter(int ifindex, int prio, int handle, uint32_t block_id);
-int tc_get_flower(int ifindex, int prio, int handle,
-                  struct tc_flower *flower, uint32_t block_id);
-int tc_flush(int ifindex, uint32_t block_id);
-int tc_dump_flower_start(int ifindex, struct nl_dump *dump, uint32_t block_id);
+int tc_replace_flower(struct tcf_id *id, struct tc_flower *flower);
+int tc_del_filter(struct tcf_id *id);
+int tc_get_flower(struct tcf_id *id, struct tc_flower *flower);
+int tc_dump_flower_start(struct tcf_id *id, struct nl_dump *dump, bool terse);
 int parse_netlink_to_tc_flower(struct ofpbuf *reply,
-                               struct tc_flower *flower);
+                               struct tcf_id *id,
+                               struct tc_flower *flower,
+                               bool terse);
 void tc_set_policy(const char *policy);
 
 #endif /* tc.h */

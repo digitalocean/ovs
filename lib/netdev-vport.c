@@ -47,7 +47,6 @@
 #include "unaligned.h"
 #include "unixctl.h"
 #include "openvswitch/vlog.h"
-#include "netdev-tc-offloads.h"
 #ifdef __linux__
 #include "netdev-linux.h"
 #endif
@@ -112,7 +111,8 @@ netdev_vport_needs_dst_port(const struct netdev *dev)
 
     return (class->get_config == get_tunnel_config &&
             (!strcmp("geneve", type) || !strcmp("vxlan", type) ||
-             !strcmp("lisp", type) || !strcmp("stt", type)) );
+             !strcmp("lisp", type) || !strcmp("stt", type) ||
+             !strcmp("gtpu", type)));
 }
 
 const char *
@@ -189,22 +189,36 @@ netdev_vport_alloc(void)
 int
 netdev_vport_construct(struct netdev *netdev_)
 {
+    const struct netdev_class *class = netdev_get_class(netdev_);
+    const char *dpif_port = netdev_vport_class_get_dpif_port(class);
     struct netdev_vport *dev = netdev_vport_cast(netdev_);
+    const char *p, *name = netdev_get_name(netdev_);
     const char *type = netdev_get_type(netdev_);
+    uint16_t port = 0;
 
     ovs_mutex_init(&dev->mutex);
     eth_addr_random(&dev->etheraddr);
 
-    /* Add a default destination port for tunnel ports if none specified. */
+    if (name && dpif_port && (strlen(name) > strlen(dpif_port) + 1) &&
+        (!strncmp(name, dpif_port, strlen(dpif_port)))) {
+        p = name + strlen(dpif_port) + 1;
+        port = atoi(p);
+    }
+
+    /* If a destination port for tunnel ports is specified in the netdev
+     * name, use it instead of the default one. Otherwise, use the default
+     * destination port */
     if (!strcmp(type, "geneve")) {
-        dev->tnl_cfg.dst_port = htons(GENEVE_DST_PORT);
+        dev->tnl_cfg.dst_port = port ? htons(port) : htons(GENEVE_DST_PORT);
     } else if (!strcmp(type, "vxlan")) {
-        dev->tnl_cfg.dst_port = htons(VXLAN_DST_PORT);
+        dev->tnl_cfg.dst_port = port ? htons(port) : htons(VXLAN_DST_PORT);
         update_vxlan_global_cfg(netdev_, NULL, &dev->tnl_cfg);
     } else if (!strcmp(type, "lisp")) {
-        dev->tnl_cfg.dst_port = htons(LISP_DST_PORT);
+        dev->tnl_cfg.dst_port = port ? htons(port) : htons(LISP_DST_PORT);
     } else if (!strcmp(type, "stt")) {
-        dev->tnl_cfg.dst_port = htons(STT_DST_PORT);
+        dev->tnl_cfg.dst_port = port ? htons(port) : htons(STT_DST_PORT);
+    } else if (!strcmp(type, "gtpu")) {
+        dev->tnl_cfg.dst_port = port ? htons(port) : htons(GTPU_DST_PORT);
     }
 
     dev->tnl_cfg.dont_fragment = true;
@@ -422,6 +436,8 @@ tunnel_supported_layers(const char *type,
     } else if (!strcmp(type, "vxlan")
                && tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE)) {
         return TNL_L2 | TNL_L3;
+    } else if (!strcmp(type, "gtpu")) {
+        return TNL_L3;
     } else {
         return TNL_L2;
     }
@@ -576,6 +592,10 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
 
     if (!strcmp(type, "stt")) {
         tnl_cfg.dst_port = htons(STT_DST_PORT);
+    }
+
+    if (!strcmp(type, "gtpu")) {
+        tnl_cfg.dst_port = htons(GTPU_DST_PORT);
     }
 
     needs_dst_port = netdev_vport_needs_dst_port(dev_);
@@ -734,7 +754,7 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
     enum tunnel_layers layers = tunnel_supported_layers(type, &tnl_cfg);
     const char *full_type = (strcmp(type, "vxlan") ? type
                              : (tnl_cfg.exts & (1 << OVS_VXLAN_EXT_GPE)
-                                ? "VXLAN-GPE" : "VXLAN (without GPE"));
+                                ? "VXLAN-GPE" : "VXLAN (without GPE)"));
     const char *packet_type = smap_get(args, "packet_type");
     if (!packet_type) {
         tnl_cfg.pt_mode = default_pt_mode(layers);
@@ -896,7 +916,8 @@ get_tunnel_config(const struct netdev *dev, struct smap *args)
         if ((!strcmp("geneve", type) && dst_port != GENEVE_DST_PORT) ||
             (!strcmp("vxlan", type) && dst_port != VXLAN_DST_PORT) ||
             (!strcmp("lisp", type) && dst_port != LISP_DST_PORT) ||
-            (!strcmp("stt", type) && dst_port != STT_DST_PORT)) {
+            (!strcmp("stt", type) && dst_port != STT_DST_PORT) ||
+            (!strcmp("gtpu", type) && dst_port != GTPU_DST_PORT)) {
             smap_add_format(args, "dst_port", "%d", dst_port);
         }
     }
@@ -1104,10 +1125,8 @@ netdev_vport_get_ifindex(const struct netdev *netdev_)
 }
 
 #define NETDEV_VPORT_GET_IFINDEX netdev_vport_get_ifindex
-#define NETDEV_FLOW_OFFLOAD_API , LINUX_FLOW_OFFLOAD_API
 #else /* !__linux__ */
 #define NETDEV_VPORT_GET_IFINDEX NULL
-#define NETDEV_FLOW_OFFLOAD_API
 #endif /* __linux__ */
 
 #define VPORT_FUNCTIONS_COMMON                      \
@@ -1121,8 +1140,7 @@ netdev_vport_get_ifindex(const struct netdev *netdev_)
     .get_etheraddr = netdev_vport_get_etheraddr,    \
     .get_stats = netdev_vport_get_stats,            \
     .get_pt_mode = netdev_vport_get_pt_mode,        \
-    .update_flags = netdev_vport_update_flags       \
-    NETDEV_FLOW_OFFLOAD_API
+    .update_flags = netdev_vport_update_flags
 
 #define TUNNEL_FUNCTIONS_COMMON                     \
     VPORT_FUNCTIONS_COMMON,                         \
@@ -1210,10 +1228,22 @@ netdev_vport_tunnel_register(void)
               .type = "ip6gre",
               .build_header = netdev_gre_build_header,
               .push_header = netdev_gre_push_header,
-              .pop_header = netdev_gre_pop_header
+              .pop_header = netdev_gre_pop_header,
+              .get_ifindex = NETDEV_VPORT_GET_IFINDEX,
           },
           {{NULL, NULL, 0, 0}}
         },
+        { "gtpu_sys",
+          {
+              TUNNEL_FUNCTIONS_COMMON,
+              .type = "gtpu",
+              .build_header = netdev_gtpu_build_header,
+              .push_header = netdev_gtpu_push_header,
+              .pop_header = netdev_gtpu_pop_header,
+          },
+          {{NULL, NULL, 0, 0}}
+        },
+
     };
     static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
 

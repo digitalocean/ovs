@@ -35,6 +35,7 @@
 #include "timeval.h"
 
 struct dp_packet;
+struct conn;
 struct ds;
 
 /* Purely internal to OVS userspace. These flags should never be exposed to
@@ -49,6 +50,12 @@ static inline bool
 flow_tnl_dst_is_set(const struct flow_tnl *tnl)
 {
     return tnl->ip_dst || ipv6_addr_is_set(&tnl->ipv6_dst);
+}
+
+static inline bool
+flow_tnl_src_is_set(const struct flow_tnl *tnl)
+{
+    return tnl->ip_src || ipv6_addr_is_set(&tnl->ipv6_src);
 }
 
 struct in6_addr flow_tnl_dst(const struct flow_tnl *tnl);
@@ -108,6 +115,9 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     uint32_t ct_mark;           /* Connection mark. */
     ovs_u128 ct_label;          /* Connection label. */
     union flow_in_port in_port; /* Input port. */
+    struct conn *conn;          /* Cached conntrack connection. */
+    bool reply;                 /* True if reply direction. */
+    bool icmp_related;          /* True if ICMP related. */
 );
 
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
@@ -140,6 +150,12 @@ pkt_metadata_init_tnl(struct pkt_metadata *md)
 }
 
 static inline void
+pkt_metadata_init_conn(struct pkt_metadata *md)
+{
+    md->conn = NULL;
+}
+
+static inline void
 pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 {
     /* This is called for every packet in userspace datapath and affects
@@ -157,6 +173,7 @@ pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
     md->tunnel.ip_dst = 0;
     md->tunnel.ipv6_dst = in6addr_any;
     md->in_port.odp_port = port;
+    md->conn = NULL;
 }
 
 /* This function prefetches the cachelines touched by pkt_metadata_init()
@@ -574,6 +591,30 @@ mpls_lse_to_ttl(ovs_be32 mpls_lse)
     return (ntohl(mpls_lse) & MPLS_TTL_MASK) >> MPLS_TTL_SHIFT;
 }
 
+/* Set label in mpls lse. */
+static inline void
+flow_set_mpls_lse_label(ovs_be32 *mpls_lse, uint32_t label)
+{
+    *mpls_lse &= ~htonl(MPLS_LABEL_MASK);
+    *mpls_lse |= htonl(label << MPLS_LABEL_SHIFT);
+}
+
+/* Set TC in mpls lse. */
+static inline void
+flow_set_mpls_lse_tc(ovs_be32 *mpls_lse, uint8_t tc)
+{
+    *mpls_lse &= ~htonl(MPLS_TC_MASK);
+    *mpls_lse |= htonl((tc & 0x7) << MPLS_TC_SHIFT);
+}
+
+/* Set BOS in mpls lse. */
+static inline void
+flow_set_mpls_lse_bos(ovs_be32 *mpls_lse, uint8_t bos)
+{
+    *mpls_lse &= ~htonl(MPLS_BOS_MASK);
+    *mpls_lse |= htonl((bos & 0x1) << MPLS_BOS_SHIFT);
+}
+
 /* Set TTL in mpls lse. */
 static inline void
 flow_set_mpls_lse_ttl(ovs_be32 *mpls_lse, uint8_t ttl)
@@ -681,6 +722,7 @@ char *ip_parse_cidr_len(const char *s, int *n, ovs_be32 *ip,
 #define IP_ECN_ECT_0 0x02
 #define IP_ECN_CE 0x03
 #define IP_ECN_MASK 0x03
+#define IP_DSCP_CS6 0xc0
 #define IP_DSCP_MASK 0xfc
 
 static inline int
@@ -744,6 +786,9 @@ struct icmp_header {
 };
 BUILD_ASSERT_DECL(ICMP_HEADER_LEN == sizeof(struct icmp_header));
 
+/* ICMPV4 */
+#define ICMP_ERROR_DATA_L4_LEN 8
+
 #define IGMP_HEADER_LEN 8
 struct igmp_header {
     uint8_t igmp_type;
@@ -762,6 +807,20 @@ struct igmpv3_header {
     ovs_be16 ngrp;
 };
 BUILD_ASSERT_DECL(IGMPV3_HEADER_LEN == sizeof(struct igmpv3_header));
+
+#define IGMPV3_QUERY_HEADER_LEN 12
+struct igmpv3_query_header {
+    uint8_t type;
+    uint8_t max_resp;
+    ovs_be16 csum;
+    ovs_16aligned_be32 group;
+    uint8_t srs_qrv;
+    uint8_t qqic;
+    ovs_be16 nsrcs;
+};
+BUILD_ASSERT_DECL(
+    IGMPV3_QUERY_HEADER_LEN == sizeof(struct igmpv3_query_header
+));
 
 #define IGMPV3_RECORD_LEN 8
 struct igmpv3_record {
@@ -910,7 +969,7 @@ union ovs_16aligned_in6_addr {
     ovs_16aligned_be32 be32[4];
 };
 
-/* Like struct in6_hdr, but whereas that struct requires 32-bit alignment, this
+/* Like struct ip6_hdr, but whereas that struct requires 32-bit alignment, this
  * one only requires 16-bit alignment. */
 struct ovs_16aligned_ip6_hdr {
     union {
@@ -943,12 +1002,16 @@ struct icmp6_header {
 };
 BUILD_ASSERT_DECL(ICMP6_HEADER_LEN == sizeof(struct icmp6_header));
 
-#define ICMP6_ERROR_HEADER_LEN 8
-struct icmp6_error_header {
+#define ICMP6_DATA_HEADER_LEN 8
+struct icmp6_data_header {
     struct icmp6_header icmp6_base;
-    ovs_be32 icmp6_error_ext;
+    union {
+        ovs_16aligned_be32 be32[1];
+        ovs_be16           be16[2];
+        uint8_t            u8[4];
+    } icmp6_data;
 };
-BUILD_ASSERT_DECL(ICMP6_ERROR_HEADER_LEN == sizeof(struct icmp6_error_header));
+BUILD_ASSERT_DECL(ICMP6_DATA_HEADER_LEN == sizeof(struct icmp6_data_header));
 
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
 ovs_be16 packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
@@ -1390,6 +1453,74 @@ static inline ovs_be32 get_erspan_ts(enum erspan_ts_gra gra)
     return ts;
 }
 
+/*
+ * GTP-U protocol header and metadata
+ * See:
+ *   User Plane Protocol and Architectural Analysis on 3GPP 5G System
+ *                 draft-hmm-dmm-5g-uplane-analysis-00
+ *
+ * 0                   1                   2                   3
+ * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * | Ver |P|R|E|S|N| Message Type|             Length              |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |                Tunnel Endpoint Identifier                     |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |      Sequence Number        |   N-PDU Number  |  Next-Ext-Hdr |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * GTP-U Flags:
+ *   P: Protocol Type (Set to '1')
+ *   R: Reserved Bit (Set to '0')
+ *   E: Extension Header Flag (Set to '1' if extension header exists)
+ *   S: Sequence Number Flag (Set to '1' if sequence number exists)
+ *   N: N-PDU Number Flag (Set to '1' if N-PDU number exists)
+ *
+ * GTP-U Message Type:
+ *   Indicates the type of GTP-U message.
+ *
+ * GTP-U Length:
+ *   Indicates the length in octets of the payload.
+ *
+ * User payload is transmitted in G-PDU packets.
+ */
+
+#define GTPU_VER_MASK   0xe0
+#define GTPU_P_MASK     0x10
+#define GTPU_E_MASK     0x04
+#define GTPU_S_MASK     0x02
+
+/* GTP-U UDP port. */
+#define GTPU_DST_PORT   2152
+
+/* Default GTP-U flags: Ver = 1 and P = 1. */
+#define GTPU_FLAGS_DEFAULT  0x30
+
+/* GTP-U message type for normal user plane PDU. */
+#define GTPU_MSGTYPE_REQ    1   /* Echo Request. */
+#define GTPU_MSGTYPE_REPL   2   /* Echo Reply. */
+#define GTPU_MSGTYPE_GPDU   255 /* User Payload. */
+
+struct gtpu_metadata {
+    uint8_t flags;
+    uint8_t msgtype;
+};
+BUILD_ASSERT_DECL(sizeof(struct gtpu_metadata) == 2);
+
+struct gtpuhdr {
+    struct gtpu_metadata md;
+    ovs_be16 len;
+    ovs_16aligned_be32 teid;
+};
+BUILD_ASSERT_DECL(sizeof(struct gtpuhdr) == 8);
+
+struct gtpuhdr_opt {
+    ovs_be16 seqno;
+    uint8_t pdu_number;
+    uint8_t next_ext_type;
+};
+BUILD_ASSERT_DECL(sizeof(struct gtpuhdr_opt) == 4);
+
 /* VXLAN protocol header */
 struct vxlanhdr {
     union {
@@ -1540,9 +1671,17 @@ void packet_set_sctp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_icmp(struct dp_packet *, uint8_t type, uint8_t code);
 void packet_set_nd(struct dp_packet *, const struct in6_addr *target,
                    const struct eth_addr sll, const struct eth_addr tll);
-
+void packet_set_nd_ext(struct dp_packet *packet,
+                       const ovs_16aligned_be32 rso_flags,
+                       const uint8_t opt_type);
+void packet_set_igmp3_query(struct dp_packet *, uint8_t max_resp,
+                            ovs_be32 group, bool srs, uint8_t qrv,
+                            uint8_t qqic);
 void packet_format_tcp_flags(struct ds *, uint16_t);
 const char *packet_tcp_flag_to_string(uint32_t flag);
+void *compose_ipv6(struct dp_packet *packet, uint8_t proto,
+                   const struct in6_addr *src, const struct in6_addr *dst,
+                   uint8_t key_tc, ovs_be32 key_fl, uint8_t key_hl, int size);
 void compose_arp__(struct dp_packet *);
 void compose_arp(struct dp_packet *, uint16_t arp_op,
                  const struct eth_addr arp_sha,

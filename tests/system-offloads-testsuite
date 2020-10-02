@@ -918,7 +918,7 @@ fi
 # List of tests.
 if $at_list_p; then
   cat <<_ATEOF || at_write_fail=1
-openvswitch 2.11.3 test suite test groups:
+openvswitch 2.14.0 test suite test groups:
 
  NUM: FILE-NAME:LINE     TEST-GROUP-NAME
       KEYWORDS
@@ -959,7 +959,7 @@ _ATEOF
   exit $at_write_fail
 fi
 if $at_version_p; then
-  $as_echo "$as_me (openvswitch 2.11.3)" &&
+  $as_echo "$as_me (openvswitch 2.14.0)" &&
   cat <<\_ATEOF || at_write_fail=1
 
 Copyright (C) 2012 Free Software Foundation, Inc.
@@ -1153,11 +1153,11 @@ exec 5>>"$at_suite_log"
 
 # Banners and logs.
 $as_echo "## ------------------------------ ##
-## openvswitch 2.11.3 test suite. ##
+## openvswitch 2.14.0 test suite. ##
 ## ------------------------------ ##"
 {
   $as_echo "## ------------------------------ ##
-## openvswitch 2.11.3 test suite. ##
+## openvswitch 2.14.0 test suite. ##
 ## ------------------------------ ##"
   echo
 
@@ -1427,9 +1427,31 @@ $as_echo "$as_me: starting at: $at_start_date" >&5
 # directory.
 ovs_init() {
     ovs_base=`pwd`
-    trap '. "$ovs_base/cleanup"' 0
+    trap ovs_on_exit 0
     : > cleanup
     ovs_setenv
+}
+
+# Catch testsuite error condition and cleanup test environment by tearing down
+# all interfaces and processes spawned.
+# User has an option to leave the test environment in error state so that system
+# can be poked around to get more information. User can enable this option by setting
+# environment variable OVS_PAUSE_TEST=1. User needs to press CTRL-D to resume the
+# cleanup operation.
+ovs_pause() {
+    echo "====================================================="
+    echo "Set following environment variable to use various ovs utilities"
+    echo "export OVS_RUNDIR=$ovs_base"
+    echo "Press ENTER to continue: "
+    read
+}
+
+ovs_on_exit () {
+    if [ ! -z "${OVS_PAUSE_TEST}" ] && [ -z $at_verbose ]; then
+        trap '' INT
+        ovs_pause
+    fi
+    . "$ovs_base/cleanup"
 }
 
 # With no parameter or an empty parameter, sets the OVS_*DIR
@@ -1525,7 +1547,7 @@ kill_ovs_vswitchd () {
     fi
 
     # Tell the daemon to terminate gracefully
-    ovs-appctl --timeout=10 -t ovs-vswitchd exit --cleanup 2>/dev/null
+    ovs-appctl -t ovs-vswitchd exit --cleanup 2>/dev/null
 
     # Nothing else to be done if there is no PID
     test -z "$TMPPID" && return
@@ -1554,7 +1576,7 @@ wc () {
 }
 
 uuidfilt () {
-    $PYTHON "$top_srcdir"/tests/uuidfilt.py "$@"
+    $PYTHON3 "$top_srcdir"/tests/uuidfilt.py "$@"
 }
 
 # run_as PROGRAM_NAME COMMAND [ARG...]
@@ -1565,7 +1587,7 @@ uuidfilt () {
 # prints a message if a bunch of identical processes are running.
 #
 # Not all shells support "exec -a NAME", so test for it.
-if (exec -a myname true 2>&1 >/dev/null); then
+if (exec -a myname true 2>/dev/null); then
     run_as () {
         (exec -a "$@")
     }
@@ -1581,8 +1603,8 @@ ovs_cleanup() {
     if test "$(echo asan.*)" != 'asan.*'; then
         echo "Address Sanitizer reported errors in:" asan.*
         cat asan.*
-        $as_echo "ovs-macros.at:194" >"$at_check_line_file"
-at_fn_check_skip 99 "$at_srcdir/ovs-macros.at:194"
+        $as_echo "ovs-macros.at:216" >"$at_check_line_file"
+at_fn_check_skip 99 "$at_srcdir/ovs-macros.at:216"
     fi
 }
 
@@ -1598,22 +1620,27 @@ ovs_wait () {
     sleep 0.1
     if ovs_wait_cond; then echo "$1: wait succeeded quickly" >&5; return 0; fi
 
-    # Then wait up to 10 seconds.
+    # Then wait up to OVS_CTL_TIMEOUT seconds.
     local d
-    for d in 1 2 3 4 5 6 7 8 9 10; do
+    for d in `seq 1 "$OVS_CTL_TIMEOUT"`; do
         sleep 1
         if ovs_wait_cond; then echo "$1: wait succeeded after $d seconds" >&5; return 0; fi
     done
 
     echo "$1: wait failed after $d seconds" >&5
     ovs_wait_failed
-    $as_echo "ovs-macros.at:219" >"$at_check_line_file"
-at_fn_check_skip 99 "$at_srcdir/ovs-macros.at:219"
+    $as_echo "ovs-macros.at:241" >"$at_check_line_file"
+at_fn_check_skip 99 "$at_srcdir/ovs-macros.at:241"
 }
 
    on_exit () {
     (echo "$1"; cat cleanup) > cleanup.tmp
     mv cleanup.tmp cleanup
+}
+
+
+ovsdb_client_wait() {
+    ovsdb-client -vconsole:warn -vreconnect:err -vjsonrpc:err -vtimeval:off -vfile -vsyslog:off -vvlog:off wait "$@"
 }
 
 
@@ -1730,153 +1757,6 @@ as() {
     fi
 }
 
-# OVN_CLEANUP_VSWITCH(sim)
-#
-# Gracefully terminate vswitch daemons in the
-# specified sandbox.
-
-
-# OVN_CLEANUP_SBOX(sbox)
-#
-# Gracefully terminate OVN daemons in the specified
-# sandbox instance. The sandbox name "vtep" is treated
-# as a special case, and is assumed to have ovn-controller-vtep
-# and ovs-vtep daemons running instead of ovn-controller.
-
-
-# OVN_CLEANUP(sim [, sim ...])
-#
-# Gracefully terminate all OVN daemons, including those in the
-# specified sandbox instances.
-
-
-# ovn_init_db DATABASE
-#
-# Creates and initializes the given DATABASE (one of "ovn-sb" or "ovn-nb"),
-# starts its ovsdb-server instance, and sets the appropriate environment
-# variable (OVN_SB_DB or OVN_NB_DB) so that ovn-sbctl or ovn-nbctl uses the
-# database by default.
-#
-# Usually invoked from ovn_start.
-ovn_init_db () {
-    echo "creating $1 database"
-    local d=$ovs_base/$1
-    mkdir "$d" || return 1
-    : > "$d"/.$1.db.~lock~
-    as $1 ovsdb-tool create "$d"/$1.db "$abs_top_srcdir"/ovn/$1.ovsschema
-    as $1 start_daemon ovsdb-server --remote=punix:"$d"/$1.sock "$d"/$1.db
-    local var=`echo $1_db | tr a-z- A-Z_`
-    eval "$var=unix:\$ovs_base/\$1/\$1.sock"; export $var
-}
-
-# ovn_start
-#
-# Creates and initializes ovn-sb and ovn-nb databases and starts their
-# ovsdb-server instance, sets appropriate environment variables so that
-# ovn-sbctl and ovn-nbctl use them by default, and starts ovn-northd running
-# against them.
-ovn_start () {
-    ovn_init_db ovn-sb; ovn-sbctl init
-    ovn_init_db ovn-nb; ovn-nbctl init
-
-    echo "starting ovn-northd"
-    mkdir "$ovs_base"/northd
-    as northd start_daemon ovn-northd \
-               --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
-               --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
-
-    echo "starting backup ovn-northd"
-    mkdir "$ovs_base"/northd-backup
-    as northd-backup start_daemon ovn-northd \
-               --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
-               --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
-}
-
-# Interconnection networks.
-#
-# When multiple sandboxed Open vSwitch instances exist, one will inevitably
-# want to connect them together.  These commands allow for that.  Conceptually,
-# an interconnection network is a switch for which these functions make it easy
-# to plug into other switches in other sandboxed Open vSwitch instances.
-# Interconnection networks are implemented as bridges in a switch named "main",
-# so to use interconnection networks please avoid working with that switch
-# directly.
-
-# net_add NETWORK
-#
-# Creates a new interconnection network named NETWORK.
-net_add () {
-    test -d "$ovs_base"/main || sim_add main || return 1
-    as main ovs-vsctl add-br "$1"
-}
-
-# net_attach NETWORK BRIDGE
-#
-# Adds a new port to BRIDGE in the default sandbox (as set with as()) and plugs
-# it into the NETWORK interconnection network.  NETWORK must already have been
-# created by a previous invocation of net_add.  The default sandbox must not be
-# "main".
-net_attach () {
-    local net=$1 bridge=$2
-
-    local port=${sandbox}_$bridge
-    as main ovs-vsctl \
-        -- add-port $net $port \
-        -- set Interface $port options:pstream="punix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/main/$port-rx.pcap" options:tx_pcap="$ovs_base/main/$port-tx.pcap" \
-        || return 1
-
-    ovs-vsctl \
-        -- set Interface $bridge options:tx_pcap="$ovs_base/$sandbox/$bridge-tx.pcap" options:rxq_pcap="$ovs_base/$sandbox/$bridge-rx.pcap" \
-        -- add-port $bridge ${bridge}_$net \
-        -- set Interface ${bridge}_$net options:stream="unix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/$sandbox/${bridge}_$net-rx.pcap" options:tx_pcap="$ovs_base/$sandbox/${bridge}_$net-tx.pcap" \
-        || return 1
-}
-
-# ovn_attach NETWORK BRIDGE IP [MASKLEN]
-#
-# First, this command attaches BRIDGE to interconnection network NETWORK, just
-# like "net_attach NETWORK BRIDGE".  Second, it configures (simulated) IP
-# address IP (with network mask length MASKLEN, which defaults to 24) on
-# BRIDGE.  Finally, it configures the Open vSwitch database to work with OVN
-# and starts ovn-controller.
-ovn_attach() {
-    local net=$1 bridge=$2 ip=$3 masklen=${4-24}
-    net_attach $net $bridge || return 1
-
-    mac=`ovs-vsctl get Interface $bridge mac_in_use | sed s/\"//g`
-    arp_table="$arp_table $sandbox,$bridge,$ip,$mac"
-    ovs-appctl netdev-dummy/ip4addr $bridge $ip/$masklen >/dev/null || return 1
-    ovs-appctl ovs/route/add $ip/$masklen $bridge >/dev/null || return 1
-    ovs-vsctl \
-        -- set Open_vSwitch . external-ids:system-id=$sandbox \
-        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
-        -- set Open_vSwitch . external-ids:ovn-encap-type=geneve,vxlan \
-        -- set Open_vSwitch . external-ids:ovn-encap-ip=$ip \
-        -- add-br br-int \
-        -- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
-        || return 1
-    start_daemon ovn-controller || return 1
-}
-
-# OVN_POPULATE_ARP
-#
-# This pre-populates the ARP tables of all of the OVN instances that have been
-# started with ovn_attach().  That means that packets sent from one hypervisor
-# to another never get dropped or delayed by ARP resolution, which makes
-# testing easier.
-ovn_populate_arp__() {
-    for e1 in $arp_table; do
-        set `echo $e1 | sed 's/,/ /g'`; sb1=$1 br1=$2 ip=$3 mac=$4
-        for e2 in $arp_table; do
-            set `echo $e2 | sed 's/,/ /g'`; sb2=$1 br2=$2
-            if test $sb1,$br1 != $sb2,$br2; then
-                as $sb2 ovs-appctl tnl/neigh/set $br2 $ip $mac || return 1
-            fi
-        done
-    done
-}
-
-
 # Strips 'xid=0x1234' from ovs-ofctl output.
 strip_xids () {
     sed 's/ (xid=0x[0-9a-fA-F]*)//'
@@ -1895,7 +1775,8 @@ strip_duration () {
 # Strips 'ufid:...' from output, to make it easier to compare.
 # (ufids are random.)
 strip_ufid () {
-    sed 's/ufid:[-0-9a-f]* //'
+    sed 's/mega_ufid:[-0-9a-f]* //
+    s/ufid:[-0-9a-f]* //'
 }
 
 check_logs () {
@@ -1909,7 +1790,7 @@ check_logs () {
 
     # We most notably ignore 'Broken pipe' warnings.  These often and
     # intermittently appear in ovsdb-server.log, because *ctl commands
-    # (e.g. ovs-vsctl, ovn-nbctl) exit right after committing a change to the
+    # (e.g. ovs-vsctl) exit right after committing a change to the
     # database.  However, in reaction, some daemon may immediately update the
     # database, and this later update may cause database sending update back to
     # *ctl command if *ctl has not exited yet.  If *ctl command exits before
@@ -1944,15 +1825,14 @@ add_of_br () {
     local br=br$brnum
     local dpid=fedcba987654321$brnum
     local mac=aa:55:aa:55:00:0$brnum
-    ovs-vsctl --timeout=20 \
+    ovs-vsctl \
         -- add-br $br \
         -- set bridge $br datapath-type=dummy \
                           fail-mode=secure \
                           other-config:datapath-id=$dpid \
                           other-config:hwaddr=$mac \
                           protocols="[OpenFlow10,OpenFlow11,OpenFlow12,\
-                                       OpenFlow13,OpenFlow14,OpenFlow15,\
-                                       OpenFlow16]" \
+                                       OpenFlow13,OpenFlow14,OpenFlow15]" \
         -- "$@"
 }
 
@@ -2578,7 +2458,7 @@ _ASBOX
   $as_echo "Please send $at_msg and all information you think might help:
 
    To: <bugs@openvswitch.org>
-   Subject: [openvswitch 2.11.3] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
+   Subject: [openvswitch 2.14.0] $as_me: $at_fail_list${at_fail_list:+ failed${at_xpass_list:+, }}$at_xpass_list${at_xpass_list:+ passed unexpectedly}
 
 You may investigate any problem if you feel able to do so, in which
 case the test suite provides a good starting point.  Its output may
@@ -2720,7 +2600,6 @@ $as_echo "$at_srcdir/system-offloads-traffic.at:10: sed < stderr '
 /ofproto|INFO|datapath ID changed to fedcba9876543210/d
 /dpdk|INFO|DPDK Disabled - Use other_config:dpdk-init to enable/d
 /netlink_socket|INFO|netlink: could not enable listening to all nsid/d
-/netdev: Flow API/d
 /probe tc:/d
 /tc: Using policy/d'"
 at_fn_check_prepare_notrace 'an embedded newline' "system-offloads-traffic.at:10"
@@ -2735,7 +2614,6 @@ at_fn_check_prepare_notrace 'an embedded newline' "system-offloads-traffic.at:10
 /ofproto|INFO|datapath ID changed to fedcba9876543210/d
 /dpdk|INFO|DPDK Disabled - Use other_config:dpdk-init to enable/d
 /netlink_socket|INFO|netlink: could not enable listening to all nsid/d
-/netdev: Flow API/d
 /probe tc:/d
 /tc: Using policy/d'
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
@@ -3245,9 +3123,9 @@ $at_traceon; }
 
    TMPPID=$(cat $OVS_RUNDIR/ovs-vswitchd.pid)
    { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:35: ovs-appctl --timeout=10 -t ovs-vswitchd exit --cleanup"
+$as_echo "$at_srcdir/system-offloads-traffic.at:35: ovs-appctl -t ovs-vswitchd exit --cleanup"
 at_fn_check_prepare_trace "system-offloads-traffic.at:35"
-( $at_check_trace; ovs-appctl --timeout=10 -t ovs-vswitchd exit --cleanup
+( $at_check_trace; ovs-appctl -t ovs-vswitchd exit --cleanup
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter
@@ -3285,9 +3163,9 @@ $at_traceon; }
 
    TMPPID=$(cat $OVS_RUNDIR/ovsdb-server.pid)
    { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:35: ovs-appctl --timeout=10 -t ovsdb-server exit"
+$as_echo "$at_srcdir/system-offloads-traffic.at:35: ovs-appctl -t ovsdb-server exit"
 at_fn_check_prepare_trace "system-offloads-traffic.at:35"
-( $at_check_trace; ovs-appctl --timeout=10 -t ovsdb-server exit
+( $at_check_trace; ovs-appctl -t ovsdb-server exit
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter
@@ -3458,7 +3336,6 @@ $as_echo "$at_srcdir/system-offloads-traffic.at:40: sed < stderr '
 /ofproto|INFO|datapath ID changed to fedcba9876543210/d
 /dpdk|INFO|DPDK Disabled - Use other_config:dpdk-init to enable/d
 /netlink_socket|INFO|netlink: could not enable listening to all nsid/d
-/netdev: Flow API/d
 /probe tc:/d
 /tc: Using policy/d'"
 at_fn_check_prepare_notrace 'an embedded newline' "system-offloads-traffic.at:40"
@@ -3473,7 +3350,6 @@ at_fn_check_prepare_notrace 'an embedded newline' "system-offloads-traffic.at:40
 /ofproto|INFO|datapath ID changed to fedcba9876543210/d
 /dpdk|INFO|DPDK Disabled - Use other_config:dpdk-init to enable/d
 /netlink_socket|INFO|netlink: could not enable listening to all nsid/d
-/netdev: Flow API/d
 /probe tc:/d
 /tc: Using policy/d'
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
@@ -4013,9 +3889,9 @@ $at_traceon; }
 
    TMPPID=$(cat $OVS_RUNDIR/ovs-vswitchd.pid)
    { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:67: ovs-appctl --timeout=10 -t ovs-vswitchd exit --cleanup"
+$as_echo "$at_srcdir/system-offloads-traffic.at:67: ovs-appctl -t ovs-vswitchd exit --cleanup"
 at_fn_check_prepare_trace "system-offloads-traffic.at:67"
-( $at_check_trace; ovs-appctl --timeout=10 -t ovs-vswitchd exit --cleanup
+( $at_check_trace; ovs-appctl -t ovs-vswitchd exit --cleanup
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter
@@ -4053,9 +3929,9 @@ $at_traceon; }
 
    TMPPID=$(cat $OVS_RUNDIR/ovsdb-server.pid)
    { set +x
-$as_echo "$at_srcdir/system-offloads-traffic.at:67: ovs-appctl --timeout=10 -t ovsdb-server exit"
+$as_echo "$at_srcdir/system-offloads-traffic.at:67: ovs-appctl -t ovsdb-server exit"
 at_fn_check_prepare_trace "system-offloads-traffic.at:67"
-( $at_check_trace; ovs-appctl --timeout=10 -t ovsdb-server exit
+( $at_check_trace; ovs-appctl -t ovsdb-server exit
 ) >>"$at_stdout" 2>>"$at_stderr" 5>&-
 at_status=$? at_failed=false
 $at_check_filter

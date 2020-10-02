@@ -65,7 +65,7 @@ ofputil_netmask_to_wcbits(ovs_be32 netmask)
 void
 ofputil_wildcard_from_ofpfw10(uint32_t ofpfw, struct flow_wildcards *wc)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     /* Initialize most of wc. */
     flow_wildcards_init_catchall(wc);
@@ -564,7 +564,6 @@ ofputil_match_typical_len(enum ofputil_protocol protocol)
     case OFPUTIL_P_OF13_OXM:
     case OFPUTIL_P_OF14_OXM:
     case OFPUTIL_P_OF15_OXM:
-    case OFPUTIL_P_OF16_OXM:
         return NXM_TYPICAL_LEN;
 
     default:
@@ -607,7 +606,6 @@ ofputil_put_ofp11_match(struct ofpbuf *b, const struct match *match,
     case OFPUTIL_P_OF13_OXM:
     case OFPUTIL_P_OF14_OXM:
     case OFPUTIL_P_OF15_OXM:
-    case OFPUTIL_P_OF16_OXM:
         return oxm_put_match(b, match,
                              ofputil_protocol_to_ofp_version(protocol));
     }

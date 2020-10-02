@@ -26,9 +26,6 @@ import ovs.dirs
 import ovs.unixctl
 import ovs.util
 
-import six
-from six.moves import range
-
 DESTINATIONS = {"console": "info", "file": "info", "syslog": "info"}
 PATTERNS = {
     "console": "%D{%Y-%m-%dT%H:%M:%SZ}|%05N|%c%T|%p|%m",
@@ -81,7 +78,7 @@ class Vlog(object):
         msg_num = Vlog.__msg_num
         Vlog.__msg_num += 1
 
-        for f, f_level in six.iteritems(Vlog.__mfl[self.name]):
+        for f, f_level in Vlog.__mfl[self.name].items():
             f_level = LEVELS.get(f_level, logging.CRITICAL)
             if level_num >= f_level:
                 msg = self._build_message(message, f, level, msg_num)
@@ -185,7 +182,7 @@ class Vlog(object):
 
     def __is_enabled(self, level):
         level = LEVELS.get(level.lower(), logging.DEBUG)
-        for f, f_level in six.iteritems(Vlog.__mfl[self.name]):
+        for f, f_level in Vlog.__mfl[self.name].items():
             f_level = LEVELS.get(f_level, logging.CRITICAL)
             if level >= f_level:
                 return True
@@ -237,7 +234,7 @@ class Vlog(object):
                     Vlog.__file_handler = logging.FileHandler(Vlog.__log_file)
                     logger.addHandler(Vlog.__file_handler)
             except (IOError, socket.error):
-                logger.setLevel(logging.CRITICAL)
+                logger.disabled = True
 
         ovs.unixctl.command_register("vlog/reopen", "", 0, 0,
                                      Vlog._unixctl_vlog_reopen, None)
@@ -305,22 +302,24 @@ class Vlog(object):
             return
 
         logger = logging.getLogger('syslog')
-        # Disable the logger if there is no infrastructure to support python
-        # syslog (to avoid repeated errors) or if the "null" syslog method
-        # requested by environment.
-        if (not os.path.exists("/dev/log")
-            or os.environ.get('OVS_SYSLOG_METHOD') == "null"):
+        # Disable the logger if the "null" syslog method requested
+        # by environment.
+        if os.environ.get('OVS_SYSLOG_METHOD') == "null":
             logger.disabled = True
             return
+
+        if facility is None:
+            facility = syslog_facility
+
+        new_handler = logging.handlers.SysLogHandler(address="/dev/log",
+                                                     facility=facility)
 
         if syslog_handler:
             logger.removeHandler(syslog_handler)
 
-        if facility:
-            syslog_facility = facility
+        syslog_handler = new_handler
+        syslog_facility = facility
 
-        syslog_handler = logging.handlers.SysLogHandler(address="/dev/log",
-                                                    facility=syslog_facility)
         logger.addHandler(syslog_handler)
         return
 
@@ -344,7 +343,11 @@ class Vlog(object):
                 return "Please supply a valid pattern and destination"
         elif words[0] == "FACILITY":
             if words[1] in FACILITIES:
-                Vlog.add_syslog_handler(words[1])
+                try:
+                    Vlog.add_syslog_handler(words[1])
+                except (IOError, socket.error):
+                    logger = logging.getLogger('syslog')
+                    logger.disabled = True
                 return
             else:
                 return "Facility %s is invalid" % words[1]

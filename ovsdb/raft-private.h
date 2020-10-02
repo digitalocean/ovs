@@ -27,6 +27,7 @@
 
 struct ds;
 struct ovsdb_parser;
+struct raft_install_snapshot_request;
 
 /* Formatting server IDs and cluster IDs for use in human-readable logs.  Do
  * not use these in cases where the whole server or cluster ID is needed; use
@@ -80,6 +81,12 @@ struct raft_server {
     uint64_t next_index;     /* Index of next log entry to send this server. */
     uint64_t match_index;    /* Index of max log entry server known to have. */
     enum raft_server_phase phase;
+    bool replied;            /* Reply to append_request was received from this
+                                node during current election_timeout interval.
+                                */
+    /* Copy of the last install_snapshot_request sent to this server. */
+    struct raft_install_snapshot_request *last_install_snapshot_request;
+
     /* For use in adding and removing servers: */
     struct uuid requester_sid;  /* Nonzero if requested via RPC. */
     struct unixctl_conn *requester_conn; /* Only if requested via unixctl. */
@@ -112,6 +119,7 @@ struct raft_entry {
     struct json *data;
     struct uuid eid;
     struct json *servers;
+    uint64_t election_timer;
 };
 
 void raft_entry_clone(struct raft_entry *, const struct raft_entry *);
@@ -178,6 +186,7 @@ struct raft_record {
             uint64_t index;
             struct json *data;
             struct json *servers;
+            uint64_t election_timer;
             struct uuid eid;
         } entry;
     };

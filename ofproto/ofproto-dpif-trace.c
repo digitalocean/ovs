@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -86,6 +86,7 @@ oftrace_node_destroy(struct oftrace_node *node)
 bool
 oftrace_add_recirc_node(struct ovs_list *recirc_queue,
                         enum oftrace_recirc_type type, const struct flow *flow,
+                        const struct ofpact_nat *ofn,
                         const struct dp_packet *packet, uint32_t recirc_id,
                         const uint16_t zone)
 {
@@ -101,6 +102,7 @@ oftrace_add_recirc_node(struct ovs_list *recirc_queue,
     node->flow = *flow;
     node->flow.recirc_id = recirc_id;
     node->flow.ct_zone = zone;
+    node->nat_act = ofn;
     node->packet = packet ? dp_packet_clone(packet) : NULL;
 
     return true;
@@ -179,6 +181,25 @@ oftrace_node_print_details(struct ds *output,
     }
 }
 
+static void
+oftrace_print_ip_flow(const struct flow *flow, int af, struct ds *output)
+{
+    if (af == AF_INET) {
+        ds_put_format(output, "nw_src="IP_FMT",tp_src=%"PRIu16","
+                      "nw_dst="IP_FMT",tp_dst=%"PRIu16,
+                      IP_ARGS(flow->nw_src), ntohs(flow->tp_src),
+                      IP_ARGS(flow->nw_dst), ntohs(flow->tp_dst));
+    } else if (af == AF_INET6) {
+        ds_put_cstr(output, "ipv6_src=");
+        ipv6_format_addr_bracket(&flow->ipv6_src, output, true);
+        ds_put_format(output, ",tp_src=%"PRIu16, ntohs(flow->tp_src));
+        ds_put_cstr(output, ",ipv6_dst=");
+        ipv6_format_addr_bracket(&flow->ipv6_dst, output, true);
+        ds_put_format(output, ",tp_dst=%"PRIu16, ntohs(flow->tp_dst));
+    }
+    ds_put_char(output, '\n');
+}
+
 /* Parses the 'argc' elements of 'argv', ignoring argv[0].  The following
  * forms are supported:
  *
@@ -195,8 +216,7 @@ parse_flow_and_packet(int argc, const char *argv[],
                       bool *consistent)
 {
     const struct dpif_backer *backer = NULL;
-    const char *error = NULL;
-    char *m_err = NULL;
+    char *error = NULL;
     struct simap port_names = SIMAP_INITIALIZER(&port_names);
     struct dp_packet *packet = NULL;
     uint8_t *l7 = NULL;
@@ -219,7 +239,7 @@ parse_flow_and_packet(int argc, const char *argv[],
             generate_packet = true;
         } else if (!strcmp(arg, "--l7")) {
             if (i + 1 >= argc) {
-                m_err = xasprintf("Missing argument for option %s", arg);
+                error = xasprintf("Missing argument for option %s", arg);
                 goto exit;
             }
 
@@ -228,7 +248,7 @@ parse_flow_and_packet(int argc, const char *argv[],
             dp_packet_init(&payload, 0);
             if (dp_packet_put_hex(&payload, argv[++i], NULL)[0] != '\0') {
                 dp_packet_uninit(&payload);
-                error = "Trailing garbage in packet data";
+                error = xstrdup("Trailing garbage in packet data");
                 goto exit;
             }
             free(l7);
@@ -236,14 +256,14 @@ parse_flow_and_packet(int argc, const char *argv[],
             l7 = dp_packet_steal_data(&payload);
         } else if (!strcmp(arg, "--l7-len")) {
             if (i + 1 >= argc) {
-                m_err = xasprintf("Missing argument for option %s", arg);
+                error = xasprintf("Missing argument for option %s", arg);
                 goto exit;
             }
             free(l7);
             l7 = NULL;
             l7_len = atoi(argv[++i]);
             if (l7_len > 64000) {
-                m_err = xasprintf("%s: too much L7 data", argv[i]);
+                error = xasprintf("%s: too much L7 data", argv[i]);
                 goto exit;
             }
         } else if (consistent
@@ -252,7 +272,7 @@ parse_flow_and_packet(int argc, const char *argv[],
             *consistent = true;
         } else if (!strcmp(arg, "--ct-next")) {
             if (i + 1 >= argc) {
-                m_err = xasprintf("Missing argument for option %s", arg);
+                error = xasprintf("Missing argument for option %s", arg);
                 goto exit;
             }
 
@@ -260,15 +280,15 @@ parse_flow_and_packet(int argc, const char *argv[],
             struct ds ds = DS_EMPTY_INITIALIZER;
             if (!parse_ct_state(argv[++i], 0, &ct_state, &ds)
                 || !validate_ct_state(ct_state, &ds)) {
-                m_err = ds_steal_cstr(&ds);
+                error = ds_steal_cstr(&ds);
                 goto exit;
             }
             oftrace_push_ct_state(next_ct_states, ct_state);
         } else if (arg[0] == '-') {
-            m_err = xasprintf("%s: unknown option", arg);
+            error = xasprintf("%s: unknown option", arg);
             goto exit;
         } else if (n_args >= ARRAY_SIZE(args)) {
-            m_err = xstrdup("too many arguments");
+            error = xstrdup("too many arguments");
             goto exit;
         } else {
             args[n_args++] = arg;
@@ -293,14 +313,14 @@ parse_flow_and_packet(int argc, const char *argv[],
      * If there is a packet, we strip it off.
      */
     if (!generate_packet && n_args > 1) {
-        error = eth_from_hex(args[n_args - 1], &packet);
-        if (!error) {
+        const char *const_error = eth_from_hex(args[n_args - 1], &packet);
+        if (!const_error) {
             n_args--;
         } else if (n_args > 2) {
             /* The 3-argument form must end in a hex string. */
+            error = xstrdup(const_error);
             goto exit;
         }
-        error = NULL;
     }
 
     /* We stripped off the packet if there was one, so 'args' now has one of
@@ -331,7 +351,7 @@ parse_flow_and_packet(int argc, const char *argv[],
             backer = node->data;
         }
     } else {
-        error = "Syntax error";
+        error = xstrdup("Syntax error");
         goto exit;
     }
     if (backer && backer->dpif) {
@@ -348,21 +368,20 @@ parse_flow_and_packet(int argc, const char *argv[],
      * returns 0, the flow is a odp_flow. If function
      * parse_ofp_exact_flow() returns NULL, the flow is a br_flow. */
     if (!odp_flow_from_string(args[n_args - 1], &port_names,
-                              &odp_key, &odp_mask)) {
+                              &odp_key, &odp_mask, &error)) {
         if (!backer) {
-            error = "Cannot find the datapath";
+            error = xstrdup("Cannot find the datapath");
             goto exit;
         }
 
-        if (odp_flow_key_to_flow(odp_key.data, odp_key.size, flow) == ODP_FIT_ERROR) {
-            error = "Failed to parse datapath flow key";
+        if (odp_flow_key_to_flow(odp_key.data, odp_key.size, flow, &error)
+            == ODP_FIT_ERROR) {
             goto exit;
         }
 
         *ofprotop = xlate_lookup_ofproto(backer, flow,
-                                         &flow->in_port.ofp_port);
+                                         &flow->in_port.ofp_port, &error);
         if (*ofprotop == NULL) {
-            error = "Invalid datapath flow";
             goto exit;
         }
 
@@ -375,27 +394,26 @@ parse_flow_and_packet(int argc, const char *argv[],
          * in OpenFlow format, which is what we use here. */
         if (flow->tunnel.flags & FLOW_TNL_F_UDPIF) {
             struct flow_tnl tnl;
-            int err;
-
             memcpy(&tnl, &flow->tunnel, sizeof tnl);
-            err = tun_metadata_from_geneve_udpif(flow->tunnel.metadata.tab,
-                                                 &tnl, &tnl, &flow->tunnel);
+            int err = tun_metadata_from_geneve_udpif(
+                flow->tunnel.metadata.tab, &tnl, &tnl, &flow->tunnel);
             if (err) {
-                error = "Failed to parse Geneve options";
+                error = xstrdup("Failed to parse Geneve options");
                 goto exit;
             }
         }
+    } else if (n_args != 2) {
+        char *s = error;
+        error = xasprintf("%s (or the bridge name was omitted)", s);
+        free(s);
+        goto exit;
     } else {
-        char *err;
-
-        if (n_args != 2) {
-            error = "Must specify bridge name";
-            goto exit;
-        }
+        free(error);
+        error = NULL;
 
         *ofprotop = ofproto_dpif_lookup_by_name(args[0]);
         if (!*ofprotop) {
-            m_err = xasprintf("%s: unknown bridge", args[0]);
+            error = xasprintf("%s: unknown bridge", args[0]);
             goto exit;
         }
 
@@ -405,12 +423,12 @@ parse_flow_and_packet(int argc, const char *argv[],
             ofputil_port_map_put(&map, ofport->ofp_port,
                                  netdev_get_name(ofport->netdev));
         }
-        err = parse_ofp_exact_flow(flow, NULL,
-                                   ofproto_get_tun_tab(&(*ofprotop)->up),
-                                   args[n_args - 1], &map);
+        char *err = parse_ofp_exact_flow(flow, NULL,
+                                         ofproto_get_tun_tab(&(*ofprotop)->up),
+                                         args[n_args - 1], &map);
         ofputil_port_map_destroy(&map);
         if (err) {
-            m_err = xasprintf("Bad openflow flow syntax: %s", err);
+            error = xasprintf("Bad openflow flow syntax: %s", err);
             free(err);
             goto exit;
         }
@@ -428,10 +446,7 @@ parse_flow_and_packet(int argc, const char *argv[],
     }
 
 exit:
-    if (error && !m_err) {
-        m_err = xstrdup(error);
-    }
-    if (m_err) {
+    if (error) {
         dp_packet_delete(packet);
         packet = NULL;
     }
@@ -440,7 +455,7 @@ exit:
     ofpbuf_uninit(&odp_mask);
     simap_destroy(&port_names);
     free(l7);
-    return m_err;
+    return error;
 }
 
 static void
@@ -644,6 +659,73 @@ execute_actions_except_outputs(struct dpif *dpif,
 }
 
 static void
+ofproto_trace_recirc_node(struct oftrace_recirc_node *node,
+                          struct ovs_list *next_ct_states,
+                          struct ds *output)
+{
+    ds_put_cstr(output, "\n\n");
+    ds_put_char_multiple(output, '=', 79);
+    ds_put_format(output, "\nrecirc(%#"PRIx32")", node->recirc_id);
+
+    if (next_ct_states && node->type == OFT_RECIRC_CONNTRACK) {
+        uint32_t ct_state;
+        if (ovs_list_is_empty(next_ct_states)) {
+            ct_state = CS_TRACKED | CS_NEW;
+            ds_put_cstr(output, " - resume conntrack with default "
+                        "ct_state=trk|new (use --ct-next to customize)");
+        } else {
+            ct_state = oftrace_pop_ct_state(next_ct_states);
+            struct ds s = DS_EMPTY_INITIALIZER;
+            format_flags(&s, ct_state_to_string, ct_state, '|');
+            ds_put_format(output, " - resume conntrack with ct_state=%s",
+                          ds_cstr(&s));
+            ds_destroy(&s);
+        }
+        node->flow.ct_state = ct_state;
+    }
+    ds_put_char(output, '\n');
+
+    /* If there's any snat/dnat information assume we always translate to
+     * the first IP/port to make sure we don't match on incorrect flows later
+     * on.
+     */
+    if (node->nat_act) {
+        const struct ofpact_nat *ofn = node->nat_act;
+
+        ds_put_cstr(output, "Replacing src/dst IP/ports to simulate NAT:\n");
+        ds_put_cstr(output, " Initial flow: ");
+        oftrace_print_ip_flow(&node->flow, ofn->range_af, output);
+
+        if (ofn->flags & NX_NAT_F_SRC) {
+            if (ofn->range_af == AF_INET) {
+                node->flow.nw_src = ofn->range.addr.ipv4.min;
+            } else if (ofn->range_af == AF_INET6) {
+                node->flow.ipv6_src = ofn->range.addr.ipv6.min;
+            }
+
+            if (ofn->range_af != AF_UNSPEC && ofn->range.proto.min) {
+                node->flow.tp_src = htons(ofn->range.proto.min);
+            }
+        }
+        if (ofn->flags & NX_NAT_F_DST) {
+            if (ofn->range_af == AF_INET) {
+                node->flow.nw_dst = ofn->range.addr.ipv4.min;
+            } else if (ofn->range_af == AF_INET6) {
+                node->flow.ipv6_dst = ofn->range.addr.ipv6.min;
+            }
+
+            if (ofn->range_af != AF_UNSPEC && ofn->range.proto.min) {
+                node->flow.tp_dst = htons(ofn->range.proto.min);
+            }
+        }
+        ds_put_cstr(output, " Modified flow: ");
+        oftrace_print_ip_flow(&node->flow, ofn->range_af, output);
+    }
+    ds_put_char_multiple(output, '=', 79);
+    ds_put_cstr(output, "\n\n");
+}
+
+static void
 ofproto_trace__(struct ofproto_dpif *ofproto, const struct flow *flow,
                 const struct dp_packet *packet, struct ovs_list *recirc_queue,
                 const struct ofpact ofpacts[], size_t ofpacts_len,
@@ -735,31 +817,7 @@ ofproto_trace(struct ofproto_dpif *ofproto, const struct flow *flow,
 
     struct oftrace_recirc_node *recirc_node;
     LIST_FOR_EACH_POP (recirc_node, node, &recirc_queue) {
-        ds_put_cstr(output, "\n\n");
-        ds_put_char_multiple(output, '=', 79);
-        ds_put_format(output, "\nrecirc(%#"PRIx32")",
-                      recirc_node->recirc_id);
-
-        if (next_ct_states && recirc_node->type == OFT_RECIRC_CONNTRACK) {
-            uint32_t ct_state;
-            if (ovs_list_is_empty(next_ct_states)) {
-                ct_state = CS_TRACKED | CS_NEW;
-                ds_put_cstr(output, " - resume conntrack with default "
-                            "ct_state=trk|new (use --ct-next to customize)");
-            } else {
-                ct_state = oftrace_pop_ct_state(next_ct_states);
-                struct ds s = DS_EMPTY_INITIALIZER;
-                format_flags(&s, ct_state_to_string, ct_state, '|');
-                ds_put_format(output, " - resume conntrack with ct_state=%s",
-                              ds_cstr(&s));
-                ds_destroy(&s);
-            }
-            recirc_node->flow.ct_state = ct_state;
-        }
-        ds_put_char(output, '\n');
-        ds_put_char_multiple(output, '=', 79);
-        ds_put_cstr(output, "\n\n");
-
+        ofproto_trace_recirc_node(recirc_node, next_ct_states, output);
         ofproto_trace__(ofproto, &recirc_node->flow, recirc_node->packet,
                         &recirc_queue, ofpacts, ofpacts_len, output);
         oftrace_recirc_node_destroy(recirc_node);

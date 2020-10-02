@@ -207,7 +207,25 @@ enum ofproto_band {
     OFPROTO_OUT_OF_BAND         /* Out-of-band connection to controller. */
 };
 
+/* ofproto supports two kinds of OpenFlow connections:
+ *
+ *   - "Primary" connections to ordinary OpenFlow controllers.  ofproto
+ *     maintains persistent connections to these controllers and by default
+ *     sends them asynchronous messages such as packet-ins.
+ *
+ *   - "Service" connections, e.g. from ovs-ofctl.  When these connections
+ *     drop, it is the other side's responsibility to reconnect them if
+ *     necessary.  ofproto does not send them asynchronous messages by default.
+ */
+enum ofconn_type {
+    OFCONN_PRIMARY,             /* An ordinary OpenFlow controller. */
+    OFCONN_SERVICE              /* A service connection, e.g. "ovs-ofctl". */
+};
+const char *ofconn_type_to_string(enum ofconn_type);
+
+/* Configuration for an OpenFlow controller. */
 struct ofproto_controller {
+    enum ofconn_type type;      /* Primary or service controller. */
     int max_backoff;            /* Maximum reconnection backoff, in seconds. */
     int probe_interval;         /* Max idle time before probing, in seconds. */
     enum ofproto_band band;     /* In-band or out-of-band? */
@@ -216,6 +234,7 @@ struct ofproto_controller {
                                  * be negotiated for a session. */
 
     /* OpenFlow packet-in rate-limiting. */
+    int max_pktq_size;          /* Maximum number of packet-in to be queued. */
     int rate_limit;             /* Max packet-in rate in packets per second. */
     int burst_limit;            /* Limit on accumulating packet credits. */
 
@@ -290,6 +309,8 @@ int ofproto_port_dump_done(struct ofproto_port_dump *);
 
 #define OFPROTO_FLOW_LIMIT_DEFAULT 200000
 #define OFPROTO_MAX_IDLE_DEFAULT 10000 /* ms */
+#define OFPROTO_MAX_REVALIDATOR_DEFAULT 500 /* ms */
+#define OFPROTO_MIN_REVALIDATE_PPS_DEFAULT 5
 
 const char *ofproto_port_open_type(const struct ofproto *,
                                    const char *port_type);
@@ -298,6 +319,9 @@ int ofproto_port_del(struct ofproto *, ofp_port_t ofp_port);
 void ofproto_port_set_config(struct ofproto *, ofp_port_t ofp_port,
                              const struct smap *cfg);
 int ofproto_port_get_stats(const struct ofport *, struct netdev_stats *stats);
+
+int ofproto_vport_get_status(const struct ofproto *, ofp_port_t ofp_port,
+                             char **errp);
 
 int ofproto_port_query_by_name(const struct ofproto *, const char *devname,
                                struct ofproto_port *);
@@ -314,6 +338,8 @@ void ofproto_set_in_band_queue(struct ofproto *, int queue_id);
 void ofproto_set_bundle_idle_timeout(unsigned timeout);
 void ofproto_set_flow_limit(unsigned limit);
 void ofproto_set_max_idle(unsigned max_idle);
+void ofproto_set_max_revalidator(unsigned max_revalidator);
+void ofproto_set_min_revalidate_pps(unsigned min_revalidate_pps);
 void ofproto_set_forward_bpdu(struct ofproto *, bool forward_bpdu);
 void ofproto_set_mac_table_config(struct ofproto *, unsigned idle_time,
                                   size_t max_entries);
@@ -325,6 +351,7 @@ void ofproto_set_threads(int n_handlers, int n_revalidators);
 void ofproto_type_set_config(const char *type,
                              const struct smap *other_config);
 void ofproto_set_dp_desc(struct ofproto *, const char *dp_desc);
+void ofproto_set_serial_desc(struct ofproto *p, const char *serial_desc);
 int ofproto_set_snoops(struct ofproto *, const struct sset *snoops);
 int ofproto_set_netflow(struct ofproto *,
                         const struct netflow_options *nf_options);
@@ -341,6 +368,13 @@ int ofproto_get_stp_status(struct ofproto *, struct ofproto_stp_status *);
 int ofproto_set_rstp(struct ofproto *, const struct ofproto_rstp_settings *);
 int ofproto_get_rstp_status(struct ofproto *, struct ofproto_rstp_status *);
 void ofproto_set_vlan_limit(int vlan_limit);
+void ofproto_ct_set_zone_timeout_policy(const char *datapath_type,
+                                        uint16_t zone,
+                                        struct simap *timeout_policy);
+void ofproto_ct_del_zone_timeout_policy(const char *datapath_type,
+                                        uint16_t zone);
+void ofproto_get_datapath_cap(const char *datapath_type,
+                              struct smap *dp_cap);
 
 /* Configuration of ports. */
 void ofproto_port_unregister(struct ofproto *, ofp_port_t ofp_port);
@@ -395,6 +429,14 @@ enum port_vlan_mode {
     PORT_VLAN_DOT1Q_TUNNEL
 };
 
+/* The behaviour of the port regarding priority tags */
+enum port_priority_tags_mode {
+    PORT_PRIORITY_TAGS_NEVER = 0,
+    PORT_PRIORITY_TAGS_IF_NONZERO,
+    PORT_PRIORITY_TAGS_ALWAYS,
+};
+
+/* The behaviour of the port regarding priority tags */
 /* Configuration of bundles. */
 struct ofproto_bundle_settings {
     char *name;                 /* For use in log messages. */
@@ -407,7 +449,8 @@ struct ofproto_bundle_settings {
     int vlan;                   /* VLAN VID, except for PORT_VLAN_TRUNK. */
     unsigned long *trunks;      /* vlan_bitmap, except for PORT_VLAN_ACCESS. */
     unsigned long *cvlans;
-    bool use_priority_tags;     /* Use 802.1p tag for frames in VLAN 0? */
+    enum port_priority_tags_mode use_priority_tags;
+                                /* Use 802.1p tag for frames in VLAN 0? */
 
     struct bond_settings *bond; /* Must be nonnull iff if n_slaves > 1. */
 
@@ -501,7 +544,7 @@ void ofproto_configure_table(struct ofproto *, int table_id,
 /* Configuration querying. */
 bool ofproto_has_snoops(const struct ofproto *);
 void ofproto_get_snoops(const struct ofproto *, struct sset *);
-void ofproto_get_all_flows(struct ofproto *p, struct ds *);
+void ofproto_get_all_flows(struct ofproto *p, struct ds *, bool);
 void ofproto_get_netflow_ids(const struct ofproto *,
                              uint8_t *engine_type, uint8_t *engine_id);
 

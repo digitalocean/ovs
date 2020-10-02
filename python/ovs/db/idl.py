@@ -25,8 +25,6 @@ import ovs.vlog
 from ovs.db import custom_index
 from ovs.db import error
 
-import six
-
 vlog = ovs.vlog.Vlog("idl")
 
 __pychecker__ = 'no-classattr no-objattrs'
@@ -37,6 +35,8 @@ ROW_DELETE = "delete"
 
 OVSDB_UPDATE = 0
 OVSDB_UPDATE2 = 1
+
+CLUSTERED = "clustered"
 
 
 class Idl(object):
@@ -92,10 +92,13 @@ class Idl(object):
 """
 
     IDL_S_INITIAL = 0
-    IDL_S_MONITOR_REQUESTED = 1
-    IDL_S_MONITOR_COND_REQUESTED = 2
+    IDL_S_SERVER_SCHEMA_REQUESTED = 1
+    IDL_S_SERVER_MONITOR_REQUESTED = 2
+    IDL_S_DATA_MONITOR_REQUESTED = 3
+    IDL_S_DATA_MONITOR_COND_REQUESTED = 4
 
-    def __init__(self, remote, schema_helper, probe_interval=None):
+    def __init__(self, remote, schema_helper, probe_interval=None,
+                 leader_only=True):
         """Creates and returns a connection to the database named 'db_name' on
         'remote', which should be in a form acceptable to
         ovs.jsonrpc.session.open().  The connection will maintain an in-memory
@@ -119,6 +122,9 @@ class Idl(object):
 
         The IDL uses and modifies 'schema' directly.
 
+        If 'leader_only' is set to True (default value) the IDL will only
+        monitor and transact with the leader of the cluster.
+
         If "probe_interval" is zero it disables the connection keepalive
         feature. If non-zero the value will be forced to at least 1000
         milliseconds. If None it will just use the default value in OVS.
@@ -137,6 +143,20 @@ class Idl(object):
         self._last_seqno = None
         self.change_seqno = 0
         self.uuid = uuid.uuid1()
+
+        # Server monitor.
+        self._server_schema_request_id = None
+        self._server_monitor_request_id = None
+        self._db_change_aware_request_id = None
+        self._server_db_name = '_Server'
+        self._server_db_table = 'Database'
+        self.server_tables = None
+        self._server_db = None
+        self.server_monitor_uuid = uuid.uuid1()
+        self.leader_only = leader_only
+        self.cluster_id = None
+        self._min_index = 0
+
         self.state = self.IDL_S_INITIAL
 
         # Database locking.
@@ -149,8 +169,8 @@ class Idl(object):
         self.txn = None
         self._outstanding_txns = {}
 
-        for table in six.itervalues(schema.tables):
-            for column in six.itervalues(table.columns):
+        for table in schema.tables.values():
+            for column in table.columns.values():
                 if not hasattr(column, 'alert'):
                     column.alert = True
             table.need_table = False
@@ -171,6 +191,12 @@ class Idl(object):
             else:
                 remotes.append(r)
         return remotes
+
+    def set_cluster_id(self, cluster_id):
+        """Set the id of the cluster that this idl must connect to."""
+        self.cluster_id = cluster_id
+        if self.state != self.IDL_S_INITIAL:
+            self.force_reconnect()
 
     def index_create(self, table, name):
         """Create a named multi-column index on a table"""
@@ -222,7 +248,7 @@ class Idl(object):
             if seqno != self._last_seqno:
                 self._last_seqno = seqno
                 self.__txn_abort_all()
-                self.__send_monitor_request()
+                self.__send_server_schema_request()
                 if self.lock_name:
                     self.__send_lock_request()
                 break
@@ -230,6 +256,7 @@ class Idl(object):
             msg = self._session.recv()
             if msg is None:
                 break
+
             if (msg.type == ovs.jsonrpc.Message.T_NOTIFY
                     and msg.method == "update2"
                     and len(msg.params) == 2):
@@ -239,7 +266,15 @@ class Idl(object):
                     and msg.method == "update"
                     and len(msg.params) == 2):
                 # Database contents changed.
-                self.__parse_update(msg.params[1], OVSDB_UPDATE)
+                if msg.params[0] == str(self.server_monitor_uuid):
+                    self.__parse_update(msg.params[1], OVSDB_UPDATE,
+                                        tables=self.server_tables)
+                    self.change_seqno = initial_change_seqno
+                    if not self.__check_server_db():
+                        self.force_reconnect()
+                        break
+                else:
+                    self.__parse_update(msg.params[1], OVSDB_UPDATE)
             elif (msg.type == ovs.jsonrpc.Message.T_REPLY
                   and self._monitor_request_id is not None
                   and self._monitor_request_id == msg.id):
@@ -248,16 +283,66 @@ class Idl(object):
                     self.change_seqno += 1
                     self._monitor_request_id = None
                     self.__clear()
-                    if self.state == self.IDL_S_MONITOR_COND_REQUESTED:
+                    if self.state == self.IDL_S_DATA_MONITOR_COND_REQUESTED:
                         self.__parse_update(msg.result, OVSDB_UPDATE2)
                     else:
-                        assert self.state == self.IDL_S_MONITOR_REQUESTED
+                        assert self.state == self.IDL_S_DATA_MONITOR_REQUESTED
                         self.__parse_update(msg.result, OVSDB_UPDATE)
 
                 except error.Error as e:
                     vlog.err("%s: parse error in received schema: %s"
                              % (self._session.get_name(), e))
                     self.__error()
+            elif (msg.type == ovs.jsonrpc.Message.T_REPLY
+                  and self._server_schema_request_id is not None
+                  and self._server_schema_request_id == msg.id):
+                # Reply to our "get_schema" of _Server request.
+                try:
+                    self._server_schema_request_id = None
+                    sh = SchemaHelper(None, msg.result)
+                    sh.register_table(self._server_db_table)
+                    schema = sh.get_idl_schema()
+                    self._server_db = schema
+                    self.server_tables = schema.tables
+                    self.__send_server_monitor_request()
+                except error.Error as e:
+                    vlog.err("%s: error receiving server schema: %s"
+                             % (self._session.get_name(), e))
+                    if self.cluster_id:
+                        self.__error()
+                        break
+                    else:
+                        self.change_seqno = initial_change_seqno
+                        self.__send_monitor_request()
+            elif (msg.type == ovs.jsonrpc.Message.T_REPLY
+                  and self._server_monitor_request_id is not None
+                  and self._server_monitor_request_id == msg.id):
+                # Reply to our "monitor" of _Server request.
+                try:
+                    self._server_monitor_request_id = None
+                    self.__parse_update(msg.result, OVSDB_UPDATE,
+                                        tables=self.server_tables)
+                    self.change_seqno = initial_change_seqno
+                    if self.__check_server_db():
+                        self.__send_monitor_request()
+                        self.__send_db_change_aware()
+                    else:
+                        self.force_reconnect()
+                        break
+                except error.Error as e:
+                    vlog.err("%s: parse error in received schema: %s"
+                             % (self._session.get_name(), e))
+                    if self.cluster_id:
+                        self.__error()
+                        break
+                    else:
+                        self.change_seqno = initial_change_seqno
+                        self.__send_monitor_request()
+            elif (msg.type == ovs.jsonrpc.Message.T_REPLY
+                  and self._db_change_aware_request_id is not None
+                  and self._db_change_aware_request_id == msg.id):
+                # Reply to us notifying the server of our change awarness.
+                self._db_change_aware_request_id = None
             elif (msg.type == ovs.jsonrpc.Message.T_REPLY
                   and self._lock_request_id is not None
                   and self._lock_request_id == msg.id):
@@ -275,9 +360,19 @@ class Idl(object):
                 # Reply to our echo request.  Ignore it.
                 pass
             elif (msg.type == ovs.jsonrpc.Message.T_ERROR and
-                  self.state == self.IDL_S_MONITOR_COND_REQUESTED and
+                  self.state == self.IDL_S_DATA_MONITOR_COND_REQUESTED and
                   self._monitor_request_id == msg.id):
                 if msg.error == "unknown method":
+                    self.__send_monitor_request()
+            elif (msg.type == ovs.jsonrpc.Message.T_ERROR and
+                  self._server_schema_request_id is not None and
+                  self._server_schema_request_id == msg.id):
+                self._server_schema_request_id = None
+                if self.cluster_id:
+                    self.force_reconnect()
+                    break
+                else:
+                    self.change_seqno = initial_change_seqno
                     self.__send_monitor_request()
             elif (msg.type in (ovs.jsonrpc.Message.T_ERROR,
                                ovs.jsonrpc.Message.T_REPLY)
@@ -297,7 +392,7 @@ class Idl(object):
         if not self._session.is_connected():
             return
 
-        for table in six.itervalues(self.tables):
+        for table in self.tables.values():
             if table.cond_changed:
                 self.__send_cond_change(table, table.condition)
                 table.cond_changed = False
@@ -341,6 +436,9 @@ class Idl(object):
         """Forces the IDL to drop its connection to the database and reconnect.
         In the meantime, the contents of the IDL will not change."""
         self._session.force_reconnect()
+
+    def session_name(self):
+        return self._session.get_name()
 
     def set_lock(self, lock_name):
         """If 'lock_name' is not None, configures the IDL to obtain the named
@@ -387,7 +485,7 @@ class Idl(object):
     def __clear(self):
         changed = False
 
-        for table in six.itervalues(self.tables):
+        for table in self.tables.values():
             if table.rows:
                 changed = True
                 table.rows = custom_index.IndexedRows(table)
@@ -440,18 +538,25 @@ class Idl(object):
             if not new_has_lock:
                 self.is_lock_contended = True
 
+    def __send_db_change_aware(self):
+        msg = ovs.jsonrpc.Message.create_request("set_db_change_aware",
+                                                 [True])
+        self._db_change_aware_request_id = msg.id
+        self._session.send(msg)
+
     def __send_monitor_request(self):
-        if self.state == self.IDL_S_INITIAL:
-            self.state = self.IDL_S_MONITOR_COND_REQUESTED
+        if (self.state in [self.IDL_S_SERVER_MONITOR_REQUESTED,
+                           self.IDL_S_INITIAL]):
+            self.state = self.IDL_S_DATA_MONITOR_COND_REQUESTED
             method = "monitor_cond"
         else:
-            self.state = self.IDL_S_MONITOR_REQUESTED
+            self.state = self.IDL_S_DATA_MONITOR_REQUESTED
             method = "monitor"
 
         monitor_requests = {}
-        for table in six.itervalues(self.tables):
+        for table in self.tables.values():
             columns = []
-            for column in six.iterkeys(table.columns):
+            for column in table.columns.keys():
                 if ((table.name not in self.readonly) or
                         (table.name in self.readonly) and
                         (column not in self.readonly[table.name])):
@@ -467,20 +572,50 @@ class Idl(object):
         self._monitor_request_id = msg.id
         self._session.send(msg)
 
-    def __parse_update(self, update, version):
+    def __send_server_schema_request(self):
+        self.state = self.IDL_S_SERVER_SCHEMA_REQUESTED
+        msg = ovs.jsonrpc.Message.create_request(
+            "get_schema", [self._server_db_name, str(self.uuid)])
+        self._server_schema_request_id = msg.id
+        self._session.send(msg)
+
+    def __send_server_monitor_request(self):
+        self.state = self.IDL_S_SERVER_MONITOR_REQUESTED
+        monitor_requests = {}
+        table = self.server_tables[self._server_db_table]
+        columns = [column for column in table.columns.keys()]
+        for column in table.columns.values():
+            if not hasattr(column, 'alert'):
+                column.alert = True
+        table.rows = custom_index.IndexedRows(table)
+        table.need_table = False
+        table.idl = self
+        monitor_request = {"columns": columns}
+        monitor_requests[table.name] = [monitor_request]
+        msg = ovs.jsonrpc.Message.create_request(
+            'monitor', [self._server_db.name,
+                             str(self.server_monitor_uuid),
+                             monitor_requests])
+        self._server_monitor_request_id = msg.id
+        self._session.send(msg)
+
+    def __parse_update(self, update, version, tables=None):
         try:
-            self.__do_parse_update(update, version)
+            if not tables:
+                self.__do_parse_update(update, version, self.tables)
+            else:
+                self.__do_parse_update(update, version, tables)
         except error.Error as e:
             vlog.err("%s: error parsing update: %s"
                      % (self._session.get_name(), e))
 
-    def __do_parse_update(self, table_updates, version):
+    def __do_parse_update(self, table_updates, version, tables):
         if not isinstance(table_updates, dict):
             raise error.Error("<table-updates> is not an object",
                               table_updates)
 
-        for table_name, table_update in six.iteritems(table_updates):
-            table = self.tables.get(table_name)
+        for table_name, table_update in table_updates.items():
+            table = tables.get(table_name)
             if not table:
                 raise error.Error('<table-updates> includes unknown '
                                   'table "%s"' % table_name)
@@ -489,7 +624,7 @@ class Idl(object):
                 raise error.Error('<table-update> for table "%s" is not '
                                   'an object' % table_name, table_update)
 
-            for uuid_string, row_update in six.iteritems(table_update):
+            for uuid_string, row_update in table_update.items():
                 if not ovs.ovsuuid.is_valid_string(uuid_string):
                     raise error.Error('<table-update> for table "%s" '
                                       'contains bad UUID "%s" as member '
@@ -605,6 +740,58 @@ class Idl(object):
                 self.notify(op, row, Row.from_json(self, table, uuid, old))
         return changed
 
+    def __check_server_db(self):
+        """Returns True if this is a valid server database, False otherwise."""
+        session_name = self.session_name()
+
+        if self._server_db_table not in self.server_tables:
+            vlog.info("%s: server does not have %s table in its %s database"
+                      % (session_name, self._server_db_table,
+                         self._server_db_name))
+            return False
+
+        rows = self.server_tables[self._server_db_table].rows
+
+        database = None
+        for row in rows.values():
+            if self.cluster_id:
+                if self.cluster_id in \
+                   map(lambda x: str(x)[:4], row.cid):
+                    database = row
+                    break
+            elif row.name == self._db.name:
+                database = row
+                break
+
+        if not database:
+            vlog.info("%s: server does not have %s database"
+                      % (session_name, self._db.name))
+            return False
+
+        if (database.model == CLUSTERED and
+            self._session.get_num_of_remotes() > 1):
+            if not database.schema:
+                vlog.info('%s: clustered database server has not yet joined '
+                          'cluster; trying another server' % session_name)
+                return False
+            if not database.connected:
+                vlog.info('%s: clustered database server is disconnected '
+                          'from cluster; trying another server' % session_name)
+                return False
+            if (self.leader_only and
+                not database.leader):
+                vlog.info('%s: clustered database server is not cluster '
+                          'leader; trying another server' % session_name)
+                return False
+            if database.index:
+                if database.index[0] < self._min_index:
+                    vlog.warn('%s: clustered database server has stale data; '
+                              'trying another server' % session_name)
+                    return False
+                self._min_index = database.index[0]
+
+        return True
+
     def __column_name(self, column):
         if column.type.key.type == ovs.db.types.UuidType:
             return ovs.ovsuuid.to_json(column.type.key.type.default)
@@ -612,7 +799,7 @@ class Idl(object):
             return column.type.key.type.default
 
     def __add_default(self, table, row_update):
-        for column in six.itervalues(table.columns):
+        for column in table.columns.values():
             if column.name not in row_update:
                 if ((table.name not in self.readonly) or
                         (table.name in self.readonly) and
@@ -622,7 +809,7 @@ class Idl(object):
 
     def __apply_diff(self, table, row, row_diff):
         old_row = {}
-        for column_name, datum_diff_json in six.iteritems(row_diff):
+        for column_name, datum_diff_json in row_diff.items():
             column = table.columns.get(column_name)
             if not column:
                 # XXX rate-limit
@@ -647,7 +834,7 @@ class Idl(object):
 
     def __row_update(self, table, row, row_json):
         changed = False
-        for column_name, datum_json in six.iteritems(row_json):
+        for column_name, datum_json in row_json.items():
             column = table.columns.get(column_name)
             if not column:
                 # XXX rate-limit
@@ -675,7 +862,7 @@ class Idl(object):
 
     def __create_row(self, table, uuid):
         data = {}
-        for column in six.itervalues(table.columns):
+        for column in table.columns.values():
             data[column.name] = ovs.db.data.Datum.default(column.type)
         return Row(self, table, uuid, data)
 
@@ -807,6 +994,12 @@ class Row(object):
 
     def __hash__(self):
         return int(self.__dict__['uuid'])
+
+    def __str__(self):
+        return "{table}({data})".format(
+            table=self._table.name,
+            data=", ".join("{col}={val}".format(col=c, val=getattr(self, c))
+                           for c in sorted(self._table.columns)))
 
     def __getattr__(self, column_name):
         assert self._changes is not None
@@ -965,7 +1158,7 @@ class Row(object):
     @classmethod
     def from_json(cls, idl, table, uuid, row_json):
         data = {}
-        for column_name, datum_json in six.iteritems(row_json):
+        for column_name, datum_json in row_json.items():
             column = table.columns.get(column_name)
             if not column:
                 # XXX rate-limit
@@ -1195,7 +1388,7 @@ class Transaction(object):
     def __disassemble(self):
         self.idl.txn = None
 
-        for row in six.itervalues(self._txn_rows):
+        for row in self._txn_rows.values():
             if row._changes is None:
                 # If we add the deleted row back to rows with _changes == None
                 # then __getattr__ will not work for the indexes
@@ -1279,7 +1472,7 @@ class Transaction(object):
                                "lock": self.idl.lock_name})
 
         # Add prerequisites and declarations of new rows.
-        for row in six.itervalues(self._txn_rows):
+        for row in self._txn_rows.values():
             if row._prereqs:
                 rows = {}
                 columns = []
@@ -1296,7 +1489,7 @@ class Transaction(object):
 
         # Add updates.
         any_updates = False
-        for row in six.itervalues(self._txn_rows):
+        for row in self._txn_rows.values():
             if row._changes is None:
                 if row._table.is_root:
                     operations.append({"op": "delete",
@@ -1322,7 +1515,7 @@ class Transaction(object):
                 row_json = {}
                 op["row"] = row_json
 
-                for column_name, datum in six.iteritems(row._changes):
+                for column_name, datum in row._changes.items():
                     if row._data is not None or not datum.is_default():
                         row_json[column_name] = (
                             self._substitute_uuids(datum.to_json()))
@@ -1350,7 +1543,7 @@ class Transaction(object):
                     op["where"] = _where_uuid_equals(row.uuid)
                 op["mutations"] = []
                 if '_removes' in row._mutations.keys():
-                    for col, dat in six.iteritems(row._mutations['_removes']):
+                    for col, dat in row._mutations['_removes'].items():
                         column = row._table.columns[col]
                         if column.type.is_map():
                             opdat = ["set"]
@@ -1371,13 +1564,12 @@ class Transaction(object):
                         op["mutations"].append(mutation)
                         addop = True
                 if '_inserts' in row._mutations.keys():
-                    for col, val in six.iteritems(row._mutations['_inserts']):
+                    for col, val in row._mutations['_inserts'].items():
                         column = row._table.columns[col]
                         if column.type.is_map():
-                            opdat = ["map"]
                             datum = data.Datum.from_python(column.type, val,
                                                            _row_to_uuid)
-                            opdat.append(datum.as_list())
+                            opdat = self._substitute_uuids(datum.to_json())
                         else:
                             opdat = ["set"]
                             inner_opdat = []
@@ -1614,7 +1806,7 @@ class Transaction(object):
                     else:
                         hard_errors = True
 
-                for insert in six.itervalues(self._inserted_rows):
+                for insert in self._inserted_rows.values():
                     if not self.__process_insert_reply(insert, ops):
                         hard_errors = True
 
@@ -1683,7 +1875,7 @@ class Transaction(object):
         # __process_reply() already checked.
         mutate = ops[self._inc_index]
         count = mutate.get("count")
-        if not Transaction.__check_json_type(count, six.integer_types,
+        if not Transaction.__check_json_type(count, (int,),
                                              '"mutate" reply "count"'):
             return False
         if count != 1:
@@ -1706,7 +1898,7 @@ class Transaction(object):
                                              '"select" reply row'):
             return False
         column = row.get(self._inc_column)
-        if not Transaction.__check_json_type(column, six.integer_types,
+        if not Transaction.__check_json_type(column, (int,),
                                              '"select" reply inc column'):
             return False
         self._inc_new_value = column
@@ -1784,7 +1976,7 @@ class SchemaHelper(object):
         'readonly' must be a list of strings.
         """
 
-        assert isinstance(table, six.string_types)
+        assert isinstance(table, str)
         assert isinstance(columns, list)
 
         columns = set(columns) | self._tables.get(table, set())
@@ -1797,7 +1989,7 @@ class SchemaHelper(object):
 
         'table' must be a string
         """
-        assert isinstance(table, six.string_types)
+        assert isinstance(table, str)
         self._tables[table] = set()  # empty set means all columns in the table
 
     def register_all(self):
@@ -1814,7 +2006,7 @@ class SchemaHelper(object):
 
         if not self._all:
             schema_tables = {}
-            for table, columns in six.iteritems(self._tables):
+            for table, columns in self._tables.items():
                 schema_tables[table] = (
                     self._keep_table_columns(schema, table, columns))
 
@@ -1832,7 +2024,7 @@ class SchemaHelper(object):
 
         new_columns = {}
         for column_name in columns:
-            assert isinstance(column_name, six.string_types)
+            assert isinstance(column_name, str)
             assert column_name in table.columns
 
             new_columns[column_name] = table.columns[column_name]

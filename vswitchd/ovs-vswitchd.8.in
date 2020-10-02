@@ -79,9 +79,8 @@ only allow privileged users, such as the superuser, to use it.
 unavailable or unsuccessful.
 .
 .SS "DPDK Options"
-For details on initializing the \fBovs\-vswitchd\fR DPDK datapath,
-refer to the documentation or \fBovs\-vswitchd.conf.db\fR(5) for
-details.
+For details on initializing \fBovs\-vswitchd\fR to use DPDK ports,
+refer to the documentation or \fBovs\-vswitchd.conf.db\fR(5).
 .SS "Daemon Options"
 .ds DD \
 \fBovs\-vswitchd\fR detaches only after it has connected to the \
@@ -108,8 +107,13 @@ how to configure Open vSwitch.
 .SS "GENERAL COMMANDS"
 .IP "\fBexit\fR \fI--cleanup\fR"
 Causes \fBovs\-vswitchd\fR to gracefully terminate. If \fI--cleanup\fR
-is specified, release datapath resources configured by \fBovs\-vswitchd\fR.
-Otherwise, datapath flows and other resources remains undeleted.
+is specified, deletes flows from datapaths and releases other datapath
+resources configured by \fBovs\-vswitchd\fR.  Otherwise, datapath
+flows and other resources remains undeleted.  Resources of datapaths
+that are integrated into \fBovs\-vswitchd\fR (e.g.  the \fBnetdev\fR
+datapath type) are always released regardless of \fI--cleanup\fR
+except for ports with \fBinternal\fR type. Use \fI--cleanup\fR to
+release \fBinternal\fR ports too.
 .
 .IP "\fBqos/show-types\fR \fIinterface\fR"
 Queries the interface for a list of Quality of Service types that are
@@ -181,11 +185,14 @@ their controller connections and reconnect.
 .IP
 This command might be useful for debugging OpenFlow controller issues.
 .
-.IP "\fBbridge/dump\-flows\fR \fIbridge\fR"
+.IP "\fBbridge/dump\-flows\fR [\fB\-\-offload-stats\fR] \fIbridge\fR"
 Lists all flows in \fIbridge\fR, including those normally hidden to
 commands such as \fBovs\-ofctl dump\-flows\fR.  Flows set up by mechanisms
 such as in-band control and fail-open are hidden from the controller
 since it is not allowed to modify or override them.
+If \fB\-\-offload-stats\fR are specified then also list statistics for
+offloaded packets and bytes, which are a subset of the total packets and
+bytes.
 .SS "BOND COMMANDS"
 These commands manage bonded ports on an Open vSwitch's bridges.  To
 understand some of these commands, it is important to understand a
@@ -265,6 +272,7 @@ type).
 ..
 .so lib/dpctl.man
 .
+.so lib/dpdk-unixctl.man
 .so lib/dpif-netdev-unixctl.man
 .so lib/netdev-dpdk-unixctl.man
 .so ofproto/ofproto-dpif-unixctl.man
@@ -319,13 +327,12 @@ limits assume the use of the Linux kernel datapath.
 \fBovs\-vswitchd\fR started through \fBovs\-ctl\fR(8) provides a limit of 65535
 file descriptors.  The limits on the number of bridges and ports is decided by
 the availability of file descriptors.  With the Linux kernel datapath, creation
-of a single bridge consumes three file descriptors and adding a port consumes
-"n-handler-threads" file descriptors per bridge port.  Performance will degrade
-beyond 1,024 ports per bridge due to fixed hash table sizing.  Other platforms
+of a single bridge consumes three file descriptors and each port
+consumes one additional file descriptor.  Other platforms
 may have different limitations.
 .
 .IP \(bu
-2,048 MAC learning entries per bridge, by default.  (This is
+8,192 MAC learning entries per bridge, by default.  (This is
 configurable via \fBother\-config:mac\-table\-size\fR in the
 \fBBridge\fR table.  See \fBovs\-vswitchd.conf.db\fR(5) for details.)
 .
@@ -351,7 +358,10 @@ time linear in the number of flows.
 32 mirrors per bridge.
 .
 .IP \(bu
-15 bytes for the name of a port.  (This is a Linux kernel limitation.)
+15 bytes for the name of a port, for ports implemented in the Linux
+kernel.  Ports implemented in userspace, such as patch ports, do not
+have an arbitrary length limitation.  OpenFlow also limit port names
+to 15 bytes.
 .
 .SH "SEE ALSO"
 .BR ovs\-appctl (8),

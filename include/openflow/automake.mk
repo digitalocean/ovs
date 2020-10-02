@@ -9,11 +9,9 @@ openflowinclude_HEADERS = \
 	include/openflow/openflow-1.3.h \
 	include/openflow/openflow-1.4.h \
 	include/openflow/openflow-1.5.h \
-	include/openflow/openflow-1.6.h \
 	include/openflow/openflow-common.h \
 	include/openflow/openflow.h
 
-if HAVE_PYTHON
 SUFFIXES += .h .hstamp
 
 .h.hstamp:
@@ -24,7 +22,6 @@ HSTAMP_FILES = $(openflowinclude_HEADERS:.h=.hstamp)
 CLEANFILES += $(HSTAMP_FILES)
 ALL_LOCAL += $(HSTAMP_FILES)
 $(HSTAMP_FILES): build-aux/check-structs $(openflowinclude_HEADERS)
-endif
 
 EXTRA_DIST += build-aux/check-structs
 

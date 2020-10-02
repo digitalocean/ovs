@@ -414,7 +414,7 @@ ovsdb_create(struct ovsdb_schema *schema, struct ovsdb_storage *storage)
     db->storage = storage;
     ovs_list_init(&db->monitors);
     ovs_list_init(&db->triggers);
-    db->run_triggers = false;
+    db->run_triggers_now = db->run_triggers = false;
 
     shash_init(&db->tables);
     if (schema) {
@@ -454,6 +454,9 @@ ovsdb_destroy(struct ovsdb *db)
 
         /* Remove all the monitors. */
         ovsdb_monitors_remove(db);
+
+        /* Destroy txn history. */
+        ovsdb_txn_history_destroy(db);
 
         /* The caller must ensure that no triggers remain. */
         ovs_assert(ovs_list_is_empty(&db->triggers));
@@ -499,6 +502,10 @@ ovsdb_get_memory_usage(const struct ovsdb *db, struct simap *usage)
     }
 
     simap_increase(usage, "cells", cells);
+
+    if (db->storage) {
+        ovsdb_storage_get_memory_usage(db->storage, usage);
+    }
 }
 
 struct ovsdb_table *
@@ -534,6 +541,9 @@ ovsdb_replace(struct ovsdb *dst, struct ovsdb *src)
     LIST_FOR_EACH_SAFE (trigger, next, node, &dst->triggers) {
         ovsdb_trigger_prereplace_db(trigger);
     }
+
+    /* Destroy txn history. */
+    ovsdb_txn_history_destroy(dst);
 
     struct ovsdb_schema *tmp_schema = dst->schema;
     dst->schema = src->schema;

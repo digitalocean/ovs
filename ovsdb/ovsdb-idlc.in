@@ -1,4 +1,4 @@
-#! @PYTHON@
+#! @PYTHON3@
 
 from __future__ import print_function
 import getopt
@@ -176,7 +176,7 @@ def replace_cplusplus_keyword(schema):
                 'wchar_t', 'while', 'xor', 'xor_eq'}
 
     for tableName, table in schema.tables.items():
-        for columnName in table.columns:
+        for columnName in list(table.columns):
             if columnName in keywords:
                 table.columns[columnName + '_'] = table.columns.pop(columnName)
 
@@ -1306,6 +1306,7 @@ struct %(s)s *
                           &%(s)s_columns[%(S)s_COL_%(C)s],
                           datum,
                           &%(p)stable_classes[%(P)sTABLE_%(T)s]);
+    free(datum);
 }
 """ % {'t': tableName,
        'p': prefix,
@@ -1351,9 +1352,10 @@ struct %(s)s *
                     print("    datum.values = NULL;")
                 txn_write_func = "ovsdb_idl_index_write"
             elif type.is_optional_pointer():
-                print("    union ovsdb_atom *key = xmalloc(sizeof (union ovsdb_atom));")
+                print("    union ovsdb_atom *key;")
                 print()
                 print("    if (%s) {" % keyVar)
+                print("        key = xmalloc(sizeof (union ovsdb_atom));")
                 print("        datum.n = 1;")
                 print("        datum.keys = key;")
                 print("        " + type.key.assign_c_value_casting_away_const("key->%s" % type.key.type.to_string(), keyVar))
@@ -1364,9 +1366,10 @@ struct %(s)s *
                 print("    datum.values = NULL;")
                 txn_write_func = "ovsdb_idl_index_write"
             elif type.n_max == 1:
-                print("    union ovsdb_atom *key = xmalloc(sizeof(union ovsdb_atom));")
+                print("    union ovsdb_atom *key;")
                 print()
                 print("    if (%s) {" % nVar)
+                print("        key = xmalloc(sizeof(union ovsdb_atom));")
                 print("        datum.n = 1;")
                 print("        datum.keys = key;")
                 print("        " + type.key.assign_c_value_casting_away_const("key->%s" % type.key.type.to_string(), "*" + keyVar))
