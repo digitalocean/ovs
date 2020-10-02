@@ -12,9 +12,9 @@ Origin: upstream, see hashes above
 Forwarded: no
 Last-Update: 2020-03-11
 
---- openvswitch-2.11.2.orig/lib/dpif-netlink.c
-+++ openvswitch-2.11.2/lib/dpif-netlink.c
-@@ -78,10 +78,6 @@ enum { MAX_PORTS = USHRT_MAX };
+--- a/lib/dpif-netlink.c
++++ b/lib/dpif-netlink.c
+@@ -80,10 +80,6 @@
  #define FLOW_DUMP_MAX_BATCH 50
  #define OPERATE_MAX_OPS 50
  
@@ -25,7 +25,7 @@ Last-Update: 2020-03-11
  struct dpif_netlink_dp {
      /* Generic Netlink header. */
      uint8_t cmd;
-@@ -174,6 +170,7 @@ struct dpif_windows_vport_sock {
+@@ -178,6 +174,7 @@
  #endif
  
  struct dpif_handler {
@@ -33,7 +33,7 @@ Last-Update: 2020-03-11
      struct epoll_event *epoll_events;
      int epoll_fd;                 /* epoll fd that includes channel socks. */
      int n_events;                 /* Num events returned by epoll_wait(). */
-@@ -196,7 +193,6 @@ struct dpif_netlink {
+@@ -201,7 +198,6 @@
      struct fat_rwlock upcall_lock;
      struct dpif_handler *handlers;
      uint32_t n_handlers;           /* Num of upcall handlers. */
@@ -41,7 +41,7 @@ Last-Update: 2020-03-11
      int uc_array_size;             /* Size of 'handler->channels' and */
                                     /* 'handler->epoll_events'. */
  
-@@ -234,7 +230,7 @@ static bool ovs_tunnels_out_of_tree = tr
+@@ -239,7 +235,7 @@
  static int dpif_netlink_init(void);
  static int open_dpif(const struct dpif_netlink_dp *, struct dpif **);
  static uint32_t dpif_netlink_port_get_pid(const struct dpif *,
@@ -50,16 +50,16 @@ Last-Update: 2020-03-11
  static void dpif_netlink_handler_uninit(struct dpif_handler *handler);
  static int dpif_netlink_refresh_channels(struct dpif_netlink *,
                                           uint32_t n_handlers);
-@@ -246,42 +242,6 @@ static int dpif_netlink_port_query__(con
+@@ -251,42 +247,6 @@
                                       odp_port_t port_no, const char *port_name,
                                       struct dpif_port *dpif_port);
  
 -static int
--create_nl_sock(struct dpif_netlink *dpif OVS_UNUSED, struct nl_sock **socksp)
+-create_nl_sock(struct dpif_netlink *dpif OVS_UNUSED, struct nl_sock **sockp)
 -    OVS_REQ_WRLOCK(dpif->upcall_lock)
 -{
 -#ifndef _WIN32
--    return nl_sock_create(NETLINK_GENERIC, socksp);
+-    return nl_sock_create(NETLINK_GENERIC, sockp);
 -#else
 -    /* Pick netlink sockets to use in a round-robin fashion from each
 -     * handler's pool of sockets. */
@@ -69,13 +69,13 @@ Last-Update: 2020-03-11
 -
 -    /* A pool of sockets is allocated when the handler is initialized. */
 -    if (sock_pool == NULL) {
--        *socksp = NULL;
+-        *sockp = NULL;
 -        return EINVAL;
 -    }
 -
 -    ovs_assert(index < VPORT_SOCK_POOL_SIZE);
--    *socksp = sock_pool[index].nl_sock;
--    ovs_assert(*socksp);
+-    *sockp = sock_pool[index].nl_sock;
+-    ovs_assert(*sockp);
 -    index = (index == VPORT_SOCK_POOL_SIZE - 1) ? 0 : index + 1;
 -    handler->last_used_pool_idx = index;
 -    return 0;
@@ -83,17 +83,17 @@ Last-Update: 2020-03-11
 -}
 -
 -static void
--close_nl_sock(struct nl_sock *socksp)
+-close_nl_sock(struct nl_sock *sock)
 -{
 -#ifndef _WIN32
--    nl_sock_destroy(socksp);
+-    nl_sock_destroy(sock);
 -#endif
 -}
 -
  static struct dpif_netlink *
  dpif_netlink_cast(const struct dpif *dpif)
  {
-@@ -371,6 +331,43 @@ open_dpif(const struct dpif_netlink_dp *
+@@ -390,6 +350,43 @@
      return 0;
  }
  
@@ -137,7 +137,7 @@ Last-Update: 2020-03-11
  #ifdef _WIN32
  static void
  vport_delete_sock_pool(struct dpif_handler *handler)
-@@ -425,34 +422,129 @@ error:
+@@ -444,44 +441,139 @@
      vport_delete_sock_pool(handler);
      return error;
  }
@@ -237,14 +237,14 @@ Last-Update: 2020-03-11
 -vport_get_pid(struct dpif_netlink *dpif, uint32_t port_idx,
 -              uint32_t *upcall_pid)
 +vport_get_pids(struct dpif_netlink *dpif, uint32_t port_idx,
-+               uint32_t **upcall_pids)
++               uint32_t *upcall_pids)
  {
 +    uint32_t *pids;
 +    size_t i;
 +
      /* Since the nl_sock can only be assigned in either all
 -     * or none "dpif" channels, the following check
-+     * or none "dpif->handlers" channels, the following check
++     * or none "dpif->handler" channels, the following check
       * would suffice. */
 -    if (!dpif->channels[port_idx].sock) {
 +    if (!dpif->handlers[0].channels[port_idx].sock) {
@@ -266,7 +266,7 @@ Last-Update: 2020-03-11
  
  static int
 -vport_add_channel(struct dpif_netlink *dpif, odp_port_t port_no,
--                  struct nl_sock *socksp)
+-                  struct nl_sock *sock)
 +vport_add_channels(struct dpif_netlink *dpif, odp_port_t port_no,
 +                   struct nl_sock **socksp)
  {
@@ -277,7 +277,10 @@ Last-Update: 2020-03-11
      int error;
  
      if (dpif->handlers == NULL) {
-@@ -461,7 +553,7 @@ vport_add_channel(struct dpif_netlink *d
+-        close_nl_sock(sock);
++        vport_del_socksp(dpif, socksp);
+         return 0;
+     }
  
      /* We assume that the datapath densely chooses port numbers, which can
       * therefore be used as an index into 'channels' and 'epoll_events' of
@@ -286,7 +289,7 @@ Last-Update: 2020-03-11
      if (port_idx >= dpif->uc_array_size) {
          uint32_t new_size = port_idx + 1;
  
-@@ -471,16 +563,16 @@ vport_add_channel(struct dpif_netlink *d
+@@ -491,16 +583,16 @@
              return EFBIG;
          }
  
@@ -310,7 +313,7 @@ Last-Update: 2020-03-11
              handler->epoll_events = xrealloc(handler->epoll_events,
                  new_size * sizeof *handler->epoll_events);
  
-@@ -489,33 +581,33 @@ vport_add_channel(struct dpif_netlink *d
+@@ -509,33 +601,33 @@
      }
  
      memset(&event, 0, sizeof event);
@@ -322,7 +325,7 @@ Last-Update: 2020-03-11
          struct dpif_handler *handler = &dpif->handlers[i];
  
  #ifndef _WIN32
--        if (epoll_ctl(handler->epoll_fd, EPOLL_CTL_ADD, nl_sock_fd(socksp),
+-        if (epoll_ctl(handler->epoll_fd, EPOLL_CTL_ADD, nl_sock_fd(sock),
 +        if (epoll_ctl(handler->epoll_fd, EPOLL_CTL_ADD, nl_sock_fd(socksp[i]),
                        &event) < 0) {
              error = errno;
@@ -332,7 +335,7 @@ Last-Update: 2020-03-11
 +        dpif->handlers[i].channels[port_idx].sock = socksp[i];
 +        dpif->handlers[i].channels[port_idx].last_poll = LLONG_MIN;
      }
--    dpif->channels[port_idx].sock = socksp;
+-    dpif->channels[port_idx].sock = sock;
 -    dpif->channels[port_idx].last_poll = LLONG_MIN;
  
      return 0;
@@ -341,10 +344,9 @@ Last-Update: 2020-03-11
 +    for (j = 0; j < i; j++) {
  #ifndef _WIN32
 -    while (i--) {
--        epoll_ctl(dpif->handlers[i].epoll_fd, EPOLL_CTL_DEL,
--                  nl_sock_fd(socksp), NULL);
+         epoll_ctl(dpif->handlers[i].epoll_fd, EPOLL_CTL_DEL,
+-                  nl_sock_fd(sock), NULL);
 -    }
-+        epoll_ctl(dpif->handlers[j].epoll_fd, EPOLL_CTL_DEL,
 +                  nl_sock_fd(socksp[j]), NULL);
  #endif
 -    dpif->channels[port_idx].sock = NULL;
@@ -353,7 +355,7 @@ Last-Update: 2020-03-11
  
      return error;
  }
-@@ -526,8 +618,14 @@ vport_del_channels(struct dpif_netlink *
+@@ -546,8 +638,14 @@
      uint32_t port_idx = odp_to_u32(port_no);
      size_t i;
  
@@ -370,7 +372,7 @@ Last-Update: 2020-03-11
          return;
      }
  
-@@ -535,14 +633,12 @@ vport_del_channels(struct dpif_netlink *
+@@ -555,14 +653,12 @@
          struct dpif_handler *handler = &dpif->handlers[i];
  #ifndef _WIN32
          epoll_ctl(handler->epoll_fd, EPOLL_CTL_DEL,
@@ -388,7 +390,7 @@ Last-Update: 2020-03-11
  }
  
  static void
-@@ -559,7 +655,10 @@ destroy_all_channels(struct dpif_netlink
+@@ -579,7 +675,10 @@
          struct dpif_netlink_vport vport_request;
          uint32_t upcall_pids = 0;
  
@@ -400,7 +402,7 @@ Last-Update: 2020-03-11
              continue;
          }
  
-@@ -580,11 +679,11 @@ destroy_all_channels(struct dpif_netlink
+@@ -600,11 +699,11 @@
  
          dpif_netlink_handler_uninit(handler);
          free(handler->epoll_events);
@@ -414,49 +416,49 @@ Last-Update: 2020-03-11
      dpif->n_handlers = 0;
      dpif->uc_array_size = 0;
  }
-@@ -747,13 +846,13 @@ dpif_netlink_port_add__(struct dpif_netl
+@@ -798,13 +897,13 @@
  {
      struct dpif_netlink_vport request, reply;
      struct ofpbuf *buf;
--    struct nl_sock *socksp = NULL;
+-    struct nl_sock *sock = NULL;
 -    uint32_t upcall_pids = 0;
 +    struct nl_sock **socksp = NULL;
 +    uint32_t *upcall_pids;
      int error = 0;
  
      if (dpif->handlers) {
--        error = create_nl_sock(dpif, &socksp);
+-        error = create_nl_sock(dpif, &sock);
 -        if (error) {
 +        socksp = vport_create_socksp(dpif, &error);
 +        if (!socksp) {
              return error;
          }
      }
-@@ -765,11 +864,9 @@ dpif_netlink_port_add__(struct dpif_netl
+@@ -816,11 +915,9 @@
      request.name = name;
  
      request.port_no = *port_nop;
--    if (socksp) {
--        upcall_pids = nl_sock_pid(socksp);
+-    if (sock) {
+-        upcall_pids = nl_sock_pid(sock);
 -    }
 -    request.n_upcall_pids = 1;
 -    request.upcall_pids = &upcall_pids;
 +    upcall_pids = vport_socksp_to_pids(socksp, dpif->n_handlers);
-+    request.n_upcall_pids = socksp ? dpif->n_handlers : 1;
++    request.n_upcall_pids = socksp ? dpif->n_handlers: 1;
 +    request.upcall_pids = upcall_pids;
  
      if (options) {
          request.options = options->data;
-@@ -785,27 +882,31 @@ dpif_netlink_port_add__(struct dpif_netl
+@@ -836,27 +933,31 @@
                        dpif_name(&dpif->dpif), *port_nop);
          }
  
--        close_nl_sock(socksp);
+-        close_nl_sock(sock);
 +        vport_del_socksp(dpif, socksp);
          goto exit;
      }
  
--    error = vport_add_channel(dpif, *port_nop, socksp);
+-    error = vport_add_channel(dpif, *port_nop, sock);
 -    if (error) {
 -        VLOG_INFO("%s: could not add channel for port %s",
 -                    dpif_name(&dpif->dpif), name);
@@ -472,7 +474,7 @@ Last-Update: 2020-03-11
 -        request.dp_ifindex = dpif->dp_ifindex;
 -        request.port_no = *port_nop;
 -        dpif_netlink_vport_transact(&request, NULL, NULL);
--        close_nl_sock(socksp);
+-        close_nl_sock(sock);
 -        goto exit;
 +            /* Delete the port. */
 +            dpif_netlink_vport_init(&request);
@@ -492,7 +494,7 @@ Last-Update: 2020-03-11
  
      return error;
  }
-@@ -1030,7 +1131,7 @@ dpif_netlink_port_query_by_name(const st
+@@ -1081,7 +1182,7 @@
  
  static uint32_t
  dpif_netlink_port_get_pid__(const struct dpif_netlink *dpif,
@@ -501,7 +503,7 @@ Last-Update: 2020-03-11
      OVS_REQ_RDLOCK(dpif->upcall_lock)
  {
      uint32_t port_idx = odp_to_u32(port_no);
-@@ -1040,13 +1141,14 @@ dpif_netlink_port_get_pid__(const struct
+@@ -1091,13 +1192,14 @@
          /* The ODPP_NONE "reserved" port number uses the "ovs-system"'s
           * channel, since it is not heavily loaded. */
          uint32_t idx = port_idx >= dpif->uc_array_size ? 0 : port_idx;
@@ -518,7 +520,7 @@ Last-Update: 2020-03-11
          }
      }
  
-@@ -1054,13 +1156,14 @@ dpif_netlink_port_get_pid__(const struct
+@@ -1105,13 +1207,14 @@
  }
  
  static uint32_t
@@ -535,7 +537,7 @@ Last-Update: 2020-03-11
      fat_rwlock_unlock(&dpif->upcall_lock);
  
      return ret;
-@@ -2305,41 +2408,42 @@ dpif_netlink_refresh_channels(struct dpi
+@@ -2423,41 +2526,42 @@
      dpif_netlink_port_dump_start__(dpif, &dump);
      while (!dpif_netlink_port_dump_next__(dpif, &dump, &vport, &buf)) {
          uint32_t port_no = odp_to_u32(vport.port_no);
@@ -545,8 +547,8 @@ Last-Update: 2020-03-11
  
          if (port_no >= dpif->uc_array_size
 -            || !vport_get_pid(dpif, port_no, &upcall_pid)) {
--            struct nl_sock *socksp;
--            error = create_nl_sock(dpif, &socksp);
+-            struct nl_sock *sock;
+-            error = create_nl_sock(dpif, &sock);
 +            || !vport_get_pids(dpif, port_no, &upcall_pids)) {
 +            struct nl_sock **socksp = vport_create_socksp(dpif, &error);
  
@@ -555,17 +557,17 @@ Last-Update: 2020-03-11
                  goto error;
              }
  
--            error = vport_add_channel(dpif, vport.port_no, socksp);
+-            error = vport_add_channel(dpif, vport.port_no, sock);
 +            error = vport_add_channels(dpif, vport.port_no, socksp);
              if (error) {
                  VLOG_INFO("%s: could not add channels for port %s",
                            dpif_name(&dpif->dpif), vport.name);
--                nl_sock_destroy(socksp);
+-                nl_sock_destroy(sock);
 +                vport_del_socksp(dpif, socksp);
                  retval = error;
                  goto error;
              }
--            upcall_pid = nl_sock_pid(socksp);
+-            upcall_pid = nl_sock_pid(sock);
 +            upcall_pids = vport_socksp_to_pids(socksp, dpif->n_handlers);
 +            free(socksp);
          }
@@ -590,7 +592,7 @@ Last-Update: 2020-03-11
              error = dpif_netlink_vport_transact(&vport_request, NULL, NULL);
              if (error) {
                  VLOG_WARN_RL(&error_rl,
-@@ -2360,9 +2464,11 @@ dpif_netlink_refresh_channels(struct dpi
+@@ -2478,9 +2582,11 @@
          if (port_no < keep_channels_nbits) {
              bitmap_set1(keep_channels, port_no);
          }
@@ -602,7 +604,7 @@ Last-Update: 2020-03-11
          vport_del_channels(dpif, vport.port_no);
      }
      nl_dump_done(&dump);
-@@ -2621,7 +2727,7 @@ dpif_netlink_recv__(struct dpif_netlink
+@@ -2741,7 +2847,7 @@
  
      while (handler->event_offset < handler->n_events) {
          int idx = handler->epoll_events[handler->event_offset].data.u32;
@@ -611,7 +613,7 @@ Last-Update: 2020-03-11
  
          handler->event_offset++;
  
-@@ -2723,14 +2829,16 @@ dpif_netlink_recv_purge__(struct dpif_ne
+@@ -2843,14 +2949,16 @@
      OVS_REQ_WRLOCK(dpif->upcall_lock)
  {
      if (dpif->handlers) {
@@ -633,9 +635,9 @@ Last-Update: 2020-03-11
          }
      }
  }
---- openvswitch-2.11.2.orig/lib/dpif-provider.h
-+++ openvswitch-2.11.2/lib/dpif-provider.h
-@@ -192,7 +192,16 @@ struct dpif_class {
+--- a/lib/dpif-provider.h
++++ b/lib/dpif-provider.h
+@@ -225,7 +225,16 @@
  
      /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE
       * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
@@ -653,7 +655,7 @@ Last-Update: 2020-03-11
       *
       * A 'port_no' of UINT32_MAX should be treated as a special case.  The
       * implementation should return a reserved PID, not allocated to any port,
-@@ -204,7 +213,8 @@ struct dpif_class {
+@@ -237,7 +246,8 @@
       *
       * A dpif provider that doesn't have meaningful Netlink PIDs can use NULL
       * for this function.  This is equivalent to always returning 0. */
@@ -663,9 +665,9 @@ Last-Update: 2020-03-11
  
      /* Attempts to begin dumping the ports in a dpif.  On success, returns 0
       * and initializes '*statep' with any data needed for iteration.  On
---- openvswitch-2.11.2.orig/lib/dpif.c
-+++ openvswitch-2.11.2/lib/dpif.c
-@@ -733,7 +733,16 @@ dpif_port_query_by_name(const struct dpi
+--- a/lib/dpif.c
++++ b/lib/dpif.c
+@@ -749,7 +749,16 @@
  
  /* Returns the Netlink PID value to supply in OVS_ACTION_ATTR_USERSPACE
   * actions as the OVS_USERSPACE_ATTR_PID attribute's value, for use in
@@ -683,7 +685,7 @@ Last-Update: 2020-03-11
   *
   * A 'port_no' of ODPP_NONE is a special case: it returns a reserved PID, not
   * allocated to any port, that the client may use for special purposes.
-@@ -744,10 +753,10 @@ dpif_port_query_by_name(const struct dpi
+@@ -760,10 +769,10 @@
   * update all of the flows that it installed that contain
   * OVS_ACTION_ATTR_USERSPACE actions. */
  uint32_t
@@ -696,8 +698,8 @@ Last-Update: 2020-03-11
              : 0);
  }
  
---- openvswitch-2.11.2.orig/lib/dpif.h
-+++ openvswitch-2.11.2/lib/dpif.h
+--- a/lib/dpif.h
++++ b/lib/dpif.h
 @@ -274,6 +274,18 @@
   *
   *    - Upcalls that specify the "special" Netlink PID are queued separately.
@@ -717,7 +719,7 @@ Last-Update: 2020-03-11
   *
   * Packet Format
   * =============
-@@ -458,7 +470,8 @@ int dpif_port_query_by_name(const struct
+@@ -462,7 +474,8 @@
                              struct dpif_port *);
  int dpif_port_get_name(struct dpif *, odp_port_t port_no,
                         char *name, size_t name_size);
@@ -727,9 +729,9 @@ Last-Update: 2020-03-11
  
  struct dpif_port_dump {
      const struct dpif *dpif;
---- openvswitch-2.11.2.orig/ofproto/ofproto-dpif-upcall.c
-+++ openvswitch-2.11.2/ofproto/ofproto-dpif-upcall.c
-@@ -1057,6 +1057,7 @@ classify_upcall(enum dpif_upcall_type ty
+--- a/ofproto/ofproto-dpif-upcall.c
++++ b/ofproto/ofproto-dpif-upcall.c
+@@ -1052,6 +1052,7 @@
   * initialized with at least 128 bytes of space. */
  static void
  compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
@@ -737,7 +739,7 @@ Last-Update: 2020-03-11
                    odp_port_t odp_in_port, ofp_port_t ofp_in_port,
                    struct ofpbuf *buf, uint32_t meter_id,
                    struct uuid *ofproto_uuid)
-@@ -1074,7 +1075,7 @@ compose_slow_path(struct udpif *udpif, s
+@@ -1069,7 +1070,7 @@
      port = xout->slow & (SLOW_CFM | SLOW_BFD | SLOW_LACP | SLOW_STP)
          ? ODPP_NONE
          : odp_in_port;
@@ -746,7 +748,7 @@ Last-Update: 2020-03-11
  
      size_t offset;
      size_t ac_offset;
-@@ -1232,7 +1233,7 @@ upcall_xlate(struct udpif *udpif, struct
+@@ -1227,7 +1228,7 @@
                           odp_actions->data, odp_actions->size);
      } else {
          /* upcall->put_actions already initialized by upcall_receive(). */
@@ -755,7 +757,7 @@ Last-Update: 2020-03-11
                            upcall->flow->in_port.odp_port, upcall->ofp_in_port,
                            &upcall->put_actions,
                            upcall->ofproto->up.slowpath_meter_id,
-@@ -2195,7 +2196,7 @@ revalidate_ukey__(struct udpif *udpif, c
+@@ -2196,7 +2197,7 @@
              goto exit;
          }
  
@@ -764,9 +766,9 @@ Last-Update: 2020-03-11
                            ofp_in_port, odp_actions,
                            ofproto->up.slowpath_meter_id, &ofproto->uuid);
      }
---- openvswitch-2.11.2.orig/ofproto/ofproto-dpif-xlate.c
-+++ openvswitch-2.11.2/ofproto/ofproto-dpif-xlate.c
-@@ -3157,7 +3157,8 @@ compose_sample_action(struct xlate_ctx *
+--- a/ofproto/ofproto-dpif-xlate.c
++++ b/ofproto/ofproto-dpif-xlate.c
+@@ -3221,7 +3221,8 @@
  
      odp_port_t odp_port = ofp_port_to_odp_port(
          ctx->xbridge, ctx->xin->flow.in_port.ofp_port);
@@ -776,7 +778,7 @@ Last-Update: 2020-03-11
      size_t cookie_offset = odp_put_userspace_action(pid, cookie,
                                                      sizeof *cookie,
                                                      tunnel_out_port,
-@@ -4707,7 +4708,8 @@ put_controller_user_action(struct xlate_
+@@ -4829,7 +4830,8 @@
  
      odp_port_t odp_port = ofp_port_to_odp_port(ctx->xbridge,
                                               ctx->xin->flow.in_port.ofp_port);
