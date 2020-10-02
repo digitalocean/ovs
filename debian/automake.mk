@@ -31,18 +31,6 @@ EXTRA_DIST += \
 	debian/openvswitch-vtep.dirs \
 	debian/openvswitch-vtep.init \
 	debian/openvswitch-vtep.install \
-	debian/ovn-central.init \
-	debian/ovn-central.install \
-	debian/ovn-central.postrm \
-	debian/ovn-central.default \
-	debian/ovn-common.install \
-	debian/ovn-common.postinst \
-	debian/ovn-common.postrm \
-    debian/ovn-docker.install \
-	debian/ovn-host.init \
-	debian/ovn-host.install \
-	debian/ovn-host.postrm \
-	debian/ovn-host.default \
 	debian/rules \
 	debian/ifupdown.sh \
 	debian/source/format
