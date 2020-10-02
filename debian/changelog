@@ -1,3 +1,12 @@
+openvswitch (2.14.0-0digitalocean1) bionic; urgency=medium
+
+  * New upstream release (2.14.0).
+    - d/patches: refresh patches.
+    - d/*: remove ovn support (dropped upstream into separate
+      repository).
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Fri, 02 Oct 2020 09:21:39 -0500
+
 openvswitch (2.11.3-0digitalocean9) bionic; urgency=medium
 
 
