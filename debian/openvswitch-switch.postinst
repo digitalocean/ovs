@@ -91,6 +91,7 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
                 # started via the script).
                 /usr/share/openvswitch/scripts/ovs-systemd-reload force-reload-kmod
                 systemctl --job-mode=ignore-dependencies start 'openvswitch-switch.service'
+            fi
         fi
 fi
 
