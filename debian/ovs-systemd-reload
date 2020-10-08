@@ -54,7 +54,7 @@ wait_for_stopped() {
         sleep $RELOAD_SLEEP_SECS
         ((i += RELOAD_SLEEP_SECS))
     done
-    log_success_msg "Stopped $pname after $i iterations"
+    log_success_msg "Stopped $pname after $i seconds"
 }
 
 
