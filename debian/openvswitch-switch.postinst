@@ -77,9 +77,20 @@ if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-decon
         if systemctl --quiet is-active 'openvswitch-switch.service'; then
             systemctl --job-mode=ignore-dependencies reload 'openvswitch-switch.service'
         else
-            systemctl --job-mode=ignore-dependencies start 'ovsdb-server.service'
-            systemctl --job-mode=ignore-dependencies start 'ovs-vswitchd.service'
-            systemctl --job-mode=ignore-dependencies start 'openvswitch-switch.service'
+            if systemctl --quiet is-failed 'openvswitch-switch.service'; then
+                systemctl --job-mode=ignore-dependencies start 'ovsdb-server.service'
+                systemctl --job-mode=ignore-dependencies start 'ovs-vswitchd.service'
+                systemctl --job-mode=ignore-dependencies start 'openvswitch-switch.service'
+            else
+                # this is a weird case, but one we have seen, where the
+                # service is not active or failed, but inactive/dead. I
+                # do not know why this is happening, but we can "fix it"
+                # during the upgrade by manually perforing the reload
+                # path for the service and then switching the service to
+                # start without its component services (which will have
+                # started via the script).
+                /usr/share/openvswitch/scripts/ovs-systemd-reload force-reload-kmod
+                systemctl --job-mode=ignore-dependencies start 'openvswitch-switch.service'
         fi
 fi
 
