@@ -1,3 +1,10 @@
+openvswitch (2.11.3-0digitalocean10) bionic; urgency=medium
+
+  * d/ovs-systemd-reload: fix log message
+  * d/openvswitch-switch.postinst: handle dead/inactive service upgrades
+
+ -- Nishanth Aravamudan <naravamudan@digitalocean.com>  Thu, 08 Oct 2020 10:02:37 -0500
+
 openvswitch (2.11.3-0digitalocean9) bionic; urgency=medium
 
 
