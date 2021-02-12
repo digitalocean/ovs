@@ -1,3 +1,11 @@
+openvswitch (2.11.3-0digitalocean12) bionic; urgency=medium
+
+  * conntrack: Fix 'reverse_nat_packet()' variable datatype
+  * flow: fix incorrect padding length checking in ipv6_sanity_check
+  * flow: Support extra padding length
+
+ -- Tianlin Li <tli@digitalocean.com>  Fri, 12 Feb 2021 15:17:30 -0500
+
 openvswitch (2.11.3-0digitalocean11) bionic; urgency=medium
 
   * d/openvswitch-switch.postinst: fix missing fi
