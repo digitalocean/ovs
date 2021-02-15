@@ -1,3 +1,9 @@
+openvswitch (2.10.1-2) bionic; urgency=medium
+
+  * debian/patches/CVE-2020-35498.patch
+
+ -- Tianlin Li <tli@digitalocean.com>  Fri, 12 Feb 2021 16:14:31 -0500
+
 openvswitch (2.10.1-1) bionic; urgency=medium
 
   * rebase to 2.10.1
