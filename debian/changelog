@@ -1,3 +1,11 @@
+openvswitch (2.10.1-2) bionic; urgency=medium
+
+  * conntrack: Fix 'reverse_nat_packet()' variable datatype
+  * flow: fix incorrect padding length checking in ipv6_sanity_check
+  * flow: Support extra padding length
+
+ -- Tianlin Li <tli@digitalocean.com>  Fri, 12 Feb 2021 16:14:31 -0500
+
 openvswitch (2.10.1-1) bionic; urgency=medium
 
   * rebase to 2.10.1
