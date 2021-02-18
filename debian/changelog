@@ -1,3 +1,10 @@
+openvswitch (2.11.3-0digitalocean12) bionic; urgency=medium
+
+  * debian/patches/0003-CVE-2020-35498.patch: Backport fixes for CVE-
+    2020-35498.
+
+ -- Tianlin Li <tli@digitalocean.com>  Fri, 12 Feb 2021 15:17:30 -0500
+
 openvswitch (2.11.3-0digitalocean11) bionic; urgency=medium
 
   * d/openvswitch-switch.postinst: fix missing fi
