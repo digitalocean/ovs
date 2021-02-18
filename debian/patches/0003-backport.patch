@@ -1,0 +1,159 @@
+Description: <short summary of the patch>
+ TODO: Put a short summary on the line above and replace this paragraph
+ with a longer explanation of this change. Complete the meta-information
+ with other relevant fields (see below for details). To make it easier, the
+ information below has been extracted from the changelog. Adjust it or drop
+ it.
+ .
+ openvswitch (2.11.3-0digitalocean12) bionic; urgency=medium
+ .
+   * conntrack: Fix 'reverse_nat_packet()' variable datatype
+   * flow: fix incorrect padding length checking in ipv6_sanity_check
+   * flow: Support extra padding length
+Author: Tianlin Li <tli@digitalocean.com>
+
+---
+The information above should follow the Patch Tagging Guidelines, please
+checkout http://dep.debian.net/deps/dep3/ to learn about the format. Here
+are templates for supplementary fields that you might want to add:
+
+Origin: <vendor|upstream|other>, <url of original patch>
+Bug: <url in upstream bugtracker>
+Bug-Debian: https://bugs.debian.org/<bugnumber>
+Bug-Ubuntu: https://launchpad.net/bugs/<bugnumber>
+Forwarded: <no|not-needed|url proving that it has been forwarded>
+Reviewed-By: <name and email of someone who approved the patch>
+Last-Update: 2021-02-17
+
+--- openvswitch-2.11.3.orig/lib/conntrack.c
++++ openvswitch-2.11.3/lib/conntrack.c
+@@ -640,7 +640,7 @@ static void
+ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
+ {
+     char *tail = dp_packet_tail(pkt);
+-    char pad = dp_packet_l2_pad_size(pkt);
++    uint16_t pad = dp_packet_l2_pad_size(pkt);
+     struct conn_key inner_key;
+     const char *inner_l4 = NULL;
+     uint16_t orig_l3_ofs = pkt->l3_ofs;
+@@ -650,6 +650,8 @@ reverse_nat_packet(struct dp_packet *pkt
+         struct ip_header *nh = dp_packet_l3(pkt);
+         struct icmp_header *icmp = dp_packet_l4(pkt);
+         struct ip_header *inner_l3 = (struct ip_header *) (icmp + 1);
++        /* This call is already verified to succeed during the code path from
++         * 'conn_key_extract()' which calls 'extract_l4_icmp()'. */
+         extract_l3_ipv4(&inner_key, inner_l3, tail - ((char *)inner_l3) - pad,
+                         &inner_l4, false);
+         pkt->l3_ofs += (char *) inner_l3 - (char *) nh;
+@@ -671,6 +673,8 @@ reverse_nat_packet(struct dp_packet *pkt
+         struct icmp6_error_header *icmp6 = dp_packet_l4(pkt);
+         struct ovs_16aligned_ip6_hdr *inner_l3_6 =
+             (struct ovs_16aligned_ip6_hdr *) (icmp6 + 1);
++        /* This call is already verified to succeed during the code path from
++         * 'conn_key_extract()' which calls 'extract_l4_icmp6()'. */
+         extract_l3_ipv6(&inner_key, inner_l3_6,
+                         tail - ((char *)inner_l3_6) - pad,
+                         &inner_l4);
+--- openvswitch-2.11.3.orig/lib/dp-packet.h
++++ openvswitch-2.11.3/lib/dp-packet.h
+@@ -65,7 +65,7 @@ struct dp_packet {
+ 
+     /* All the following elements of this struct are copied in a single call
+      * of memcpy in dp_packet_clone_with_headroom. */
+-    uint8_t l2_pad_size;           /* Detected l2 padding size.
++    uint16_t l2_pad_size;          /* Detected l2 padding size.
+                                     * Padding is non-pullable. */
+     uint16_t l2_5_ofs;             /* MPLS label stack offset, or UINT16_MAX */
+     uint16_t l3_ofs;               /* Network-level header offset,
+@@ -95,8 +95,8 @@ void *dp_packet_resize_l2(struct dp_pack
+ void *dp_packet_resize_l2_5(struct dp_packet *, int increment);
+ static inline void *dp_packet_eth(const struct dp_packet *);
+ static inline void dp_packet_reset_offsets(struct dp_packet *);
+-static inline uint8_t dp_packet_l2_pad_size(const struct dp_packet *);
+-static inline void dp_packet_set_l2_pad_size(struct dp_packet *, uint8_t);
++static inline uint16_t dp_packet_l2_pad_size(const struct dp_packet *);
++static inline void dp_packet_set_l2_pad_size(struct dp_packet *, uint16_t);
+ static inline void *dp_packet_l2_5(const struct dp_packet *);
+ static inline void dp_packet_set_l2_5(struct dp_packet *, void *);
+ static inline void *dp_packet_l3(const struct dp_packet *);
+@@ -295,14 +295,14 @@ dp_packet_reset_offsets(struct dp_packet
+     b->l4_ofs = UINT16_MAX;
+ }
+ 
+-static inline uint8_t
++static inline uint16_t
+ dp_packet_l2_pad_size(const struct dp_packet *b)
+ {
+     return b->l2_pad_size;
+ }
+ 
+ static inline void
+-dp_packet_set_l2_pad_size(struct dp_packet *b, uint8_t pad_size)
++dp_packet_set_l2_pad_size(struct dp_packet *b, uint16_t pad_size)
+ {
+     ovs_assert(pad_size <= dp_packet_size(b));
+     b->l2_pad_size = pad_size;
+--- openvswitch-2.11.3.orig/lib/flow.c
++++ openvswitch-2.11.3/lib/flow.c
+@@ -646,7 +646,7 @@ ipv4_sanity_check(const struct ip_header
+ 
+     tot_len = ntohs(nh->ip_tot_len);
+     if (OVS_UNLIKELY(tot_len > size || ip_len > tot_len ||
+-                size - tot_len > UINT8_MAX)) {
++                size - tot_len > UINT16_MAX)) {
+         return false;
+     }
+ 
+@@ -684,8 +684,8 @@ ipv6_sanity_check(const struct ovs_16ali
+     if (OVS_UNLIKELY(plen + IPV6_HEADER_LEN > size)) {
+         return false;
+     }
+-    /* Jumbo Payload option not supported yet. */
+-    if (OVS_UNLIKELY(size - plen > UINT8_MAX)) {
++
++    if (OVS_UNLIKELY(size - (plen + IPV6_HEADER_LEN) > UINT16_MAX)) {
+         return false;
+     }
+ 
+--- openvswitch-2.11.3.orig/tests/classifier.at
++++ openvswitch-2.11.3/tests/classifier.at
+@@ -306,3 +306,39 @@ ovs-ofctl: Incorrect instruction orderin
+ ])
+ OVS_VSWITCHD_STOP
+ AT_CLEANUP
++
++# Flow classifier a packet with excess of padding.
++AT_SETUP([flow classifier - packet with extra padding])
++OVS_VSWITCHD_START
++add_of_ports br0 1 2
++AT_DATA([flows.txt], [dnl
++priority=5,ip,ip_dst=1.1.1.1,actions=1
++priority=5,ip,ip_dst=1.1.1.2,actions=2
++priority=0,actions=drop
++])
++AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
++packet=00020202020000010101010008004500001c00010000401176cc01010101010101020d6a00350008ee3a
++AT_CHECK([ovs-appctl ofproto/trace br0 in_port=1 $packet] , [0], [stdout])
++AT_CHECK([tail -2 stdout], [0],
++  [Megaflow: recirc_id=0,eth,ip,in_port=1,nw_dst=1.1.1.2,nw_frag=no
++Datapath actions: 2
++])
++# normal packet plus 255 bytes of padding (8bit padding).
++# 255 * 2 = 510
++padding=$(printf '%*s' 510 | tr ' ' '0')
++AT_CHECK([ovs-appctl ofproto/trace br0 in_port=1 ${packet}${padding}] , [0], [stdout])
++AT_CHECK([tail -2 stdout], [0],
++  [Megaflow: recirc_id=0,eth,ip,in_port=1,nw_dst=1.1.1.2,nw_frag=no
++Datapath actions: 2
++])
++# normal packet plus padding up to 65535 bytes of length (16bit limit).
++# 65535 - 43 = 65492
++# 65492 * 2 = 130984
++padding=$(printf '%*s' 130984 | tr ' ' '0')
++AT_CHECK([ovs-appctl ofproto/trace br0 in_port=1 ${packet}${padding}], [0], [stdout])
++AT_CHECK([tail -2 stdout], [0],
++  [Megaflow: recirc_id=0,eth,ip,in_port=1,nw_dst=1.1.1.2,nw_frag=no
++Datapath actions: 2
++])
++OVS_VSWITCHD_STOP
++AT_CLEANUP
