@@ -1,8 +1,7 @@
 openvswitch (2.11.3-0digitalocean12) bionic; urgency=medium
 
-  * conntrack: Fix 'reverse_nat_packet()' variable datatype
-  * flow: fix incorrect padding length checking in ipv6_sanity_check
-  * flow: Support extra padding length
+  * debian/patches/0003-CVE-2020-35498.patch: Backport fixes for CVE-
+    2020-35498.
 
  -- Tianlin Li <tli@digitalocean.com>  Fri, 12 Feb 2021 15:17:30 -0500
 
