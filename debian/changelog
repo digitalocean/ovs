@@ -1,3 +1,9 @@
+openvswitch (2.7.3-2) unstable; urgency=low
+
+   * flow: Support extra padding length
+
+ -- Tianlin Li <tli@digitalocean.com>  Sun, 21 Feb 2021 17:09:20 -0500
+
 openvswitch (2.7.3-1) unstable; urgency=low
    [ Open vSwitch team ]
    * New upstream version
