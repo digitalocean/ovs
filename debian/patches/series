@@ -1,3 +1,4 @@
 enables-openflow14-by-default.diff
 ofp14-tests.patch
 datapatch-fix-data-type.patch
+CVE-2020-35498.patch
