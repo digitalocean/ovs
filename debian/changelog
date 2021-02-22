@@ -1,3 +1,10 @@
+openvswitch (2.7.3-2digitalocean1) unstable; urgency=low
+
+   * debian/patches/CVE-2020-35498.patch: Backport fixes for CVE-2020-
+    35498.
+
+ -- Tianlin Li <tli@digitalocean.com>  Mon, 22 Feb 2021 11:01:20 -0500
+
 openvswitch (2.7.3-1) unstable; urgency=low
    [ Open vSwitch team ]
    * New upstream version
